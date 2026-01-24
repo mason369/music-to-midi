@@ -1,0 +1,143 @@
+{
+  "app": {
+    "name": "Music to MIDI",
+    "version": "Version"
+  },
+  "menu": {
+    "file": "File",
+    "open": "Open Audio File",
+    "save": "Save MIDI",
+    "export": "Export",
+    "exit": "Exit",
+    "edit": "Edit",
+    "settings": "Settings",
+    "view": "View",
+    "help": "Help",
+    "about": "About"
+  },
+  "toolbar": {
+    "open": "Open",
+    "save": "Save",
+    "start": "Start",
+    "stop": "Stop",
+    "settings": "Settings"
+  },
+  "main": {
+    "dropzone": {
+      "title": "Drop audio file here, or click to select",
+      "subtitle": "Supports MP3, WAV, FLAC, OGG",
+      "selected": "Selected file"
+    },
+    "tracks": {
+      "title": "Track Preview",
+      "vocals": "Vocals",
+      "drums": "Drums",
+      "bass": "Bass",
+      "other": "Other Instruments",
+      "lyrics": "Lyrics",
+      "midi": "MIDI"
+    },
+    "progress": {
+      "title": "Processing Progress",
+      "current": "Current",
+      "stages": {
+        "preprocessing": "Preprocessing",
+        "separation": "Separation",
+        "transcription": "Transcription",
+        "lyrics": "Lyrics",
+        "synthesis": "Synthesis",
+        "complete": "Complete"
+      }
+    },
+    "output": {
+      "title": "Output Settings",
+      "directory": "Output Directory",
+      "browse": "Browse...",
+      "options": {
+        "generateMidi": "Generate MIDI file",
+        "embedLyrics": "Embed lyrics",
+        "exportLrc": "Export LRC",
+        "saveTracks": "Save separated tracks",
+        "vocalsOnly": "Vocals only"
+      }
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "general": {
+      "title": "General Settings",
+      "language": "Interface Language",
+      "theme": "Theme",
+      "autoUpdate": "Auto check for updates"
+    },
+    "processing": {
+      "title": "Processing Settings",
+      "useGpu": "Use GPU Acceleration",
+      "gpuDevice": "GPU Device",
+      "quality": "Processing Quality",
+      "whisperModel": "Whisper Model",
+      "lyricsLanguage": "Lyrics Language",
+      "autoDetect": "Auto Detect"
+    },
+    "midi": {
+      "title": "MIDI Settings",
+      "ticksPerBeat": "Ticks/Beat",
+      "defaultVelocity": "Default Velocity",
+      "noteThreshold": "Note Detection Threshold"
+    },
+    "buttons": {
+      "cancel": "Cancel",
+      "apply": "Apply",
+      "ok": "OK"
+    }
+  },
+  "status": {
+    "ready": "Ready",
+    "processing": "Processing...",
+    "complete": "Complete",
+    "error": "Error",
+    "gpu": "GPU",
+    "cpu": "CPU",
+    "memory": "Memory"
+  },
+  "dialogs": {
+    "openFile": {
+      "title": "Open Audio File",
+      "filter": "Audio Files"
+    },
+    "saveFile": {
+      "title": "Save MIDI File",
+      "filter": "MIDI Files"
+    },
+    "selectDir": {
+      "title": "Select Output Directory"
+    },
+    "confirm": {
+      "title": "Confirm",
+      "cancel": "Cancel processing?",
+      "overwrite": "File exists. Overwrite?"
+    },
+    "error": {
+      "title": "Error",
+      "fileNotFound": "File not found",
+      "invalidFormat": "Invalid file format",
+      "processingFailed": "Processing failed"
+    },
+    "about": {
+      "title": "About Music to MIDI",
+      "description": "Convert audio to multi-track MIDI with lyrics embedding",
+      "author": "Author",
+      "license": "License"
+    }
+  },
+  "quality": {
+    "low": "Low (Fast)",
+    "medium": "Medium",
+    "high": "High (Quality)"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  }
+}
