@@ -12,7 +12,7 @@ def main():
     """主入口函数"""
     # 设置日志
     log_dir = Path.home() / ".music-to-midi" / "logs"
-    logger = setup_logger(log_dir=str(log_dir))
+    logger = setup_logger(log_dir=str(log_dir), level=logging.DEBUG)
 
     logger.info("正在启动音乐转MIDI应用程序")
 

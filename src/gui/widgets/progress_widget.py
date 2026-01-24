@@ -30,7 +30,7 @@ class StageIndicator(QWidget):
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.name_label = QLabel(self._get_stage_name())
-        self.name_label.setStyleSheet("font-size: 11px;")
+        self.name_label.setStyleSheet("font-size: 11px; color: #b0b8c8;")
 
         layout.addWidget(self.icon_label)
         layout.addWidget(self.name_label)
@@ -60,36 +60,36 @@ class StageIndicator(QWidget):
         if self.status == "done":
             self.icon_label.setText("✓")
             self.icon_label.setStyleSheet("""
-                color: #48bb78;
+                color: #50c878;
                 font-weight: bold;
                 font-size: 14px;
             """)
             self.name_label.setStyleSheet("""
                 font-size: 11px;
-                color: #48bb78;
+                color: #50c878;
                 font-weight: 500;
             """)
         elif self.status == "current":
             self.icon_label.setText("◉")
             self.icon_label.setStyleSheet("""
-                color: #667eea;
+                color: #4a9eff;
                 font-weight: bold;
                 font-size: 14px;
             """)
             self.name_label.setStyleSheet("""
                 font-size: 11px;
-                color: #667eea;
+                color: #4a9eff;
                 font-weight: bold;
             """)
         else:
             self.icon_label.setText("○")
             self.icon_label.setStyleSheet("""
-                color: #cbd5e0;
+                color: #4a5a6a;
                 font-size: 14px;
             """)
             self.name_label.setStyleSheet("""
                 font-size: 11px;
-                color: #a0aec0;
+                color: #6a7a8a;
             """)
 
     def update_translations(self):
@@ -112,18 +112,18 @@ class ProgressWidget(QGroupBox):
             QGroupBox {
                 font-weight: bold;
                 font-size: 13px;
-                color: #2d3748;
-                border: 1px solid #e2e8f0;
+                color: #e0e0e0;
+                border: 1px solid #3a4a6a;
                 border-radius: 8px;
                 margin-top: 12px;
                 padding-top: 8px;
-                background: white;
+                background: #1f2940;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 16px;
                 padding: 0 8px;
-                background: white;
+                background: #1f2940;
             }
         """)
 
@@ -136,7 +136,7 @@ class ProgressWidget(QGroupBox):
         self.current_label.setStyleSheet("""
             QLabel {
                 font-weight: normal;
-                color: #4a5568;
+                color: #b0b8c8;
                 font-size: 12px;
             }
         """)
@@ -151,16 +151,15 @@ class ProgressWidget(QGroupBox):
             QProgressBar {
                 border: none;
                 border-radius: 12px;
-                background: #edf2f7;
+                background: #16213e;
                 text-align: center;
                 font-size: 11px;
                 font-weight: bold;
-                color: #4a5568;
+                color: #e0e0e0;
             }
             QProgressBar::chunk {
                 border-radius: 12px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667eea, stop:1 #764ba2);
+                background: #4a9eff;
             }
         """)
 
@@ -184,7 +183,7 @@ class ProgressWidget(QGroupBox):
             # 阶段之间添加箭头
             if i < len(stages) - 1:
                 arrow = QLabel("→")
-                arrow.setStyleSheet("color: #ccc;")
+                arrow.setStyleSheet("color: #4a5a6a;")
                 stages_layout.addWidget(arrow)
 
         stages_layout.addStretch()
