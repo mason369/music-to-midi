@@ -1,5 +1,5 @@
 """
-Logging configuration for the application.
+应用程序日志配置
 """
 import logging
 import sys
@@ -15,37 +15,37 @@ def setup_logger(
     console: bool = True
 ) -> logging.Logger:
     """
-    Set up and configure logger.
+    设置并配置日志记录器
 
-    Args:
-        name: Logger name
-        level: Logging level
-        log_dir: Directory for log files (None = no file logging)
-        console: Whether to log to console
+    参数:
+        name: 日志记录器名称
+        level: 日志级别
+        log_dir: 日志文件目录（None = 不记录到文件）
+        console: 是否输出到控制台
 
-    Returns:
-        Configured logger
+    返回:
+        配置好的日志记录器
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
-    # Clear existing handlers
+    # 清除现有处理器
     logger.handlers.clear()
 
-    # Format
+    # 格式
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console handler
+    # 控制台处理器
     if console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
-    # File handler
+    # 文件处理器
     if log_dir:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
@@ -60,5 +60,5 @@ def setup_logger(
 
 
 def get_logger(name: str = "music_to_midi") -> logging.Logger:
-    """Get existing logger or create new one."""
+    """获取现有日志记录器或创建新的"""
     return logging.getLogger(name)

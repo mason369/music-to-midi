@@ -1,5 +1,5 @@
 """
-GPU detection and management utilities.
+GPU检测和管理工具
 """
 import logging
 from typing import List, Optional, Tuple
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_cuda_available() -> bool:
-    """Check if CUDA is available."""
+    """检查CUDA是否可用"""
     try:
         import torch
         return torch.cuda.is_available()
@@ -17,7 +17,7 @@ def is_cuda_available() -> bool:
 
 
 def get_gpu_count() -> int:
-    """Get number of available GPUs."""
+    """获取可用GPU数量"""
     try:
         import torch
         if torch.cuda.is_available():
@@ -29,10 +29,10 @@ def get_gpu_count() -> int:
 
 def get_gpu_info() -> List[dict]:
     """
-    Get information about available GPUs.
+    获取可用GPU信息
 
-    Returns:
-        List of dicts with GPU info (name, memory, etc.)
+    返回:
+        包含GPU信息（名称、内存等）的字典列表
     """
     gpus = []
     try:
@@ -49,23 +49,23 @@ def get_gpu_info() -> List[dict]:
                     "minor": props.minor,
                 })
     except ImportError:
-        logger.warning("PyTorch not installed, cannot detect GPUs")
+        logger.warning("未安装PyTorch，无法检测GPU")
     except Exception as e:
-        logger.error(f"Error detecting GPUs: {e}")
+        logger.error(f"检测GPU时出错: {e}")
 
     return gpus
 
 
 def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
     """
-    Get the best available device.
+    获取最佳可用设备
 
-    Args:
-        prefer_gpu: Whether to prefer GPU if available
-        gpu_index: Which GPU to use if multiple available
+    参数:
+        prefer_gpu: 是否优先使用GPU
+        gpu_index: 多GPU时使用哪个GPU
 
-    Returns:
-        Device string ('cuda:0', 'mps', or 'cpu')
+    返回:
+        设备字符串（'cuda:0', 'mps', 或 'cpu'）
     """
     try:
         import torch
@@ -73,13 +73,13 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
         if prefer_gpu:
             if torch.cuda.is_available():
                 device = f"cuda:{gpu_index}"
-                logger.info(f"Using GPU: {torch.cuda.get_device_name(gpu_index)}")
+                logger.info(f"使用GPU: {torch.cuda.get_device_name(gpu_index)}")
                 return device
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                logger.info("Using Apple MPS")
+                logger.info("使用Apple MPS")
                 return "mps"
 
-        logger.info("Using CPU")
+        logger.info("使用CPU")
         return "cpu"
     except ImportError:
         return "cpu"
@@ -87,13 +87,13 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
 
 def get_memory_info(device: str = "cuda:0") -> Optional[Tuple[float, float]]:
     """
-    Get GPU memory usage.
+    获取GPU内存使用情况
 
-    Args:
-        device: Device string
+    参数:
+        device: 设备字符串
 
-    Returns:
-        Tuple of (used_gb, total_gb) or None if not available
+    返回:
+        (已用GB, 总共GB) 元组，如不可用则返回None
     """
     try:
         import torch
@@ -103,17 +103,17 @@ def get_memory_info(device: str = "cuda:0") -> Optional[Tuple[float, float]]:
             total = torch.cuda.get_device_properties(device_idx).total_memory / (1024**3)
             return (allocated, total)
     except Exception as e:
-        logger.error(f"Error getting memory info: {e}")
+        logger.error(f"获取内存信息时出错: {e}")
 
     return None
 
 
 def clear_gpu_memory() -> None:
-    """Clear GPU memory cache."""
+    """清除GPU内存缓存"""
     try:
         import torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            logger.info("GPU memory cache cleared")
+            logger.info("GPU内存缓存已清除")
     except Exception as e:
-        logger.error(f"Error clearing GPU memory: {e}")
+        logger.error(f"清除GPU内存时出错: {e}")

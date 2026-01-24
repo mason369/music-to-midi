@@ -1,5 +1,5 @@
 """
-Lyrics recognition module using Whisper and WhisperX.
+歌词识别模块 - 使用 Whisper 和 WhisperX
 """
 import logging
 from typing import List, Optional, Callable
@@ -10,28 +10,28 @@ from src.utils.gpu_utils import get_device, clear_gpu_memory
 
 logger = logging.getLogger(__name__)
 
-# Suppress whisper warnings
+# 抑制 whisper 警告
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class LyricsRecognizer:
     """
-    Lyrics recognition and alignment using Whisper and WhisperX.
+    使用 Whisper 和 WhisperX 进行歌词识别和对齐
 
-    Features:
-    - Automatic speech recognition
-    - Word-level timestamp alignment
-    - Multi-language support
+    功能特点:
+    - 自动语音识别
+    - 单词级时间戳对齐
+    - 多语言支持
     """
 
     AVAILABLE_MODELS = ["tiny", "base", "small", "medium", "large"]
 
     def __init__(self, config: Config):
         """
-        Initialize lyrics recognizer.
+        初始化歌词识别器
 
-        Args:
-            config: Application configuration
+        参数:
+            config: 应用配置
         """
         self.config = config
         self.model_size = config.whisper_model
@@ -41,11 +41,11 @@ class LyricsRecognizer:
         self.align_model = None
 
     def load_model(self) -> None:
-        """Load Whisper model."""
+        """加载 Whisper 模型"""
         if self.model is not None:
             return
 
-        logger.info(f"Loading Whisper model: {self.model_size}")
+        logger.info(f"正在加载 Whisper 模型: {self.model_size}")
 
         try:
             import whisperx
@@ -58,14 +58,14 @@ class LyricsRecognizer:
                 compute_type=compute_type
             )
 
-            logger.info(f"Whisper model loaded on {self.device}")
+            logger.info(f"Whisper 模型已加载到 {self.device}")
 
         except ImportError as e:
-            logger.error("WhisperX not installed. Install with: pip install whisperx")
-            raise ImportError("WhisperX is required for lyrics recognition") from e
+            logger.error("WhisperX 未安装，请运行: pip install whisperx")
+            raise ImportError("歌词识别需要 WhisperX 库") from e
 
     def unload_model(self) -> None:
-        """Unload models to free memory."""
+        """卸载模型以释放内存"""
         if self.model is not None:
             del self.model
             self.model = None
@@ -75,7 +75,7 @@ class LyricsRecognizer:
             self.align_model = None
 
         clear_gpu_memory()
-        logger.info("Whisper models unloaded")
+        logger.info("Whisper 模型已卸载")
 
     def recognize(
         self,
@@ -83,30 +83,30 @@ class LyricsRecognizer:
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> List[LyricEvent]:
         """
-        Recognize lyrics from audio and get word-level timestamps.
+        从音频识别歌词并获取单词级时间戳
 
-        Args:
-            audio_path: Path to audio file (preferably isolated vocals)
-            progress_callback: Optional progress callback
+        参数:
+            audio_path: 音频文件路径（最好是分离后的人声）
+            progress_callback: 可选的进度回调
 
-        Returns:
-            List of LyricEvent objects with timestamps
+        返回:
+            带时间戳的 LyricEvent 对象列表
         """
         import whisperx
 
         self.load_model()
 
         if progress_callback:
-            progress_callback(0.0, "Loading audio...")
+            progress_callback(0.0, "正在加载音频...")
 
-        # Load audio
-        logger.info(f"Recognizing lyrics: {audio_path}")
+        # 加载音频
+        logger.info(f"正在识别歌词: {audio_path}")
         audio = whisperx.load_audio(audio_path)
 
         if progress_callback:
-            progress_callback(0.2, "Transcribing...")
+            progress_callback(0.2, "正在转录...")
 
-        # Transcribe
+        # 转录
         result = self.model.transcribe(
             audio,
             batch_size=16,
@@ -114,23 +114,23 @@ class LyricsRecognizer:
         )
 
         detected_language = result.get("language", "en")
-        logger.info(f"Detected language: {detected_language}")
+        logger.info(f"检测到语言: {detected_language}")
 
         if progress_callback:
-            progress_callback(0.5, "Aligning words...")
+            progress_callback(0.5, "正在对齐单词...")
 
-        # Load alignment model for detected language
+        # 加载检测到语言的对齐模型
         try:
             align_model, metadata = whisperx.load_align_model(
                 language_code=detected_language,
                 device=self.device
             )
         except Exception as e:
-            logger.warning(f"Could not load alignment model: {e}")
-            # Fall back to segment-level timestamps
+            logger.warning(f"无法加载对齐模型: {e}")
+            # 回退到段落级时间戳
             return self._extract_segment_lyrics(result)
 
-        # Align
+        # 对齐
         aligned = whisperx.align(
             result["segments"],
             align_model,
@@ -141,19 +141,19 @@ class LyricsRecognizer:
         )
 
         if progress_callback:
-            progress_callback(0.9, "Processing lyrics...")
+            progress_callback(0.9, "正在处理歌词...")
 
-        # Extract lyrics
+        # 提取歌词
         lyrics = self._extract_word_lyrics(aligned)
 
         if progress_callback:
-            progress_callback(1.0, f"Found {len(lyrics)} words")
+            progress_callback(1.0, f"发现 {len(lyrics)} 个单词")
 
-        logger.info(f"Recognized {len(lyrics)} words/syllables")
+        logger.info(f"识别了 {len(lyrics)} 个单词/音节")
         return lyrics
 
     def _extract_word_lyrics(self, aligned_result: dict) -> List[LyricEvent]:
-        """Extract word-level lyrics from aligned result."""
+        """从对齐结果中提取单词级歌词"""
         lyrics = []
 
         for segment in aligned_result.get("segments", []):
@@ -171,13 +171,13 @@ class LyricsRecognizer:
                         confidence=float(score) if score else 1.0
                     ))
 
-        # Sort by start time
+        # 按开始时间排序
         lyrics.sort(key=lambda l: l.start_time)
 
         return lyrics
 
     def _extract_segment_lyrics(self, result: dict) -> List[LyricEvent]:
-        """Extract segment-level lyrics (fallback)."""
+        """提取段落级歌词（回退方案）"""
         lyrics = []
 
         for segment in result.get("segments", []):
@@ -186,7 +186,7 @@ class LyricsRecognizer:
             end = segment.get("end", start + 1)
 
             if text:
-                # Split into words
+                # 分割为单词
                 words = text.split()
                 duration = (end - start) / len(words) if words else end - start
 
@@ -198,11 +198,11 @@ class LyricsRecognizer:
                         text=word,
                         start_time=float(word_start),
                         end_time=float(word_end),
-                        confidence=0.8  # Lower confidence for segment-level
+                        confidence=0.8  # 段落级置信度较低
                     ))
 
         return lyrics
 
     def get_full_text(self, lyrics: List[LyricEvent]) -> str:
-        """Get full lyrics text from events."""
+        """从事件中获取完整歌词文本"""
         return " ".join(lyric.text for lyric in lyrics)

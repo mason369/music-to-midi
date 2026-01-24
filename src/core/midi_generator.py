@@ -1,5 +1,5 @@
 """
-MIDI generation module with lyrics embedding.
+MIDI生成模块 - 支持歌词嵌入
 """
 import logging
 import os
@@ -14,45 +14,45 @@ logger = logging.getLogger(__name__)
 
 class MidiGenerator:
     """
-    MIDI file generation with multi-track support and lyrics embedding.
+    MIDI 文件生成器，支持多轨道和歌词嵌入
 
-    Features:
-    - Multi-track MIDI creation
-    - Lyrics Meta Event embedding (0xFF 0x05)
-    - LRC file export
-    - Configurable tempo and instruments
+    功能特点:
+    - 多轨道 MIDI 创建
+    - 歌词元事件嵌入 (0xFF 0x05)
+    - LRC 文件导出
+    - 可配置速度和乐器
     """
 
-    # MIDI channel mapping for different track types
+    # 不同轨道类型的 MIDI 通道映射
     CHANNEL_MAP = {
-        TrackType.DRUMS: 9,     # GM standard drum channel
+        TrackType.DRUMS: 9,     # GM 标准鼓通道
         TrackType.BASS: 0,
         TrackType.VOCALS: 1,
         TrackType.OTHER: 2
     }
 
-    # GM program numbers for different track types
+    # 不同轨道类型的 GM 音色编号
     PROGRAM_MAP = {
-        TrackType.DRUMS: 0,      # Drums don't need program change
-        TrackType.BASS: 33,      # Electric Bass (finger)
-        TrackType.VOCALS: 52,    # Choir Aahs
-        TrackType.OTHER: 0       # Acoustic Grand Piano
+        TrackType.DRUMS: 0,      # 鼓组不需要音色变更
+        TrackType.BASS: 33,      # 电贝斯（指弹）
+        TrackType.VOCALS: 52,    # 合唱
+        TrackType.OTHER: 0       # 原声大钢琴
     }
 
-    # Track names
+    # 轨道名称
     TRACK_NAMES = {
-        TrackType.DRUMS: "Drums",
-        TrackType.BASS: "Bass",
-        TrackType.VOCALS: "Vocals",
-        TrackType.OTHER: "Other Instruments"
+        TrackType.DRUMS: "鼓",
+        TrackType.BASS: "贝斯",
+        TrackType.VOCALS: "人声",
+        TrackType.OTHER: "其他乐器"
     }
 
     def __init__(self, config: Config):
         """
-        Initialize MIDI generator.
+        初始化 MIDI 生成器
 
-        Args:
-            config: Application configuration
+        参数:
+            config: 应用配置
         """
         self.config = config
         self.ticks_per_beat = config.ticks_per_beat
@@ -66,33 +66,33 @@ class MidiGenerator:
         embed_lyrics: bool = True
     ) -> str:
         """
-        Generate multi-track MIDI file with optional lyrics.
+        生成带可选歌词的多轨道 MIDI 文件
 
-        Args:
-            tracks: Dictionary mapping TrackType to note events
-            lyrics: List of lyric events with timestamps
+        参数:
+            tracks: 轨道类型到音符事件的字典
+            lyrics: 带时间戳的歌词事件列表
             tempo: BPM
-            output_path: Output MIDI file path
-            embed_lyrics: Whether to embed lyrics as meta events
+            output_path: 输出 MIDI 文件路径
+            embed_lyrics: 是否将歌词作为元事件嵌入
 
-        Returns:
-            Path to generated MIDI file
+        返回:
+            生成的 MIDI 文件路径
         """
-        logger.info(f"Generating MIDI: {output_path}")
+        logger.info(f"正在生成 MIDI: {output_path}")
 
-        # Create MIDI file
+        # 创建 MIDI 文件
         mid = MidiFile(ticks_per_beat=self.ticks_per_beat)
 
-        # Track 0: Tempo and lyrics (conductor track)
+        # 轨道 0: 速度和歌词（指挥轨道）
         meta_track = MidiTrack()
         mid.tracks.append(meta_track)
-        meta_track.name = "Conductor"
+        meta_track.name = "指挥轨道"
 
-        # Set tempo
+        # 设置速度
         tempo_value = mido.bpm2tempo(tempo)
         meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
 
-        # Set time signature (4/4)
+        # 设置拍号 (4/4)
         meta_track.append(MetaMessage(
             'time_signature',
             numerator=4,
@@ -102,25 +102,25 @@ class MidiGenerator:
             time=0
         ))
 
-        # Add lyrics to conductor track
+        # 将歌词添加到指挥轨道
         if embed_lyrics and lyrics:
             self._add_lyrics_events(meta_track, lyrics, tempo)
 
-        # End of track
+        # 轨道结束
         meta_track.append(MetaMessage('end_of_track', time=0))
 
-        # Create tracks for each stem
+        # 为每个音源创建轨道
         for track_type, notes in tracks.items():
             if notes:
                 track = self._create_track(track_type, notes, tempo)
                 mid.tracks.append(track)
 
-        # Ensure output directory exists
+        # 确保输出目录存在
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
 
-        # Save MIDI file
+        # 保存 MIDI 文件
         mid.save(output_path)
-        logger.info(f"MIDI saved: {output_path}")
+        logger.info(f"MIDI 已保存: {output_path}")
 
         return output_path
 
@@ -131,23 +131,23 @@ class MidiGenerator:
         tempo: float
     ) -> None:
         """
-        Add lyrics as MIDI Meta Events.
+        将歌词添加为 MIDI 元事件
 
-        Args:
-            track: MIDI track to add lyrics to
-            lyrics: List of lyric events
-            tempo: BPM for time conversion
+        参数:
+            track: 要添加歌词的 MIDI 轨道
+            lyrics: 歌词事件列表
+            tempo: 用于时间转换的 BPM
         """
-        logger.info(f"Embedding {len(lyrics)} lyrics events")
+        logger.info(f"正在嵌入 {len(lyrics)} 个歌词事件")
 
         current_tick = 0
 
         for lyric in sorted(lyrics, key=lambda l: l.start_time):
-            # Convert time to ticks
+            # 将时间转换为 ticks
             tick = self._time_to_ticks(lyric.start_time, tempo)
             delta = max(0, tick - current_tick)
 
-            # Add lyrics meta event
+            # 添加歌词元事件
             try:
                 track.append(MetaMessage(
                     'lyrics',
@@ -156,7 +156,7 @@ class MidiGenerator:
                 ))
                 current_tick = tick
             except Exception as e:
-                logger.warning(f"Could not add lyric '{lyric.text}': {e}")
+                logger.warning(f"无法添加歌词 '{lyric.text}': {e}")
 
     def _create_track(
         self,
@@ -165,23 +165,23 @@ class MidiGenerator:
         tempo: float
     ) -> MidiTrack:
         """
-        Create a MIDI track with notes.
+        创建带音符的 MIDI 轨道
 
-        Args:
-            track_type: Type of track
-            notes: Note events
+        参数:
+            track_type: 轨道类型
+            notes: 音符事件
             tempo: BPM
 
-        Returns:
-            MidiTrack with notes
+        返回:
+            带音符的 MidiTrack
         """
         track = MidiTrack()
-        track.name = self.TRACK_NAMES.get(track_type, "Track")
+        track.name = self.TRACK_NAMES.get(track_type, "轨道")
 
         channel = self.CHANNEL_MAP.get(track_type, 0)
         program = self.PROGRAM_MAP.get(track_type, 0)
 
-        # Program change (not for drums)
+        # 音色变更（鼓组除外）
         if track_type != TrackType.DRUMS:
             track.append(Message(
                 'program_change',
@@ -190,10 +190,10 @@ class MidiGenerator:
                 time=0
             ))
 
-        # Sort notes by start time
+        # 按开始时间排序音符
         sorted_notes = sorted(notes, key=lambda n: n.start_time)
 
-        # Create note on/off events
+        # 创建音符开/关事件
         events = []
         for note in sorted_notes:
             start_tick = self._time_to_ticks(note.start_time, tempo)
@@ -214,10 +214,10 @@ class MidiGenerator:
                 'channel': channel
             })
 
-        # Sort events by tick
+        # 按 tick 排序事件
         events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
 
-        # Add events with delta times
+        # 添加带增量时间的事件
         current_tick = 0
         for event in events:
             delta = max(0, event['tick'] - current_tick)
@@ -241,22 +241,22 @@ class MidiGenerator:
 
             current_tick = event['tick']
 
-        # End of track
+        # 轨道结束
         track.append(MetaMessage('end_of_track', time=0))
 
-        logger.info(f"Created {track_type.value} track with {len(sorted_notes)} notes")
+        logger.info(f"已创建 {track_type.value} 轨道，包含 {len(sorted_notes)} 个音符")
 
         return track
 
     def _time_to_ticks(self, time_seconds: float, tempo: float) -> int:
         """
-        Convert time in seconds to MIDI ticks.
+        将秒转换为 MIDI ticks
 
-        Args:
-            time_seconds: Time in seconds
+        参数:
+            time_seconds: 时间（秒）
             tempo: BPM
 
-        Returns:
+        返回:
             MIDI ticks
         """
         # ticks = time * (ticks_per_beat * bpm / 60)
@@ -271,40 +271,40 @@ class MidiGenerator:
         artist: str = ""
     ) -> str:
         """
-        Export lyrics to LRC format.
+        将歌词导出为 LRC 格式
 
-        Args:
-            lyrics: List of lyric events
-            output_path: Output LRC file path
-            title: Song title (optional)
-            artist: Artist name (optional)
+        参数:
+            lyrics: 歌词事件列表
+            output_path: 输出 LRC 文件路径
+            title: 歌曲标题（可选）
+            artist: 艺术家名称（可选）
 
-        Returns:
-            Path to LRC file
+        返回:
+            LRC 文件路径
         """
-        logger.info(f"Exporting LRC: {output_path}")
+        logger.info(f"正在导出 LRC: {output_path}")
 
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
 
         with open(output_path, 'w', encoding='utf-8') as f:
-            # Write metadata
+            # 写入元数据
             if title:
                 f.write(f"[ti:{title}]\n")
             if artist:
                 f.write(f"[ar:{artist}]\n")
-            f.write("[by:Music to MIDI Converter]\n")
+            f.write("[by:音乐转MIDI转换器]\n")
             f.write("\n")
 
-            # Group lyrics by line
+            # 按行分组歌词
             lines = self._group_lyrics_by_line(lyrics)
 
-            # Write lyrics
+            # 写入歌词
             for line_start, line_text in lines:
                 minutes = int(line_start // 60)
                 seconds = line_start % 60
                 f.write(f"[{minutes:02d}:{seconds:05.2f}]{line_text}\n")
 
-        logger.info(f"LRC saved: {output_path}")
+        logger.info(f"LRC 已保存: {output_path}")
         return output_path
 
     def _group_lyrics_by_line(
@@ -313,14 +313,14 @@ class MidiGenerator:
         gap_threshold: float = 1.5
     ) -> List[tuple]:
         """
-        Group lyrics into lines based on timing gaps.
+        根据时间间隔将歌词分组为行
 
-        Args:
-            lyrics: List of lyric events
-            gap_threshold: Time gap to start new line
+        参数:
+            lyrics: 歌词事件列表
+            gap_threshold: 开始新行的时间间隔
 
-        Returns:
-            List of (start_time, line_text) tuples
+        返回:
+            (开始时间, 行文本) 元组列表
         """
         if not lyrics:
             return []
@@ -331,11 +331,11 @@ class MidiGenerator:
         current_line_words = []
 
         for i, lyric in enumerate(sorted_lyrics):
-            # Check if we should start a new line
+            # 检查是否应该开始新行
             if i > 0:
                 gap = lyric.start_time - sorted_lyrics[i-1].end_time
                 if gap > gap_threshold:
-                    # Save current line
+                    # 保存当前行
                     if current_line_words:
                         lines.append((current_line_start, " ".join(current_line_words)))
                     current_line_start = lyric.start_time
@@ -343,7 +343,7 @@ class MidiGenerator:
 
             current_line_words.append(lyric.text)
 
-        # Add last line
+        # 添加最后一行
         if current_line_words:
             lines.append((current_line_start, " ".join(current_line_words)))
 

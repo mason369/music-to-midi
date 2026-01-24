@@ -1,5 +1,5 @@
 """
-Drag and drop zone widget for file input.
+文件拖放区域组件 - 用于文件输入
 """
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -14,7 +14,7 @@ from src.utils.audio_utils import get_supported_formats, is_supported_format
 
 class DropZoneWidget(QWidget):
     """
-    Widget for drag-and-drop file input.
+    拖放文件输入组件
     """
 
     file_selected = pyqtSignal(str)
@@ -25,11 +25,11 @@ class DropZoneWidget(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Set up the user interface."""
+        """设置用户界面"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 40, 20, 40)
 
-        # Title
+        # 标题
         self.title_label = QLabel(t("main.dropzone.title"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setStyleSheet("""
@@ -40,7 +40,7 @@ class DropZoneWidget(QWidget):
             }
         """)
 
-        # Subtitle
+        # 副标题
         self.subtitle_label = QLabel(t("main.dropzone.subtitle"))
         self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.subtitle_label.setStyleSheet("""
@@ -50,12 +50,12 @@ class DropZoneWidget(QWidget):
             }
         """)
 
-        # Browse button
+        # 浏览按钮
         self.browse_btn = QPushButton(t("main.output.browse"))
         self.browse_btn.setFixedWidth(120)
         self.browse_btn.clicked.connect(self._on_browse)
 
-        # Selected file label
+        # 已选文件标签
         self.file_label = QLabel()
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_label.setStyleSheet("""
@@ -69,7 +69,7 @@ class DropZoneWidget(QWidget):
         """)
         self.file_label.hide()
 
-        # Add widgets
+        # 添加组件
         layout.addStretch()
         layout.addWidget(self.title_label)
         layout.addWidget(self.subtitle_label)
@@ -85,7 +85,7 @@ class DropZoneWidget(QWidget):
         layout.addWidget(self.file_label)
         layout.addStretch()
 
-        # Style
+        # 样式
         self.setStyleSheet("""
             DropZoneWidget {
                 background: #fafafa;
@@ -99,7 +99,7 @@ class DropZoneWidget(QWidget):
         """)
 
     def _on_browse(self):
-        """Handle browse button click."""
+        """处理浏览按钮点击"""
         formats = get_supported_formats()
         filter_str = f"{t('dialogs.openFile.filter')} (*{' *'.join(formats)})"
 
@@ -114,13 +114,13 @@ class DropZoneWidget(QWidget):
             self._set_file(file_path)
 
     def _set_file(self, file_path: str):
-        """Set selected file."""
+        """设置已选文件"""
         self.file_label.setText(f"{t('main.dropzone.selected')}: {Path(file_path).name}")
         self.file_label.show()
         self.file_selected.emit(file_path)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter event."""
+        """处理拖入事件"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if urls and is_supported_format(urls[0].toLocalFile()):
@@ -134,7 +134,7 @@ class DropZoneWidget(QWidget):
                 """)
 
     def dragLeaveEvent(self, event):
-        """Handle drag leave event."""
+        """处理拖出事件"""
         self.setStyleSheet("""
             DropZoneWidget {
                 background: #fafafa;
@@ -144,7 +144,7 @@ class DropZoneWidget(QWidget):
         """)
 
     def dropEvent(self, event: QDropEvent):
-        """Handle drop event."""
+        """处理放下事件"""
         urls = event.mimeData().urls()
         if urls:
             file_path = urls[0].toLocalFile()
@@ -160,7 +160,7 @@ class DropZoneWidget(QWidget):
         """)
 
     def update_translations(self):
-        """Update text for current language."""
+        """更新当前语言的文本"""
         self.title_label.setText(t("main.dropzone.title"))
         self.subtitle_label.setText(t("main.dropzone.subtitle"))
         self.browse_btn.setText(t("main.output.browse"))

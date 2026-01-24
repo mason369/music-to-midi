@@ -1,5 +1,5 @@
 """
-Audio to MIDI transcription module using Basic Pitch.
+音频转MIDI模块 - 使用 Basic Pitch
 """
 import logging
 from pathlib import Path
@@ -14,20 +14,20 @@ logger = logging.getLogger(__name__)
 
 class AudioTranscriber:
     """
-    Audio to MIDI transcription using Basic Pitch (Spotify).
+    使用 Basic Pitch (Spotify) 进行音频转MIDI转写
 
-    Features:
-    - Polyphonic pitch detection
-    - Instrument-agnostic transcription
-    - Pitch bend detection
+    功能特点:
+    - 多音音高检测
+    - 乐器无关转写
+    - 音高弯曲检测
     """
 
     def __init__(self, config: Config):
         """
-        Initialize transcriber.
+        初始化转写器
 
-        Args:
-            config: Application configuration
+        参数:
+            config: 应用配置
         """
         self.config = config
         self.onset_threshold = config.onset_threshold
@@ -42,32 +42,32 @@ class AudioTranscriber:
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> List[NoteEvent]:
         """
-        Transcribe audio file to MIDI note events.
+        将音频文件转写为MIDI音符事件
 
-        Args:
-            audio_path: Path to audio file
-            track_type: Type of track (affects processing parameters)
-            progress_callback: Optional progress callback
+        参数:
+            audio_path: 音频文件路径
+            track_type: 轨道类型（影响处理参数）
+            progress_callback: 可选的进度回调
 
-        Returns:
-            List of NoteEvent objects
+        返回:
+            NoteEvent 对象列表
         """
-        logger.info(f"Transcribing: {audio_path} (type: {track_type.value})")
+        logger.info(f"正在转写: {audio_path} (类型: {track_type.value})")
 
         if progress_callback:
-            progress_callback(0.0, f"Transcribing {track_type.value}...")
+            progress_callback(0.0, f"正在转写 {track_type.value}...")
 
         try:
             from basic_pitch.inference import predict
             from basic_pitch import ICASSP_2022_MODEL_PATH
 
-            # Adjust thresholds based on track type
+            # 根据轨道类型调整阈值
             onset_thresh, frame_thresh = self._get_thresholds(track_type)
 
             if progress_callback:
-                progress_callback(0.3, "Running pitch detection...")
+                progress_callback(0.3, "正在进行音高检测...")
 
-            # Run prediction
+            # 运行预测
             model_output, midi_data, note_events = predict(
                 audio_path,
                 onset_threshold=onset_thresh,
@@ -80,35 +80,35 @@ class AudioTranscriber:
             )
 
             if progress_callback:
-                progress_callback(0.8, "Processing note events...")
+                progress_callback(0.8, "正在处理音符事件...")
 
-            # Convert to our NoteEvent format
+            # 转换为我们的 NoteEvent 格式
             notes = self._process_note_events(note_events, track_type)
 
             if progress_callback:
-                progress_callback(1.0, f"Found {len(notes)} notes")
+                progress_callback(1.0, f"发现 {len(notes)} 个音符")
 
-            logger.info(f"Transcribed {len(notes)} notes from {track_type.value}")
+            logger.info(f"从 {track_type.value} 转写了 {len(notes)} 个音符")
             return notes
 
         except ImportError as e:
-            logger.error("Basic Pitch not installed. Install with: pip install basic-pitch")
-            raise ImportError("Basic Pitch is required for transcription") from e
+            logger.error("Basic Pitch 未安装，请运行: pip install basic-pitch")
+            raise ImportError("转写需要 Basic Pitch 库") from e
 
     def _get_thresholds(self, track_type: TrackType) -> Tuple[float, float]:
-        """Get optimized thresholds for track type."""
-        # Adjust thresholds based on track characteristics
+        """获取针对轨道类型优化的阈值"""
+        # 根据轨道特征调整阈值
         if track_type == TrackType.DRUMS:
-            # Higher thresholds for drums (transient-heavy)
+            # 鼓使用较高阈值（瞬态较多）
             return 0.6, 0.4
         elif track_type == TrackType.BASS:
-            # Lower thresholds for bass (sustained notes)
+            # 贝斯使用较低阈值（持续音符）
             return 0.4, 0.25
         elif track_type == TrackType.VOCALS:
-            # Medium thresholds for vocals
+            # 人声使用中等阈值
             return 0.5, 0.3
         else:
-            # Default thresholds
+            # 默认阈值
             return self.onset_threshold, self.frame_threshold
 
     def _process_note_events(
@@ -117,27 +117,27 @@ class AudioTranscriber:
         track_type: TrackType
     ) -> List[NoteEvent]:
         """
-        Process raw note events into NoteEvent objects.
+        将原始音符事件处理为 NoteEvent 对象
 
-        Args:
-            note_events: Raw note events from Basic Pitch
-            track_type: Track type for velocity adjustment
+        参数:
+            note_events: Basic Pitch 的原始音符事件
+            track_type: 用于力度调整的轨道类型
 
-        Returns:
-            List of NoteEvent objects
+        返回:
+            NoteEvent 对象列表
         """
         notes = []
 
         for start_time, end_time, pitch, velocity, pitch_bends in note_events:
-            # Ensure pitch is in valid MIDI range
+            # 确保音高在有效的 MIDI 范围内
             midi_pitch = int(round(pitch))
             if midi_pitch < 0 or midi_pitch > 127:
                 continue
 
-            # Normalize velocity to 0-127
+            # 将力度归一化到 0-127
             midi_velocity = int(np.clip(velocity * 127, 1, 127))
 
-            # Apply track-specific velocity scaling
+            # 应用轨道特定的力度缩放
             midi_velocity = self._adjust_velocity(midi_velocity, track_type)
 
             note = NoteEvent(
@@ -148,21 +148,21 @@ class AudioTranscriber:
             )
             notes.append(note)
 
-        # Sort by start time
+        # 按开始时间排序
         notes.sort(key=lambda n: n.start_time)
 
         return notes
 
     def _adjust_velocity(self, velocity: int, track_type: TrackType) -> int:
-        """Adjust velocity based on track type."""
+        """根据轨道类型调整力度"""
         if track_type == TrackType.DRUMS:
-            # Drums are typically louder
+            # 鼓通常更响
             velocity = int(velocity * 1.1)
         elif track_type == TrackType.BASS:
-            # Bass is typically more consistent
+            # 贝斯通常更一致
             velocity = int(velocity * 0.95)
         elif track_type == TrackType.VOCALS:
-            # Vocals have dynamic range
+            # 人声有动态范围
             pass
 
         return int(np.clip(velocity, 1, 127))
@@ -174,19 +174,19 @@ class AudioTranscriber:
         track_type: TrackType = TrackType.OTHER
     ) -> str:
         """
-        Transcribe audio directly to MIDI file.
+        将音频直接转写为 MIDI 文件
 
-        Args:
-            audio_path: Input audio path
-            output_path: Output MIDI path
-            track_type: Track type
+        参数:
+            audio_path: 输入音频路径
+            output_path: 输出 MIDI 路径
+            track_type: 轨道类型
 
-        Returns:
-            Path to output MIDI file
+        返回:
+            输出 MIDI 文件路径
         """
         from basic_pitch.inference import predict_and_save
 
-        logger.info(f"Transcribing to MIDI: {audio_path} -> {output_path}")
+        logger.info(f"正在转写为 MIDI: {audio_path} -> {output_path}")
 
         onset_thresh, frame_thresh = self._get_thresholds(track_type)
 

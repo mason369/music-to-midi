@@ -1,5 +1,5 @@
 """
-Utility functions for audio processing.
+音频处理工具函数
 """
 import os
 import logging
@@ -16,21 +16,21 @@ def load_audio(
     mono: bool = True
 ) -> Tuple[np.ndarray, int]:
     """
-    Load audio file and return as numpy array.
+    加载音频文件并返回numpy数组
 
-    Args:
-        path: Path to audio file
-        sr: Target sample rate
-        mono: Whether to convert to mono
+    参数:
+        path: 音频文件路径
+        sr: 目标采样率
+        mono: 是否转换为单声道
 
-    Returns:
-        Tuple of (audio_data, sample_rate)
+    返回:
+        (音频数据, 采样率) 元组
     """
     import librosa
 
-    logger.info(f"Loading audio: {path}")
+    logger.info(f"正在加载音频: {path}")
     y, loaded_sr = librosa.load(path, sr=sr, mono=mono)
-    logger.info(f"Loaded audio: {len(y)/loaded_sr:.2f}s at {loaded_sr}Hz")
+    logger.info(f"已加载音频: {len(y)/loaded_sr:.2f}秒 采样率{loaded_sr}Hz")
 
     return y, loaded_sr
 
@@ -41,31 +41,31 @@ def save_audio(
     sr: int = 44100
 ) -> None:
     """
-    Save numpy array as audio file.
+    将numpy数组保存为音频文件
 
-    Args:
-        path: Output path
-        audio: Audio data as numpy array
-        sr: Sample rate
+    参数:
+        path: 输出路径
+        audio: 音频数据numpy数组
+        sr: 采样率
     """
     import soundfile as sf
 
-    # Ensure directory exists
+    # 确保目录存在
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    logger.info(f"Saving audio: {path}")
+    logger.info(f"正在保存音频: {path}")
     sf.write(path, audio, sr)
 
 
 def get_audio_duration(path: str) -> float:
     """
-    Get duration of audio file in seconds.
+    获取音频文件时长（秒）
 
-    Args:
-        path: Path to audio file
+    参数:
+        path: 音频文件路径
 
-    Returns:
-        Duration in seconds
+    返回:
+        时长（秒）
     """
     import librosa
 
@@ -75,13 +75,13 @@ def get_audio_duration(path: str) -> float:
 
 def normalize_audio(audio: np.ndarray) -> np.ndarray:
     """
-    Normalize audio to [-1, 1] range.
+    将音频归一化到 [-1, 1] 范围
 
-    Args:
-        audio: Audio data
+    参数:
+        audio: 音频数据
 
-    Returns:
-        Normalized audio
+    返回:
+        归一化后的音频
     """
     max_val = np.max(np.abs(audio))
     if max_val > 0:
@@ -95,15 +95,15 @@ def resample_audio(
     target_sr: int
 ) -> np.ndarray:
     """
-    Resample audio to target sample rate.
+    将音频重采样到目标采样率
 
-    Args:
-        audio: Audio data
-        orig_sr: Original sample rate
-        target_sr: Target sample rate
+    参数:
+        audio: 音频数据
+        orig_sr: 原始采样率
+        target_sr: 目标采样率
 
-    Returns:
-        Resampled audio
+    返回:
+        重采样后的音频
     """
     import librosa
 
@@ -114,27 +114,27 @@ def resample_audio(
 
 
 def get_supported_formats() -> list:
-    """Get list of supported audio formats."""
+    """获取支持的音频格式列表"""
     return [".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma"]
 
 
 def is_supported_format(path: str) -> bool:
-    """Check if file format is supported."""
+    """检查文件格式是否支持"""
     ext = Path(path).suffix.lower()
     return ext in get_supported_formats()
 
 
 def convert_to_wav(input_path: str, output_path: str, sr: int = 44100) -> str:
     """
-    Convert audio file to WAV format.
+    将音频文件转换为WAV格式
 
-    Args:
-        input_path: Input audio file path
-        output_path: Output WAV file path
-        sr: Target sample rate
+    参数:
+        input_path: 输入音频文件路径
+        output_path: 输出WAV文件路径
+        sr: 目标采样率
 
-    Returns:
-        Path to converted file
+    返回:
+        转换后文件的路径
     """
     audio, _ = load_audio(input_path, sr=sr, mono=False)
     save_audio(output_path, audio, sr)
