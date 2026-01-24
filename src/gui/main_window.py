@@ -121,11 +121,11 @@ class MainWindow(QMainWindow):
 
         title_label = QLabel(t("app.name"))
         title_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title_label.setStyleSheet("color: #2d3748;")
+        title_label.setStyleSheet("color: #e0e0e0;")
 
         subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
         subtitle_label.setFont(QFont("Segoe UI", 10))
-        subtitle_label.setStyleSheet("color: #718096;")
+        subtitle_label.setStyleSheet("color: #8892a0;")
 
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle_label)
@@ -140,10 +140,10 @@ class MainWindow(QMainWindow):
     def _add_shadow(self, widget: QWidget):
         """为组件添加阴影效果"""
         shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(20)
+        shadow.setBlurRadius(15)
         shadow.setXOffset(0)
-        shadow.setYOffset(4)
-        shadow.setColor(QColor(0, 0, 0, 30))
+        shadow.setYOffset(2)
+        shadow.setColor(QColor(0, 0, 0, 80))
         widget.setGraphicsEffect(shadow)
 
     def _create_output_settings(self) -> QGroupBox:
@@ -153,18 +153,18 @@ class MainWindow(QMainWindow):
             QGroupBox {
                 font-weight: bold;
                 font-size: 13px;
-                color: #2d3748;
-                border: 1px solid #e2e8f0;
+                color: #e0e0e0;
+                border: 1px solid #3a4a6a;
                 border-radius: 8px;
                 margin-top: 12px;
                 padding-top: 8px;
-                background: white;
+                background: #1f2940;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 16px;
                 padding: 0 8px;
-                background: white;
+                background: #1f2940;
             }
         """)
         layout = QVBoxLayout(group)
@@ -174,35 +174,36 @@ class MainWindow(QMainWindow):
         # 输出目录
         dir_layout = QHBoxLayout()
         self.output_dir_label = QLabel(t("main.output.directory") + ":")
-        self.output_dir_label.setStyleSheet("font-weight: normal; color: #4a5568;")
+        self.output_dir_label.setStyleSheet("font-weight: normal; color: #b0b8c8;")
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setText(str(Path.home() / "Music" / "MidiOutput"))
         self.output_dir_edit.setStyleSheet("""
             QLineEdit {
                 padding: 8px 12px;
-                border: 1px solid #e2e8f0;
+                border: 1px solid #3a4a6a;
                 border-radius: 6px;
-                background: #f7fafc;
+                background: #16213e;
+                color: #e0e0e0;
                 font-size: 12px;
             }
             QLineEdit:focus {
-                border-color: #667eea;
-                background: white;
+                border-color: #4a9eff;
+                background: #1f2940;
             }
         """)
         self.browse_dir_btn = QPushButton(t("main.output.browse"))
         self.browse_dir_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 16px;
-                background: #edf2f7;
-                border: 1px solid #e2e8f0;
+                background: #2a3f5f;
+                border: 1px solid #3a4a6a;
                 border-radius: 6px;
-                color: #4a5568;
+                color: #e0e0e0;
                 font-weight: 500;
             }
             QPushButton:hover {
-                background: #e2e8f0;
-                border-color: #cbd5e0;
+                background: #3a5a7c;
+                border-color: #4a9eff;
             }
         """)
         self.browse_dir_btn.clicked.connect(self._browse_output_dir)
@@ -218,21 +219,22 @@ class MainWindow(QMainWindow):
         checkbox_style = """
             QCheckBox {
                 font-size: 12px;
-                color: #4a5568;
+                color: #b0b8c8;
                 spacing: 8px;
             }
             QCheckBox::indicator {
                 width: 18px;
                 height: 18px;
                 border-radius: 4px;
-                border: 2px solid #cbd5e0;
+                border: 2px solid #3a4a6a;
+                background: #16213e;
             }
             QCheckBox::indicator:checked {
-                background: #667eea;
-                border-color: #667eea;
+                background: #4a9eff;
+                border-color: #4a9eff;
             }
             QCheckBox::indicator:hover {
-                border-color: #667eea;
+                border-color: #4a9eff;
             }
         """
 
@@ -274,8 +276,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
+                background: #4a9eff;
                 color: white;
                 font-weight: bold;
                 padding: 12px 24px;
@@ -283,16 +284,14 @@ class MainWindow(QMainWindow):
                 border: none;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7c8ff0, stop:1 #8b5cb8);
+                background: #5aafff;
             }
             QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #5a6fd6, stop:1 #6a4190);
+                background: #3a8eef;
             }
             QPushButton:disabled {
-                background: #cbd5e0;
-                color: #a0aec0;
+                background: #2a3f5f;
+                color: #5a6a8a;
             }
         """)
 
@@ -303,21 +302,21 @@ class MainWindow(QMainWindow):
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
             QPushButton {
-                background: #fc8181;
+                background: #e05050;
                 color: white;
                 padding: 12px 20px;
                 border-radius: 10px;
                 border: none;
             }
             QPushButton:hover {
-                background: #f56565;
+                background: #f06060;
             }
             QPushButton:pressed {
-                background: #e53e3e;
+                background: #d04040;
             }
             QPushButton:disabled {
-                background: #e2e8f0;
-                color: #a0aec0;
+                background: #2a3f5f;
+                color: #5a6a8a;
             }
         """)
 
@@ -330,61 +329,72 @@ class MainWindow(QMainWindow):
         return layout
 
     def _apply_modern_style(self):
-        """应用现代化样式"""
+        """应用现代化样式 - 专业音频软件风格"""
         self.setStyleSheet("""
             QMainWindow {
-                background: #f7fafc;
+                background: #1a1a2e;
             }
             QMenuBar {
-                background: white;
-                border-bottom: 1px solid #e2e8f0;
+                background: #16213e;
+                border-bottom: 1px solid #2a2a4a;
                 padding: 4px;
+                color: #e0e0e0;
             }
             QMenuBar::item {
                 padding: 6px 12px;
                 border-radius: 4px;
+                color: #e0e0e0;
             }
             QMenuBar::item:selected {
-                background: #edf2f7;
+                background: #2a3f5f;
             }
             QMenu {
-                background: white;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
+                background: #1f2940;
+                border: 1px solid #2a2a4a;
+                border-radius: 6px;
                 padding: 4px;
+                color: #e0e0e0;
             }
             QMenu::item {
                 padding: 8px 24px;
                 border-radius: 4px;
+                color: #e0e0e0;
             }
             QMenu::item:selected {
-                background: #edf2f7;
+                background: #3a5a7c;
             }
             QToolBar {
-                background: white;
-                border-bottom: 1px solid #e2e8f0;
+                background: #16213e;
+                border-bottom: 1px solid #2a2a4a;
                 spacing: 8px;
                 padding: 4px 8px;
             }
             QStatusBar {
-                background: white;
-                border-top: 1px solid #e2e8f0;
-                color: #718096;
+                background: #16213e;
+                border-top: 1px solid #2a2a4a;
+                color: #8892a0;
                 font-size: 11px;
             }
             QComboBox {
                 padding: 6px 12px;
-                border: 1px solid #e2e8f0;
+                border: 1px solid #3a4a6a;
                 border-radius: 6px;
-                background: white;
+                background: #1f2940;
+                color: #e0e0e0;
                 min-width: 100px;
             }
             QComboBox:hover {
-                border-color: #667eea;
+                border-color: #4a9eff;
             }
             QComboBox::drop-down {
                 border: none;
                 width: 24px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1f2940;
+                border: 1px solid #3a4a6a;
+                color: #e0e0e0;
+                selection-background-color: #3a5a7c;
             }
         """)
 
@@ -622,7 +632,7 @@ class MainWindow(QMainWindow):
 
         # 错误提示标签
         error_label = QLabel(t("dialogs.error.processingFailed"))
-        error_label.setStyleSheet("font-weight: bold; color: #e53e3e; font-size: 14px;")
+        error_label.setStyleSheet("font-weight: bold; color: #e05050; font-size: 14px;")
         layout.addWidget(error_label)
 
         # 错误详情文本框（可滚动，限制高度）
@@ -632,12 +642,13 @@ class MainWindow(QMainWindow):
         error_text.setMaximumHeight(200)
         error_text.setStyleSheet("""
             QTextEdit {
-                background: #f7fafc;
-                border: 1px solid #e2e8f0;
+                background: #16213e;
+                border: 1px solid #3a4a6a;
                 border-radius: 6px;
                 padding: 8px;
                 font-family: Consolas, monospace;
                 font-size: 11px;
+                color: #e0e0e0;
             }
         """)
         layout.addWidget(error_text)
@@ -651,14 +662,14 @@ class MainWindow(QMainWindow):
         copy_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 16px;
-                background: #edf2f7;
-                border: 1px solid #e2e8f0;
+                background: #2a3f5f;
+                border: 1px solid #3a4a6a;
                 border-radius: 6px;
-                color: #4a5568;
+                color: #e0e0e0;
                 font-weight: 500;
             }
             QPushButton:hover {
-                background: #e2e8f0;
+                background: #3a5a7c;
             }
         """)
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(error_msg))
@@ -668,14 +679,14 @@ class MainWindow(QMainWindow):
         ok_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 20px;
-                background: #667eea;
+                background: #4a9eff;
                 border: none;
                 border-radius: 6px;
                 color: white;
                 font-weight: 500;
             }
             QPushButton:hover {
-                background: #5a6fd6;
+                background: #5aafff;
             }
         """)
         ok_btn.clicked.connect(dialog.accept)

@@ -41,7 +41,7 @@ class DropZoneWidget(QWidget):
             QLabel {
                 font-size: 18px;
                 font-weight: bold;
-                color: #2d3748;
+                color: #e0e0e0;
             }
         """)
 
@@ -51,7 +51,7 @@ class DropZoneWidget(QWidget):
         self.subtitle_label.setStyleSheet("""
             QLabel {
                 font-size: 13px;
-                color: #718096;
+                color: #8892a0;
             }
         """)
 
@@ -62,8 +62,7 @@ class DropZoneWidget(QWidget):
         self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.browse_btn.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
+                background: #4a9eff;
                 color: white;
                 font-size: 13px;
                 font-weight: 600;
@@ -72,12 +71,10 @@ class DropZoneWidget(QWidget):
                 padding: 10px 20px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7c8ff0, stop:1 #8b5cb8);
+                background: #5aafff;
             }
             QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #5a6fd6, stop:1 #6a4190);
+                background: #3a8eef;
             }
         """)
         self.browse_btn.clicked.connect(self._on_browse)
@@ -88,12 +85,12 @@ class DropZoneWidget(QWidget):
         self.file_label.setStyleSheet("""
             QLabel {
                 font-size: 14px;
-                color: #2d3748;
+                color: #e0e0e0;
                 font-weight: 500;
                 padding: 12px 20px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #e0e7ff, stop:1 #c7d2fe);
+                background: #2a3f5f;
                 border-radius: 8px;
+                border: 1px solid #3a5a7c;
             }
         """)
         self.file_label.hide()
@@ -104,7 +101,7 @@ class DropZoneWidget(QWidget):
         self.format_label.setStyleSheet("""
             QLabel {
                 font-size: 11px;
-                color: #a0aec0;
+                color: #6a7a8a;
             }
         """)
 
@@ -135,8 +132,8 @@ class DropZoneWidget(QWidget):
         """应用默认样式"""
         self.setStyleSheet("""
             DropZoneWidget {
-                background: white;
-                border: 2px dashed #cbd5e0;
+                background: #1f2940;
+                border: 2px dashed #3a4a6a;
                 border-radius: 16px;
             }
         """)
@@ -145,8 +142,8 @@ class DropZoneWidget(QWidget):
         """应用悬停样式"""
         self.setStyleSheet("""
             DropZoneWidget {
-                background: #f7fafc;
-                border: 2px dashed #667eea;
+                background: #2a3f5f;
+                border: 2px dashed #4a9eff;
                 border-radius: 16px;
             }
         """)
@@ -180,8 +177,8 @@ class DropZoneWidget(QWidget):
                 event.acceptProposedAction()
                 self.setStyleSheet("""
                     DropZoneWidget {
-                        background: #f0fff4;
-                        border: 2px dashed #48bb78;
+                        background: #1a3a2a;
+                        border: 2px dashed #50c878;
                         border-radius: 16px;
                     }
                 """)

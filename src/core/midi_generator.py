@@ -39,12 +39,12 @@ class MidiGenerator:
         TrackType.OTHER: 0       # 原声大钢琴
     }
 
-    # 轨道名称
+    # 轨道名称 (使用ASCII兼容名称，因为MIDI元数据使用latin-1编码)
     TRACK_NAMES = {
-        TrackType.DRUMS: "鼓",
-        TrackType.BASS: "贝斯",
-        TrackType.VOCALS: "人声",
-        TrackType.OTHER: "其他乐器"
+        TrackType.DRUMS: "Drums",
+        TrackType.BASS: "Bass",
+        TrackType.VOCALS: "Vocals",
+        TrackType.OTHER: "Other"
     }
 
     def __init__(self, config: Config):
@@ -86,7 +86,7 @@ class MidiGenerator:
         # 轨道 0: 速度和歌词（指挥轨道）
         meta_track = MidiTrack()
         mid.tracks.append(meta_track)
-        meta_track.name = "指挥轨道"
+        meta_track.name = "Conductor"
 
         # 设置速度
         tempo_value = mido.bpm2tempo(tempo)
@@ -176,7 +176,7 @@ class MidiGenerator:
             带音符的 MidiTrack
         """
         track = MidiTrack()
-        track.name = self.TRACK_NAMES.get(track_type, "轨道")
+        track.name = self.TRACK_NAMES.get(track_type, "Track")
 
         channel = self.CHANNEL_MAP.get(track_type, 0)
         program = self.PROGRAM_MAP.get(track_type, 0)

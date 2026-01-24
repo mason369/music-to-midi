@@ -39,9 +39,10 @@ class TrackRow(QWidget):
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet("""
             QLabel {
-                background: #e0e0e0;
+                background: #16213e;
                 border-radius: 3px;
                 min-height: 20px;
+                border: 1px solid #3a4a6a;
             }
         """)
 
@@ -88,6 +89,45 @@ class TrackPanel(QGroupBox):
     def _setup_ui(self):
         """设置用户界面"""
         self.setTitle(t("main.tracks.title"))
+        self.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 13px;
+                color: #e0e0e0;
+                border: 1px solid #3a4a6a;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 8px;
+                background: #1f2940;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 16px;
+                padding: 0 8px;
+                background: #1f2940;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QCheckBox {
+                color: #b0b8c8;
+                spacing: 6px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                border: 2px solid #3a4a6a;
+                background: #16213e;
+            }
+            QCheckBox::indicator:checked {
+                background: #4a9eff;
+                border-color: #4a9eff;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #4a9eff;
+            }
+        """)
 
         layout = QVBoxLayout(self)
 

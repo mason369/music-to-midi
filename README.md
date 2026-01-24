@@ -12,6 +12,7 @@
 - **音频转MIDI**：使用AI驱动的音高检测（Basic Pitch）将每个轨道转换为MIDI
 - **歌词识别**：识别人声中的歌词，并以单词级时间戳嵌入MIDI
 - **多语言界面**：支持中文和英文界面切换
+- **专业深色主题**：现代化音频软件风格界面设计
 
 ## 平台支持
 
@@ -126,8 +127,10 @@ mypy src/
 # 安装PyInstaller
 pip install pyinstaller
 
-# 构建
-pyinstaller --name MusicToMidi --windowed --onedir src/main.py
+# 使用项目配置文件构建（推荐）
+pyinstaller MusicToMidi.spec
+
+# 构建产物在 dist/MusicToMidi/ 目录下
 ```
 
 ## 贡献
