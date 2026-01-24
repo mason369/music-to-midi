@@ -1,0 +1,143 @@
+{
+  "app": {
+    "name": "音乐转MIDI",
+    "version": "版本"
+  },
+  "menu": {
+    "file": "文件",
+    "open": "打开音频文件",
+    "save": "保存MIDI",
+    "export": "导出",
+    "exit": "退出",
+    "edit": "编辑",
+    "settings": "设置",
+    "view": "视图",
+    "help": "帮助",
+    "about": "关于"
+  },
+  "toolbar": {
+    "open": "打开",
+    "save": "保存",
+    "start": "开始",
+    "stop": "停止",
+    "settings": "设置"
+  },
+  "main": {
+    "dropzone": {
+      "title": "拖拽音频文件到此处，或点击选择",
+      "subtitle": "支持 MP3, WAV, FLAC, OGG",
+      "selected": "已选文件"
+    },
+    "tracks": {
+      "title": "轨道预览",
+      "vocals": "人声",
+      "drums": "鼓",
+      "bass": "贝斯",
+      "other": "其他乐器",
+      "lyrics": "歌词",
+      "midi": "MIDI"
+    },
+    "progress": {
+      "title": "处理进度",
+      "current": "当前",
+      "stages": {
+        "preprocessing": "预处理",
+        "separation": "音源分离",
+        "transcription": "音频转写",
+        "lyrics": "歌词识别",
+        "synthesis": "MIDI合成",
+        "complete": "完成"
+      }
+    },
+    "output": {
+      "title": "输出设置",
+      "directory": "输出目录",
+      "browse": "浏览...",
+      "options": {
+        "generateMidi": "生成MIDI文件",
+        "embedLyrics": "嵌入歌词",
+        "exportLrc": "导出LRC",
+        "saveTracks": "保存分离音轨",
+        "vocalsOnly": "仅导出人声"
+      }
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "general": {
+      "title": "通用设置",
+      "language": "界面语言",
+      "theme": "主题",
+      "autoUpdate": "自动检查更新"
+    },
+    "processing": {
+      "title": "处理设置",
+      "useGpu": "使用GPU加速",
+      "gpuDevice": "GPU设备",
+      "quality": "处理质量",
+      "whisperModel": "Whisper模型",
+      "lyricsLanguage": "歌词语言",
+      "autoDetect": "自动检测"
+    },
+    "midi": {
+      "title": "MIDI设置",
+      "ticksPerBeat": "Ticks/拍",
+      "defaultVelocity": "默认力度",
+      "noteThreshold": "音符检测阈值"
+    },
+    "buttons": {
+      "cancel": "取消",
+      "apply": "应用",
+      "ok": "确定"
+    }
+  },
+  "status": {
+    "ready": "就绪",
+    "processing": "处理中...",
+    "complete": "完成",
+    "error": "错误",
+    "gpu": "GPU",
+    "cpu": "CPU",
+    "memory": "内存"
+  },
+  "dialogs": {
+    "openFile": {
+      "title": "打开音频文件",
+      "filter": "音频文件"
+    },
+    "saveFile": {
+      "title": "保存MIDI文件",
+      "filter": "MIDI文件"
+    },
+    "selectDir": {
+      "title": "选择输出目录"
+    },
+    "confirm": {
+      "title": "确认",
+      "cancel": "取消处理？",
+      "overwrite": "文件已存在，是否覆盖？"
+    },
+    "error": {
+      "title": "错误",
+      "fileNotFound": "文件未找到",
+      "invalidFormat": "无效的文件格式",
+      "processingFailed": "处理失败"
+    },
+    "about": {
+      "title": "关于音乐转MIDI",
+      "description": "将音频转换为多轨道MIDI并嵌入歌词",
+      "author": "作者",
+      "license": "许可证"
+    }
+  },
+  "quality": {
+    "low": "低（快速）",
+    "medium": "中等",
+    "high": "高（质量优先）"
+  },
+  "theme": {
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统"
+  }
+}
