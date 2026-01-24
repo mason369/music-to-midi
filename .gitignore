@@ -93,3 +93,4 @@ temp/
 # Logs
 *.log
 logs/
+/.claude

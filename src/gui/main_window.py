@@ -16,7 +16,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
-from src.models.data_models import Config, ProcessingProgress, ProcessingResult, ProcessingStage
+from src.models.data_models import (
+    Config, ProcessingProgress, ProcessingResult, ProcessingStage,
+    TrackLayout, ProcessingMode
+)
 from src.gui.widgets.dropzone import DropZoneWidget
 from src.gui.widgets.track_panel import TrackPanel
 from src.gui.widgets.progress_widget import ProgressWidget
@@ -552,6 +555,12 @@ class MainWindow(QMainWindow):
         self.config.export_lrc = self.lrc_check.isChecked()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
 
+        # 获取轨道布局
+        track_layout = self.track_panel.get_track_layout()
+        self.config.processing_mode = track_layout.mode.value
+        if track_layout.mode == ProcessingMode.PIANO:
+            self.config.piano_track_count = len(track_layout.tracks)
+
         # 确保输出目录存在
         os.makedirs(self.config.output_dir, exist_ok=True)
 
@@ -560,7 +569,8 @@ class MainWindow(QMainWindow):
             self.current_file,
             self.config.output_dir,
             self.config,
-            self
+            self,
+            track_layout=track_layout
         )
 
         self.worker.progress_updated.connect(self._on_progress)

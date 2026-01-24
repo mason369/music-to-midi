@@ -29,14 +29,43 @@
       "subtitle": "Supports MP3, WAV, FLAC, OGG",
       "selected": "Selected file"
     },
+    "mode": {
+      "piano": "Piano Mode",
+      "smart": "Smart Detection",
+      "piano_tooltip": "Convert audio directly to multiple piano tracks, ideal for piano music",
+      "smart_tooltip": "Automatically detect instruments in the audio and transcribe separately"
+    },
+    "piano": {
+      "track_count": "Piano tracks:",
+      "hint": "Recommended: 2-4 (left/right hand separation)"
+    },
+    "smart": {
+      "hint": "Instruments will be detected after selecting audio file"
+    },
     "tracks": {
-      "title": "Track Preview",
+      "title": "Track Settings",
       "vocals": "Vocals",
       "drums": "Drums",
       "bass": "Bass",
+      "guitar": "Guitar",
+      "piano": "Piano",
+      "strings": "Strings",
       "other": "Other Instruments",
       "lyrics": "Lyrics",
-      "midi": "MIDI"
+      "midi": "MIDI",
+      "channel": "Channel:",
+      "program": "Sound:"
+    },
+    "programs": {
+      "piano": "Piano",
+      "acoustic_guitar": "Acoustic Guitar",
+      "steel_guitar": "Steel Guitar",
+      "acoustic_bass": "Acoustic Bass",
+      "electric_bass": "Electric Bass",
+      "strings": "String Ensemble",
+      "choir": "Choir",
+      "trumpet": "Trumpet",
+      "flute": "Flute"
     },
     "progress": {
       "title": "Processing Progress",

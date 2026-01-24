@@ -8,6 +8,9 @@ demucs>=4.0.0
 # Audio to MIDI transcription
 basic-pitch>=0.3.0
 
+# Instrument classification
+panns-inference>=0.1.0
+
 # Speech recognition and lyrics alignment
 openai-whisper>=20231117
 whisperx>=3.1.0

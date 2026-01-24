@@ -2,9 +2,10 @@
 处理工作线程 - 后台执行处理任务
 """
 import logging
+from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.models.data_models import Config, ProcessingProgress, ProcessingResult
+from src.models.data_models import Config, ProcessingProgress, ProcessingResult, TrackLayout
 from src.core.pipeline import MusicToMidiPipeline
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ class ProcessingWorker(QThread):
         audio_path: str,
         output_dir: str,
         config: Config,
-        parent=None
+        parent=None,
+        track_layout: Optional[TrackLayout] = None
     ):
         """
         初始化工作线程
@@ -37,12 +39,14 @@ class ProcessingWorker(QThread):
             output_dir: 输出目录
             config: 应用配置
             parent: 父QObject
+            track_layout: 可选的轨道布局
         """
         super().__init__(parent)
 
         self.audio_path = audio_path
         self.output_dir = output_dir
         self.config = config
+        self.track_layout = track_layout
         self.pipeline = MusicToMidiPipeline(config)
 
     def run(self):
@@ -53,7 +57,8 @@ class ProcessingWorker(QThread):
             result = self.pipeline.process(
                 self.audio_path,
                 self.output_dir,
-                self._on_progress
+                self._on_progress,
+                self.track_layout
             )
 
             self.processing_finished.emit(result)

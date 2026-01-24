@@ -1,13 +1,17 @@
 """
-MIDI生成模块 - 支持歌词嵌入
+MIDI生成模块 - 支持歌词嵌入和后处理优化
 """
 import logging
 import os
 from typing import List, Dict, Optional
+from copy import deepcopy
 import mido
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
-from src.models.data_models import Config, NoteEvent, LyricEvent, TrackType
+from src.models.data_models import (
+    Config, NoteEvent, LyricEvent, TrackType,
+    InstrumentType, TrackConfig, TrackLayout
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +266,425 @@ class MidiGenerator:
         # ticks = time * (ticks_per_beat * bpm / 60)
         ticks = int(time_seconds * self.ticks_per_beat * tempo / 60)
         return ticks
+
+    def _ticks_to_time(self, ticks: int, tempo: float) -> float:
+        """
+        将 MIDI ticks 转换为秒
+
+        参数:
+            ticks: MIDI ticks
+            tempo: BPM
+
+        返回:
+            时间（秒）
+        """
+        return ticks * 60 / (self.ticks_per_beat * tempo)
+
+    # ==================== 后处理方法 ====================
+
+    def _quantize_notes(
+        self,
+        notes: List[NoteEvent],
+        tempo: float,
+        grid: str = "1/16"
+    ) -> List[NoteEvent]:
+        """
+        将音符量化到指定的网格
+
+        参数:
+            notes: 音符列表
+            tempo: BPM
+            grid: 量化网格 ("1/4", "1/8", "1/16", "1/32")
+
+        返回:
+            量化后的音符列表
+        """
+        if not notes:
+            return notes
+
+        # 解析网格值
+        grid_map = {
+            "1/4": 1.0,
+            "1/8": 0.5,
+            "1/16": 0.25,
+            "1/32": 0.125
+        }
+        beats_per_grid = grid_map.get(grid, 0.25)
+
+        # 计算网格时间（秒）
+        grid_time = beats_per_grid * 60 / tempo
+
+        quantized = []
+        for note in notes:
+            # 量化开始时间
+            quantized_start = round(note.start_time / grid_time) * grid_time
+
+            # 量化时长（确保至少有一个网格单位）
+            duration = note.end_time - note.start_time
+            quantized_duration = max(grid_time, round(duration / grid_time) * grid_time)
+
+            quantized.append(NoteEvent(
+                pitch=note.pitch,
+                start_time=quantized_start,
+                end_time=quantized_start + quantized_duration,
+                velocity=note.velocity
+            ))
+
+        logger.debug(f"已量化 {len(notes)} 个音符到 {grid} 网格")
+        return quantized
+
+    def _remove_duplicate_notes(
+        self,
+        notes: List[NoteEvent],
+        time_threshold: float = 0.01
+    ) -> List[NoteEvent]:
+        """
+        去除重叠的重复音符
+
+        参数:
+            notes: 音符列表
+            time_threshold: 判断重复的时间阈值（秒）
+
+        返回:
+            去重后的音符列表
+        """
+        if not notes:
+            return notes
+
+        # 按开始时间和音高排序
+        sorted_notes = sorted(notes, key=lambda n: (n.start_time, n.pitch))
+
+        result = []
+        for note in sorted_notes:
+            is_duplicate = False
+            for existing in result:
+                # 检查是否是相同音高且时间重叠
+                if (existing.pitch == note.pitch and
+                    abs(existing.start_time - note.start_time) < time_threshold):
+                    # 保留较长的音符
+                    if note.duration > existing.duration:
+                        result.remove(existing)
+                    else:
+                        is_duplicate = True
+                    break
+
+            if not is_duplicate:
+                result.append(note)
+
+        removed_count = len(notes) - len(result)
+        if removed_count > 0:
+            logger.debug(f"已移除 {removed_count} 个重复音符")
+
+        return result
+
+    def _smooth_velocity(
+        self,
+        notes: List[NoteEvent],
+        window_size: int = 3,
+        min_velocity: int = 20
+    ) -> List[NoteEvent]:
+        """
+        平滑音符力度
+
+        参数:
+            notes: 音符列表
+            window_size: 平滑窗口大小
+            min_velocity: 最小力度值（低于此值的音符将被过滤）
+
+        返回:
+            力度平滑后的音符列表
+        """
+        if not notes or len(notes) < window_size:
+            return [n for n in notes if n.velocity >= min_velocity]
+
+        # 按开始时间排序
+        sorted_notes = sorted(notes, key=lambda n: n.start_time)
+
+        # 过滤低力度音符
+        filtered_notes = [n for n in sorted_notes if n.velocity >= min_velocity]
+
+        if len(filtered_notes) < window_size:
+            return filtered_notes
+
+        # 使用移动平均平滑力度
+        result = []
+        for i, note in enumerate(filtered_notes):
+            # 计算窗口范围
+            start_idx = max(0, i - window_size // 2)
+            end_idx = min(len(filtered_notes), i + window_size // 2 + 1)
+
+            # 计算窗口内的平均力度
+            window_velocities = [filtered_notes[j].velocity for j in range(start_idx, end_idx)]
+            avg_velocity = int(sum(window_velocities) / len(window_velocities))
+
+            # 混合原始力度和平均力度（保留一定的动态特征）
+            smoothed_velocity = int(note.velocity * 0.6 + avg_velocity * 0.4)
+            smoothed_velocity = max(min_velocity, min(127, smoothed_velocity))
+
+            result.append(NoteEvent(
+                pitch=note.pitch,
+                start_time=note.start_time,
+                end_time=note.end_time,
+                velocity=smoothed_velocity
+            ))
+
+        removed_count = len(notes) - len(result)
+        if removed_count > 0:
+            logger.debug(f"已过滤 {removed_count} 个低力度音符")
+
+        return result
+
+    def _limit_polyphony(
+        self,
+        notes: List[NoteEvent],
+        max_polyphony: int = 10
+    ) -> List[NoteEvent]:
+        """
+        限制最大复音数
+
+        参数:
+            notes: 音符列表
+            max_polyphony: 最大同时发声的音符数
+
+        返回:
+            限制复音后的音符列表
+        """
+        if not notes or max_polyphony <= 0:
+            return notes
+
+        # 按开始时间排序
+        sorted_notes = sorted(notes, key=lambda n: (n.start_time, -n.velocity))
+
+        result = []
+        for note in sorted_notes:
+            # 计算在该音符开始时还在发声的音符数
+            active_notes = sum(
+                1 for n in result
+                if n.start_time <= note.start_time < n.end_time
+            )
+
+            if active_notes < max_polyphony:
+                result.append(note)
+
+        removed_count = len(notes) - len(result)
+        if removed_count > 0:
+            logger.debug(f"已移除 {removed_count} 个超出复音限制的音符")
+
+        return result
+
+    def post_process_notes(
+        self,
+        notes: List[NoteEvent],
+        tempo: float
+    ) -> List[NoteEvent]:
+        """
+        对音符列表应用所有后处理
+
+        参数:
+            notes: 音符列表
+            tempo: BPM
+
+        返回:
+            后处理后的音符列表
+        """
+        if not notes:
+            return notes
+
+        processed = deepcopy(notes)
+
+        # 量化
+        if self.config.quantize_notes:
+            processed = self._quantize_notes(processed, tempo, self.config.quantize_grid)
+
+        # 去重
+        if self.config.remove_duplicates:
+            processed = self._remove_duplicate_notes(processed)
+
+        # 力度平滑
+        if self.config.velocity_smoothing:
+            processed = self._smooth_velocity(processed)
+
+        # 限制复音
+        if self.config.max_polyphony > 0:
+            processed = self._limit_polyphony(processed, self.config.max_polyphony)
+
+        logger.info(f"后处理: {len(notes)} -> {len(processed)} 个音符")
+        return processed
+
+    # ==================== 新版生成方法 ====================
+
+    def generate_v2(
+        self,
+        track_layout: TrackLayout,
+        tracks_notes: Dict[str, List[NoteEvent]],
+        tempo: float,
+        output_path: str,
+        lyrics: Optional[List[LyricEvent]] = None,
+        embed_lyrics: bool = True,
+        apply_post_processing: bool = True
+    ) -> str:
+        """
+        使用新的轨道布局系统生成 MIDI 文件
+
+        参数:
+            track_layout: 轨道布局配置
+            tracks_notes: 轨道ID到音符事件的字典
+            tempo: BPM
+            output_path: 输出 MIDI 文件路径
+            lyrics: 带时间戳的歌词事件列表（可选）
+            embed_lyrics: 是否将歌词作为元事件嵌入
+            apply_post_processing: 是否应用后处理优化
+
+        返回:
+            生成的 MIDI 文件路径
+        """
+        logger.info(f"正在生成 MIDI (v2): {output_path}")
+        logger.info(f"轨道布局: {len(track_layout.tracks)} 个轨道")
+
+        # 创建 MIDI 文件
+        mid = MidiFile(ticks_per_beat=self.ticks_per_beat)
+
+        # 轨道 0: 速度和歌词（指挥轨道）
+        meta_track = MidiTrack()
+        mid.tracks.append(meta_track)
+        meta_track.name = "Conductor"
+
+        # 设置速度
+        tempo_value = mido.bpm2tempo(tempo)
+        meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
+
+        # 设置拍号 (4/4)
+        meta_track.append(MetaMessage(
+            'time_signature',
+            numerator=4,
+            denominator=4,
+            clocks_per_click=24,
+            notated_32nd_notes_per_beat=8,
+            time=0
+        ))
+
+        # 将歌词添加到指挥轨道
+        if embed_lyrics and lyrics:
+            self._add_lyrics_events(meta_track, lyrics, tempo)
+
+        # 轨道结束
+        meta_track.append(MetaMessage('end_of_track', time=0))
+
+        # 为每个启用的轨道创建 MIDI 轨道
+        for track_config in track_layout.get_enabled_tracks():
+            notes = tracks_notes.get(track_config.id, [])
+
+            if not notes:
+                logger.warning(f"轨道 {track_config.name} 没有音符，跳过")
+                continue
+
+            # 应用后处理
+            if apply_post_processing:
+                notes = self.post_process_notes(notes, tempo)
+
+            # 创建 MIDI 轨道
+            midi_track = self._create_track_v2(track_config, notes, tempo)
+            mid.tracks.append(midi_track)
+
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+
+        # 保存 MIDI 文件
+        mid.save(output_path)
+        logger.info(f"MIDI 已保存: {output_path}")
+
+        return output_path
+
+    def _create_track_v2(
+        self,
+        track_config: TrackConfig,
+        notes: List[NoteEvent],
+        tempo: float
+    ) -> MidiTrack:
+        """
+        使用轨道配置创建 MIDI 轨道
+
+        参数:
+            track_config: 轨道配置
+            notes: 音符事件
+            tempo: BPM
+
+        返回:
+            带音符的 MidiTrack
+        """
+        track = MidiTrack()
+        # 使用 ASCII 兼容的轨道名（MIDI 元数据使用 latin-1 编码）
+        track.name = track_config.id
+
+        channel = track_config.midi_channel
+        program = track_config.program
+
+        # 音色变更（鼓组除外）
+        if track_config.instrument != InstrumentType.DRUMS:
+            track.append(Message(
+                'program_change',
+                channel=channel,
+                program=program,
+                time=0
+            ))
+
+        # 按开始时间排序音符
+        sorted_notes = sorted(notes, key=lambda n: n.start_time)
+
+        # 创建音符开/关事件
+        events = []
+        for note in sorted_notes:
+            start_tick = self._time_to_ticks(note.start_time, tempo)
+            end_tick = self._time_to_ticks(note.end_time, tempo)
+
+            events.append({
+                'type': 'note_on',
+                'tick': start_tick,
+                'note': note.pitch,
+                'velocity': note.velocity,
+                'channel': channel
+            })
+            events.append({
+                'type': 'note_off',
+                'tick': end_tick,
+                'note': note.pitch,
+                'velocity': 0,
+                'channel': channel
+            })
+
+        # 按 tick 排序事件
+        events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
+
+        # 添加带增量时间的事件
+        current_tick = 0
+        for event in events:
+            delta = max(0, event['tick'] - current_tick)
+
+            if event['type'] == 'note_on':
+                track.append(Message(
+                    'note_on',
+                    note=event['note'],
+                    velocity=event['velocity'],
+                    channel=event['channel'],
+                    time=delta
+                ))
+            else:
+                track.append(Message(
+                    'note_off',
+                    note=event['note'],
+                    velocity=0,
+                    channel=event['channel'],
+                    time=delta
+                ))
+
+            current_tick = event['tick']
+
+        # 轨道结束
+        track.append(MetaMessage('end_of_track', time=0))
+
+        logger.info(f"已创建 {track_config.name} 轨道，包含 {len(sorted_notes)} 个音符")
+
+        return track
 
     def export_lrc(
         self,
