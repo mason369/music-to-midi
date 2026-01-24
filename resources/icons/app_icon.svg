@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea"/>
+      <stop offset="100%" style="stop-color:#764ba2"/>
+    </linearGradient>
+    <linearGradient id="note" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f093fb"/>
+      <stop offset="100%" style="stop-color:#f5576c"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4facfe"/>
+      <stop offset="100%" style="stop-color:#00f2fe"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#bg)"/>
+
+  <!-- Sound wave bars -->
+  <g fill="url(#wave)" opacity="0.9">
+    <rect x="80" y="200" width="20" height="112" rx="10"/>
+    <rect x="115" y="160" width="20" height="192" rx="10"/>
+    <rect x="150" y="130" width="20" height="252" rx="10"/>
+    <rect x="185" y="170" width="20" height="172" rx="10"/>
+    <rect x="220" y="190" width="20" height="132" rx="10"/>
+  </g>
+
+  <!-- Arrow -->
+  <path d="M270 256 L320 256 L300 230 L340 256 L300 282 L320 256"
+        fill="white" stroke="white" stroke-width="8" stroke-linejoin="round"/>
+
+  <!-- MIDI note / Piano keys representation -->
+  <g transform="translate(350, 150)">
+    <!-- Piano keys background -->
+    <rect x="0" y="0" width="100" height="212" rx="8" fill="white" opacity="0.95"/>
+
+    <!-- White keys -->
+    <rect x="5" y="5" width="25" height="200" rx="3" fill="#f8f8f8" stroke="#ddd"/>
+    <rect x="35" y="5" width="25" height="200" rx="3" fill="#f8f8f8" stroke="#ddd"/>
+    <rect x="65" y="5" width="25" height="200" rx="3" fill="#f8f8f8" stroke="#ddd"/>
+
+    <!-- Black keys -->
+    <rect x="22" y="5" width="18" height="120" rx="3" fill="#333"/>
+    <rect x="55" y="5" width="18" height="120" rx="3" fill="#333"/>
+
+    <!-- Active note indicator -->
+    <circle cx="17" cy="175" r="8" fill="url(#note)"/>
+    <circle cx="47" cy="160" r="8" fill="url(#note)"/>
+    <circle cx="77" cy="180" r="8" fill="url(#note)"/>
+  </g>
+
+  <!-- Musical note floating -->
+  <g transform="translate(320, 80)" fill="url(#note)">
+    <ellipse cx="12" cy="35" rx="12" ry="10"/>
+    <rect x="22" y="0" width="4" height="35"/>
+    <path d="M26 0 Q40 5, 38 20 Q36 10, 26 12" fill="url(#note)"/>
+  </g>
+</svg>

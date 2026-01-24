@@ -3,10 +3,30 @@
 """
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def get_resource_path(relative_path: str) -> Path:
+    """
+    获取资源文件的绝对路径，支持开发环境和PyInstaller打包后的环境
+
+    参数:
+        relative_path: 相对于项目根目录的路径
+
+    返回:
+        资源文件的绝对路径
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的环境
+        base_path = Path(sys._MEIPASS)
+    else:
+        # 开发环境
+        base_path = Path(__file__).parent.parent.parent
+    return base_path / relative_path
 
 
 class Translator:
@@ -39,7 +59,7 @@ class Translator:
 
     def _get_i18n_dir(self) -> Path:
         """获取i18n目录路径"""
-        return Path(__file__).parent
+        return get_resource_path("src/i18n")
 
     def _load_translations(self) -> None:
         """加载所有可用的翻译文件"""

@@ -92,7 +92,9 @@ class SourceSeparator:
         返回:
             音轨名称到输出文件路径的字典
         """
-        import torchaudio
+        import soundfile as sf
+        import numpy as np
+        import torchaudio.transforms
         from demucs.apply import apply_model
 
         self.load_model()
@@ -100,9 +102,17 @@ class SourceSeparator:
         if progress_callback:
             progress_callback(0.0, "正在加载音频...")
 
-        # 加载音频
+        # 使用 soundfile 直接加载音频（避免 torchaudio 的 torchcodec 依赖问题）
         logger.info(f"正在加载音频: {audio_path}")
-        wav, sr = torchaudio.load(audio_path)
+        audio_data, sr = sf.read(audio_path, dtype='float32')
+
+        # 转换为 torch tensor (soundfile 返回 [samples, channels]，需要转置为 [channels, samples])
+        if audio_data.ndim == 1:
+            # 单声道
+            wav = torch.from_numpy(audio_data).unsqueeze(0)
+        else:
+            # 多声道，转置
+            wav = torch.from_numpy(audio_data.T)
 
         # 确保是立体声
         if wav.shape[0] == 1:
@@ -147,13 +157,9 @@ class SourceSeparator:
         for i, stem in enumerate(self.model.sources):
             if stem in self.STEMS:
                 output_path = os.path.join(output_dir, f"{input_name}_{stem}.wav")
-                stem_audio = sources[0, i].cpu()
+                stem_audio = sources[0, i].cpu().numpy().T  # 转置为 [samples, channels]
 
-                torchaudio.save(
-                    output_path,
-                    stem_audio,
-                    self.model.samplerate
-                )
+                sf.write(output_path, stem_audio, self.model.samplerate)
 
                 output_paths[stem] = output_path
                 logger.info(f"已保存 {stem}: {output_path}")

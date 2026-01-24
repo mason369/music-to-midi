@@ -1,6 +1,7 @@
 {
   "app": {
     "name": "音乐转MIDI",
+    "subtitle": "将音乐智能转换为MIDI文件",
     "version": "版本"
   },
   "menu": {
@@ -121,7 +122,9 @@
       "title": "错误",
       "fileNotFound": "文件未找到",
       "invalidFormat": "无效的文件格式",
-      "processingFailed": "处理失败"
+      "processingFailed": "处理失败",
+      "copy": "复制错误信息",
+      "ok": "确定"
     },
     "about": {
       "title": "关于音乐转MIDI",

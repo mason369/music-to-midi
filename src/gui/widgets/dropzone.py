@@ -27,16 +27,21 @@ class DropZoneWidget(QWidget):
     def _setup_ui(self):
         """设置用户界面"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 40, 20, 40)
+        layout.setContentsMargins(30, 50, 30, 50)
+
+        # 图标
+        self.icon_label = QLabel("🎵")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet("font-size: 48px;")
 
         # 标题
         self.title_label = QLabel(t("main.dropzone.title"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setStyleSheet("""
             QLabel {
-                font-size: 16px;
+                font-size: 18px;
                 font-weight: bold;
-                color: #666;
+                color: #2d3748;
             }
         """)
 
@@ -45,14 +50,36 @@ class DropZoneWidget(QWidget):
         self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.subtitle_label.setStyleSheet("""
             QLabel {
-                font-size: 12px;
-                color: #999;
+                font-size: 13px;
+                color: #718096;
             }
         """)
 
         # 浏览按钮
-        self.browse_btn = QPushButton(t("main.output.browse"))
-        self.browse_btn.setFixedWidth(120)
+        self.browse_btn = QPushButton("📂  " + t("main.output.browse"))
+        self.browse_btn.setFixedWidth(160)
+        self.browse_btn.setFixedHeight(42)
+        self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.browse_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+                color: white;
+                font-size: 13px;
+                font-weight: 600;
+                border-radius: 8px;
+                border: none;
+                padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #7c8ff0, stop:1 #8b5cb8);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #5a6fd6, stop:1 #6a4190);
+            }
+        """)
         self.browse_btn.clicked.connect(self._on_browse)
 
         # 已选文件标签
@@ -61,16 +88,30 @@ class DropZoneWidget(QWidget):
         self.file_label.setStyleSheet("""
             QLabel {
                 font-size: 14px;
-                color: #333;
-                padding: 10px;
-                background: #f5f5f5;
-                border-radius: 5px;
+                color: #2d3748;
+                font-weight: 500;
+                padding: 12px 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #e0e7ff, stop:1 #c7d2fe);
+                border-radius: 8px;
             }
         """)
         self.file_label.hide()
 
+        # 支持格式提示
+        self.format_label = QLabel("支持格式: MP3, WAV, FLAC, OGG, M4A")
+        self.format_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.format_label.setStyleSheet("""
+            QLabel {
+                font-size: 11px;
+                color: #a0aec0;
+            }
+        """)
+
         # 添加组件
         layout.addStretch()
+        layout.addWidget(self.icon_label)
+        layout.addSpacing(8)
         layout.addWidget(self.title_label)
         layout.addWidget(self.subtitle_label)
         layout.addSpacing(20)
@@ -81,20 +122,32 @@ class DropZoneWidget(QWidget):
         btn_layout.addWidget(self.browse_btn)
         layout.addWidget(btn_container)
 
-        layout.addSpacing(10)
+        layout.addSpacing(8)
+        layout.addWidget(self.format_label)
+        layout.addSpacing(12)
         layout.addWidget(self.file_label)
         layout.addStretch()
 
         # 样式
+        self._apply_default_style()
+
+    def _apply_default_style(self):
+        """应用默认样式"""
         self.setStyleSheet("""
             DropZoneWidget {
-                background: #fafafa;
-                border: 2px dashed #ccc;
-                border-radius: 10px;
+                background: white;
+                border: 2px dashed #cbd5e0;
+                border-radius: 16px;
             }
-            DropZoneWidget:hover {
-                border-color: #999;
-                background: #f0f0f0;
+        """)
+
+    def _apply_hover_style(self):
+        """应用悬停样式"""
+        self.setStyleSheet("""
+            DropZoneWidget {
+                background: #f7fafc;
+                border: 2px dashed #667eea;
+                border-radius: 16px;
             }
         """)
 
@@ -127,21 +180,17 @@ class DropZoneWidget(QWidget):
                 event.acceptProposedAction()
                 self.setStyleSheet("""
                     DropZoneWidget {
-                        background: #e8f4e8;
-                        border: 2px dashed #4a9;
-                        border-radius: 10px;
+                        background: #f0fff4;
+                        border: 2px dashed #48bb78;
+                        border-radius: 16px;
                     }
                 """)
+                self.icon_label.setText("✨")
 
     def dragLeaveEvent(self, event):
         """处理拖出事件"""
-        self.setStyleSheet("""
-            DropZoneWidget {
-                background: #fafafa;
-                border: 2px dashed #ccc;
-                border-radius: 10px;
-            }
-        """)
+        self._apply_default_style()
+        self.icon_label.setText("🎵")
 
     def dropEvent(self, event: QDropEvent):
         """处理放下事件"""
@@ -151,16 +200,11 @@ class DropZoneWidget(QWidget):
             if is_supported_format(file_path):
                 self._set_file(file_path)
 
-        self.setStyleSheet("""
-            DropZoneWidget {
-                background: #fafafa;
-                border: 2px dashed #ccc;
-                border-radius: 10px;
-            }
-        """)
+        self._apply_default_style()
+        self.icon_label.setText("🎵")
 
     def update_translations(self):
         """更新当前语言的文本"""
         self.title_label.setText(t("main.dropzone.title"))
         self.subtitle_label.setText(t("main.dropzone.subtitle"))
-        self.browse_btn.setText(t("main.output.browse"))
+        self.browse_btn.setText("📂  " + t("main.output.browse"))
