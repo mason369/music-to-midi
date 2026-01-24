@@ -1,5 +1,5 @@
 """
-Internationalization (i18n) translator module.
+国际化 (i18n) 翻译模块
 """
 import json
 import logging
@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 
 class Translator:
     """
-    Translation manager for multi-language support.
+    多语言支持的翻译管理器
 
-    Supports:
-    - JSON-based translation files
-    - Dynamic language switching
-    - Nested key access (e.g., "menu.file")
-    - Fallback to default language
+    支持:
+    - 基于JSON的翻译文件
+    - 动态语言切换
+    - 嵌套键访问（如 "menu.file"）
+    - 回退到默认语言
     """
 
     DEFAULT_LANGUAGE = "en_US"
@@ -28,21 +28,21 @@ class Translator:
 
     def __init__(self, language: str = "zh_CN"):
         """
-        Initialize translator.
+        初始化翻译器
 
-        Args:
-            language: Language code (e.g., 'en_US', 'zh_CN')
+        参数:
+            language: 语言代码（如 'en_US', 'zh_CN'）
         """
         self.current_language = language
         self.translations: Dict[str, Dict] = {}
         self._load_translations()
 
     def _get_i18n_dir(self) -> Path:
-        """Get i18n directory path."""
+        """获取i18n目录路径"""
         return Path(__file__).parent
 
     def _load_translations(self) -> None:
-        """Load all available translation files."""
+        """加载所有可用的翻译文件"""
         i18n_dir = self._get_i18n_dir()
 
         for lang_code in self.AVAILABLE_LANGUAGES:
@@ -51,62 +51,62 @@ class Translator:
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         self.translations[lang_code] = json.load(f)
-                    logger.info(f"Loaded translations: {lang_code}")
+                    logger.info(f"已加载翻译: {lang_code}")
                 except Exception as e:
-                    logger.error(f"Failed to load {lang_code}: {e}")
+                    logger.error(f"加载 {lang_code} 失败: {e}")
                     self.translations[lang_code] = {}
 
     def set_language(self, language: str) -> bool:
         """
-        Set current language.
+        设置当前语言
 
-        Args:
-            language: Language code
+        参数:
+            language: 语言代码
 
-        Returns:
-            True if language was set successfully
+        返回:
+            如果语言设置成功则返回True
         """
         if language in self.AVAILABLE_LANGUAGES:
             self.current_language = language
-            logger.info(f"Language set to: {language}")
+            logger.info(f"语言已设置为: {language}")
             return True
         else:
-            logger.warning(f"Unknown language: {language}")
+            logger.warning(f"未知语言: {language}")
             return False
 
     def get_language(self) -> str:
-        """Get current language code."""
+        """获取当前语言代码"""
         return self.current_language
 
     def get_language_name(self, code: Optional[str] = None) -> str:
-        """Get language display name."""
+        """获取语言显示名称"""
         code = code or self.current_language
         return self.AVAILABLE_LANGUAGES.get(code, code)
 
     def t(self, key: str, **kwargs) -> str:
         """
-        Get translated string.
+        获取翻译字符串
 
-        Args:
-            key: Translation key (supports dot notation, e.g., "menu.file")
-            **kwargs: Format arguments
+        参数:
+            key: 翻译键（支持点号表示法，如 "menu.file"）
+            **kwargs: 格式化参数
 
-        Returns:
-            Translated string, or key if not found
+        返回:
+            翻译后的字符串，如果未找到则返回键
         """
-        # Try current language
+        # 尝试当前语言
         value = self._get_nested(self.translations.get(self.current_language, {}), key)
 
-        # Fallback to default language
+        # 回退到默认语言
         if value is None and self.current_language != self.DEFAULT_LANGUAGE:
             value = self._get_nested(self.translations.get(self.DEFAULT_LANGUAGE, {}), key)
 
-        # Return key if not found
+        # 如果未找到则返回键
         if value is None:
-            logger.debug(f"Translation not found: {key}")
+            logger.debug(f"未找到翻译: {key}")
             return key
 
-        # Format with arguments
+        # 使用参数格式化
         if kwargs:
             try:
                 value = value.format(**kwargs)
@@ -117,14 +117,14 @@ class Translator:
 
     def _get_nested(self, data: Dict, key: str) -> Optional[str]:
         """
-        Get nested dictionary value using dot notation.
+        使用点号表示法获取嵌套字典值
 
-        Args:
-            data: Dictionary to search
-            key: Dot-separated key path
+        参数:
+            data: 要搜索的字典
+            key: 点分隔的键路径
 
-        Returns:
-            Value if found, None otherwise
+        返回:
+            如果找到则返回值，否则返回None
         """
         keys = key.split('.')
         value = data
@@ -141,13 +141,13 @@ class Translator:
 
     def get_all_keys(self, prefix: str = "") -> list:
         """
-        Get all translation keys.
+        获取所有翻译键
 
-        Args:
-            prefix: Key prefix filter
+        参数:
+            prefix: 键前缀过滤
 
-        Returns:
-            List of matching keys
+        返回:
+            匹配键的列表
         """
         def extract_keys(data: Dict, current_prefix: str = "") -> list:
             keys = []
@@ -167,12 +167,12 @@ class Translator:
         return all_keys
 
 
-# Global translator instance
+# 全局翻译器实例
 _translator: Optional[Translator] = None
 
 
 def get_translator() -> Translator:
-    """Get global translator instance."""
+    """获取全局翻译器实例"""
     global _translator
     if _translator is None:
         _translator = Translator()
@@ -180,19 +180,19 @@ def get_translator() -> Translator:
 
 
 def set_language(language: str) -> bool:
-    """Set global language."""
+    """设置全局语言"""
     return get_translator().set_language(language)
 
 
 def t(key: str, **kwargs) -> str:
     """
-    Translate a key using the global translator.
+    使用全局翻译器翻译键
 
-    Args:
-        key: Translation key
-        **kwargs: Format arguments
+    参数:
+        key: 翻译键
+        **kwargs: 格式化参数
 
-    Returns:
-        Translated string
+    返回:
+        翻译后的字符串
     """
     return get_translator().t(key, **kwargs)

@@ -1,5 +1,5 @@
 """
-Main window for the Music to MIDI application.
+音乐转MIDI应用程序主窗口
 """
 import os
 import logging
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     """
-    Main application window.
+    应用程序主窗口
     """
 
     def __init__(self, config: Config = None):
@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.resize(900, 750)
 
     def _setup_ui(self):
-        """Set up the main user interface."""
+        """设置主用户界面"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
@@ -55,23 +55,23 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(20, 10, 20, 10)
         main_layout.setSpacing(15)
 
-        # Drop zone for file input
+        # 文件输入拖放区域
         self.dropzone = DropZoneWidget()
         self.dropzone.setMinimumHeight(150)
 
-        # Track panel
+        # 轨道面板
         self.track_panel = TrackPanel()
 
-        # Progress widget
+        # 进度组件
         self.progress_widget = ProgressWidget()
 
-        # Output settings
+        # 输出设置
         self.output_group = self._create_output_settings()
 
-        # Action buttons
+        # 操作按钮
         self.action_layout = self._create_action_buttons()
 
-        # Add widgets
+        # 添加组件
         main_layout.addWidget(self.dropzone)
         main_layout.addWidget(self.track_panel)
         main_layout.addWidget(self.progress_widget)
@@ -79,11 +79,11 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(self.action_layout)
 
     def _create_output_settings(self) -> QGroupBox:
-        """Create output settings group."""
+        """创建输出设置组"""
         group = QGroupBox(t("main.output.title"))
         layout = QVBoxLayout(group)
 
-        # Output directory
+        # 输出目录
         dir_layout = QHBoxLayout()
         self.output_dir_label = QLabel(t("main.output.directory") + ":")
         self.output_dir_edit = QLineEdit()
@@ -95,7 +95,7 @@ class MainWindow(QMainWindow):
         dir_layout.addWidget(self.output_dir_edit, 1)
         dir_layout.addWidget(self.browse_dir_btn)
 
-        # Options
+        # 选项
         options_layout = QHBoxLayout()
 
         self.midi_check = QCheckBox(t("main.output.options.generateMidi"))
@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _create_action_buttons(self) -> QHBoxLayout:
-        """Create action buttons layout."""
+        """创建操作按钮布局"""
         layout = QHBoxLayout()
 
         self.start_btn = QPushButton(t("toolbar.start"))
@@ -169,10 +169,10 @@ class MainWindow(QMainWindow):
         return layout
 
     def _setup_menu(self):
-        """Set up the menu bar."""
+        """设置菜单栏"""
         menubar = self.menuBar()
 
-        # File menu
+        # 文件菜单
         file_menu = menubar.addMenu(t("menu.file"))
 
         self.open_action = QAction(t("menu.open"), self)
@@ -192,17 +192,17 @@ class MainWindow(QMainWindow):
         self.exit_action.triggered.connect(self.close)
         file_menu.addAction(self.exit_action)
 
-        # Edit menu
+        # 编辑菜单
         edit_menu = menubar.addMenu(t("menu.edit"))
 
         self.settings_action = QAction(t("menu.settings"), self)
         self.settings_action.triggered.connect(self._open_settings)
         edit_menu.addAction(self.settings_action)
 
-        # View menu
+        # 视图菜单
         view_menu = menubar.addMenu(t("menu.view"))
 
-        # Language submenu
+        # 语言子菜单
         self.lang_menu = QMenu(t("settings.general.language"), self)
         view_menu.addMenu(self.lang_menu)
 
@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked, c=code: self._change_language(c))
             self.lang_menu.addAction(action)
 
-        # Help menu
+        # 帮助菜单
         help_menu = menubar.addMenu(t("menu.help"))
 
         self.about_action = QAction(t("menu.about"), self)
@@ -220,13 +220,13 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self.about_action)
 
     def _setup_toolbar(self):
-        """Set up the toolbar."""
+        """设置工具栏"""
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
 
-        # Language selector on the right
+        # 语言选择器放在右侧
         spacer = QWidget()
         spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding,
                             spacer.sizePolicy().verticalPolicy().Preferred)
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         for code, name in get_translator().AVAILABLE_LANGUAGES.items():
             self.lang_combo.addItem(name, code)
 
-        # Set current language
+        # 设置当前语言
         current_lang = get_translator().get_language()
         index = self.lang_combo.findData(current_lang)
         if index >= 0:
@@ -247,14 +247,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.lang_combo)
 
     def _setup_statusbar(self):
-        """Set up the status bar."""
+        """设置状态栏"""
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
 
-        # Status label
+        # 状态标签
         self.status_label = QLabel(t("status.ready"))
 
-        # GPU/CPU indicator
+        # GPU/CPU指示器
         if is_cuda_available():
             gpu_info = get_gpu_info()
             gpu_name = gpu_info[0]["name"] if gpu_info else "GPU"
@@ -262,7 +262,7 @@ class MainWindow(QMainWindow):
         else:
             self.device_label = QLabel(f"{t('status.cpu')}")
 
-        # Memory indicator
+        # 内存指示器
         self.memory_label = QLabel()
         self._update_memory_label()
 
@@ -271,20 +271,20 @@ class MainWindow(QMainWindow):
         self.statusbar.addPermanentWidget(self.memory_label)
 
     def _connect_signals(self):
-        """Connect signals and slots."""
+        """连接信号与槽"""
         self.dropzone.file_selected.connect(self._on_file_selected)
         self.start_btn.clicked.connect(self._start_processing)
         self.stop_btn.clicked.connect(self._stop_processing)
 
     def _on_file_selected(self, file_path: str):
-        """Handle file selection."""
+        """处理文件选择"""
         self.current_file = file_path
         self.start_btn.setEnabled(True)
         self.status_label.setText(f"{t('status.ready')} - {Path(file_path).name}")
-        logger.info(f"File selected: {file_path}")
+        logger.info(f"已选择文件: {file_path}")
 
     def _open_file(self):
-        """Open file dialog."""
+        """打开文件对话框"""
         from src.utils.audio_utils import get_supported_formats
 
         formats = get_supported_formats()
@@ -301,7 +301,7 @@ class MainWindow(QMainWindow):
             self._on_file_selected(file_path)
 
     def _browse_output_dir(self):
-        """Browse for output directory."""
+        """浏览输出目录"""
         dir_path = QFileDialog.getExistingDirectory(
             self,
             t("dialogs.selectDir.title"),
@@ -312,20 +312,20 @@ class MainWindow(QMainWindow):
             self.output_dir_edit.setText(dir_path)
 
     def _start_processing(self):
-        """Start processing the audio file."""
+        """开始处理音频文件"""
         if not self.current_file:
             return
 
-        # Update config from UI
+        # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
         self.config.embed_lyrics = self.lyrics_check.isChecked()
         self.config.export_lrc = self.lrc_check.isChecked()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
 
-        # Ensure output directory exists
+        # 确保输出目录存在
         os.makedirs(self.config.output_dir, exist_ok=True)
 
-        # Create worker
+        # 创建工作线程
         self.worker = ProcessingWorker(
             self.current_file,
             self.config.output_dir,
@@ -337,18 +337,18 @@ class MainWindow(QMainWindow):
         self.worker.processing_finished.connect(self._on_finished)
         self.worker.error_occurred.connect(self._on_error)
 
-        # Update UI
+        # 更新UI
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_widget.reset()
         self.status_label.setText(t("status.processing"))
 
-        # Start processing
+        # 开始处理
         self.worker.start()
-        logger.info("Processing started")
+        logger.info("处理已开始")
 
     def _stop_processing(self):
-        """Stop processing."""
+        """停止处理"""
         if self.worker:
             self.worker.cancel()
             self.worker.wait()
@@ -358,34 +358,34 @@ class MainWindow(QMainWindow):
         self.status_label.setText(t("status.ready"))
 
     def _on_progress(self, progress: ProcessingProgress):
-        """Handle progress update."""
+        """处理进度更新"""
         self.progress_widget.update_progress(progress)
         self._update_memory_label()
 
     def _on_finished(self, result: ProcessingResult):
-        """Handle processing completion."""
+        """处理完成"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.save_action.setEnabled(True)
 
         self.status_label.setText(
-            f"{t('status.complete')} - {result.processing_time:.1f}s"
+            f"{t('status.complete')} - {result.processing_time:.1f}秒"
         )
 
-        # Show success message
+        # 显示成功消息
         QMessageBox.information(
             self,
             t("status.complete"),
             f"MIDI: {result.midi_path}\n"
-            f"Tracks: {len(result.tracks)}\n"
-            f"Notes: {sum(len(track.notes) for track in result.tracks)}\n"
-            f"Lyrics: {len(result.lyrics)}"
+            f"轨道数: {len(result.tracks)}\n"
+            f"音符数: {sum(len(track.notes) for track in result.tracks)}\n"
+            f"歌词数: {len(result.lyrics)}"
         )
 
-        logger.info(f"Processing complete: {result.midi_path}")
+        logger.info(f"处理完成: {result.midi_path}")
 
     def _on_error(self, error_msg: str):
-        """Handle processing error."""
+        """处理错误"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_label.setText(t("status.error"))
@@ -396,10 +396,10 @@ class MainWindow(QMainWindow):
             f"{t('dialogs.error.processingFailed')}\n\n{error_msg}"
         )
 
-        logger.error(f"Processing error: {error_msg}")
+        logger.error(f"处理错误: {error_msg}")
 
     def _update_memory_label(self):
-        """Update memory usage display."""
+        """更新内存使用显示"""
         mem_info = get_memory_info()
         if mem_info:
             used, total = mem_info
@@ -408,12 +408,12 @@ class MainWindow(QMainWindow):
             self.memory_label.setText("")
 
     def _open_settings(self):
-        """Open settings dialog."""
-        # TODO: Implement settings dialog
+        """打开设置对话框"""
+        # TODO: 实现设置对话框
         pass
 
     def _show_about(self):
-        """Show about dialog."""
+        """显示关于对话框"""
         QMessageBox.about(
             self,
             t("dialogs.about.title"),
@@ -424,29 +424,29 @@ class MainWindow(QMainWindow):
         )
 
     def _change_language(self, lang_code: str):
-        """Change application language."""
+        """更改应用程序语言"""
         set_language(lang_code)
         self._update_translations()
 
     def _on_language_changed(self, index: int):
-        """Handle language combo box change."""
+        """处理语言下拉框更改"""
         lang_code = self.lang_combo.itemData(index)
         if lang_code:
             set_language(lang_code)
             self._update_translations()
 
     def _update_translations(self):
-        """Update all UI text for current language."""
+        """更新当前语言的所有UI文本"""
         self.setWindowTitle(t("app.name"))
 
-        # Menu
+        # 菜单
         self.open_action.setText(t("menu.open"))
         self.save_action.setText(t("menu.save"))
         self.exit_action.setText(t("menu.exit"))
         self.settings_action.setText(t("menu.settings"))
         self.about_action.setText(t("menu.about"))
 
-        # Output settings
+        # 输出设置
         self.output_group.setTitle(t("main.output.title"))
         self.output_dir_label.setText(t("main.output.directory") + ":")
         self.browse_dir_btn.setText(t("main.output.browse"))
@@ -455,16 +455,16 @@ class MainWindow(QMainWindow):
         self.lrc_check.setText(t("main.output.options.exportLrc"))
         self.tracks_check.setText(t("main.output.options.saveTracks"))
 
-        # Buttons
+        # 按钮
         self.start_btn.setText(t("toolbar.start"))
         self.stop_btn.setText(t("toolbar.stop"))
 
-        # Status
+        # 状态
         self.status_label.setText(t("status.ready"))
 
-        # Widgets
+        # 组件
         self.dropzone.update_translations()
         self.track_panel.update_translations()
         self.progress_widget.update_translations()
 
-        logger.info(f"Language updated to: {get_translator().get_language()}")
+        logger.info(f"语言已更新为: {get_translator().get_language()}")

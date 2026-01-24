@@ -1,6 +1,6 @@
 """
-Source separation module using Demucs v4.
-Separates audio into drums, bass, vocals, and other tracks.
+音源分离模块 - 使用 Demucs v4
+将音频分离为鼓、贝斯、人声和其他乐器轨道
 """
 import os
 import logging
@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 class SourceSeparator:
     """
-    Audio source separation using Demucs v4 (htdemucs).
+    使用 Demucs v4 (htdemucs) 进行音源分离
 
-    Separates audio into 4 stems:
-    - drums: Drums and percussion
-    - bass: Bass instruments
-    - vocals: Vocals and voice
-    - other: Other instruments (guitars, keyboards, etc.)
+    将音频分离为4个音轨：
+    - drums: 鼓和打击乐器
+    - bass: 贝斯
+    - vocals: 人声
+    - other: 其他乐器（吉他、键盘等）
     """
 
     STEMS = ["drums", "bass", "vocals", "other"]
@@ -30,10 +30,10 @@ class SourceSeparator:
 
     def __init__(self, config: Config):
         """
-        Initialize source separator.
+        初始化音源分离器
 
-        Args:
-            config: Application configuration
+        参数:
+            config: 应用配置
         """
         self.config = config
         self.model = None
@@ -41,11 +41,11 @@ class SourceSeparator:
         self.segment_size = config.segment_size
 
     def load_model(self) -> None:
-        """Load Demucs model (lazy loading to save memory)."""
+        """加载 Demucs 模型（延迟加载以节省内存）"""
         if self.model is not None:
             return
 
-        logger.info(f"Loading Demucs model: {self.MODEL_NAME}")
+        logger.info(f"正在加载 Demucs 模型: {self.MODEL_NAME}")
 
         try:
             from demucs.pretrained import get_model
@@ -54,26 +54,26 @@ class SourceSeparator:
             self.model = get_model(self.MODEL_NAME)
 
             if isinstance(self.model, BagOfModels):
-                logger.info(f"Loaded bag of {len(self.model.models)} models")
+                logger.info(f"已加载 {len(self.model.models)} 个模型组合")
             else:
-                logger.info("Loaded single model")
+                logger.info("已加载单个模型")
 
             self.model.to(self.device)
             self.model.eval()
 
-            logger.info(f"Model loaded on device: {self.device}")
+            logger.info(f"模型已加载到设备: {self.device}")
 
         except ImportError as e:
-            logger.error("Demucs not installed. Install with: pip install demucs")
-            raise ImportError("Demucs is required for source separation") from e
+            logger.error("Demucs 未安装，请运行: pip install demucs")
+            raise ImportError("音源分离需要 Demucs 库") from e
 
     def unload_model(self) -> None:
-        """Unload model to free memory."""
+        """卸载模型以释放内存"""
         if self.model is not None:
             del self.model
             self.model = None
             clear_gpu_memory()
-            logger.info("Model unloaded")
+            logger.info("模型已卸载")
 
     def separate(
         self,
@@ -82,15 +82,15 @@ class SourceSeparator:
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> Dict[str, str]:
         """
-        Separate audio file into stems.
+        将音频文件分离为多个音轨
 
-        Args:
-            audio_path: Path to input audio file
-            output_dir: Directory to save separated stems
-            progress_callback: Optional callback for progress updates (progress, message)
+        参数:
+            audio_path: 输入音频文件路径
+            output_dir: 保存分离音轨的目录
+            progress_callback: 可选的进度回调函数 (进度, 消息)
 
-        Returns:
-            Dictionary mapping stem names to output file paths
+        返回:
+            音轨名称到输出文件路径的字典
         """
         import torchaudio
         from demucs.apply import apply_model
@@ -98,33 +98,33 @@ class SourceSeparator:
         self.load_model()
 
         if progress_callback:
-            progress_callback(0.0, "Loading audio...")
+            progress_callback(0.0, "正在加载音频...")
 
-        # Load audio
-        logger.info(f"Loading audio: {audio_path}")
+        # 加载音频
+        logger.info(f"正在加载音频: {audio_path}")
         wav, sr = torchaudio.load(audio_path)
 
-        # Ensure stereo
+        # 确保是立体声
         if wav.shape[0] == 1:
             wav = wav.repeat(2, 1)
         elif wav.shape[0] > 2:
             wav = wav[:2]
 
-        # Add batch dimension
+        # 添加批次维度
         wav = wav.unsqueeze(0)
 
-        # Resample if needed
+        # 如需要则重采样
         if sr != self.model.samplerate:
-            logger.info(f"Resampling from {sr} to {self.model.samplerate}")
+            logger.info(f"正在从 {sr} 重采样到 {self.model.samplerate}")
             wav = torchaudio.transforms.Resample(sr, self.model.samplerate)(wav)
 
         wav = wav.to(self.device)
 
         if progress_callback:
-            progress_callback(0.2, "Separating sources...")
+            progress_callback(0.2, "正在分离音源...")
 
-        # Apply model
-        logger.info("Applying source separation model...")
+        # 应用模型
+        logger.info("正在应用音源分离模型...")
         with torch.no_grad():
             sources = apply_model(
                 self.model,
@@ -136,9 +136,9 @@ class SourceSeparator:
             )
 
         if progress_callback:
-            progress_callback(0.8, "Saving separated tracks...")
+            progress_callback(0.8, "正在保存分离的音轨...")
 
-        # Save stems
+        # 保存音轨
         output_paths = {}
         os.makedirs(output_dir, exist_ok=True)
 
@@ -156,13 +156,13 @@ class SourceSeparator:
                 )
 
                 output_paths[stem] = output_path
-                logger.info(f"Saved {stem}: {output_path}")
+                logger.info(f"已保存 {stem}: {output_path}")
 
         if progress_callback:
-            progress_callback(1.0, "Separation complete")
+            progress_callback(1.0, "分离完成")
 
         return output_paths
 
     def get_stem_for_track_type(self, track_type: TrackType) -> str:
-        """Get stem name for track type."""
+        """获取轨道类型对应的音轨名称"""
         return track_type.value

@@ -1,7 +1,7 @@
 # 音乐转MIDI转换器
 
 <p align="center">
-  中文 | <a href="./README.md">English</a>
+  中文 | <a href="./docs/README.md">English</a>
 </p>
 
 将音频文件转换为多轨道MIDI，自动嵌入歌词。
@@ -11,8 +11,15 @@
 - **音源分离**：使用Demucs v4自动将音频分离为4个轨道（人声、鼓、贝斯、其他）
 - **音频转MIDI**：使用AI驱动的音高检测（Basic Pitch）将每个轨道转换为MIDI
 - **歌词识别**：识别人声中的歌词，并以单词级时间戳嵌入MIDI
-- **多语言界面**：支持中文和英文界面
-- **跨平台**：支持Windows、macOS和Linux
+- **多语言界面**：支持中文和英文界面切换
+
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| Windows | ✅ 已支持 | 完整功能 |
+| macOS | 🚧 计划中 | 开发中 |
+| Linux | 🚧 计划中 | 开发中 |
 
 ## 截图
 
@@ -25,8 +32,6 @@
 - **Python 3.10+**
 - **FFmpeg**：音频处理必需
   - Windows: `choco install ffmpeg` 或从 [ffmpeg.org](https://ffmpeg.org/download.html) 下载
-  - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt install ffmpeg`
 - **NVIDIA GPU**（推荐）：使用CUDA加速处理
 
 ### 从源码安装
@@ -38,7 +43,7 @@ cd music-to-midi
 
 # 创建虚拟环境
 python -m venv venv
-source venv/bin/activate  # Windows上: venv\Scripts\activate
+venv\Scripts\activate  # Windows
 
 # 安装依赖
 pip install -r requirements.txt
@@ -49,7 +54,7 @@ python -m src.main
 
 ### 从发布版安装
 
-从 [Releases](https://github.com/mason369/music-to-midi/releases) 页面下载适合您平台的最新版本。
+从 [Releases](https://github.com/mason369/music-to-midi/releases) 页面下载Windows版本。
 
 ## 使用方法
 
@@ -96,24 +101,6 @@ python -m src.main
                                     输出: MIDI + LRC + WAV
 ```
 
-## 配置
-
-设置存储在 `~/.music-to-midi/config.yaml`：
-
-```yaml
-# 通用
-language: zh_CN  # 或 en_US
-theme: dark
-
-# 处理
-use_gpu: true
-whisper_model: medium  # tiny, base, small, medium, large
-
-# MIDI
-ticks_per_beat: 480
-default_velocity: 80
-```
-
 ## 开发
 
 ### 设置开发环境
@@ -140,7 +127,7 @@ mypy src/
 pip install pyinstaller
 
 # 构建
-pyinstaller music-to-midi.spec
+pyinstaller --name MusicToMidi --windowed --onedir src/main.py
 ```
 
 ## 贡献
@@ -155,7 +142,7 @@ pyinstaller music-to-midi.spec
 
 ## 许可证
 
-本项目采用MIT许可证 - 详见 [LICENSE](../LICENSE) 文件。
+本项目采用MIT许可证 - 详见 [LICENSE](./LICENSE) 文件。
 
 ## 致谢
 

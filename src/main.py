@@ -1,5 +1,5 @@
 """
-Main entry point for the Music to MIDI application.
+音乐转MIDI应用程序入口
 """
 import sys
 import logging
@@ -9,12 +9,12 @@ from src.utils.logger import setup_logger
 
 
 def main():
-    """Main entry point."""
-    # Setup logging
+    """主入口函数"""
+    # 设置日志
     log_dir = Path.home() / ".music-to-midi" / "logs"
     logger = setup_logger(log_dir=str(log_dir))
 
-    logger.info("Starting Music to MIDI application")
+    logger.info("正在启动音乐转MIDI应用程序")
 
     try:
         from PyQt6.QtWidgets import QApplication
@@ -23,37 +23,37 @@ def main():
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config
 
-        # Enable high DPI scaling
+        # 启用高DPI缩放
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
         )
 
-        # Create application
+        # 创建应用程序
         app = QApplication(sys.argv)
-        app.setApplicationName("Music to MIDI")
+        app.setApplicationName("音乐转MIDI")
         app.setApplicationVersion("1.0.0")
         app.setOrganizationName("mason369")
 
-        # Apply dark theme style
+        # 应用Fusion样式
         app.setStyle("Fusion")
 
-        # Create and show main window
+        # 创建并显示主窗口
         config = Config()
         window = MainWindow(config)
         window.show()
 
-        logger.info("Application window shown")
+        logger.info("应用程序窗口已显示")
 
-        # Run event loop
+        # 运行事件循环
         sys.exit(app.exec())
 
     except ImportError as e:
-        logger.error(f"Failed to import PyQt6: {e}")
-        print("Error: PyQt6 is required. Install with: pip install PyQt6")
+        logger.error(f"导入PyQt6失败: {e}")
+        print("错误: 需要PyQt6。请使用以下命令安装: pip install PyQt6")
         sys.exit(1)
 
     except Exception as e:
-        logger.error(f"Application error: {e}", exc_info=True)
+        logger.error(f"应用程序错误: {e}", exc_info=True)
         sys.exit(1)
 
 

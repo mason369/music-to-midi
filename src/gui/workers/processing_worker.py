@@ -1,5 +1,5 @@
 """
-Processing worker thread for background execution.
+处理工作线程 - 后台执行处理任务
 """
 import logging
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 
 class ProcessingWorker(QThread):
     """
-    Background worker thread for audio processing.
+    音频处理的后台工作线程
 
-    Runs the processing pipeline in a separate thread to avoid blocking the UI.
+    在独立线程中运行处理流水线，避免阻塞UI
     """
 
-    # Signals
+    # 信号
     progress_updated = pyqtSignal(ProcessingProgress)
     processing_finished = pyqtSignal(ProcessingResult)
     error_occurred = pyqtSignal(str)
@@ -30,13 +30,13 @@ class ProcessingWorker(QThread):
         parent=None
     ):
         """
-        Initialize worker.
+        初始化工作线程
 
-        Args:
-            audio_path: Path to input audio file
-            output_dir: Output directory
-            config: Application configuration
-            parent: Parent QObject
+        参数:
+            audio_path: 输入音频文件路径
+            output_dir: 输出目录
+            config: 应用配置
+            parent: 父QObject
         """
         super().__init__(parent)
 
@@ -46,9 +46,9 @@ class ProcessingWorker(QThread):
         self.pipeline = MusicToMidiPipeline(config)
 
     def run(self):
-        """Execute processing in background thread."""
+        """在后台线程中执行处理"""
         try:
-            logger.info(f"Worker starting: {self.audio_path}")
+            logger.info(f"工作线程启动: {self.audio_path}")
 
             result = self.pipeline.process(
                 self.audio_path,
@@ -57,21 +57,21 @@ class ProcessingWorker(QThread):
             )
 
             self.processing_finished.emit(result)
-            logger.info("Worker finished successfully")
+            logger.info("工作线程成功完成")
 
         except InterruptedError:
-            logger.info("Worker cancelled")
-            self.error_occurred.emit("Processing cancelled")
+            logger.info("工作线程已取消")
+            self.error_occurred.emit("处理已取消")
 
         except Exception as e:
-            logger.error(f"Worker error: {e}", exc_info=True)
+            logger.error(f"工作线程错误: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
 
     def _on_progress(self, progress: ProcessingProgress):
-        """Handle progress update from pipeline."""
+        """处理来自流水线的进度更新"""
         self.progress_updated.emit(progress)
 
     def cancel(self):
-        """Cancel processing."""
+        """取消处理"""
         if self.pipeline:
             self.pipeline.cancel()

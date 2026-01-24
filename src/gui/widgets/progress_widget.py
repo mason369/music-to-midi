@@ -1,5 +1,5 @@
 """
-Progress widget showing processing stages.
+进度组件 - 显示处理阶段
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QGroupBox
@@ -11,16 +11,16 @@ from src.models.data_models import ProcessingStage, ProcessingProgress
 
 
 class StageIndicator(QWidget):
-    """Small indicator for a processing stage."""
+    """处理阶段的小型指示器"""
 
     def __init__(self, stage: ProcessingStage, parent=None):
         super().__init__(parent)
         self.stage = stage
-        self.status = "pending"  # pending, current, done
+        self.status = "pending"  # pending（待处理）, current（当前）, done（完成）
         self._setup_ui()
 
     def _setup_ui(self):
-        """Set up the user interface."""
+        """设置用户界面"""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(5)
@@ -38,7 +38,7 @@ class StageIndicator(QWidget):
         self._update_style()
 
     def _get_stage_name(self) -> str:
-        """Get localized stage name."""
+        """获取本地化的阶段名称"""
         stage_keys = {
             ProcessingStage.PREPROCESSING: "preprocessing",
             ProcessingStage.SEPARATION: "separation",
@@ -51,12 +51,12 @@ class StageIndicator(QWidget):
         return t(f"main.progress.stages.{key}")
 
     def set_status(self, status: str):
-        """Set stage status (pending, current, done)."""
+        """设置阶段状态（pending待处理, current当前, done完成）"""
         self.status = status
         self._update_style()
 
     def _update_style(self):
-        """Update visual style based on status."""
+        """根据状态更新视觉样式"""
         if self.status == "done":
             self.icon_label.setText("✓")
             self.icon_label.setStyleSheet("color: #4a9; font-weight: bold;")
@@ -71,12 +71,12 @@ class StageIndicator(QWidget):
             self.name_label.setStyleSheet("font-size: 11px; color: #999;")
 
     def update_translations(self):
-        """Update text for current language."""
+        """更新当前语言的文本"""
         self.name_label.setText(self._get_stage_name())
 
 
 class ProgressWidget(QGroupBox):
-    """Widget showing overall progress and stage indicators."""
+    """显示总体进度和阶段指示器的组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,21 +84,21 @@ class ProgressWidget(QGroupBox):
         self._setup_ui()
 
     def _setup_ui(self):
-        """Set up the user interface."""
+        """设置用户界面"""
         self.setTitle(t("main.progress.title"))
 
         layout = QVBoxLayout(self)
 
-        # Current stage label
+        # 当前阶段标签
         self.current_label = QLabel(f"{t('main.progress.current')}: --")
 
-        # Progress bar
+        # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
 
-        # Stage indicators
+        # 阶段指示器
         stages_layout = QHBoxLayout()
         stages_layout.setSpacing(5)
 
@@ -115,7 +115,7 @@ class ProgressWidget(QGroupBox):
             self.stage_indicators[stage] = indicator
             stages_layout.addWidget(indicator)
 
-            # Add arrow between stages
+            # 阶段之间添加箭头
             if i < len(stages) - 1:
                 arrow = QLabel("→")
                 arrow.setStyleSheet("color: #ccc;")
@@ -129,14 +129,14 @@ class ProgressWidget(QGroupBox):
         layout.addLayout(stages_layout)
 
     def update_progress(self, progress: ProcessingProgress):
-        """Update progress display."""
-        # Update progress bar
+        """更新进度显示"""
+        # 更新进度条
         self.progress_bar.setValue(int(progress.overall_progress * 100))
 
-        # Update current label
+        # 更新当前标签
         self.current_label.setText(f"{t('main.progress.current')}: {progress.message}")
 
-        # Update stage indicators
+        # 更新阶段指示器
         current_stage = progress.stage
         stage_order = [
             ProcessingStage.PREPROCESSING,
@@ -160,7 +160,7 @@ class ProgressWidget(QGroupBox):
                 indicator.set_status("pending")
 
     def reset(self):
-        """Reset progress to initial state."""
+        """重置进度到初始状态"""
         self.progress_bar.setValue(0)
         self.current_label.setText(f"{t('main.progress.current')}: --")
 
@@ -168,7 +168,7 @@ class ProgressWidget(QGroupBox):
             indicator.set_status("pending")
 
     def update_translations(self):
-        """Update text for current language."""
+        """更新当前语言的文本"""
         self.setTitle(t("main.progress.title"))
         self.current_label.setText(f"{t('main.progress.current')}: --")
 
