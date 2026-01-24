@@ -2,26 +2,34 @@
 音乐转MIDI应用程序主窗口
 """
 import os
+import sys
 import logging
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QMenuBar, QMenu, QToolBar, QStatusBar,
     QLabel, QPushButton, QCheckBox, QLineEdit,
-    QGroupBox, QFileDialog, QMessageBox, QComboBox
+    QGroupBox, QFileDialog, QMessageBox, QComboBox,
+    QFrame, QSplitter, QGraphicsDropShadowEffect,
+    QDialog, QTextEdit, QApplication
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
 from src.models.data_models import Config, ProcessingProgress, ProcessingResult, ProcessingStage
 from src.gui.widgets.dropzone import DropZoneWidget
 from src.gui.widgets.track_panel import TrackPanel
 from src.gui.widgets.progress_widget import ProgressWidget
 from src.gui.workers.processing_worker import ProcessingWorker
-from src.i18n.translator import t, get_translator, set_language
+from src.i18n.translator import t, get_translator, set_language, get_resource_path
 from src.utils.gpu_utils import is_cuda_available, get_gpu_info, get_memory_info
 
 logger = logging.getLogger(__name__)
+
+
+def get_icon_path(name: str) -> str:
+    """获取图标文件路径"""
+    return str(get_resource_path(f"resources/icons/{name}"))
 
 
 class MainWindow(QMainWindow):
@@ -41,10 +49,16 @@ class MainWindow(QMainWindow):
         self._setup_toolbar()
         self._setup_statusbar()
         self._connect_signals()
+        self._apply_modern_style()
 
         self.setWindowTitle(t("app.name"))
-        self.setMinimumSize(800, 700)
-        self.resize(900, 750)
+        self.setMinimumSize(1000, 850)
+        self.showMaximized()
+
+        # 设置应用图标
+        icon_path = get_icon_path("app.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
     def _setup_ui(self):
         """设置主用户界面"""
@@ -52,21 +66,29 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(20, 10, 20, 10)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(24, 16, 24, 16)
+        main_layout.setSpacing(16)
+
+        # 顶部标题区域
+        header_widget = self._create_header()
+        main_layout.addWidget(header_widget)
 
         # 文件输入拖放区域
         self.dropzone = DropZoneWidget()
-        self.dropzone.setMinimumHeight(150)
+        self.dropzone.setMinimumHeight(180)
+        self._add_shadow(self.dropzone)
 
         # 轨道面板
         self.track_panel = TrackPanel()
+        self._add_shadow(self.track_panel)
 
         # 进度组件
         self.progress_widget = ProgressWidget()
+        self._add_shadow(self.progress_widget)
 
         # 输出设置
         self.output_group = self._create_output_settings()
+        self._add_shadow(self.output_group)
 
         # 操作按钮
         self.action_layout = self._create_action_buttons()
@@ -78,17 +100,111 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.output_group)
         main_layout.addLayout(self.action_layout)
 
+    def _create_header(self) -> QWidget:
+        """创建顶部标题区域"""
+        header = QWidget()
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 8)
+
+        # 图标
+        icon_label = QLabel()
+        icon_path = get_icon_path("icon_48.png")
+        if os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path)
+            icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation))
+        icon_label.setFixedSize(48, 48)
+
+        # 标题文字
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+
+        title_label = QLabel(t("app.name"))
+        title_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+        title_label.setStyleSheet("color: #2d3748;")
+
+        subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
+        subtitle_label.setFont(QFont("Segoe UI", 10))
+        subtitle_label.setStyleSheet("color: #718096;")
+
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(subtitle_label)
+
+        layout.addWidget(icon_label)
+        layout.addSpacing(12)
+        layout.addLayout(title_layout)
+        layout.addStretch()
+
+        return header
+
+    def _add_shadow(self, widget: QWidget):
+        """为组件添加阴影效果"""
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(0)
+        shadow.setYOffset(4)
+        shadow.setColor(QColor(0, 0, 0, 30))
+        widget.setGraphicsEffect(shadow)
+
     def _create_output_settings(self) -> QGroupBox:
         """创建输出设置组"""
         group = QGroupBox(t("main.output.title"))
+        group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 13px;
+                color: #2d3748;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 8px;
+                background: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 16px;
+                padding: 0 8px;
+                background: white;
+            }
+        """)
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(16, 20, 16, 16)
+        layout.setSpacing(12)
 
         # 输出目录
         dir_layout = QHBoxLayout()
         self.output_dir_label = QLabel(t("main.output.directory") + ":")
+        self.output_dir_label.setStyleSheet("font-weight: normal; color: #4a5568;")
         self.output_dir_edit = QLineEdit()
         self.output_dir_edit.setText(str(Path.home() / "Music" / "MidiOutput"))
+        self.output_dir_edit.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 12px;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background: #f7fafc;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #667eea;
+                background: white;
+            }
+        """)
         self.browse_dir_btn = QPushButton(t("main.output.browse"))
+        self.browse_dir_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background: #edf2f7;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                color: #4a5568;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: #e2e8f0;
+                border-color: #cbd5e0;
+            }
+        """)
         self.browse_dir_btn.clicked.connect(self._browse_output_dir)
 
         dir_layout.addWidget(self.output_dir_label)
@@ -97,18 +213,44 @@ class MainWindow(QMainWindow):
 
         # 选项
         options_layout = QHBoxLayout()
+        options_layout.setSpacing(20)
+
+        checkbox_style = """
+            QCheckBox {
+                font-size: 12px;
+                color: #4a5568;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #cbd5e0;
+            }
+            QCheckBox::indicator:checked {
+                background: #667eea;
+                border-color: #667eea;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #667eea;
+            }
+        """
 
         self.midi_check = QCheckBox(t("main.output.options.generateMidi"))
         self.midi_check.setChecked(True)
+        self.midi_check.setStyleSheet(checkbox_style)
 
         self.lyrics_check = QCheckBox(t("main.output.options.embedLyrics"))
         self.lyrics_check.setChecked(True)
+        self.lyrics_check.setStyleSheet(checkbox_style)
 
         self.lrc_check = QCheckBox(t("main.output.options.exportLrc"))
         self.lrc_check.setChecked(True)
+        self.lrc_check.setStyleSheet(checkbox_style)
 
         self.tracks_check = QCheckBox(t("main.output.options.saveTracks"))
         self.tracks_check.setChecked(True)
+        self.tracks_check.setStyleSheet(checkbox_style)
 
         options_layout.addWidget(self.midi_check)
         options_layout.addWidget(self.lyrics_check)
@@ -124,49 +266,127 @@ class MainWindow(QMainWindow):
     def _create_action_buttons(self) -> QHBoxLayout:
         """创建操作按钮布局"""
         layout = QHBoxLayout()
+        layout.setContentsMargins(0, 8, 0, 0)
 
-        self.start_btn = QPushButton(t("toolbar.start"))
-        self.start_btn.setFixedWidth(120)
+        self.start_btn = QPushButton("▶  " + t("toolbar.start"))
+        self.start_btn.setFixedSize(160, 48)
+        self.start_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background: #4a9;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
                 color: white;
                 font-weight: bold;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 12px 24px;
+                border-radius: 10px;
+                border: none;
             }
             QPushButton:hover {
-                background: #5ba;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #7c8ff0, stop:1 #8b5cb8);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #5a6fd6, stop:1 #6a4190);
             }
             QPushButton:disabled {
-                background: #ccc;
+                background: #cbd5e0;
+                color: #a0aec0;
             }
         """)
 
-        self.stop_btn = QPushButton(t("toolbar.stop"))
-        self.stop_btn.setFixedWidth(100)
+        self.stop_btn = QPushButton("■  " + t("toolbar.stop"))
+        self.stop_btn.setFixedSize(120, 48)
+        self.stop_btn.setFont(QFont("Segoe UI", 11))
         self.stop_btn.setEnabled(False)
+        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
             QPushButton {
-                background: #e55;
+                background: #fc8181;
                 color: white;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 12px 20px;
+                border-radius: 10px;
+                border: none;
             }
             QPushButton:hover {
-                background: #f66;
+                background: #f56565;
+            }
+            QPushButton:pressed {
+                background: #e53e3e;
             }
             QPushButton:disabled {
-                background: #ccc;
+                background: #e2e8f0;
+                color: #a0aec0;
             }
         """)
 
         layout.addStretch()
         layout.addWidget(self.start_btn)
+        layout.addSpacing(16)
         layout.addWidget(self.stop_btn)
         layout.addStretch()
 
         return layout
+
+    def _apply_modern_style(self):
+        """应用现代化样式"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background: #f7fafc;
+            }
+            QMenuBar {
+                background: white;
+                border-bottom: 1px solid #e2e8f0;
+                padding: 4px;
+            }
+            QMenuBar::item {
+                padding: 6px 12px;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected {
+                background: #edf2f7;
+            }
+            QMenu {
+                background: white;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 8px 24px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background: #edf2f7;
+            }
+            QToolBar {
+                background: white;
+                border-bottom: 1px solid #e2e8f0;
+                spacing: 8px;
+                padding: 4px 8px;
+            }
+            QStatusBar {
+                background: white;
+                border-top: 1px solid #e2e8f0;
+                color: #718096;
+                font-size: 11px;
+            }
+            QComboBox {
+                padding: 6px 12px;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background: white;
+                min-width: 100px;
+            }
+            QComboBox:hover {
+                border-color: #667eea;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+        """)
 
     def _setup_menu(self):
         """设置菜单栏"""
@@ -390,11 +610,82 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.status_label.setText(t("status.error"))
 
-        QMessageBox.critical(
-            self,
-            t("dialogs.error.title"),
-            f"{t('dialogs.error.processingFailed')}\n\n{error_msg}"
-        )
+        # 创建自定义错误对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle(t("dialogs.error.title"))
+        dialog.setMinimumWidth(500)
+        dialog.setMaximumHeight(400)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # 错误提示标签
+        error_label = QLabel(t("dialogs.error.processingFailed"))
+        error_label.setStyleSheet("font-weight: bold; color: #e53e3e; font-size: 14px;")
+        layout.addWidget(error_label)
+
+        # 错误详情文本框（可滚动，限制高度）
+        error_text = QTextEdit()
+        error_text.setPlainText(error_msg)
+        error_text.setReadOnly(True)
+        error_text.setMaximumHeight(200)
+        error_text.setStyleSheet("""
+            QTextEdit {
+                background: #f7fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                padding: 8px;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+            }
+        """)
+        layout.addWidget(error_text)
+
+        # 按钮布局
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+
+        # 复制按钮
+        copy_btn = QPushButton(t("dialogs.error.copy") if "dialogs.error.copy" in t("dialogs.error.copy") else "复制错误信息")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background: #edf2f7;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                color: #4a5568;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: #e2e8f0;
+            }
+        """)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(error_msg))
+
+        # 确定按钮
+        ok_btn = QPushButton(t("dialogs.error.ok") if "dialogs.error.ok" in t("dialogs.error.ok") else "确定")
+        ok_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 20px;
+                background: #667eea;
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: #5a6fd6;
+            }
+        """)
+        ok_btn.clicked.connect(dialog.accept)
+
+        btn_layout.addStretch()
+        btn_layout.addWidget(copy_btn)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
 
         logger.error(f"处理错误: {error_msg}")
 

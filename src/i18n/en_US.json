@@ -1,6 +1,7 @@
 {
   "app": {
     "name": "Music to MIDI",
+    "subtitle": "Intelligently convert music to MIDI files",
     "version": "Version"
   },
   "menu": {
@@ -121,7 +122,9 @@
       "title": "Error",
       "fileNotFound": "File not found",
       "invalidFormat": "Invalid file format",
-      "processingFailed": "Processing failed"
+      "processingFailed": "Processing failed",
+      "copy": "Copy Error",
+      "ok": "OK"
     },
     "about": {
       "title": "About Music to MIDI",

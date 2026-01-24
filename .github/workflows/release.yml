@@ -32,7 +32,7 @@ jobs:
 
       - name: 使用 PyInstaller 构建
         run: |
-          pyinstaller --name MusicToMidi --windowed --onedir src/main.py
+          pyinstaller MusicToMidi.spec
 
       - name: 创建压缩包
         run: |

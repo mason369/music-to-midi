@@ -33,7 +33,7 @@ jobs:
 
       - name: 使用 PyInstaller 构建
         run: |
-          pyinstaller --name MusicToMidi --windowed --onedir src/main.py
+          pyinstaller MusicToMidi.spec
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4

@@ -59,16 +59,38 @@ class StageIndicator(QWidget):
         """根据状态更新视觉样式"""
         if self.status == "done":
             self.icon_label.setText("✓")
-            self.icon_label.setStyleSheet("color: #4a9; font-weight: bold;")
-            self.name_label.setStyleSheet("font-size: 11px; color: #4a9;")
+            self.icon_label.setStyleSheet("""
+                color: #48bb78;
+                font-weight: bold;
+                font-size: 14px;
+            """)
+            self.name_label.setStyleSheet("""
+                font-size: 11px;
+                color: #48bb78;
+                font-weight: 500;
+            """)
         elif self.status == "current":
             self.icon_label.setText("◉")
-            self.icon_label.setStyleSheet("color: #49f; font-weight: bold;")
-            self.name_label.setStyleSheet("font-size: 11px; color: #49f; font-weight: bold;")
+            self.icon_label.setStyleSheet("""
+                color: #667eea;
+                font-weight: bold;
+                font-size: 14px;
+            """)
+            self.name_label.setStyleSheet("""
+                font-size: 11px;
+                color: #667eea;
+                font-weight: bold;
+            """)
         else:
             self.icon_label.setText("○")
-            self.icon_label.setStyleSheet("color: #999;")
-            self.name_label.setStyleSheet("font-size: 11px; color: #999;")
+            self.icon_label.setStyleSheet("""
+                color: #cbd5e0;
+                font-size: 14px;
+            """)
+            self.name_label.setStyleSheet("""
+                font-size: 11px;
+                color: #a0aec0;
+            """)
 
     def update_translations(self):
         """更新当前语言的文本"""
@@ -86,17 +108,61 @@ class ProgressWidget(QGroupBox):
     def _setup_ui(self):
         """设置用户界面"""
         self.setTitle(t("main.progress.title"))
+        self.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 13px;
+                color: #2d3748;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 8px;
+                background: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 16px;
+                padding: 0 8px;
+                background: white;
+            }
+        """)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 20, 16, 16)
+        layout.setSpacing(12)
 
         # 当前阶段标签
         self.current_label = QLabel(f"{t('main.progress.current')}: --")
+        self.current_label.setStyleSheet("""
+            QLabel {
+                font-weight: normal;
+                color: #4a5568;
+                font-size: 12px;
+            }
+        """)
 
         # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(24)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                border-radius: 12px;
+                background: #edf2f7;
+                text-align: center;
+                font-size: 11px;
+                font-weight: bold;
+                color: #4a5568;
+            }
+            QProgressBar::chunk {
+                border-radius: 12px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+        """)
 
         # 阶段指示器
         stages_layout = QHBoxLayout()
