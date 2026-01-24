@@ -37,7 +37,10 @@
     },
     "piano": {
       "track_count": "Piano tracks:",
-      "hint": "Recommended: 2-4 (left/right hand separation)"
+      "hint": "Recommended: 2-4 (left/right hand separation)",
+      "auto": "Auto detect",
+      "auto_tooltip": "Automatically determine optimal track count based on audio complexity",
+      "auto_hint": "Track count will be auto-detected based on audio complexity (1-6)"
     },
     "smart": {
       "hint": "Instruments will be detected after selecting audio file"
@@ -160,6 +163,12 @@
       "description": "Convert audio to multi-track MIDI with lyrics embedding",
       "author": "Author",
       "license": "License"
+    },
+    "complete": {
+      "title": "Conversion Complete",
+      "openFolder": "Open Folder",
+      "openFile": "Open MIDI File",
+      "ok": "OK"
     }
   },
   "quality": {

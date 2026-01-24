@@ -8,11 +8,24 @@
 
 ## 功能特点
 
-- **音源分离**：使用Demucs v4自动将音频分离为4个轨道（人声、鼓、贝斯、其他）
+- **双模式处理**：
+  - **钢琴模式**：跳过音源分离，直接将音频转换为多轨钢琴MIDI（适合纯钢琴曲）
+  - **智能模式**：自动检测乐器类型，分离并转换为对应乐器的MIDI轨道
+- **音源分离**：使用Demucs v4自动将音频分离为6个轨道（人声、鼓、贝斯、吉他、钢琴、其他）
+- **乐器识别**：使用PANNs进行智能乐器检测和分类
 - **音频转MIDI**：使用AI驱动的音高检测（Basic Pitch）将每个轨道转换为MIDI
+- **MIDI后处理**：音符量化、力度平滑、去重、复音限制等优化
 - **歌词识别**：识别人声中的歌词，并以单词级时间戳嵌入MIDI
-- **多语言界面**：支持中文和英文界面
-- **跨平台**：支持Windows、macOS和Linux
+- **多语言界面**：支持中文和英文界面切换
+- **专业深色主题**：现代化音频软件风格界面设计
+
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| Windows | ✅ 已支持 | 完整功能 |
+| macOS | 🚧 计划中 | 开发中 |
+| Linux | 🚧 计划中 | 开发中 |
 
 ## 截图
 
@@ -49,7 +62,7 @@ python -m src.main
 
 ### 从发布版安装
 
-从 [Releases](https://github.com/mason369/music-to-midi/releases) 页面下载适合您平台的最新版本。
+从 [Releases](https://github.com/mason369/music-to-midi/releases) 页面下载Windows版本。
 
 ## 使用方法
 
@@ -71,9 +84,17 @@ python -m src.main
 ## 技术细节
 
 ### 使用的AI模型
-- **Demucs v4** (Meta)：最先进的音源分离
+- **Demucs v4** (Meta)：最先进的音源分离（支持4轨和6轨模式）
+- **PANNs** (Audio Pattern Analysis)：乐器识别和音频分类
 - **Basic Pitch** (Spotify)：多音高检测
 - **Whisper + WhisperX** (OpenAI)：带单词级对齐的语音识别
+
+### 处理模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| 钢琴模式 | 跳过分离，生成多轨钢琴MIDI | 纯钢琴曲、简单旋律 |
+| 智能模式 | 6轨分离 + 乐器识别 | 完整编曲、多乐器作品 |
 
 ### 架构
 
@@ -81,37 +102,32 @@ python -m src.main
 音频输入
     │
     ▼
-音源分离 (Demucs) ──→ 4个轨道（人声/鼓/贝斯/其他）
+┌─────────────────────────────────────────────────────┐
+│ 模式选择                                              │
+│  ├─ 钢琴模式 ──→ 跳过分离，直接转写                    │
+│  └─ 智能模式 ──→ 6轨分离 (Demucs htdemucs_6s)         │
+└─────────────────────────────────────────────────────┘
     │
-    ├──→ 节拍检测 (librosa)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│ 智能模式处理流程                                       │
+│  ├──→ 乐器识别 (PANNs) ──→ 轨道布局建议                │
+│  ├──→ 节拍检测 (librosa)                              │
+│  ├──→ 音频转MIDI (Basic Pitch)                        │
+│  └──→ 歌词识别 (Whisper) ──→ 单词对齐 (WhisperX)       │
+└─────────────────────────────────────────────────────┘
     │
-    ├──→ 音频转MIDI (Basic Pitch)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│ MIDI后处理                                            │
+│  ├──→ 音符量化                                        │
+│  ├──→ 力度平滑                                        │
+│  ├──→ 重复音符去除                                    │
+│  └──→ 复音数限制                                      │
+└─────────────────────────────────────────────────────┘
     │
-    └──→ 歌词识别 (Whisper) ──→ 单词对齐 (WhisperX)
-                                              │
-                                              ▼
-                                    MIDI生成 (mido)
-                                              │
-                                              ▼
-                                    输出: MIDI + LRC + WAV
-```
-
-## 配置
-
-设置存储在 `~/.music-to-midi/config.yaml`：
-
-```yaml
-# 通用
-language: zh_CN  # 或 en_US
-theme: dark
-
-# 处理
-use_gpu: true
-whisper_model: medium  # tiny, base, small, medium, large
-
-# MIDI
-ticks_per_beat: 480
-default_velocity: 80
+    ▼
+输出: MIDI + LRC + WAV
 ```
 
 ## 开发
@@ -139,8 +155,10 @@ mypy src/
 # 安装PyInstaller
 pip install pyinstaller
 
-# 构建
-pyinstaller music-to-midi.spec
+# 使用项目配置文件构建（推荐）
+pyinstaller MusicToMidi.spec
+
+# 构建产物在 dist/MusicToMidi/ 目录下
 ```
 
 ## 贡献
@@ -160,6 +178,7 @@ pyinstaller music-to-midi.spec
 ## 致谢
 
 - [Demucs](https://github.com/facebookresearch/demucs) - 音乐源分离
+- [PANNs](https://github.com/qiuqiangkong/panns_inference) - 音频模式分析与乐器识别
 - [Basic Pitch](https://github.com/spotify/basic-pitch) - 音频转MIDI转录
 - [Whisper](https://github.com/openai/whisper) - 语音识别
 - [WhisperX](https://github.com/m-bain/whisperX) - 单词级对齐

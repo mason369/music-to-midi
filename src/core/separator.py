@@ -45,6 +45,33 @@ class SourceSeparator:
         self.current_model_name = None
         self.device = get_device(config.use_gpu, config.gpu_device)
         self.segment_size = config.segment_size
+        self._cancelled = False
+        self._cancel_check_callback = None
+
+    def set_cancel_check(self, callback) -> None:
+        """
+        设置取消检查回调
+
+        参数:
+            callback: 返回 True 表示已取消的回调函数
+        """
+        self._cancel_check_callback = callback
+
+    def cancel(self) -> None:
+        """取消正在进行的处理"""
+        self._cancelled = True
+        logger.info("分离器：处理已取消")
+
+    def reset_cancel(self) -> None:
+        """重置取消标志"""
+        self._cancelled = False
+
+    def _check_cancelled(self) -> None:
+        """检查是否已取消，如果是则抛出异常"""
+        if self._cancelled:
+            raise InterruptedError("分离处理已取消")
+        if self._cancel_check_callback and self._cancel_check_callback():
+            raise InterruptedError("分离处理已取消")
 
     def load_model(self, model_name: str = None) -> None:
         """
@@ -215,16 +242,12 @@ class SourceSeparator:
 
     def _instrument_to_stem(self, instrument: InstrumentType) -> str:
         """将乐器类型映射到分离轨道名称"""
-        mapping = {
-            InstrumentType.DRUMS: "drums",
-            InstrumentType.BASS: "bass",
-            InstrumentType.VOCALS: "vocals",
-            InstrumentType.GUITAR: "guitar",
-            InstrumentType.PIANO: "piano",
-            InstrumentType.STRINGS: "other",
-            InstrumentType.OTHER: "other",
-        }
-        return mapping.get(instrument, "other")
+        # 使用 InstrumentType 的方法获取对应的 stem 来源
+        return instrument.get_stem_source()
+
+    def get_stem_for_instrument(self, instrument: InstrumentType) -> str:
+        """公共方法：获取乐器对应的 stem 名称"""
+        return self._instrument_to_stem(instrument)
 
     def _separate_internal(
         self,
@@ -251,12 +274,21 @@ class SourceSeparator:
         import torchaudio.transforms
         from demucs.apply import apply_model
 
+        # 检查取消
+        self._check_cancelled()
+
         self.load_model(model_name)
+
+        # 检查取消
+        self._check_cancelled()
 
         if progress_callback:
             progress_callback(0.0, "正在加载音频...")
 
         wav, sr = self._load_audio(audio_path)
+
+        # 检查取消
+        self._check_cancelled()
 
         # 如需要则重采样
         if sr != self.model.samplerate:
@@ -264,12 +296,18 @@ class SourceSeparator:
             wav = torchaudio.transforms.Resample(sr, self.model.samplerate)(wav)
 
         wav = wav.to(self.device)
+        logger.debug(f"音频形状: {wav.shape}, 设备: {self.device}")
+
+        # 检查取消
+        self._check_cancelled()
 
         if progress_callback:
             progress_callback(0.2, "正在分离音源...")
 
         # 应用模型
         logger.info(f"正在应用音源分离模型 ({model_name})...")
+        logger.debug(f"模型源: {self.model.sources}")
+        logger.debug(f"分段大小: {self.segment_size}, 重叠: 0.25")
         with torch.no_grad():
             sources = apply_model(
                 self.model,
@@ -279,6 +317,9 @@ class SourceSeparator:
                 overlap=0.25,
                 progress=True
             )
+
+        # 检查取消（模型处理完成后）
+        self._check_cancelled()
 
         if progress_callback:
             progress_callback(0.8, "正在保存分离的音轨...")
@@ -290,6 +331,9 @@ class SourceSeparator:
         input_name = Path(audio_path).stem
 
         for i, stem in enumerate(self.model.sources):
+            # 检查取消
+            self._check_cancelled()
+
             if stem in stems:
                 output_path = os.path.join(output_dir, f"{input_name}_{stem}.wav")
                 stem_audio = sources[0, i].cpu().numpy().T  # 转置为 [samples, channels]
@@ -298,6 +342,7 @@ class SourceSeparator:
 
                 output_paths[stem] = output_path
                 logger.info(f"已保存 {stem}: {output_path}")
+                logger.debug(f"  音频形状: {stem_audio.shape}, 采样率: {self.model.samplerate}")
 
         if progress_callback:
             progress_callback(1.0, "分离完成")

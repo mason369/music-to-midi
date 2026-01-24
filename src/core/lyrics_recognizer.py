@@ -14,6 +14,45 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+def _patch_torchaudio_compatibility():
+    """
+    修复 torchaudio 2.0+ 的兼容性问题
+
+    torchaudio 2.0+ 移除了 AudioMetaData 类，但某些旧版依赖（如 whisperx）
+    可能仍在使用它。此函数添加一个兼容的占位类。
+    """
+    try:
+        import torchaudio
+
+        # 检查是否已存在 AudioMetaData
+        if hasattr(torchaudio, 'AudioMetaData'):
+            return  # 已存在，无需修补
+
+        # 创建一个兼容的占位类
+        class AudioMetaData:
+            """torchaudio.AudioMetaData 的兼容占位类"""
+            def __init__(self, sample_rate=0, num_frames=0, num_channels=0,
+                         bits_per_sample=0, encoding=None):
+                self.sample_rate = sample_rate
+                self.num_frames = num_frames
+                self.num_channels = num_channels
+                self.bits_per_sample = bits_per_sample
+                self.encoding = encoding
+
+        # 注入到 torchaudio 模块
+        torchaudio.AudioMetaData = AudioMetaData
+        logger.debug("已注入 torchaudio.AudioMetaData 兼容类")
+
+    except ImportError:
+        logger.debug("torchaudio 未安装，跳过兼容性修补")
+    except Exception as e:
+        logger.warning(f"torchaudio 兼容性修补失败: {e}")
+
+
+# 在模块加载时应用修补
+_patch_torchaudio_compatibility()
+
+
 class LyricsRecognizer:
     """
     使用 Whisper 和 WhisperX 进行歌词识别和对齐
@@ -92,16 +131,37 @@ class LyricsRecognizer:
         返回:
             带时间戳的 LyricEvent 对象列表
         """
-        import whisperx
+        try:
+            import whisperx
+        except ImportError as e:
+            logger.error("WhisperX 未安装，请运行: pip install whisperx")
+            raise ImportError("歌词识别需要 WhisperX 库") from e
+        except AttributeError as e:
+            # 捕获 torchaudio.AudioMetaData 相关错误
+            if "AudioMetaData" in str(e):
+                logger.error(
+                    "torchaudio 版本兼容性问题。"
+                    "请尝试: pip install torchaudio==2.0.0"
+                )
+            raise
 
-        self.load_model()
+        try:
+            self.load_model()
+        except Exception as e:
+            logger.error(f"加载 Whisper 模型失败: {e}")
+            raise
 
         if progress_callback:
             progress_callback(0.0, "正在加载音频...")
 
         # 加载音频
         logger.info(f"正在识别歌词: {audio_path}")
-        audio = whisperx.load_audio(audio_path)
+
+        try:
+            audio = whisperx.load_audio(audio_path)
+        except Exception as e:
+            logger.error(f"加载音频失败: {e}")
+            raise
 
         if progress_callback:
             progress_callback(0.2, "正在转录...")
@@ -131,14 +191,18 @@ class LyricsRecognizer:
             return self._extract_segment_lyrics(result)
 
         # 对齐
-        aligned = whisperx.align(
-            result["segments"],
-            align_model,
-            metadata,
-            audio,
-            self.device,
-            return_char_alignments=False
-        )
+        try:
+            aligned = whisperx.align(
+                result["segments"],
+                align_model,
+                metadata,
+                audio,
+                self.device,
+                return_char_alignments=False
+            )
+        except Exception as e:
+            logger.warning(f"单词对齐失败: {e}，使用段落级时间戳")
+            return self._extract_segment_lyrics(result)
 
         if progress_callback:
             progress_callback(0.9, "正在处理歌词...")

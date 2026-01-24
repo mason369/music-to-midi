@@ -264,7 +264,7 @@ class ModeSelector(QWidget):
 class PianoTrackConfig(QWidget):
     """钢琴轨道数量配置"""
 
-    count_changed = pyqtSignal(int)
+    count_changed = pyqtSignal(int)  # -1 表示自动
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -277,31 +277,59 @@ class PianoTrackConfig(QWidget):
 
         self.label = QLabel(t("main.piano.track_count"))
 
+        # 自动检测复选框
+        self.auto_check = QCheckBox(t("main.piano.auto"))
+        self.auto_check.setChecked(True)  # 默认自动
+        self.auto_check.setToolTip(t("main.piano.auto_tooltip"))
+        self.auto_check.toggled.connect(self._on_auto_toggled)
+
         self.count_spin = QSpinBox()
         self.count_spin.setRange(1, 8)
         self.count_spin.setValue(2)
         self.count_spin.setFixedWidth(60)
-        self.count_spin.valueChanged.connect(self.count_changed.emit)
+        self.count_spin.setEnabled(False)  # 自动模式下禁用
+        self.count_spin.valueChanged.connect(lambda v: self.count_changed.emit(v))
 
         self.hint_label = QLabel(t("main.piano.hint"))
         self.hint_label.setStyleSheet("color: #808080; font-size: 11px;")
 
         layout.addWidget(self.label)
+        layout.addWidget(self.auto_check)
         layout.addWidget(self.count_spin)
         layout.addWidget(self.hint_label)
         layout.addStretch()
 
+    def _on_auto_toggled(self, checked: bool):
+        """自动模式切换"""
+        self.count_spin.setEnabled(not checked)
+        if checked:
+            self.count_changed.emit(-1)  # -1 表示自动
+        else:
+            self.count_changed.emit(self.count_spin.value())
+
     def get_count(self) -> int:
-        """获取钢琴轨道数量"""
+        """获取钢琴轨道数量，-1 表示自动检测"""
+        if self.auto_check.isChecked():
+            return -1
         return self.count_spin.value()
 
     def set_count(self, count: int):
-        """设置钢琴轨道数量"""
-        self.count_spin.setValue(count)
+        """设置钢琴轨道数量，-1 表示自动"""
+        if count == -1:
+            self.auto_check.setChecked(True)
+        else:
+            self.auto_check.setChecked(False)
+            self.count_spin.setValue(count)
+
+    def is_auto(self) -> bool:
+        """是否为自动模式"""
+        return self.auto_check.isChecked()
 
     def update_translations(self):
         """更新翻译"""
         self.label.setText(t("main.piano.track_count"))
+        self.auto_check.setText(t("main.piano.auto"))
+        self.auto_check.setToolTip(t("main.piano.auto_tooltip"))
         self.hint_label.setText(t("main.piano.hint"))
 
 
@@ -437,12 +465,29 @@ class TrackPanel(QGroupBox):
             row.deleteLater()
         self.track_rows.clear()
 
+        # 清除占位提示
+        while self.tracks_layout.count():
+            item = self.tracks_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
         mode = self.mode_selector.get_mode()
 
         if mode == "piano":
-            # 钢琴模式：创建指定数量的钢琴轨道
             count = self.piano_config.get_count()
-            self._current_layout = TrackLayout.default_piano(count)
+            if count == -1:
+                # 自动模式：显示提示，实际轨道数在处理时确定
+                self._current_layout = TrackLayout(
+                    mode=ProcessingMode.PIANO,
+                    tracks=[]  # 空轨道表示自动检测
+                )
+                hint = QLabel(t("main.piano.auto_hint"))
+                hint.setStyleSheet("color: #808080; font-style: italic; padding: 10px;")
+                hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tracks_layout.addWidget(hint)
+            else:
+                # 固定数量模式
+                self._current_layout = TrackLayout.default_piano(count)
         else:
             # 智能模式：暂时显示占位提示
             self._current_layout = TrackLayout(

@@ -23,6 +23,11 @@ class InstrumentType(Enum):
     GUITAR = "guitar"
     VOCALS = "vocals"
     STRINGS = "strings"
+    BRASS = "brass"       # 铜管乐器（小号、长号等）
+    WOODWIND = "woodwind" # 木管乐器（长笛、萨克斯等）
+    SYNTH = "synth"       # 合成器
+    ORGAN = "organ"       # 风琴
+    HARP = "harp"         # 竖琴
     OTHER = "other"
 
     @classmethod
@@ -45,6 +50,11 @@ class InstrumentType(Enum):
             InstrumentType.GUITAR: 24,    # Acoustic Guitar (nylon)
             InstrumentType.VOCALS: 52,    # Choir Aahs
             InstrumentType.STRINGS: 48,   # String Ensemble 1
+            InstrumentType.BRASS: 56,     # Trumpet
+            InstrumentType.WOODWIND: 73,  # Flute
+            InstrumentType.SYNTH: 80,     # Lead 1 (square)
+            InstrumentType.ORGAN: 16,     # Drawbar Organ
+            InstrumentType.HARP: 46,      # Orchestral Harp
             InstrumentType.OTHER: 0,      # 默认钢琴
         }
         return programs.get(self, 0)
@@ -58,6 +68,11 @@ class InstrumentType(Enum):
             InstrumentType.GUITAR: "吉他",
             InstrumentType.VOCALS: "人声",
             InstrumentType.STRINGS: "弦乐",
+            InstrumentType.BRASS: "铜管",
+            InstrumentType.WOODWIND: "木管",
+            InstrumentType.SYNTH: "合成器",
+            InstrumentType.ORGAN: "风琴",
+            InstrumentType.HARP: "竖琴",
             InstrumentType.OTHER: "其他",
         }
         names_en = {
@@ -67,11 +82,29 @@ class InstrumentType(Enum):
             InstrumentType.GUITAR: "Guitar",
             InstrumentType.VOCALS: "Vocals",
             InstrumentType.STRINGS: "Strings",
+            InstrumentType.BRASS: "Brass",
+            InstrumentType.WOODWIND: "Woodwind",
+            InstrumentType.SYNTH: "Synth",
+            InstrumentType.ORGAN: "Organ",
+            InstrumentType.HARP: "Harp",
             InstrumentType.OTHER: "Other",
         }
         if lang.startswith("zh"):
             return names_zh.get(self, self.value)
         return names_en.get(self, self.value)
+
+    def get_stem_source(self) -> str:
+        """获取该乐器对应的 Demucs 分离轨道来源"""
+        # Demucs 6s 只有这些轨道：drums, bass, vocals, guitar, piano, other
+        # 其他乐器都来自 other 轨道
+        direct_stems = {
+            InstrumentType.DRUMS: "drums",
+            InstrumentType.BASS: "bass",
+            InstrumentType.VOCALS: "vocals",
+            InstrumentType.GUITAR: "guitar",
+            InstrumentType.PIANO: "piano",
+        }
+        return direct_stems.get(self, "other")
 
 
 class ProcessingMode(Enum):
@@ -101,6 +134,19 @@ class NoteEvent:
     @property
     def duration(self) -> float:
         """音符持续时间（秒）"""
+        return self.end_time - self.start_time
+
+
+@dataclass
+class PedalEvent:
+    """表示一个踏板事件（延音踏板或柔音踏板）"""
+    start_time: float    # 踩下时间（秒）
+    end_time: float      # 抬起时间（秒）
+    pedal_type: str = "sustain"  # "sustain" (CC64) 或 "soft" (CC67)
+
+    @property
+    def duration(self) -> float:
+        """踏板持续时间（秒）"""
         return self.end_time - self.start_time
 
 
@@ -301,10 +347,10 @@ class Config:
 
     # MIDI后处理设置
     quantize_notes: bool = True       # 音符量化
-    quantize_grid: str = "1/16"       # 量化网格 ("1/4", "1/8", "1/16", "1/32")
+    quantize_grid: str = "1/32"       # 量化网格：从1/16改为1/32，更精细
     remove_duplicates: bool = True    # 去除重复音符
     velocity_smoothing: bool = True   # 力度平滑
-    max_polyphony: int = 10           # 最大复音数
+    max_polyphony: int = 25           # 最大复音数：从10提高到25，更好支持钢琴
 
     # 输出设置
     output_dir: str = ""

@@ -117,3 +117,141 @@ def clear_gpu_memory() -> None:
             logger.info("GPU内存缓存已清除")
     except Exception as e:
         logger.error(f"清除GPU内存时出错: {e}")
+
+
+def diagnose_gpu() -> dict:
+    """
+    诊断GPU可用性问题
+
+    返回包含以下信息的字典:
+    - torch_version: PyTorch 版本
+    - cuda_available: CUDA 是否可用
+    - cuda_version: CUDA 版本
+    - cudnn_available: cuDNN 是否可用
+    - gpu_count: GPU 数量
+    - gpu_names: GPU 名称列表
+    - tensorflow_gpu: TensorFlow GPU 是否可用
+    - tf_gpu_count: TensorFlow 检测到的 GPU 数量
+    """
+    result = {
+        "torch_version": None,
+        "cuda_available": False,
+        "cuda_version": None,
+        "cudnn_available": False,
+        "cudnn_version": None,
+        "gpu_count": 0,
+        "gpu_names": [],
+        "tensorflow_gpu": False,
+        "tf_gpu_count": 0,
+        "mps_available": False,
+    }
+
+    # PyTorch 诊断
+    try:
+        import torch
+        result["torch_version"] = torch.__version__
+        result["cuda_available"] = torch.cuda.is_available()
+
+        if result["cuda_available"]:
+            result["cuda_version"] = torch.version.cuda
+            result["cudnn_available"] = torch.backends.cudnn.is_available()
+            if result["cudnn_available"]:
+                result["cudnn_version"] = str(torch.backends.cudnn.version())
+            result["gpu_count"] = torch.cuda.device_count()
+
+            for i in range(result["gpu_count"]):
+                result["gpu_names"].append(torch.cuda.get_device_name(i))
+
+        # macOS MPS 支持
+        if hasattr(torch.backends, 'mps'):
+            result["mps_available"] = torch.backends.mps.is_available()
+
+    except ImportError:
+        logger.warning("PyTorch 未安装")
+    except Exception as e:
+        logger.warning(f"PyTorch 诊断失败: {e}")
+
+    # TensorFlow 诊断（Basic Pitch 使用 TensorFlow）
+    try:
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices('GPU')
+        result["tensorflow_gpu"] = len(gpus) > 0
+        result["tf_gpu_count"] = len(gpus)
+    except ImportError:
+        logger.debug("TensorFlow 未安装")
+    except Exception as e:
+        logger.warning(f"TensorFlow 诊断失败: {e}")
+
+    return result
+
+
+def configure_tensorflow_gpu() -> bool:
+    """
+    配置 TensorFlow GPU
+
+    启用 GPU 内存增长以避免占用所有 GPU 内存。
+    Basic Pitch 使用 TensorFlow 后端，需要显式配置。
+
+    返回:
+        True 如果成功配置 GPU，False 如果使用 CPU
+    """
+    try:
+        import os
+        # 减少 TensorFlow 日志输出
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+        import tensorflow as tf
+
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            try:
+                # 为每个 GPU 启用内存增长
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                logger.info(f"TensorFlow GPU 已配置: {len(gpus)} 个设备")
+                return True
+            except RuntimeError as e:
+                # 如果 GPU 已经被初始化，无法修改配置
+                logger.warning(f"TensorFlow GPU 配置失败: {e}")
+                return False
+        else:
+            logger.info("TensorFlow 未检测到 GPU，将使用 CPU")
+            return False
+
+    except ImportError:
+        logger.debug("TensorFlow 未安装")
+        return False
+    except Exception as e:
+        logger.warning(f"TensorFlow GPU 配置异常: {e}")
+        return False
+
+
+def print_gpu_diagnosis() -> None:
+    """打印详细的 GPU 诊断信息"""
+    info = diagnose_gpu()
+
+    print("\n" + "=" * 50)
+    print("GPU 诊断信息")
+    print("=" * 50)
+
+    print(f"\n[PyTorch]")
+    print(f"  版本: {info['torch_version'] or '未安装'}")
+    print(f"  CUDA 可用: {info['cuda_available']}")
+
+    if info['cuda_available']:
+        print(f"  CUDA 版本: {info['cuda_version']}")
+        print(f"  cuDNN 可用: {info['cudnn_available']}")
+        if info['cudnn_available']:
+            print(f"  cuDNN 版本: {info['cudnn_version']}")
+        print(f"  GPU 数量: {info['gpu_count']}")
+        for i, name in enumerate(info['gpu_names']):
+            print(f"    GPU {i}: {name}")
+
+    if info['mps_available']:
+        print(f"  Apple MPS 可用: True")
+
+    print(f"\n[TensorFlow]")
+    print(f"  GPU 可用: {info['tensorflow_gpu']}")
+    print(f"  GPU 数量: {info['tf_gpu_count']}")
+
+    print("\n" + "=" * 50)
