@@ -29,14 +29,43 @@
       "subtitle": "支持 MP3, WAV, FLAC, OGG",
       "selected": "已选文件"
     },
+    "mode": {
+      "piano": "钢琴模式",
+      "smart": "智能识别",
+      "piano_tooltip": "直接将音频转写为多个钢琴轨道，适合钢琴曲目",
+      "smart_tooltip": "自动检测音频中的乐器类型并分别转写"
+    },
+    "piano": {
+      "track_count": "钢琴轨道数:",
+      "hint": "推荐: 2-4 (左右手分离)"
+    },
+    "smart": {
+      "hint": "选择音频文件后将自动检测乐器"
+    },
     "tracks": {
-      "title": "轨道预览",
+      "title": "轨道设置",
       "vocals": "人声",
       "drums": "鼓",
       "bass": "贝斯",
+      "guitar": "吉他",
+      "piano": "钢琴",
+      "strings": "弦乐",
       "other": "其他乐器",
       "lyrics": "歌词",
-      "midi": "MIDI"
+      "midi": "MIDI",
+      "channel": "通道:",
+      "program": "音色:"
+    },
+    "programs": {
+      "piano": "钢琴",
+      "acoustic_guitar": "木吉他",
+      "steel_guitar": "钢弦吉他",
+      "acoustic_bass": "原声贝斯",
+      "electric_bass": "电贝斯",
+      "strings": "弦乐合奏",
+      "choir": "合唱",
+      "trumpet": "小号",
+      "flute": "长笛"
     },
     "progress": {
       "title": "处理进度",

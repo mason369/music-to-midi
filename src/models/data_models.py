@@ -8,11 +8,76 @@ from pathlib import Path
 
 
 class TrackType(Enum):
-    """音源分离后的音轨类型"""
+    """音源分离后的音轨类型 (已弃用，请使用 InstrumentType)"""
     DRUMS = "drums"
     BASS = "bass"
     VOCALS = "vocals"
     OTHER = "other"
+
+
+class InstrumentType(Enum):
+    """乐器类型枚举"""
+    PIANO = "piano"
+    DRUMS = "drums"
+    BASS = "bass"
+    GUITAR = "guitar"
+    VOCALS = "vocals"
+    STRINGS = "strings"
+    OTHER = "other"
+
+    @classmethod
+    def from_track_type(cls, track_type: TrackType) -> "InstrumentType":
+        """从旧的 TrackType 转换"""
+        mapping = {
+            TrackType.DRUMS: cls.DRUMS,
+            TrackType.BASS: cls.BASS,
+            TrackType.VOCALS: cls.VOCALS,
+            TrackType.OTHER: cls.OTHER,
+        }
+        return mapping.get(track_type, cls.OTHER)
+
+    def to_program_number(self) -> int:
+        """获取 General MIDI 音色编号"""
+        programs = {
+            InstrumentType.PIANO: 0,      # Acoustic Grand Piano
+            InstrumentType.DRUMS: 0,      # 鼓使用通道10，不需要音色
+            InstrumentType.BASS: 32,      # Acoustic Bass
+            InstrumentType.GUITAR: 24,    # Acoustic Guitar (nylon)
+            InstrumentType.VOCALS: 52,    # Choir Aahs
+            InstrumentType.STRINGS: 48,   # String Ensemble 1
+            InstrumentType.OTHER: 0,      # 默认钢琴
+        }
+        return programs.get(self, 0)
+
+    def get_display_name(self, lang: str = "zh_CN") -> str:
+        """获取显示名称"""
+        names_zh = {
+            InstrumentType.PIANO: "钢琴",
+            InstrumentType.DRUMS: "鼓",
+            InstrumentType.BASS: "贝斯",
+            InstrumentType.GUITAR: "吉他",
+            InstrumentType.VOCALS: "人声",
+            InstrumentType.STRINGS: "弦乐",
+            InstrumentType.OTHER: "其他",
+        }
+        names_en = {
+            InstrumentType.PIANO: "Piano",
+            InstrumentType.DRUMS: "Drums",
+            InstrumentType.BASS: "Bass",
+            InstrumentType.GUITAR: "Guitar",
+            InstrumentType.VOCALS: "Vocals",
+            InstrumentType.STRINGS: "Strings",
+            InstrumentType.OTHER: "Other",
+        }
+        if lang.startswith("zh"):
+            return names_zh.get(self, self.value)
+        return names_en.get(self, self.value)
+
+
+class ProcessingMode(Enum):
+    """处理模式枚举"""
+    PIANO = "piano"   # 默认：钢琴模式（跳过分离）
+    SMART = "smart"   # 智能识别模式（自动检测乐器）
 
 
 class ProcessingStage(Enum):
@@ -55,6 +120,112 @@ class BeatInfo:
     beat_times: List[float] = field(default_factory=list)  # 所有节拍时间
     downbeats: Optional[List[float]] = None  # 重拍时间
     time_signature: tuple = (4, 4)           # 拍号（分子/分母）
+
+
+@dataclass
+class TrackConfig:
+    """单个轨道的配置"""
+    id: str                         # 轨道ID，如 "piano_1", "drums"
+    instrument: InstrumentType      # 乐器类型
+    name: str                       # 显示名称
+    enabled: bool = True            # 是否启用
+    midi_channel: int = 0           # MIDI通道 (0-15)
+    program: int = 0                # General MIDI 音色编号
+
+    def __post_init__(self):
+        # 自动设置默认音色编号
+        if self.program == 0 and self.instrument != InstrumentType.PIANO:
+            self.program = self.instrument.to_program_number()
+        # 鼓轨道固定使用通道9（GM标准）
+        if self.instrument == InstrumentType.DRUMS:
+            self.midi_channel = 9
+
+
+@dataclass
+class TrackLayout:
+    """轨道布局配置"""
+    mode: ProcessingMode
+    tracks: List[TrackConfig] = field(default_factory=list)
+
+    @classmethod
+    def default_piano(cls, count: int = 2) -> "TrackLayout":
+        """创建默认的钢琴模式轨道布局"""
+        count = max(1, min(count, 8))  # 限制在 1-8 之间
+        tracks = []
+        for i in range(count):
+            tracks.append(TrackConfig(
+                id=f"piano_{i + 1}",
+                instrument=InstrumentType.PIANO,
+                name=f"钢琴 {i + 1}",
+                enabled=True,
+                midi_channel=i,
+                program=0  # Acoustic Grand Piano
+            ))
+        return cls(mode=ProcessingMode.PIANO, tracks=tracks)
+
+    @classmethod
+    def from_detected_instruments(
+        cls,
+        instruments: List[InstrumentType]
+    ) -> "TrackLayout":
+        """从检测到的乐器列表创建轨道布局"""
+        tracks = []
+        channel = 0
+        for i, inst in enumerate(instruments):
+            if inst == InstrumentType.DRUMS:
+                midi_channel = 9  # 鼓固定使用通道9
+            else:
+                midi_channel = channel
+                channel += 1
+                if channel == 9:
+                    channel = 10  # 跳过鼓通道
+
+            tracks.append(TrackConfig(
+                id=f"{inst.value}_{i + 1}",
+                instrument=inst,
+                name=inst.get_display_name(),
+                enabled=True,
+                midi_channel=midi_channel,
+                program=inst.to_program_number()
+            ))
+        return cls(mode=ProcessingMode.SMART, tracks=tracks)
+
+    def get_enabled_tracks(self) -> List[TrackConfig]:
+        """获取所有启用的轨道"""
+        return [t for t in self.tracks if t.enabled]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "mode": self.mode.value,
+            "tracks": [
+                {
+                    "id": t.id,
+                    "instrument": t.instrument.value,
+                    "name": t.name,
+                    "enabled": t.enabled,
+                    "midi_channel": t.midi_channel,
+                    "program": t.program,
+                }
+                for t in self.tracks
+            ]
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TrackLayout":
+        """从字典创建"""
+        mode = ProcessingMode(data.get("mode", "piano"))
+        tracks = []
+        for t in data.get("tracks", []):
+            tracks.append(TrackConfig(
+                id=t["id"],
+                instrument=InstrumentType(t["instrument"]),
+                name=t["name"],
+                enabled=t.get("enabled", True),
+                midi_channel=t.get("midi_channel", 0),
+                program=t.get("program", 0),
+            ))
+        return cls(mode=mode, tracks=tracks)
 
 
 @dataclass
@@ -113,6 +284,10 @@ class Config:
     gpu_device: int = 0
     segment_size: float = 7.8  # Demucs分段大小（内存优化）
 
+    # 轨道系统设置
+    processing_mode: str = "piano"   # "piano" 或 "smart"
+    piano_track_count: int = 2       # 钢琴轨道数量 (1-8)
+
     # Whisper设置
     whisper_model: str = "medium"  # tiny, base, small, medium, large
     lyrics_language: Optional[str] = None  # None = 自动检测
@@ -123,6 +298,13 @@ class Config:
     onset_threshold: float = 0.5
     frame_threshold: float = 0.3
     min_note_length: int = 58  # 毫秒
+
+    # MIDI后处理设置
+    quantize_notes: bool = True       # 音符量化
+    quantize_grid: str = "1/16"       # 量化网格 ("1/4", "1/8", "1/16", "1/32")
+    remove_duplicates: bool = True    # 去除重复音符
+    velocity_smoothing: bool = True   # 力度平滑
+    max_polyphony: int = 10           # 最大复音数
 
     # 输出设置
     output_dir: str = ""
@@ -137,6 +319,8 @@ class Config:
             "use_gpu": self.use_gpu,
             "gpu_device": self.gpu_device,
             "segment_size": self.segment_size,
+            "processing_mode": self.processing_mode,
+            "piano_track_count": self.piano_track_count,
             "whisper_model": self.whisper_model,
             "lyrics_language": self.lyrics_language,
             "ticks_per_beat": self.ticks_per_beat,
@@ -144,6 +328,11 @@ class Config:
             "onset_threshold": self.onset_threshold,
             "frame_threshold": self.frame_threshold,
             "min_note_length": self.min_note_length,
+            "quantize_notes": self.quantize_notes,
+            "quantize_grid": self.quantize_grid,
+            "remove_duplicates": self.remove_duplicates,
+            "velocity_smoothing": self.velocity_smoothing,
+            "max_polyphony": self.max_polyphony,
             "output_dir": self.output_dir,
             "save_separated_tracks": self.save_separated_tracks,
             "export_lrc": self.export_lrc,
