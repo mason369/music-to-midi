@@ -8,11 +8,24 @@ Convert audio files to multi-track MIDI with automatic lyrics embedding.
 
 ## Features
 
-- **Source Separation**: Automatically separate audio into 4 tracks (vocals, drums, bass, other) using Demucs v4
+- **Dual Processing Modes**:
+  - **Piano Mode**: Skip source separation, directly convert audio to multi-track piano MIDI (ideal for solo piano pieces)
+  - **Smart Mode**: Automatically detect instrument types, separate and convert to corresponding instrument MIDI tracks
+- **Source Separation**: Automatically separate audio into 6 tracks (vocals, drums, bass, guitar, piano, other) using Demucs v4
+- **Instrument Recognition**: Smart instrument detection and classification using PANNs
 - **Audio to MIDI**: Convert each track to MIDI using AI-powered pitch detection (Basic Pitch)
+- **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
 - **Lyrics Recognition**: Recognize lyrics from vocals and embed them into MIDI with word-level timestamps
 - **Multi-language UI**: Support for English and Chinese interface
-- **Cross-platform**: Windows, macOS, and Linux support
+- **Professional Dark Theme**: Modern audio software-style interface design
+
+## Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Windows | ✅ Supported | Full functionality |
+| macOS | 🚧 Planned | In development |
+| Linux | 🚧 Planned | In development |
 
 ## Screenshots
 
@@ -49,7 +62,7 @@ python -m src.main
 
 ### Install from Release
 
-Download the latest release for your platform from the [Releases](https://github.com/mason369/music-to-midi/releases) page.
+Download the latest Windows release from the [Releases](https://github.com/mason369/music-to-midi/releases) page.
 
 ## Usage
 
@@ -71,9 +84,17 @@ Download the latest release for your platform from the [Releases](https://github
 ## Technical Details
 
 ### AI Models Used
-- **Demucs v4** (Meta): State-of-the-art source separation
+- **Demucs v4** (Meta): State-of-the-art source separation (supports 4-track and 6-track modes)
+- **PANNs** (Audio Pattern Analysis): Instrument recognition and audio classification
 - **Basic Pitch** (Spotify): Polyphonic pitch detection
 - **Whisper + WhisperX** (OpenAI): Speech recognition with word-level alignment
+
+### Processing Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| Piano Mode | Skip separation, generate multi-track piano MIDI | Solo piano pieces, simple melodies |
+| Smart Mode | 6-track separation + instrument recognition | Full arrangements, multi-instrument works |
 
 ### Architecture
 
@@ -81,37 +102,32 @@ Download the latest release for your platform from the [Releases](https://github
 Audio Input
     │
     ▼
-Source Separation (Demucs) ──→ 4 tracks (vocals/drums/bass/other)
+┌─────────────────────────────────────────────────────┐
+│ Mode Selection                                       │
+│  ├─ Piano Mode ──→ Skip separation, direct transcribe│
+│  └─ Smart Mode ──→ 6-track separation (Demucs htdemucs_6s)│
+└─────────────────────────────────────────────────────┘
     │
-    ├──→ Beat Detection (librosa)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│ Smart Mode Processing Pipeline                       │
+│  ├──→ Instrument Recognition (PANNs) ──→ Track Layout│
+│  ├──→ Beat Detection (librosa)                       │
+│  ├──→ Audio to MIDI (Basic Pitch)                    │
+│  └──→ Lyrics Recognition (Whisper) ──→ Word Alignment (WhisperX)│
+└─────────────────────────────────────────────────────┘
     │
-    ├──→ Audio to MIDI (Basic Pitch)
+    ▼
+┌─────────────────────────────────────────────────────┐
+│ MIDI Post-processing                                 │
+│  ├──→ Note Quantization                              │
+│  ├──→ Velocity Smoothing                             │
+│  ├──→ Duplicate Note Removal                         │
+│  └──→ Polyphony Limiting                             │
+└─────────────────────────────────────────────────────┘
     │
-    └──→ Lyrics Recognition (Whisper) ──→ Word Alignment (WhisperX)
-                                              │
-                                              ▼
-                                    MIDI Generation (mido)
-                                              │
-                                              ▼
-                                    Output: MIDI + LRC + WAV
-```
-
-## Configuration
-
-Settings are stored in `~/.music-to-midi/config.yaml`:
-
-```yaml
-# General
-language: zh_CN  # or en_US
-theme: dark
-
-# Processing
-use_gpu: true
-whisper_model: medium  # tiny, base, small, medium, large
-
-# MIDI
-ticks_per_beat: 480
-default_velocity: 80
+    ▼
+Output: MIDI + LRC + WAV
 ```
 
 ## Development
@@ -139,8 +155,10 @@ mypy src/
 # Install PyInstaller
 pip install pyinstaller
 
-# Build
-pyinstaller music-to-midi.spec
+# Build using project spec file (recommended)
+pyinstaller MusicToMidi.spec
+
+# Build output is in dist/MusicToMidi/ directory
 ```
 
 ## Contributing
@@ -160,6 +178,7 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 ## Acknowledgments
 
 - [Demucs](https://github.com/facebookresearch/demucs) - Music source separation
+- [PANNs](https://github.com/qiuqiangkong/panns_inference) - Audio pattern analysis and instrument recognition
 - [Basic Pitch](https://github.com/spotify/basic-pitch) - Audio to MIDI transcription
 - [Whisper](https://github.com/openai/whisper) - Speech recognition
 - [WhisperX](https://github.com/m-bain/whisperX) - Word-level alignment

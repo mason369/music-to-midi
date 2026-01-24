@@ -3,14 +3,29 @@
 支持乐器类型特定的参数优化
 """
 import logging
+import os
+import sys
+from io import StringIO
 from pathlib import Path
 from typing import List, Optional, Callable, Tuple, Union
+from contextlib import contextmanager
 import numpy as np
 
 from src.models.data_models import Config, NoteEvent, TrackType, InstrumentType
-from src.utils.gpu_utils import get_device
+from src.utils.gpu_utils import get_device, configure_tensorflow_gpu
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def suppress_stdout():
+    """临时抑制标准输出"""
+    old_stdout = sys.stdout
+    sys.stdout = StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
 
 
 class AudioTranscriber:
@@ -22,6 +37,9 @@ class AudioTranscriber:
     - 乐器无关转写
     - 音高弯曲检测
     """
+
+    # 标记是否已配置 TensorFlow GPU
+    _tf_gpu_configured = False
 
     def __init__(self, config: Config):
         """
@@ -35,6 +53,39 @@ class AudioTranscriber:
         self.frame_threshold = config.frame_threshold
         self.min_note_length = config.min_note_length
         self.device = get_device(config.use_gpu, config.gpu_device)
+        self._cancelled = False
+        self._cancel_check_callback = None
+
+        # 配置 TensorFlow GPU（仅首次）
+        if not AudioTranscriber._tf_gpu_configured:
+            if config.use_gpu:
+                configure_tensorflow_gpu()
+            AudioTranscriber._tf_gpu_configured = True
+
+    def set_cancel_check(self, callback) -> None:
+        """
+        设置取消检查回调
+
+        参数:
+            callback: 返回 True 表示已取消的回调函数
+        """
+        self._cancel_check_callback = callback
+
+    def cancel(self) -> None:
+        """取消正在进行的处理"""
+        self._cancelled = True
+        logger.info("转写器：处理已取消")
+
+    def reset_cancel(self) -> None:
+        """重置取消标志"""
+        self._cancelled = False
+
+    def _check_cancelled(self) -> None:
+        """检查是否已取消，如果是则抛出异常"""
+        if self._cancelled:
+            raise InterruptedError("转写处理已取消")
+        if self._cancel_check_callback and self._cancel_check_callback():
+            raise InterruptedError("转写处理已取消")
 
     def transcribe(
         self,
@@ -59,6 +110,9 @@ class AudioTranscriber:
 
         logger.info(f"正在转写: {audio_path} (类型: {type_name})")
 
+        # 检查取消
+        self._check_cancelled()
+
         if progress_callback:
             progress_callback(0.0, f"正在转写 {type_name}...")
 
@@ -66,26 +120,40 @@ class AudioTranscriber:
             from basic_pitch.inference import predict
             from basic_pitch import ICASSP_2022_MODEL_PATH
 
+            # 检查取消
+            self._check_cancelled()
+
             # 根据乐器类型调整阈值
             onset_thresh, frame_thresh = self._get_thresholds_for_instrument(instrument)
 
             # 获取乐器特定的频率范围
             min_freq, max_freq = self._get_frequency_range(instrument)
 
+            # 获取乐器特定的最小音符长度
+            min_note_len = self._get_min_note_length_for_instrument(instrument)
+
+            logger.debug(f"转写参数: onset={onset_thresh:.2f}, frame={frame_thresh:.2f}")
+            logger.debug(f"频率范围: {min_freq}Hz - {max_freq}Hz")
+            logger.debug(f"最小音符长度: {min_note_len * 1000:.0f}ms")
+
             if progress_callback:
                 progress_callback(0.3, "正在进行音高检测...")
 
-            # 运行预测
-            model_output, midi_data, note_events = predict(
-                audio_path,
-                onset_threshold=onset_thresh,
-                frame_threshold=frame_thresh,
-                minimum_note_length=self.min_note_length,
-                minimum_frequency=min_freq,
-                maximum_frequency=max_freq,
-                multiple_pitch_bends=False,
-                melodia_trick=True
-            )
+            # 运行预测（抑制 basic_pitch 的英文输出）
+            with suppress_stdout():
+                model_output, midi_data, note_events = predict(
+                    audio_path,
+                    onset_threshold=onset_thresh,
+                    frame_threshold=frame_thresh,
+                    minimum_note_length=min_note_len,
+                    minimum_frequency=min_freq,
+                    maximum_frequency=max_freq,
+                    multiple_pitch_bends=False,
+                    melodia_trick=True
+                )
+
+            # 检查取消（预测完成后）
+            self._check_cancelled()
 
             if progress_callback:
                 progress_callback(0.8, "正在处理音符事件...")
@@ -93,10 +161,17 @@ class AudioTranscriber:
             # 转换为我们的 NoteEvent 格式
             notes = self._process_note_events_v2(note_events, instrument)
 
+            # 检查取消
+            self._check_cancelled()
+
             if progress_callback:
                 progress_callback(1.0, f"发现 {len(notes)} 个音符")
 
             logger.info(f"从 {type_name} 转写了 {len(notes)} 个音符")
+            if notes:
+                pitches = [n.pitch for n in notes]
+                logger.debug(f"音高范围: MIDI {min(pitches)} - {max(pitches)}")
+                logger.debug(f"时长范围: {notes[0].start_time:.2f}s - {notes[-1].end_time:.2f}s")
             return notes
 
         except ImportError as e:
@@ -118,18 +193,18 @@ class AudioTranscriber:
     ) -> Tuple[float, float]:
         """获取针对乐器类型优化的阈值"""
         thresholds = {
-            # 钢琴：较低阈值以捕捉持续音符
-            InstrumentType.PIANO: (0.45, 0.28),
-            # 鼓：较高阈值（瞬态较多）
-            InstrumentType.DRUMS: (0.6, 0.4),
-            # 贝斯：较低阈值（持续音符，低频）
-            InstrumentType.BASS: (0.4, 0.25),
-            # 吉他：中等阈值
-            InstrumentType.GUITAR: (0.5, 0.3),
-            # 人声：中等阈值
-            InstrumentType.VOCALS: (0.5, 0.3),
-            # 弦乐：较低阈值（持续音符）
-            InstrumentType.STRINGS: (0.45, 0.28),
+            # 钢琴：提高阈值减少碎片音符
+            InstrumentType.PIANO: (0.50, 0.35),
+            # 鼓：降低onset阈值（瞬态）
+            InstrumentType.DRUMS: (0.55, 0.40),
+            # 贝斯：适度提高阈值减少噪声
+            InstrumentType.BASS: (0.45, 0.30),
+            # 吉他：保持中等阈值
+            InstrumentType.GUITAR: (0.50, 0.32),
+            # 人声：保持中等阈值
+            InstrumentType.VOCALS: (0.50, 0.30),
+            # 弦乐：提高阈值减少噪声
+            InstrumentType.STRINGS: (0.48, 0.32),
             # 其他：默认阈值
             InstrumentType.OTHER: (self.onset_threshold, self.frame_threshold),
         }
@@ -158,6 +233,156 @@ class AudioTranscriber:
             InstrumentType.OTHER: (None, None),
         }
         return ranges.get(instrument, (None, None))
+
+    def _get_min_note_length_for_instrument(
+        self,
+        instrument: InstrumentType
+    ) -> float:
+        """获取乐器特定的最小音符长度（秒）"""
+        # 不同乐器有不同的典型音符长度
+        min_lengths = {
+            InstrumentType.PIANO: 0.080,    # 80ms - 钢琴音符较短
+            InstrumentType.DRUMS: 0.030,    # 30ms - 鼓的瞬态很短
+            InstrumentType.BASS: 0.100,     # 100ms - 贝斯音符较长
+            InstrumentType.GUITAR: 0.060,   # 60ms - 吉他适中
+            InstrumentType.VOCALS: 0.100,   # 100ms - 人声较长
+            InstrumentType.STRINGS: 0.120,  # 120ms - 弦乐持续音
+            InstrumentType.OTHER: 0.058,    # 58ms - 默认
+        }
+        return min_lengths.get(instrument, self.min_note_length / 1000.0)
+
+    def _get_complexity_params(self, track_count: int) -> dict:
+        """
+        根据轨道数量获取复杂度相关参数
+
+        参数映射原理：
+        - onset_threshold: 提高 → 减少检测到的音符起始（简化）
+        - frame_threshold: 提高 → 过滤弱音符（简化）
+        - min_note_length: 增加 → 过滤短音符/装饰音（简化）
+
+        参数:
+            track_count: 目标轨道数量（1-4）
+
+        返回:
+            包含转写参数的字典
+        """
+        params = {
+            1: {  # 最简化：只保留核心旋律
+                'onset_threshold': 0.65,
+                'frame_threshold': 0.45,
+                'min_note_length': 0.120,  # 120ms
+            },
+            2: {  # 中等：左右手分离
+                'onset_threshold': 0.55,
+                'frame_threshold': 0.38,
+                'min_note_length': 0.090,  # 90ms
+            },
+            3: {  # 较高复杂度
+                'onset_threshold': 0.50,
+                'frame_threshold': 0.35,
+                'min_note_length': 0.080,  # 80ms
+            },
+            4: {  # 完整细节
+                'onset_threshold': 0.50,
+                'frame_threshold': 0.35,
+                'min_note_length': 0.080,  # 80ms
+            },
+        }
+        return params.get(track_count, params[4])
+
+    def transcribe_with_complexity(
+        self,
+        audio_path: str,
+        instrument: InstrumentType,
+        track_count: int,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> List[NoteEvent]:
+        """
+        根据轨道数量调整转写复杂度
+
+        使用复杂度感知的参数进行转写，轨道数越少参数越严格，
+        输出的音符越精简，更接近原曲的核心旋律。
+
+        参数:
+            audio_path: 音频文件路径
+            instrument: 乐器类型
+            track_count: 目标轨道数量（1-4）
+            progress_callback: 可选的进度回调
+
+        返回:
+            转写的音符事件列表
+        """
+        type_name = instrument.value if isinstance(instrument, InstrumentType) else str(instrument)
+
+        logger.info(f"正在转写（复杂度控制）: {audio_path} (类型: {type_name}, 轨道数: {track_count})")
+
+        # 检查取消
+        self._check_cancelled()
+
+        if progress_callback:
+            progress_callback(0.0, f"正在转写 {type_name}（{track_count}轨模式）...")
+
+        try:
+            from basic_pitch.inference import predict
+            from basic_pitch import ICASSP_2022_MODEL_PATH
+
+            # 检查取消
+            self._check_cancelled()
+
+            # 获取复杂度参数
+            complexity_params = self._get_complexity_params(track_count)
+            onset_thresh = complexity_params['onset_threshold']
+            frame_thresh = complexity_params['frame_threshold']
+            min_note_len = complexity_params['min_note_length']
+
+            # 获取乐器特定的频率范围
+            min_freq, max_freq = self._get_frequency_range(instrument)
+
+            logger.debug(f"复杂度参数（{track_count}轨）: onset={onset_thresh:.2f}, "
+                        f"frame={frame_thresh:.2f}, min_note={min_note_len*1000:.0f}ms")
+            logger.debug(f"频率范围: {min_freq}Hz - {max_freq}Hz")
+
+            if progress_callback:
+                progress_callback(0.3, "正在进行音高检测...")
+
+            # 运行预测（抑制 basic_pitch 的英文输出）
+            with suppress_stdout():
+                model_output, midi_data, note_events = predict(
+                    audio_path,
+                    onset_threshold=onset_thresh,
+                    frame_threshold=frame_thresh,
+                    minimum_note_length=min_note_len,
+                    minimum_frequency=min_freq,
+                    maximum_frequency=max_freq,
+                    multiple_pitch_bends=False,
+                    melodia_trick=True
+                )
+
+            # 检查取消（预测完成后）
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.8, "正在处理音符事件...")
+
+            # 转换为我们的 NoteEvent 格式
+            notes = self._process_note_events_v2(note_events, instrument)
+
+            # 检查取消
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(1.0, f"发现 {len(notes)} 个音符")
+
+            logger.info(f"从 {type_name} 转写了 {len(notes)} 个音符（{track_count}轨模式）")
+            if notes:
+                pitches = [n.pitch for n in notes]
+                logger.debug(f"音高范围: MIDI {min(pitches)} - {max(pitches)}")
+                logger.debug(f"时长范围: {notes[0].start_time:.2f}s - {notes[-1].end_time:.2f}s")
+            return notes
+
+        except ImportError as e:
+            logger.error("Basic Pitch 未安装，请运行: pip install basic-pitch")
+            raise ImportError("转写需要 Basic Pitch 库") from e
 
     def _get_thresholds(self, track_type: TrackType) -> Tuple[float, float]:
         """获取针对轨道类型优化的阈值（向后兼容）"""
@@ -272,16 +497,18 @@ class AudioTranscriber:
         instrument = self._to_instrument_type(track_type)
         onset_thresh, frame_thresh = self._get_thresholds_for_instrument(instrument)
 
-        predict_and_save(
-            [audio_path],
-            Path(output_path).parent,
-            save_midi=True,
-            sonify_midi=False,
-            save_model_outputs=False,
-            save_notes=False,
-            onset_threshold=onset_thresh,
-            frame_threshold=frame_thresh,
-            minimum_note_length=self.min_note_length
-        )
+        # 抑制 basic_pitch 的英文输出
+        with suppress_stdout():
+            predict_and_save(
+                [audio_path],
+                Path(output_path).parent,
+                save_midi=True,
+                sonify_midi=False,
+                save_model_outputs=False,
+                save_notes=False,
+                onset_threshold=onset_thresh,
+                frame_threshold=frame_thresh,
+                minimum_note_length=self.min_note_length
+            )
 
         return output_path

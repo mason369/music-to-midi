@@ -30,6 +30,21 @@ from src.utils.gpu_utils import is_cuda_available, get_gpu_info, get_memory_info
 logger = logging.getLogger(__name__)
 
 
+def get_app_dir() -> Path:
+    """
+    获取应用程序所在目录（用于输出文件）
+
+    对于打包后的应用，返回可执行文件所在的目录
+    对于开发环境，返回项目根目录
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的环境 - 使用可执行文件所在目录
+        return Path(sys.executable).parent
+    else:
+        # 开发环境 - 使用项目根目录
+        return Path(__file__).parent.parent.parent
+
+
 def get_icon_path(name: str) -> str:
     """获取图标文件路径"""
     return str(get_resource_path(f"resources/icons/{name}"))
@@ -179,7 +194,7 @@ class MainWindow(QMainWindow):
         self.output_dir_label = QLabel(t("main.output.directory") + ":")
         self.output_dir_label.setStyleSheet("font-weight: normal; color: #b0b8c8;")
         self.output_dir_edit = QLineEdit()
-        self.output_dir_edit.setText(str(Path.home() / "Music" / "MidiOutput"))
+        self.output_dir_edit.setText(str(get_app_dir() / "MidiOutput"))
         self.output_dir_edit.setStyleSheet("""
             QLineEdit {
                 padding: 8px 12px;
@@ -559,15 +574,23 @@ class MainWindow(QMainWindow):
         track_layout = self.track_panel.get_track_layout()
         self.config.processing_mode = track_layout.mode.value
         if track_layout.mode == ProcessingMode.PIANO:
-            self.config.piano_track_count = len(track_layout.tracks)
+            # 如果轨道列表为空，表示自动检测，设置为 -1
+            if len(track_layout.tracks) == 0:
+                self.config.piano_track_count = -1  # 自动检测
+            else:
+                self.config.piano_track_count = len(track_layout.tracks)
+
+        # 创建以音乐名命名的子文件夹
+        music_name = Path(self.current_file).stem
+        output_dir_with_music_name = os.path.join(self.config.output_dir, music_name)
 
         # 确保输出目录存在
-        os.makedirs(self.config.output_dir, exist_ok=True)
+        os.makedirs(output_dir_with_music_name, exist_ok=True)
 
         # 创建工作线程
         self.worker = ProcessingWorker(
             self.current_file,
-            self.config.output_dir,
+            output_dir_with_music_name,
             self.config,
             self,
             track_layout=track_layout
@@ -612,17 +635,152 @@ class MainWindow(QMainWindow):
             f"{t('status.complete')} - {result.processing_time:.1f}秒"
         )
 
-        # 显示成功消息
-        QMessageBox.information(
-            self,
-            t("status.complete"),
-            f"MIDI: {result.midi_path}\n"
-            f"轨道数: {len(result.tracks)}\n"
-            f"音符数: {sum(len(track.notes) for track in result.tracks)}\n"
-            f"歌词数: {len(result.lyrics)}"
-        )
+        # 创建自定义完成对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle(t("status.complete"))
+        dialog.setMinimumWidth(450)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # 成功图标和标题
+        header_layout = QHBoxLayout()
+        success_icon = QLabel("✓")
+        success_icon.setStyleSheet("""
+            QLabel {
+                color: #4ade80;
+                font-size: 32px;
+                font-weight: bold;
+            }
+        """)
+        success_icon.setFixedWidth(50)
+
+        title_label = QLabel(t("dialogs.complete.title"))
+        title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #e0e0e0;")
+
+        header_layout.addWidget(success_icon)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # 结果信息
+        info_text = f"""
+        <p style="color: #b0b8c8; line-height: 1.6;">
+        <b>MIDI文件:</b> {result.midi_path}<br>
+        <b>轨道数:</b> {len(result.tracks)}<br>
+        <b>音符数:</b> {sum(len(track.notes) for track in result.tracks)}<br>
+        <b>歌词数:</b> {len(result.lyrics)}<br>
+        <b>处理时间:</b> {result.processing_time:.1f}秒
+        </p>
+        """
+        info_label = QLabel(info_text)
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("""
+            QLabel {
+                background: #16213e;
+                border: 1px solid #3a4a6a;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        layout.addWidget(info_label)
+
+        # 按钮布局
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+
+        # 打开文件夹按钮
+        open_folder_btn = QPushButton("📁  " + t("dialogs.complete.openFolder"))
+        open_folder_btn.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                background: #2a3f5f;
+                border: 1px solid #3a4a6a;
+                border-radius: 6px;
+                color: #e0e0e0;
+                font-weight: 500;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: #3a5a7c;
+                border-color: #4a9eff;
+            }
+        """)
+        open_folder_btn.clicked.connect(lambda: self._open_output_folder(result.midi_path))
+
+        # 打开MIDI文件按钮
+        open_file_btn = QPushButton("🎵  " + t("dialogs.complete.openFile"))
+        open_file_btn.setStyleSheet("""
+            QPushButton {
+                padding: 10px 20px;
+                background: #2a3f5f;
+                border: 1px solid #3a4a6a;
+                border-radius: 6px;
+                color: #e0e0e0;
+                font-weight: 500;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: #3a5a7c;
+                border-color: #4a9eff;
+            }
+        """)
+        open_file_btn.clicked.connect(lambda: self._open_midi_file(result.midi_path))
+
+        # 确定按钮
+        ok_btn = QPushButton(t("dialogs.complete.ok"))
+        ok_btn.setStyleSheet("""
+            QPushButton {
+                padding: 10px 24px;
+                background: #4a9eff;
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: #5aafff;
+            }
+        """)
+        ok_btn.clicked.connect(dialog.accept)
+
+        btn_layout.addWidget(open_folder_btn)
+        btn_layout.addWidget(open_file_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
 
         logger.info(f"处理完成: {result.midi_path}")
+
+    def _open_output_folder(self, file_path: str):
+        """打开输出文件夹"""
+        import subprocess
+        folder_path = os.path.dirname(file_path)
+
+        if sys.platform == 'win32':
+            # Windows: 使用 explorer 打开并选中文件
+            subprocess.run(['explorer', '/select,', file_path.replace('/', '\\')])
+        elif sys.platform == 'darwin':
+            # macOS: 使用 Finder 打开
+            subprocess.run(['open', '-R', file_path])
+        else:
+            # Linux: 使用默认文件管理器
+            subprocess.run(['xdg-open', folder_path])
+
+    def _open_midi_file(self, file_path: str):
+        """使用默认程序打开MIDI文件"""
+        import subprocess
+
+        if sys.platform == 'win32':
+            os.startfile(file_path)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', file_path])
+        else:
+            subprocess.run(['xdg-open', file_path])
 
     def _on_error(self, error_msg: str):
         """处理错误"""

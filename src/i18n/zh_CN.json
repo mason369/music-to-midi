@@ -37,7 +37,10 @@
     },
     "piano": {
       "track_count": "钢琴轨道数:",
-      "hint": "推荐: 2-4 (左右手分离)"
+      "hint": "推荐: 2-4 (左右手分离)",
+      "auto": "自动检测",
+      "auto_tooltip": "根据音频复杂度自动确定最佳轨道数",
+      "auto_hint": "将根据音频复杂度自动确定轨道数 (1-6)"
     },
     "smart": {
       "hint": "选择音频文件后将自动检测乐器"
@@ -160,6 +163,12 @@
       "description": "将音频转换为多轨道MIDI并嵌入歌词",
       "author": "作者",
       "license": "许可证"
+    },
+    "complete": {
+      "title": "转换完成",
+      "openFolder": "打开文件夹",
+      "openFile": "打开MIDI文件",
+      "ok": "确定"
     }
   },
   "quality": {

@@ -10,7 +10,7 @@ from mido import MidiFile, MidiTrack, Message, MetaMessage
 
 from src.models.data_models import (
     Config, NoteEvent, LyricEvent, TrackType,
-    InstrumentType, TrackConfig, TrackLayout
+    InstrumentType, TrackConfig, TrackLayout, PedalEvent
 )
 
 logger = logging.getLogger(__name__)
@@ -336,7 +336,7 @@ class MidiGenerator:
     def _remove_duplicate_notes(
         self,
         notes: List[NoteEvent],
-        time_threshold: float = 0.01
+        time_threshold: float = 0.025  # 从0.01提高到0.025秒
     ) -> List[NoteEvent]:
         """
         去除重叠的重复音符
@@ -380,7 +380,7 @@ class MidiGenerator:
     def _smooth_velocity(
         self,
         notes: List[NoteEvent],
-        window_size: int = 3,
+        window_size: int = 5,  # 从3提高到5，更平滑的力度曲线
         min_velocity: int = 20
     ) -> List[NoteEvent]:
         """
@@ -437,7 +437,7 @@ class MidiGenerator:
     def _limit_polyphony(
         self,
         notes: List[NoteEvent],
-        max_polyphony: int = 10
+        max_polyphony: int = 25  # 从10提高到25，更好支持钢琴
     ) -> List[NoteEvent]:
         """
         限制最大复音数
@@ -472,6 +472,217 @@ class MidiGenerator:
 
         return result
 
+    def _merge_close_notes(
+        self,
+        notes: List[NoteEvent],
+        gap_threshold: float = 0.050  # 50ms 间隔阈值
+    ) -> List[NoteEvent]:
+        """
+        合并间隔很近的同音高音符
+
+        当两个相同音高的音符间隔小于阈值时，合并为一个音符
+
+        参数:
+            notes: 音符列表
+            gap_threshold: 合并间隔阈值（秒）
+
+        返回:
+            合并后的音符列表
+        """
+        if not notes:
+            return notes
+
+        # 按音高分组
+        from collections import defaultdict
+        notes_by_pitch: Dict[int, List[NoteEvent]] = defaultdict(list)
+        for note in notes:
+            notes_by_pitch[note.pitch].append(note)
+
+        merged_notes = []
+        merge_count = 0
+
+        for pitch, pitch_notes in notes_by_pitch.items():
+            # 按开始时间排序
+            sorted_notes = sorted(pitch_notes, key=lambda n: n.start_time)
+
+            i = 0
+            while i < len(sorted_notes):
+                current = sorted_notes[i]
+                merged_end = current.end_time
+                merged_velocity = current.velocity
+                velocity_count = 1
+
+                # 检查后续音符是否应该合并
+                j = i + 1
+                while j < len(sorted_notes):
+                    next_note = sorted_notes[j]
+                    gap = next_note.start_time - merged_end
+
+                    if gap <= gap_threshold:
+                        # 合并：扩展结束时间，平均力度
+                        merged_end = max(merged_end, next_note.end_time)
+                        merged_velocity += next_note.velocity
+                        velocity_count += 1
+                        merge_count += 1
+                        j += 1
+                    else:
+                        break
+
+                # 创建合并后的音符
+                merged_notes.append(NoteEvent(
+                    pitch=pitch,
+                    start_time=current.start_time,
+                    end_time=merged_end,
+                    velocity=merged_velocity // velocity_count
+                ))
+
+                i = j
+
+        if merge_count > 0:
+            logger.debug(f"已合并 {merge_count} 个碎片音符")
+
+        # 按开始时间排序返回
+        return sorted(merged_notes, key=lambda n: n.start_time)
+
+    def _smooth_vibrato(
+        self,
+        notes: List[NoteEvent],
+        vibrato_range: int = 1,  # 允许的音高波动范围（半音）
+        time_tolerance: float = 0.100  # 100ms 时间容差
+    ) -> List[NoteEvent]:
+        """
+        平滑颤音导致的音高波动
+
+        当连续的音符在很短时间内有小幅音高变化时，统一到主音高
+
+        参数:
+            notes: 音符列表
+            vibrato_range: 视为颤音的音高范围（半音数）
+            time_tolerance: 时间容差（秒）
+
+        返回:
+            平滑后的音符列表
+        """
+        if len(notes) < 2:
+            return notes
+
+        # 按开始时间排序
+        sorted_notes = sorted(notes, key=lambda n: n.start_time)
+        result = []
+        smoothed_count = 0
+
+        i = 0
+        while i < len(sorted_notes):
+            current = sorted_notes[i]
+
+            # 收集可能是颤音的音符组
+            vibrato_group = [current]
+            j = i + 1
+
+            while j < len(sorted_notes):
+                next_note = sorted_notes[j]
+
+                # 检查时间是否接近
+                time_gap = next_note.start_time - vibrato_group[-1].end_time
+                if time_gap > time_tolerance:
+                    break
+
+                # 检查音高是否在颤音范围内
+                pitch_diff = abs(next_note.pitch - current.pitch)
+                if pitch_diff > vibrato_range:
+                    break
+
+                vibrato_group.append(next_note)
+                j += 1
+
+            if len(vibrato_group) > 1:
+                # 找到最常见的音高（主音高）
+                from collections import Counter
+                pitch_counts = Counter(n.pitch for n in vibrato_group)
+                main_pitch = pitch_counts.most_common(1)[0][0]
+
+                # 将所有音符统一到主音高
+                for note in vibrato_group:
+                    if note.pitch != main_pitch:
+                        smoothed_count += 1
+                    result.append(NoteEvent(
+                        pitch=main_pitch,
+                        start_time=note.start_time,
+                        end_time=note.end_time,
+                        velocity=note.velocity
+                    ))
+            else:
+                result.append(current)
+
+            i = j
+
+        if smoothed_count > 0:
+            logger.debug(f"已平滑 {smoothed_count} 个颤音音符")
+
+        return result
+
+    def _normalize_velocity(
+        self,
+        notes: List[NoteEvent],
+        target_mean: int = 80,
+        target_std: int = 20
+    ) -> List[NoteEvent]:
+        """
+        力度归一化到目标分布
+
+        将力度值调整到更自然的分布
+
+        参数:
+            notes: 音符列表
+            target_mean: 目标平均力度
+            target_std: 目标力度标准差
+
+        返回:
+            归一化后的音符列表
+        """
+        if len(notes) < 2:
+            return notes
+
+        import numpy as np
+
+        # 计算当前力度统计
+        velocities = np.array([n.velocity for n in notes])
+        current_mean = np.mean(velocities)
+        current_std = np.std(velocities)
+
+        if current_std < 1:
+            # 力度几乎没有变化，使用目标均值
+            result = []
+            for note in notes:
+                result.append(NoteEvent(
+                    pitch=note.pitch,
+                    start_time=note.start_time,
+                    end_time=note.end_time,
+                    velocity=target_mean
+                ))
+            return result
+
+        # Z-score 归一化后映射到目标分布
+        result = []
+        for note in notes:
+            # 标准化
+            z_score = (note.velocity - current_mean) / current_std
+            # 映射到目标分布
+            new_velocity = int(target_mean + z_score * target_std)
+            # 限制在有效范围
+            new_velocity = max(1, min(127, new_velocity))
+
+            result.append(NoteEvent(
+                pitch=note.pitch,
+                start_time=note.start_time,
+                end_time=note.end_time,
+                velocity=new_velocity
+            ))
+
+        logger.debug(f"力度归一化: {current_mean:.0f}±{current_std:.0f} -> {target_mean}±{target_std}")
+
+        return result
+
     def post_process_notes(
         self,
         notes: List[NoteEvent],
@@ -479,6 +690,15 @@ class MidiGenerator:
     ) -> List[NoteEvent]:
         """
         对音符列表应用所有后处理
+
+        处理流程:
+        1. 颤音平滑 - 消除音高波动
+        2. 音符合并 - 合并碎片音符
+        3. 量化 - 对齐到网格
+        4. 去重 - 移除重复音符
+        5. 力度平滑 - 平滑力度变化
+        6. 力度归一化 - 标准化力度分布
+        7. 复音限制 - 限制同时发声数
 
         参数:
             notes: 音符列表
@@ -491,24 +711,134 @@ class MidiGenerator:
             return notes
 
         processed = deepcopy(notes)
+        initial_count = len(processed)
 
-        # 量化
+        # 1. 颤音平滑
+        processed = self._smooth_vibrato(processed)
+
+        # 2. 音符合并
+        processed = self._merge_close_notes(processed)
+
+        # 3. 量化
         if self.config.quantize_notes:
             processed = self._quantize_notes(processed, tempo, self.config.quantize_grid)
 
-        # 去重
+        # 4. 去重
         if self.config.remove_duplicates:
             processed = self._remove_duplicate_notes(processed)
 
-        # 力度平滑
+        # 5. 力度平滑
         if self.config.velocity_smoothing:
             processed = self._smooth_velocity(processed)
 
-        # 限制复音
+        # 6. 力度归一化
+        processed = self._normalize_velocity(processed)
+
+        # 7. 限制复音
         if self.config.max_polyphony > 0:
             processed = self._limit_polyphony(processed, self.config.max_polyphony)
 
-        logger.info(f"后处理: {len(notes)} -> {len(processed)} 个音符")
+        logger.info(f"后处理: {initial_count} -> {len(processed)} 个音符")
+        return processed
+
+    def _get_post_process_params(self, track_count: int) -> dict:
+        """
+        根据轨道数量获取后处理参数
+
+        原理：
+        - max_polyphony: 降低 → 减少同时发声数（简化）
+        - min_velocity: 提高 → 过滤弱音（简化）
+        - gap_threshold: 增加 → 更多合并（简化）
+        - quantize_grid: 粗网格 → 节奏更规整（简化）
+
+        参数:
+            track_count: 目标轨道数量（1-4）
+
+        返回:
+            包含后处理参数的字典
+        """
+        params = {
+            1: {
+                'max_polyphony': 4,      # 单旋律+和弦
+                'min_velocity': 45,       # 只保留强音
+                'gap_threshold': 0.150,   # 大幅合并
+                'quantize_grid': '1/8',   # 粗网格
+            },
+            2: {
+                'max_polyphony': 8,       # 每手4个音
+                'min_velocity': 35,
+                'gap_threshold': 0.100,
+                'quantize_grid': '1/16',
+            },
+            3: {
+                'max_polyphony': 15,
+                'min_velocity': 28,
+                'gap_threshold': 0.075,
+                'quantize_grid': '1/32',
+            },
+            4: {
+                'max_polyphony': 25,
+                'min_velocity': 20,
+                'gap_threshold': 0.050,
+                'quantize_grid': '1/32',
+            },
+        }
+        return params.get(track_count, params[4])
+
+    def post_process_notes_with_complexity(
+        self,
+        notes: List[NoteEvent],
+        tempo: float,
+        track_count: int
+    ) -> List[NoteEvent]:
+        """
+        根据轨道数量应用不同级别的后处理
+
+        使用复杂度感知的参数进行后处理，轨道数越少参数越严格，
+        输出的音符越精简，更适合人工演奏。
+
+        参数:
+            notes: 音符列表
+            tempo: BPM
+            track_count: 目标轨道数量（1-4）
+
+        返回:
+            后处理后的音符列表
+        """
+        if not notes:
+            return notes
+
+        # 获取复杂度参数
+        params = self._get_post_process_params(track_count)
+        logger.info(f"后处理参数（{track_count}轨）: polyphony={params['max_polyphony']}, "
+                   f"min_vel={params['min_velocity']}, gap={params['gap_threshold']*1000:.0f}ms, "
+                   f"grid={params['quantize_grid']}")
+
+        processed = deepcopy(notes)
+        initial_count = len(processed)
+
+        # 1. 颤音平滑
+        processed = self._smooth_vibrato(processed)
+
+        # 2. 音符合并（使用复杂度参数）
+        processed = self._merge_close_notes(processed, gap_threshold=params['gap_threshold'])
+
+        # 3. 量化（使用复杂度参数的网格）
+        processed = self._quantize_notes(processed, tempo, params['quantize_grid'])
+
+        # 4. 去重
+        processed = self._remove_duplicate_notes(processed)
+
+        # 5. 力度平滑（使用复杂度参数的最小力度）
+        processed = self._smooth_velocity(processed, min_velocity=params['min_velocity'])
+
+        # 6. 力度归一化
+        processed = self._normalize_velocity(processed)
+
+        # 7. 限制复音（使用复杂度参数）
+        processed = self._limit_polyphony(processed, max_polyphony=params['max_polyphony'])
+
+        logger.info(f"复杂度感知后处理（{track_count}轨）: {initial_count} -> {len(processed)} 个音符")
         return processed
 
     # ==================== 新版生成方法 ====================
@@ -521,7 +851,9 @@ class MidiGenerator:
         output_path: str,
         lyrics: Optional[List[LyricEvent]] = None,
         embed_lyrics: bool = True,
-        apply_post_processing: bool = True
+        apply_post_processing: bool = True,
+        track_count: Optional[int] = None,
+        pedals: Optional[List[PedalEvent]] = None
     ) -> str:
         """
         使用新的轨道布局系统生成 MIDI 文件
@@ -534,6 +866,8 @@ class MidiGenerator:
             lyrics: 带时间戳的歌词事件列表（可选）
             embed_lyrics: 是否将歌词作为元事件嵌入
             apply_post_processing: 是否应用后处理优化
+            track_count: 轨道数量，用于复杂度感知后处理（可选，钢琴模式时使用）
+            pedals: 踏板事件列表（可选，钢琴模式使用）
 
         返回:
             生成的 MIDI 文件路径
@@ -580,11 +914,20 @@ class MidiGenerator:
 
             # 应用后处理
             if apply_post_processing:
-                notes = self.post_process_notes(notes, tempo)
+                if track_count is not None and track_count > 0:
+                    # 使用复杂度感知后处理
+                    notes = self.post_process_notes_with_complexity(notes, tempo, track_count)
+                else:
+                    # 使用默认后处理
+                    notes = self.post_process_notes(notes, tempo)
 
             # 创建 MIDI 轨道
             midi_track = self._create_track_v2(track_config, notes, tempo)
             mid.tracks.append(midi_track)
+
+        # 添加踏板事件（钢琴模式）
+        if pedals:
+            self._add_pedal_events(mid, pedals, tempo)
 
         # 确保输出目录存在
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
@@ -685,6 +1028,108 @@ class MidiGenerator:
         logger.info(f"已创建 {track_config.name} 轨道，包含 {len(sorted_notes)} 个音符")
 
         return track
+
+    def _add_pedal_events(
+        self,
+        midi_file: MidiFile,
+        pedals: List[PedalEvent],
+        tempo: float
+    ) -> None:
+        """
+        将踏板事件添加到 MIDI 文件
+
+        踏板使用 Control Change 消息:
+        - CC64 (Sustain Pedal): 延音踏板
+        - CC67 (Soft Pedal): 柔音踏板
+
+        参数:
+            midi_file: MIDI 文件对象
+            pedals: 踏板事件列表
+            tempo: BPM
+        """
+        if not pedals:
+            return
+
+        logger.info(f"正在添加 {len(pedals)} 个踏板事件")
+
+        # 创建踏板轨道
+        pedal_track = MidiTrack()
+        pedal_track.name = "Pedals"
+        midi_file.tracks.append(pedal_track)
+
+        # 按类型分组踏板事件
+        sustain_pedals = [p for p in pedals if p.pedal_type == "sustain"]
+        soft_pedals = [p for p in pedals if p.pedal_type == "soft"]
+
+        # 创建所有踏板事件
+        events = []
+
+        # 延音踏板事件 (CC64)
+        for pedal in sustain_pedals:
+            start_tick = self._time_to_ticks(pedal.start_time, tempo)
+            end_tick = self._time_to_ticks(pedal.end_time, tempo)
+
+            # 踩下踏板 (value 127)
+            events.append({
+                'tick': start_tick,
+                'type': 'pedal_on',
+                'cc': 64,
+                'value': 127,
+                'channel': 0
+            })
+            # 释放踏板 (value 0)
+            events.append({
+                'tick': end_tick,
+                'type': 'pedal_off',
+                'cc': 64,
+                'value': 0,
+                'channel': 0
+            })
+
+        # 柔音踏板事件 (CC67)
+        for pedal in soft_pedals:
+            start_tick = self._time_to_ticks(pedal.start_time, tempo)
+            end_tick = self._time_to_ticks(pedal.end_time, tempo)
+
+            events.append({
+                'tick': start_tick,
+                'type': 'pedal_on',
+                'cc': 67,
+                'value': 127,
+                'channel': 0
+            })
+            events.append({
+                'tick': end_tick,
+                'type': 'pedal_off',
+                'cc': 67,
+                'value': 0,
+                'channel': 0
+            })
+
+        # 按时间排序事件
+        events.sort(key=lambda e: (e['tick'], e['type'] == 'pedal_on'))
+
+        # 写入事件
+        current_tick = 0
+        for event in events:
+            delta = max(0, event['tick'] - current_tick)
+
+            pedal_track.append(Message(
+                'control_change',
+                channel=event['channel'],
+                control=event['cc'],
+                value=event['value'],
+                time=delta
+            ))
+
+            current_tick = event['tick']
+
+        # 轨道结束
+        pedal_track.append(MetaMessage('end_of_track', time=0))
+
+        sustain_count = len(sustain_pedals)
+        soft_count = len(soft_pedals)
+        logger.info(f"已添加踏板轨道: {sustain_count} 个延音踏板, {soft_count} 个柔音踏板")
 
     def export_lrc(
         self,
