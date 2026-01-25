@@ -143,6 +143,9 @@ def diagnose_gpu() -> dict:
         "gpu_names": [],
         "tensorflow_gpu": False,
         "tf_gpu_count": 0,
+        "tf_version": None,
+        "tf_gpu_names": [],
+        "tf_is_cpu_only": None,
         "mps_available": False,
     }
 
@@ -174,11 +177,23 @@ def diagnose_gpu() -> dict:
     # TensorFlow 诊断（Basic Pitch 使用 TensorFlow）
     try:
         import tensorflow as tf
+        result["tf_version"] = tf.__version__
         gpus = tf.config.list_physical_devices('GPU')
         result["tensorflow_gpu"] = len(gpus) > 0
         result["tf_gpu_count"] = len(gpus)
+        result["tf_gpu_names"] = []
+
+        if gpus:
+            for gpu in gpus:
+                result["tf_gpu_names"].append(gpu.name)
+
+        # 检查是否是CPU版本
+        result["tf_is_cpu_only"] = "cpu" in tf.__file__.lower() or "intel" in tf.__file__.lower()
+
     except ImportError:
         logger.debug("TensorFlow 未安装")
+        result["tf_version"] = None
+        result["tf_is_cpu_only"] = None
     except Exception as e:
         logger.warning(f"TensorFlow 诊断失败: {e}")
 
@@ -226,6 +241,24 @@ def configure_tensorflow_gpu() -> bool:
         return False
 
 
+def normalize_device_for_whisperx(device: str) -> str:
+    """
+    规范化设备字符串用于 WhisperX 对齐模型
+
+    WhisperX 的对齐模型不支持 'cuda:0' 格式的设备字符串，
+    需要简化为 'cuda'。
+
+    参数:
+        device: 原始设备字符串 (如 'cuda:0', 'cuda:1', 'cpu')
+
+    返回:
+        规范化后的设备字符串 (如 'cuda', 'cpu')
+    """
+    if device.startswith("cuda:"):
+        return "cuda"
+    return device
+
+
 def print_gpu_diagnosis() -> None:
     """打印详细的 GPU 诊断信息"""
     info = diagnose_gpu()
@@ -251,7 +284,16 @@ def print_gpu_diagnosis() -> None:
         print(f"  Apple MPS 可用: True")
 
     print(f"\n[TensorFlow]")
+    print(f"  版本: {info['tf_version'] or '未安装'}")
+    if info['tf_is_cpu_only'] is not None:
+        print(f"  CPU版本: {info['tf_is_cpu_only']}")
     print(f"  GPU 可用: {info['tensorflow_gpu']}")
     print(f"  GPU 数量: {info['tf_gpu_count']}")
+    if info['tf_gpu_names']:
+        for name in info['tf_gpu_names']:
+            print(f"    {name}")
+
+    if info['tf_is_cpu_only']:
+        print(f"\n  警告: TensorFlow 使用CPU版本，建议安装 tensorflow[and-cuda]")
 
     print("\n" + "=" * 50)

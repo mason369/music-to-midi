@@ -9,6 +9,7 @@
 """
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import List, Optional, Callable, Tuple
 
@@ -18,6 +19,69 @@ from src.models.data_models import Config, NoteEvent, PedalEvent
 from src.utils.gpu_utils import get_device
 
 logger = logging.getLogger(__name__)
+
+
+# ByteDance 模型下载配置
+PIANO_MODEL_URL = "https://zenodo.org/record/4034264/files/note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
+PIANO_MODEL_FILENAME = "note_F1=0.9677_pedal_F1=0.9186.pth"
+
+
+def _ensure_piano_model_downloaded() -> Optional[Path]:
+    """
+    确保钢琴模型已下载（Windows 兼容版本）
+
+    piano_transcription_inference 使用 wget 下载模型，
+    但 Windows 上通常没有 wget。此函数使用 Python 下载。
+
+    返回:
+        模型文件路径，如果下载失败返回 None
+    """
+    # 模型默认保存位置
+    home = Path.home()
+    model_dir = home / "piano_transcription_inference_data"
+    model_path = model_dir / PIANO_MODEL_FILENAME
+
+    # 如果已存在，直接返回
+    if model_path.exists():
+        logger.debug(f"钢琴模型已存在: {model_path}")
+        return model_path
+
+    # 创建目录
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"正在下载钢琴转写模型到: {model_path}")
+    logger.info("模型大小约 165MB，请耐心等待...")
+
+    try:
+        import requests
+        from tqdm import tqdm
+
+        response = requests.get(PIANO_MODEL_URL, stream=True, timeout=300)
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+
+        with open(model_path, 'wb') as f:
+            with tqdm(total=total_size, unit='B', unit_scale=True, desc="下载钢琴模型") as pbar:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    pbar.update(len(chunk))
+
+        logger.info(f"钢琴模型下载完成: {model_path}")
+        return model_path
+
+    except ImportError:
+        logger.error("requests 库未安装，无法下载模型")
+        return None
+    except Exception as e:
+        logger.error(f"下载钢琴模型失败: {e}")
+        # 清理不完整的文件
+        if model_path.exists():
+            try:
+                model_path.unlink()
+            except Exception:
+                pass
+        return None
 
 
 class PianoTranscriberPro:
@@ -96,9 +160,16 @@ class PianoTranscriberPro:
         try:
             from piano_transcription_inference import PianoTranscription
 
+            # 确保模型文件存在（Windows 兼容下载）
+            model_path = _ensure_piano_model_downloaded()
+
+            if model_path is None:
+                logger.error("无法下载钢琴模型")
+                return False
+
             self.transcriptor = PianoTranscription(
                 device=self.device,
-                checkpoint_path=None  # 使用默认模型（自动下载）
+                checkpoint_path=str(model_path)
             )
 
             self._model_loaded = True
@@ -138,7 +209,7 @@ class PianoTranscriberPro:
         返回:
             (音符事件列表, 踏板事件列表) 元组
         """
-        logger.info(f"正在使用 ByteDance 模型转写: {audio_path}")
+        logger.info(f"[诊断] 开始转写: {audio_path}")
 
         self._check_cancelled()
 
@@ -146,7 +217,8 @@ class PianoTranscriberPro:
             progress_callback(0.0, "正在加载钢琴模型...")
 
         if not self.load_model():
-            logger.warning("ByteDance 模型不可用，返回空结果")
+            logger.error("[诊断] 模型加载失败！")
+            logger.error("[诊断] 请检查 piano_transcription_inference 是否已安装")
             return [], []
 
         self._check_cancelled()
@@ -160,7 +232,7 @@ class PianoTranscriberPro:
             # 加载音频（模型期望 32000Hz 采样率）
             audio, sr = librosa.load(audio_path, sr=32000, mono=True)
             duration = len(audio) / sr
-            logger.info(f"音频时长: {duration:.2f}秒")
+            logger.info(f"[诊断] 音频时长: {duration:.2f}秒, 采样率: {sr}")
 
             self._check_cancelled()
 
@@ -174,6 +246,9 @@ class PianoTranscriberPro:
                 midi_path=None  # 不直接保存 MIDI
             )
 
+            # 诊断输出
+            logger.info(f"[诊断] 转写结果键: {list(transcribed_dict.keys())}")
+
             self._check_cancelled()
 
             if progress_callback:
@@ -184,6 +259,12 @@ class PianoTranscriberPro:
 
             # 提取踏板事件
             pedals = self._extract_pedals(transcribed_dict)
+
+            if not notes:
+                logger.warning("[诊断] 转写结果为空！")
+                logger.debug(f"[诊断] 完整返回: {transcribed_dict}")
+            else:
+                logger.info(f"[诊断] 获取到 {len(notes)} 个音符")
 
             self._check_cancelled()
 

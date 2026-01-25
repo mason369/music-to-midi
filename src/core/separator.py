@@ -212,14 +212,68 @@ class SourceSeparator:
             progress_callback: 可选的进度回调函数 (进度, 消息)
 
         返回:
-            轨道ID到输出文件路径的字典
+            轨道来源到输出文件路径的字典（如 {"vocals": "path", "accompaniment": "path"}）
         """
         if track_layout.mode == ProcessingMode.PIANO:
-            # 钢琴模式：跳过分离，所有轨道使用原始音频
-            logger.info("钢琴模式：跳过音源分离")
-            if progress_callback:
-                progress_callback(1.0, "钢琴模式：使用原始音频")
-            return {track.id: audio_path for track in track_layout.get_enabled_tracks()}
+            num_tracks = len(track_layout.get_enabled_tracks())
+
+            if num_tracks == 1:
+                # 1轨：不分离
+                logger.info("钢琴模式（1轨）：使用原始音频")
+                if progress_callback:
+                    progress_callback(1.0, "使用原始音频")
+                return {"original": audio_path}
+
+            elif num_tracks == 2:
+                # 2轨：分离为伴奏+人声
+                logger.info("钢琴模式（2轨）：分离为伴奏和人声")
+                stem_paths = self.separate(audio_path, output_dir, progress_callback)
+
+                # 合成伴奏轨（drums + bass + other）
+                accompaniment_path = self._mix_stems(
+                    [stem_paths.get("drums"), stem_paths.get("bass"), stem_paths.get("other")],
+                    output_dir, "accompaniment"
+                )
+
+                return {
+                    "accompaniment": accompaniment_path,
+                    "vocals": stem_paths.get("vocals", audio_path)
+                }
+
+            elif num_tracks == 3:
+                # 3轨：伴奏+人声+其他
+                logger.info("钢琴模式（3轨）：分离为伴奏、人声和其他")
+                stem_paths = self.separate(audio_path, output_dir, progress_callback)
+
+                # 合成伴奏轨（drums + bass）
+                accompaniment_path = self._mix_stems(
+                    [stem_paths.get("drums"), stem_paths.get("bass")],
+                    output_dir, "accompaniment"
+                )
+
+                return {
+                    "accompaniment": accompaniment_path,
+                    "vocals": stem_paths.get("vocals", audio_path),
+                    "other": stem_paths.get("other", audio_path)
+                }
+
+            else:  # 4轨
+                # 4轨：使用 6s 模型
+                logger.info("钢琴模式（4轨）：使用 htdemucs_6s")
+                stem_paths = self.separate_6s(audio_path, output_dir, progress_callback)
+
+                # 合成伴奏轨（drums + bass + piano）
+                accompaniment_path = self._mix_stems(
+                    [stem_paths.get("drums"), stem_paths.get("bass"), stem_paths.get("piano")],
+                    output_dir, "accompaniment"
+                )
+
+                return {
+                    "accompaniment": accompaniment_path,
+                    "vocals": stem_paths.get("vocals", audio_path),
+                    "guitar": stem_paths.get("guitar", audio_path),
+                    "other": stem_paths.get("other", audio_path)
+                }
 
         elif track_layout.mode == ProcessingMode.SMART:
             # 智能模式：使用6轨分离
@@ -239,6 +293,54 @@ class SourceSeparator:
 
         else:
             raise ValueError(f"未知的处理模式: {track_layout.mode}")
+
+    def _mix_stems(
+        self,
+        stem_paths: List[Optional[str]],
+        output_dir: str,
+        output_name: str
+    ) -> str:
+        """
+        混合多个轨道为一个
+
+        参数:
+            stem_paths: 要混合的轨道路径列表
+            output_dir: 输出目录
+            output_name: 输出文件名（不含扩展名）
+
+        返回:
+            混合后的文件路径
+        """
+        import soundfile as sf
+        import numpy as np
+
+        valid_paths = [p for p in stem_paths if p and os.path.exists(p)]
+        if not valid_paths:
+            logger.warning(f"混合轨道失败：没有有效的输入文件")
+            return ""
+
+        logger.info(f"正在混合 {len(valid_paths)} 个轨道为 {output_name}")
+
+        mixed = None
+        sr = None
+        for path in valid_paths:
+            audio, sr = sf.read(path)
+            if mixed is None:
+                mixed = audio.astype(np.float64)
+            else:
+                min_len = min(len(mixed), len(audio))
+                mixed = mixed[:min_len] + audio[:min_len].astype(np.float64)
+
+        # 归一化防止削波
+        max_val = np.max(np.abs(mixed))
+        if max_val > 0.99:
+            mixed = mixed * 0.99 / max_val
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{output_name}.wav")
+        sf.write(output_path, mixed.astype(np.float32), sr)
+        logger.info(f"混合轨道已保存: {output_path}")
+        return output_path
 
     def _instrument_to_stem(self, instrument: InstrumentType) -> str:
         """将乐器类型映射到分离轨道名称"""

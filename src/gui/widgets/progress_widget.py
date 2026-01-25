@@ -43,7 +43,6 @@ class StageIndicator(QWidget):
             ProcessingStage.PREPROCESSING: "preprocessing",
             ProcessingStage.SEPARATION: "separation",
             ProcessingStage.TRANSCRIPTION: "transcription",
-            ProcessingStage.LYRICS: "lyrics",
             ProcessingStage.SYNTHESIS: "synthesis",
             ProcessingStage.COMPLETE: "complete"
         }
@@ -171,7 +170,6 @@ class ProgressWidget(QGroupBox):
             ProcessingStage.PREPROCESSING,
             ProcessingStage.SEPARATION,
             ProcessingStage.TRANSCRIPTION,
-            ProcessingStage.LYRICS,
             ProcessingStage.SYNTHESIS
         ]
 
@@ -207,7 +205,6 @@ class ProgressWidget(QGroupBox):
             ProcessingStage.PREPROCESSING,
             ProcessingStage.SEPARATION,
             ProcessingStage.TRANSCRIPTION,
-            ProcessingStage.LYRICS,
             ProcessingStage.SYNTHESIS,
             ProcessingStage.COMPLETE
         ]
