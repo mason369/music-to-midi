@@ -117,11 +117,40 @@ class AudioTranscriber:
             progress_callback(0.0, f"正在转写 {type_name}...")
 
         try:
-            from basic_pitch.inference import predict
+            from basic_pitch.inference import predict, Model
             from basic_pitch import ICASSP_2022_MODEL_PATH
+            import os
 
             # 检查取消
             self._check_cancelled()
+
+            # 选择可用的模型后端
+            # 优先级: TensorFlow SavedModel > ONNX > TFLite
+            model_dir = os.path.dirname(ICASSP_2022_MODEL_PATH)
+            model_path = ICASSP_2022_MODEL_PATH
+
+            # 检查 TensorFlow SavedModel (nmp 目录)
+            tf_model = os.path.join(model_dir, "nmp")
+            if os.path.isdir(tf_model) and os.path.exists(os.path.join(tf_model, "saved_model.pb")):
+                try:
+                    import tensorflow as tf
+                    model_path = tf_model
+                    logger.debug(f"使用 TensorFlow SavedModel: {model_path}")
+                except ImportError:
+                    pass
+
+            # 如果 TF 不可用，尝试 ONNX
+            if model_path == ICASSP_2022_MODEL_PATH:
+                onnx_model = os.path.join(model_dir, "nmp.onnx")
+                if os.path.exists(onnx_model):
+                    try:
+                        import onnxruntime
+                        model_path = onnx_model
+                        logger.debug(f"使用 ONNX 模型: {model_path}")
+                    except ImportError:
+                        logger.debug(f"ONNX Runtime 不可用，使用默认模型: {model_path}")
+
+            logger.info(f"Basic Pitch 模型: {os.path.basename(model_path)}")
 
             # 根据乐器类型调整阈值
             onset_thresh, frame_thresh = self._get_thresholds_for_instrument(instrument)
@@ -143,6 +172,7 @@ class AudioTranscriber:
             with suppress_stdout():
                 model_output, midi_data, note_events = predict(
                     audio_path,
+                    model_or_model_path=model_path,  # 显式指定模型路径
                     onset_threshold=onset_thresh,
                     frame_threshold=frame_thresh,
                     minimum_note_length=min_note_len,
@@ -193,20 +223,20 @@ class AudioTranscriber:
     ) -> Tuple[float, float]:
         """获取针对乐器类型优化的阈值"""
         thresholds = {
-            # 钢琴：提高阈值减少碎片音符
-            InstrumentType.PIANO: (0.50, 0.35),
+            # 钢琴：降低阈值以捕获更多音符
+            InstrumentType.PIANO: (0.40, 0.28),
             # 鼓：降低onset阈值（瞬态）
-            InstrumentType.DRUMS: (0.55, 0.40),
-            # 贝斯：适度提高阈值减少噪声
-            InstrumentType.BASS: (0.45, 0.30),
-            # 吉他：保持中等阈值
-            InstrumentType.GUITAR: (0.50, 0.32),
+            InstrumentType.DRUMS: (0.45, 0.32),
+            # 贝斯：降低阈值以捕获弱音符
+            InstrumentType.BASS: (0.38, 0.25),
+            # 吉他：降低阈值
+            InstrumentType.GUITAR: (0.42, 0.28),
             # 人声：保持中等阈值
-            InstrumentType.VOCALS: (0.50, 0.30),
-            # 弦乐：提高阈值减少噪声
-            InstrumentType.STRINGS: (0.48, 0.32),
-            # 其他：默认阈值
-            InstrumentType.OTHER: (self.onset_threshold, self.frame_threshold),
+            InstrumentType.VOCALS: (0.45, 0.28),
+            # 弦乐：降低阈值
+            InstrumentType.STRINGS: (0.42, 0.28),
+            # 其他：使用优化的默认阈值
+            InstrumentType.OTHER: (0.42, 0.28),
         }
         return thresholds.get(instrument, (self.onset_threshold, self.frame_threshold))
 
@@ -268,24 +298,24 @@ class AudioTranscriber:
         """
         params = {
             1: {  # 最简化：只保留核心旋律
-                'onset_threshold': 0.65,
-                'frame_threshold': 0.45,
-                'min_note_length': 0.120,  # 120ms
+                'onset_threshold': 0.50,
+                'frame_threshold': 0.38,
+                'min_note_length': 0.100,  # 100ms
             },
             2: {  # 中等：左右手分离
-                'onset_threshold': 0.55,
-                'frame_threshold': 0.38,
-                'min_note_length': 0.090,  # 90ms
+                'onset_threshold': 0.45,
+                'frame_threshold': 0.32,
+                'min_note_length': 0.080,  # 80ms
             },
             3: {  # 较高复杂度
-                'onset_threshold': 0.50,
-                'frame_threshold': 0.35,
-                'min_note_length': 0.080,  # 80ms
+                'onset_threshold': 0.40,
+                'frame_threshold': 0.28,
+                'min_note_length': 0.070,  # 70ms
             },
             4: {  # 完整细节
-                'onset_threshold': 0.50,
-                'frame_threshold': 0.35,
-                'min_note_length': 0.080,  # 80ms
+                'onset_threshold': 0.38,
+                'frame_threshold': 0.25,
+                'min_note_length': 0.060,  # 60ms
             },
         }
         return params.get(track_count, params[4])
@@ -323,11 +353,35 @@ class AudioTranscriber:
             progress_callback(0.0, f"正在转写 {type_name}（{track_count}轨模式）...")
 
         try:
-            from basic_pitch.inference import predict
+            from basic_pitch.inference import predict, Model
             from basic_pitch import ICASSP_2022_MODEL_PATH
+            import os
 
             # 检查取消
             self._check_cancelled()
+
+            # 选择可用的模型后端
+            model_dir = os.path.dirname(ICASSP_2022_MODEL_PATH)
+            model_path = ICASSP_2022_MODEL_PATH
+
+            # 检查 TensorFlow SavedModel (nmp 目录)
+            tf_model = os.path.join(model_dir, "nmp")
+            if os.path.isdir(tf_model) and os.path.exists(os.path.join(tf_model, "saved_model.pb")):
+                try:
+                    import tensorflow as tf
+                    model_path = tf_model
+                except ImportError:
+                    pass
+
+            # 如果 TF 不可用，尝试 ONNX
+            if model_path == ICASSP_2022_MODEL_PATH:
+                onnx_model = os.path.join(model_dir, "nmp.onnx")
+                if os.path.exists(onnx_model):
+                    try:
+                        import onnxruntime
+                        model_path = onnx_model
+                    except ImportError:
+                        pass
 
             # 获取复杂度参数
             complexity_params = self._get_complexity_params(track_count)
@@ -349,6 +403,7 @@ class AudioTranscriber:
             with suppress_stdout():
                 model_output, midi_data, note_events = predict(
                     audio_path,
+                    model_or_model_path=model_path,  # 显式指定模型路径
                     onset_threshold=onset_thresh,
                     frame_threshold=frame_thresh,
                     minimum_note_length=min_note_len,

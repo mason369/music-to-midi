@@ -260,21 +260,11 @@ class MainWindow(QMainWindow):
         self.midi_check.setChecked(True)
         self.midi_check.setStyleSheet(checkbox_style)
 
-        self.lyrics_check = QCheckBox(t("main.output.options.embedLyrics"))
-        self.lyrics_check.setChecked(True)
-        self.lyrics_check.setStyleSheet(checkbox_style)
-
-        self.lrc_check = QCheckBox(t("main.output.options.exportLrc"))
-        self.lrc_check.setChecked(True)
-        self.lrc_check.setStyleSheet(checkbox_style)
-
         self.tracks_check = QCheckBox(t("main.output.options.saveTracks"))
         self.tracks_check.setChecked(True)
         self.tracks_check.setStyleSheet(checkbox_style)
 
         options_layout.addWidget(self.midi_check)
-        options_layout.addWidget(self.lyrics_check)
-        options_layout.addWidget(self.lrc_check)
         options_layout.addWidget(self.tracks_check)
         options_layout.addStretch()
 
@@ -566,8 +556,6 @@ class MainWindow(QMainWindow):
 
         # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
-        self.config.embed_lyrics = self.lyrics_check.isChecked()
-        self.config.export_lrc = self.lrc_check.isChecked()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
 
         # 获取轨道布局
@@ -580,9 +568,20 @@ class MainWindow(QMainWindow):
             else:
                 self.config.piano_track_count = len(track_layout.tracks)
 
-        # 创建以音乐名命名的子文件夹
+        # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem
         output_dir_with_music_name = os.path.join(self.config.output_dir, music_name)
+
+        # 如果目录已存在，添加数字后缀避免覆盖
+        if os.path.exists(output_dir_with_music_name):
+            counter = 2
+            while True:
+                new_dir = os.path.join(self.config.output_dir, f"{music_name}_{counter}")
+                if not os.path.exists(new_dir):
+                    output_dir_with_music_name = new_dir
+                    logger.info(f"输出目录已存在，使用新目录: {new_dir}")
+                    break
+                counter += 1
 
         # 确保输出目录存在
         os.makedirs(output_dir_with_music_name, exist_ok=True)
@@ -670,7 +669,6 @@ class MainWindow(QMainWindow):
         <b>MIDI文件:</b> {result.midi_path}<br>
         <b>轨道数:</b> {len(result.tracks)}<br>
         <b>音符数:</b> {sum(len(track.notes) for track in result.tracks)}<br>
-        <b>歌词数:</b> {len(result.lyrics)}<br>
         <b>处理时间:</b> {result.processing_time:.1f}秒
         </p>
         """
@@ -921,8 +919,6 @@ class MainWindow(QMainWindow):
         self.output_dir_label.setText(t("main.output.directory") + ":")
         self.browse_dir_btn.setText(t("main.output.browse"))
         self.midi_check.setText(t("main.output.options.generateMidi"))
-        self.lyrics_check.setText(t("main.output.options.embedLyrics"))
-        self.lrc_check.setText(t("main.output.options.exportLrc"))
         self.tracks_check.setText(t("main.output.options.saveTracks"))
 
         # 按钮

@@ -11,6 +11,7 @@ from src.i18n.translator import t
 from src.models.data_models import (
     TrackType, InstrumentType, TrackConfig, TrackLayout, ProcessingMode
 )
+from src.models.gm_instruments import GM_INSTRUMENTS, get_instrument_name
 
 
 class TrackRowV2(QWidget):
@@ -24,6 +25,19 @@ class TrackRowV2(QWidget):
         InstrumentType.GUITAR: "🎸",
         InstrumentType.VOCALS: "🎤",
         InstrumentType.STRINGS: "🎻",
+        InstrumentType.BRASS: "🎺",
+        InstrumentType.WOODWIND: "🎷",
+        InstrumentType.SYNTH: "🎹",
+        InstrumentType.ORGAN: "🎹",
+        InstrumentType.HARP: "🎵",
+        InstrumentType.PERCUSSION: "🥁",
+        InstrumentType.CHOIR: "🎤",
+        InstrumentType.KICK: "🥁",
+        InstrumentType.SNARE: "🥁",
+        InstrumentType.HIHAT: "🥁",
+        InstrumentType.TOM: "🥁",
+        InstrumentType.CYMBAL: "🥁",
+        InstrumentType.RIDE: "🥁",
         InstrumentType.OTHER: "🎵",
     }
 
@@ -80,28 +94,20 @@ class TrackRowV2(QWidget):
         layout.addWidget(self.program_combo)
 
     def _populate_programs(self):
-        """填充 GM 音色列表"""
-        # 常用音色的简短列表
-        programs = [
-            (0, t("main.programs.piano")),
-            (24, t("main.programs.acoustic_guitar")),
-            (25, t("main.programs.steel_guitar")),
-            (32, t("main.programs.acoustic_bass")),
-            (33, t("main.programs.electric_bass")),
-            (48, t("main.programs.strings")),
-            (52, t("main.programs.choir")),
-            (56, t("main.programs.trumpet")),
-            (73, t("main.programs.flute")),
-        ]
+        """填充完整的 128 个 GM 音色列表"""
+        # 获取当前语言
+        from src.i18n.translator import get_translator
+        lang = get_translator().get_language()
 
-        for program_num, name in programs:
-            self.program_combo.addItem(name, program_num)
+        # 添加所有 128 个 GM 乐器
+        for program in range(128):
+            name = get_instrument_name(program, lang)
+            # 格式: "000 - 原声大钢琴" 方便查找
+            display_name = f"{program:03d} - {name}"
+            self.program_combo.addItem(display_name, program)
 
         # 设置当前值
-        for i in range(self.program_combo.count()):
-            if self.program_combo.itemData(i) == self.track_config.program:
-                self.program_combo.setCurrentIndex(i)
-                break
+        self.program_combo.setCurrentIndex(self.track_config.program)
 
     def _on_enabled_changed(self, enabled: bool):
         """启用状态变更"""
@@ -171,17 +177,11 @@ class TrackRow(QWidget):
         """)
 
         # 选项
-        self.lyrics_check = QCheckBox(t("main.tracks.lyrics"))
         self.midi_check = QCheckBox(t("main.tracks.midi"))
         self.midi_check.setChecked(True)
 
-        # 只为人声显示歌词选项
-        if self.track_type != TrackType.VOCALS:
-            self.lyrics_check.hide()
-
         layout.addWidget(self.name_label)
         layout.addWidget(self.progress_label, 1)
-        layout.addWidget(self.lyrics_check)
         layout.addWidget(self.midi_check)
 
     def _get_track_name(self) -> str:
@@ -198,7 +198,6 @@ class TrackRow(QWidget):
         """更新当前语言的文本"""
         icon = self.ICONS.get(self.track_type, "🎵")
         self.name_label.setText(f"{icon} {self._get_track_name()}")
-        self.lyrics_check.setText(t("main.tracks.lyrics"))
         self.midi_check.setText(t("main.tracks.midi"))
 
 
@@ -224,7 +223,7 @@ class ModeSelector(QWidget):
         self.piano_radio.setToolTip(t("main.mode.piano_tooltip"))
         self.button_group.addButton(self.piano_radio)
 
-        # 智能识别模式
+        # 智能识别模式（多乐器转写）
         self.smart_radio = QRadioButton(t("main.mode.smart"))
         self.smart_radio.setToolTip(t("main.mode.smart_tooltip"))
         self.button_group.addButton(self.smart_radio)
@@ -244,7 +243,10 @@ class ModeSelector(QWidget):
 
     def get_mode(self) -> str:
         """获取当前模式"""
-        return "piano" if self.piano_radio.isChecked() else "smart"
+        if self.piano_radio.isChecked():
+            return "piano"
+        else:
+            return "smart"
 
     def set_mode(self, mode: str):
         """设置模式"""
@@ -489,10 +491,10 @@ class TrackPanel(QGroupBox):
                 # 固定数量模式
                 self._current_layout = TrackLayout.default_piano(count)
         else:
-            # 智能模式：暂时显示占位提示
+            # 智能识别模式：使用多乐器转写
             self._current_layout = TrackLayout(
                 mode=ProcessingMode.SMART,
-                tracks=[]
+                tracks=[]  # 轨道由转写结果决定
             )
 
         # 添加轨道行
@@ -504,7 +506,7 @@ class TrackPanel(QGroupBox):
 
         # 如果是智能模式且没有轨道，显示提示
         if mode == "smart" and not self._current_layout.tracks:
-            hint = QLabel(t("main.smart.hint"))
+            hint = QLabel(t("main.mode.smart_tooltip"))
             hint.setStyleSheet("color: #808080; font-style: italic; padding: 10px;")
             hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.tracks_layout.addWidget(hint)

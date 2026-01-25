@@ -33,7 +33,7 @@
       "piano": "钢琴模式",
       "smart": "智能识别",
       "piano_tooltip": "直接将音频转写为多个钢琴轨道，适合钢琴曲目",
-      "smart_tooltip": "自动检测音频中的乐器类型并分别转写"
+      "smart_tooltip": "使用MT3/YourMT3+智能识别多种乐器，动态输出10+轨道"
     },
     "piano": {
       "track_count": "钢琴轨道数:",
@@ -45,6 +45,21 @@
     "smart": {
       "hint": "选择音频文件后将自动检测乐器"
     },
+    "transcriber": {
+      "title": "转写引擎",
+      "auto": "自动选择",
+      "mt3": "MT3 (Google Magenta)",
+      "yourmt3": "YourMT3+ (最佳质量)",
+      "basic_pitch": "Basic Pitch (轻量)",
+      "auto_tooltip": "自动选择最佳可用引擎",
+      "mt3_tooltip": "Google Magenta开发，支持34类乐器动态识别",
+      "yourmt3_tooltip": "2025年AMT挑战赛获奖模型，支持多乐器直接转写",
+      "basic_pitch_tooltip": "轻量级模型，适合简单音乐"
+    },
+    "drums": {
+      "separate_voices": "层次化鼓分离",
+      "separate_tooltip": "将鼓轨分为底鼓、军鼓、踩镲等独立轨道"
+    },
     "tracks": {
       "title": "轨道设置",
       "vocals": "人声",
@@ -53,8 +68,19 @@
       "guitar": "吉他",
       "piano": "钢琴",
       "strings": "弦乐",
+      "brass": "铜管",
+      "woodwind": "木管",
+      "synth": "合成器",
+      "organ": "风琴",
+      "percussion": "打击乐",
+      "choir": "合唱",
+      "kick": "底鼓",
+      "snare": "军鼓",
+      "hihat": "踩镲",
+      "tom": "嗵鼓",
+      "cymbal": "镲片",
+      "ride": "叮叮镲",
       "other": "其他乐器",
-      "lyrics": "歌词",
       "midi": "MIDI",
       "channel": "通道:",
       "program": "音色:"
@@ -77,7 +103,6 @@
         "preprocessing": "预处理",
         "separation": "音源分离",
         "transcription": "音频转写",
-        "lyrics": "歌词识别",
         "synthesis": "MIDI合成",
         "complete": "完成"
       }
@@ -88,8 +113,6 @@
       "browse": "浏览...",
       "options": {
         "generateMidi": "生成MIDI文件",
-        "embedLyrics": "嵌入歌词",
-        "exportLrc": "导出LRC",
         "saveTracks": "保存分离音轨",
         "vocalsOnly": "仅导出人声"
       }
@@ -108,9 +131,9 @@
       "useGpu": "使用GPU加速",
       "gpuDevice": "GPU设备",
       "quality": "处理质量",
-      "whisperModel": "Whisper模型",
-      "lyricsLanguage": "歌词语言",
-      "autoDetect": "自动检测"
+      "transcriber": "转写引擎",
+      "autoDetect": "自动检测",
+      "separateDrums": "层次化鼓分离"
     },
     "midi": {
       "title": "MIDI设置",
@@ -160,7 +183,7 @@
     },
     "about": {
       "title": "关于音乐转MIDI",
-      "description": "将音频转换为多轨道MIDI并嵌入歌词",
+      "description": "将音频转换为多轨道MIDI文件",
       "author": "作者",
       "license": "许可证"
     },
@@ -172,6 +195,9 @@
     }
   },
   "quality": {
+    "fast": "快速",
+    "balanced": "均衡",
+    "best": "最佳",
     "low": "低（快速）",
     "medium": "中等",
     "high": "高（质量优先）"

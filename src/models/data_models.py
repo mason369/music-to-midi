@@ -28,6 +28,18 @@ class InstrumentType(Enum):
     SYNTH = "synth"       # 合成器
     ORGAN = "organ"       # 风琴
     HARP = "harp"         # 竖琴
+    # 新增乐器类型（YourMT3+ 支持）
+    PERCUSSION = "percussion"  # 非套鼓打击乐
+    CHOIR = "choir"            # 合唱（区别于独唱）
+    LEAD_SYNTH = "lead_synth"  # 主奏合成器
+    PAD_SYNTH = "pad_synth"    # 铺底合成器
+    # 层次化鼓分离
+    KICK = "kick"              # 底鼓
+    SNARE = "snare"            # 军鼓
+    HIHAT = "hihat"            # 踩镲
+    TOM = "tom"                # 嗵鼓
+    CYMBAL = "cymbal"          # 镲片
+    RIDE = "ride"              # 叮叮镲
     OTHER = "other"
 
     @classmethod
@@ -55,6 +67,16 @@ class InstrumentType(Enum):
             InstrumentType.SYNTH: 80,     # Lead 1 (square)
             InstrumentType.ORGAN: 16,     # Drawbar Organ
             InstrumentType.HARP: 46,      # Orchestral Harp
+            InstrumentType.PERCUSSION: 0, # 打击乐使用通道10
+            InstrumentType.CHOIR: 52,     # Choir Aahs
+            InstrumentType.LEAD_SYNTH: 80,# Lead 1
+            InstrumentType.PAD_SYNTH: 88, # Pad 1 (new age)
+            InstrumentType.KICK: 0,       # 底鼓（通道10）
+            InstrumentType.SNARE: 0,      # 军鼓（通道10）
+            InstrumentType.HIHAT: 0,      # 踩镲（通道10）
+            InstrumentType.TOM: 0,        # 嗵鼓（通道10）
+            InstrumentType.CYMBAL: 0,     # 镲片（通道10）
+            InstrumentType.RIDE: 0,       # 叮叮镲（通道10）
             InstrumentType.OTHER: 0,      # 默认钢琴
         }
         return programs.get(self, 0)
@@ -73,6 +95,16 @@ class InstrumentType(Enum):
             InstrumentType.SYNTH: "合成器",
             InstrumentType.ORGAN: "风琴",
             InstrumentType.HARP: "竖琴",
+            InstrumentType.PERCUSSION: "打击乐",
+            InstrumentType.CHOIR: "合唱",
+            InstrumentType.LEAD_SYNTH: "主奏合成器",
+            InstrumentType.PAD_SYNTH: "铺底合成器",
+            InstrumentType.KICK: "底鼓",
+            InstrumentType.SNARE: "军鼓",
+            InstrumentType.HIHAT: "踩镲",
+            InstrumentType.TOM: "嗵鼓",
+            InstrumentType.CYMBAL: "镲片",
+            InstrumentType.RIDE: "叮叮镲",
             InstrumentType.OTHER: "其他",
         }
         names_en = {
@@ -87,6 +119,16 @@ class InstrumentType(Enum):
             InstrumentType.SYNTH: "Synth",
             InstrumentType.ORGAN: "Organ",
             InstrumentType.HARP: "Harp",
+            InstrumentType.PERCUSSION: "Percussion",
+            InstrumentType.CHOIR: "Choir",
+            InstrumentType.LEAD_SYNTH: "Lead Synth",
+            InstrumentType.PAD_SYNTH: "Pad Synth",
+            InstrumentType.KICK: "Kick",
+            InstrumentType.SNARE: "Snare",
+            InstrumentType.HIHAT: "Hi-Hat",
+            InstrumentType.TOM: "Tom",
+            InstrumentType.CYMBAL: "Cymbal",
+            InstrumentType.RIDE: "Ride",
             InstrumentType.OTHER: "Other",
         }
         if lang.startswith("zh"):
@@ -109,8 +151,15 @@ class InstrumentType(Enum):
 
 class ProcessingMode(Enum):
     """处理模式枚举"""
-    PIANO = "piano"   # 默认：钢琴模式（跳过分离）
-    SMART = "smart"   # 智能识别模式（自动检测乐器）
+    PIANO = "piano"         # 钢琴模式（跳过分离，直接转写为钢琴轨道）
+    SMART = "smart"         # 智能识别模式（多乐器转写，动态识别乐器）
+
+
+class TranscriptionQuality(Enum):
+    """转写质量模式枚举"""
+    FAST = "fast"           # 快速模式：无后处理，最快速度
+    BALANCED = "balanced"   # 平衡模式：轻量后处理，平衡质量和速度
+    BEST = "best"           # 极致质量模式：最小后处理，保留最多细节
 
 
 class ProcessingStage(Enum):
@@ -118,7 +167,6 @@ class ProcessingStage(Enum):
     PREPROCESSING = "preprocessing"
     SEPARATION = "separation"
     TRANSCRIPTION = "transcription"
-    LYRICS = "lyrics"
     SYNTHESIS = "synthesis"
     COMPLETE = "complete"
 
@@ -130,6 +178,7 @@ class NoteEvent:
     start_time: float    # 开始时间（秒）
     end_time: float      # 结束时间（秒）
     velocity: int = 80   # 音符力度 (0-127)
+    program: int = 0     # GM 程序号 (0-127)，用于精确乐器识别
 
     @property
     def duration(self) -> float:
@@ -151,15 +200,6 @@ class PedalEvent:
 
 
 @dataclass
-class LyricEvent:
-    """表示带时间戳的歌词事件"""
-    text: str            # 歌词文本（单词/音节）
-    start_time: float    # 开始时间（秒）
-    end_time: float      # 结束时间（秒）
-    confidence: float = 1.0  # 识别置信度
-
-
-@dataclass
 class BeatInfo:
     """节拍和速度信息"""
     bpm: float                                # 每分钟节拍数
@@ -177,6 +217,7 @@ class TrackConfig:
     enabled: bool = True            # 是否启用
     midi_channel: int = 0           # MIDI通道 (0-15)
     program: int = 0                # General MIDI 音色编号
+    source: str = "original"        # 分离轨道来源 (original, vocals, accompaniment, guitar, other)
 
     def __post_init__(self):
         # 自动设置默认音色编号
@@ -195,17 +236,48 @@ class TrackLayout:
 
     @classmethod
     def default_piano(cls, count: int = 2) -> "TrackLayout":
-        """创建默认的钢琴模式轨道布局"""
-        count = max(1, min(count, 8))  # 限制在 1-8 之间
+        """创建钢琴模式轨道布局（支持1-4轨道自适应分离）
+
+        轨道分配策略：
+        - 1 轨道：不分离，全部为钢琴声部
+        - 2 轨道：分离为钢琴（伴奏）+ 钢琴（人声）
+        - 3 轨道：分离为钢琴（伴奏）+ 钢琴（人声）+ 钢琴（其他）
+        - 4 轨道：分离为钢琴（伴奏）+ 钢琴（人声）+ 钢琴（吉他）+ 钢琴（其他）
+        """
+        count = max(1, min(count, 4))  # 限制为 1-4
+
+        PIANO_TRACK_TEMPLATES = {
+            1: [
+                {"id": "piano_full", "name": "钢琴", "source": "original"}
+            ],
+            2: [
+                {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
+                {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"}
+            ],
+            3: [
+                {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
+                {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"},
+                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"}
+            ],
+            4: [
+                {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
+                {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"},
+                {"id": "piano_guitar", "name": "钢琴（吉他）", "source": "guitar"},
+                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"}
+            ]
+        }
+
+        template = PIANO_TRACK_TEMPLATES[count]
         tracks = []
-        for i in range(count):
+        for i, t in enumerate(template):
             tracks.append(TrackConfig(
-                id=f"piano_{i + 1}",
+                id=t["id"],
                 instrument=InstrumentType.PIANO,
-                name=f"钢琴 {i + 1}",
+                name=t["name"],
                 enabled=True,
                 midi_channel=i,
-                program=0  # Acoustic Grand Piano
+                program=0,  # Acoustic Grand Piano
+                source=t["source"]
             ))
         return cls(mode=ProcessingMode.PIANO, tracks=tracks)
 
@@ -252,6 +324,7 @@ class TrackLayout:
                     "enabled": t.enabled,
                     "midi_channel": t.midi_channel,
                     "program": t.program,
+                    "source": t.source,
                 }
                 for t in self.tracks
             ]
@@ -270,6 +343,7 @@ class TrackLayout:
                 enabled=t.get("enabled", True),
                 midi_channel=t.get("midi_channel", 0),
                 program=t.get("program", 0),
+                source=t.get("source", "original"),
             ))
         return cls(mode=mode, tracks=tracks)
 
@@ -307,15 +381,9 @@ class ProcessingProgress:
 class ProcessingResult:
     """完整处理流水线的结果"""
     midi_path: str                           # 输出MIDI文件路径
-    lrc_path: Optional[str]                  # LRC歌词文件路径
     tracks: List[Track] = field(default_factory=list)
     beat_info: Optional[BeatInfo] = None
-    lyrics: List[LyricEvent] = field(default_factory=list)
     processing_time: float = 0.0             # 总处理时间（秒）
-
-    @property
-    def has_lyrics(self) -> bool:
-        return len(self.lyrics) > 0
 
 
 @dataclass
@@ -334,9 +402,16 @@ class Config:
     processing_mode: str = "piano"   # "piano" 或 "smart"
     piano_track_count: int = 2       # 钢琴轨道数量 (1-8)
 
-    # Whisper设置
-    whisper_model: str = "medium"  # tiny, base, small, medium, large
-    lyrics_language: Optional[str] = None  # None = 自动检测
+    # 转写引擎设置
+    transcriber_engine: str = "auto"  # "auto", "yourmt3", "basic_pitch"
+    use_direct_transcription: bool = False  # True = 跳过分离，直接YourMT3+
+    transcription_quality: str = "best"      # "fast", "balanced", "best" - 默认使用最佳质量
+    use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
+    preserve_all_notes: bool = True          # 保留所有音符（不做激进后处理）
+    ultra_quality_mode: bool = True          # 极致质量模式（忽略性能，最大化质量）
+
+    # 鼓设置
+    separate_drum_voices: bool = False  # 层次化鼓输出（底鼓、军鼓、踩镲等）
 
     # MIDI设置
     ticks_per_beat: int = 480
@@ -350,13 +425,12 @@ class Config:
     quantize_grid: str = "1/32"       # 量化网格：从1/16改为1/32，更精细
     remove_duplicates: bool = True    # 去除重复音符
     velocity_smoothing: bool = True   # 力度平滑
-    max_polyphony: int = 25           # 最大复音数：从10提高到25，更好支持钢琴
+    max_polyphony: int = 40           # 最大复音数：从25提高到40，更好支持钢琴
+    aggressive_post_processing: bool = False  # False = 轻量后处理（保留更多音符），True = 激进后处理（更简化）
 
     # 输出设置
     output_dir: str = ""
     save_separated_tracks: bool = True
-    export_lrc: bool = True
-    embed_lyrics: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -367,8 +441,13 @@ class Config:
             "segment_size": self.segment_size,
             "processing_mode": self.processing_mode,
             "piano_track_count": self.piano_track_count,
-            "whisper_model": self.whisper_model,
-            "lyrics_language": self.lyrics_language,
+            "transcriber_engine": self.transcriber_engine,
+            "use_direct_transcription": self.use_direct_transcription,
+            "transcription_quality": self.transcription_quality,
+            "use_precise_instruments": self.use_precise_instruments,
+            "preserve_all_notes": self.preserve_all_notes,
+            "ultra_quality_mode": self.ultra_quality_mode,
+            "separate_drum_voices": self.separate_drum_voices,
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
             "onset_threshold": self.onset_threshold,
@@ -379,10 +458,9 @@ class Config:
             "remove_duplicates": self.remove_duplicates,
             "velocity_smoothing": self.velocity_smoothing,
             "max_polyphony": self.max_polyphony,
+            "aggressive_post_processing": self.aggressive_post_processing,
             "output_dir": self.output_dir,
-            "save_separated_tracks": self.save_separated_tracks,
-            "export_lrc": self.export_lrc,
-            "embed_lyrics": self.embed_lyrics
+            "save_separated_tracks": self.save_separated_tracks
         }
 
     @classmethod

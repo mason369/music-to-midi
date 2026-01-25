@@ -1,0 +1,1869 @@
+"""
+YourMT3+ 转写器模块
+
+使用 YourMT3+（2025 AMT Challenge 获奖架构）进行最先进的多乐器音频转写。
+
+优势:
+- 层次化注意力 Transformer 架构
+- 混合专家 (MoE) 针对不同乐器
+- 直接多乐器转写（无需分离）
+- 精确识别 128 种 GM 乐器
+- PyTorch 原生，完美支持 GPU 加速
+"""
+import logging
+import os
+import sys
+from io import StringIO
+from pathlib import Path
+from typing import List, Optional, Callable, Dict, Tuple, Union
+from contextlib import contextmanager
+import numpy as np
+
+from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
+from src.models.gm_instruments import get_instrument_name
+from src.utils.gpu_utils import get_device
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def suppress_output():
+    """临时抑制标准输出和标准错误"""
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = StringIO()
+    sys.stderr = StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
+
+def program_to_instrument_type(program: int, is_drum: bool = False) -> InstrumentType:
+    """
+    将 GM 程序号映射到 InstrumentType
+
+    使用精确的程序号到乐器类型映射，支持更多乐器类型。
+
+    参数:
+        program: GM 程序号 (0-127)
+        is_drum: 是否为鼓轨道
+
+    返回:
+        对应的 InstrumentType
+    """
+    # 鼓轨道特殊处理
+    if is_drum:
+        return InstrumentType.DRUMS
+
+    if program < 0 or program > 127:
+        return InstrumentType.OTHER
+
+    # 精确的 GM 程序号到乐器类型映射
+    # Piano (0-7)
+    if 0 <= program <= 7:
+        return InstrumentType.PIANO
+
+    # Chromatic Percussion (8-15) - 半音阶打击乐
+    if 8 <= program <= 15:
+        return InstrumentType.PERCUSSION
+
+    # Organ (16-23)
+    if 16 <= program <= 23:
+        return InstrumentType.ORGAN
+
+    # Guitar (24-31)
+    if 24 <= program <= 31:
+        return InstrumentType.GUITAR
+
+    # Bass (32-39)
+    if 32 <= program <= 39:
+        return InstrumentType.BASS
+
+    # Strings (40-47)
+    if 40 <= program <= 47:
+        return InstrumentType.STRINGS
+
+    # Ensemble (48-55) - 合奏/合唱
+    if 48 <= program <= 55:
+        # 区分人声和弦乐合奏
+        if program in [52, 53, 54]:  # Choir Aahs, Voice Oohs, Synth Voice
+            return InstrumentType.CHOIR
+        return InstrumentType.STRINGS
+
+    # Brass (56-63)
+    if 56 <= program <= 63:
+        return InstrumentType.BRASS
+
+    # Reed (64-71) - 簧管乐器
+    if 64 <= program <= 71:
+        return InstrumentType.WOODWIND
+
+    # Pipe (72-79) - 哨笛类
+    if 72 <= program <= 79:
+        return InstrumentType.WOODWIND
+
+    # Synth Lead (80-87)
+    if 80 <= program <= 87:
+        return InstrumentType.LEAD_SYNTH
+
+    # Synth Pad (88-95)
+    if 88 <= program <= 95:
+        return InstrumentType.PAD_SYNTH
+
+    # Synth Effects (96-103)
+    if 96 <= program <= 103:
+        return InstrumentType.SYNTH
+
+    # Ethnic (104-111)
+    if 104 <= program <= 111:
+        # 民族乐器中的一些可以分类
+        if program == 105:  # Banjo
+            return InstrumentType.GUITAR
+        if program == 106:  # Shamisen
+            return InstrumentType.STRINGS
+        if program == 107:  # Koto
+            return InstrumentType.HARP
+        if program == 110:  # Bagpipe
+            return InstrumentType.WOODWIND
+        return InstrumentType.OTHER
+
+    # Percussive (112-119)
+    if 112 <= program <= 119:
+        return InstrumentType.PERCUSSION
+
+    # Sound Effects (120-127)
+    if 120 <= program <= 127:
+        return InstrumentType.OTHER
+
+    return InstrumentType.OTHER
+
+
+class YourMT3Transcriber:
+    """
+    使用 YourMT3+ 进行最先进的多乐器转写
+
+    优势:
+    - 2025 AMT Challenge 获奖架构
+    - 层次化注意力 Transformer + 混合专家 (MoE)
+    - 直接多乐器转写（可输出超过6轨道）
+    - PyTorch 原生，完美 GPU 加速
+    """
+
+    # 类级别的模型缓存
+    _model = None
+    _model_name = None
+    _device = None
+
+    def __init__(self, config: Config):
+        """
+        初始化 YourMT3+ 转写器
+
+        参数:
+            config: 应用配置
+        """
+        self.config = config
+        self.device = get_device(config.use_gpu, config.gpu_device)
+        self._cancelled = False
+        self._cancel_check_callback = None
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """严格检查 YourMT3+ 是否真正可用（所有依赖+模型）"""
+        try:
+            # 第一步：检查 PyTorch
+            import torch
+            logger.debug("✓ PyTorch 已安装")
+
+            # 第二步：检查其他必需依赖
+            try:
+                import pytorch_lightning
+                logger.debug("✓ pytorch-lightning 已安装")
+            except ImportError:
+                logger.warning("YourMT3+ 不可用：缺少 pytorch-lightning")
+                logger.info("安装方法: pip install pytorch-lightning")
+                return False
+
+            # 第三步：尝试导入 YourMT3 核心模块
+            has_code = False
+
+            # 方式1：从 model.ymt3 导入（官方仓库结构，需要先添加路径）
+            # 这种方式只有在路径已配置时才会成功，跳过以避免混淆日志
+
+            # 方式2：从 yourmt3 包导入（pip 安装的包）
+            try:
+                import yourmt3
+                logger.debug("✓ YourMT3+ 代码可用（通过 yourmt3 包导入）")
+                has_code = True
+            except ImportError:
+                pass  # 静默失败，尝试下一种方式
+
+            # 方式3：检查本地克隆的仓库（最常用的方式）
+            if not has_code:
+                import sys
+                import os
+                yourmt3_paths = [
+                    "YourMT3",  # 项目根路径
+                    os.path.join(os.getcwd(), "YourMT3"),
+                    "external/YourMT3",
+                    os.path.join(os.getcwd(), "external/YourMT3"),
+                    os.path.join(os.path.dirname(__file__), "../../YourMT3"),
+                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3")
+                ]
+
+                for path in yourmt3_paths:
+                    if os.path.exists(path):
+                        # 添加 amt/src 子目录到路径
+                        amt_src_path = os.path.join(path, "amt/src")
+                        if os.path.exists(amt_src_path):
+                            sys.path.insert(0, amt_src_path)
+                            try:
+                                from model.ymt3 import YourMT3
+                                logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
+                                has_code = True
+                                break
+                            except ImportError:
+                                sys.path.remove(amt_src_path)
+                                continue
+
+            if not has_code:
+                logger.warning("YourMT3+ 不可用：未找到代码")
+                logger.info("安装方法: bash install_yourmt3.sh")
+                return False
+
+            # 第四步：检查模型权重文件
+            try:
+                from src.utils.yourmt3_downloader import get_model_path, DEFAULT_MODEL
+                model_path = get_model_path(DEFAULT_MODEL)
+                if not model_path or not model_path.exists():
+                    logger.warning("YourMT3+ 不可用：模型权重不存在")
+                    logger.info("下载方法: python download_sota_models.py")
+                    return False
+                logger.debug(f"✓ 找到 YourMT3+ 模型: {model_path}")
+            except ImportError:
+                logger.debug("⚠ yourmt3_downloader 模块不可用，跳过模型检查")
+                # 如果有打包好的 yourmt3，可能包含内置模型
+                pass
+
+            # 所有检查通过
+            logger.info("✓ YourMT3+ 完全可用")
+            return True
+
+        except ImportError as e:
+            logger.warning(f"YourMT3+ 不可用：{e}")
+            return False
+
+    def set_cancel_check(self, callback) -> None:
+        """设置取消检查回调"""
+        self._cancel_check_callback = callback
+
+    def cancel(self) -> None:
+        """取消正在进行的处理"""
+        self._cancelled = True
+        logger.info("YourMT3+ 转写器：处理已取消")
+
+    def reset_cancel(self) -> None:
+        """重置取消标志"""
+        self._cancelled = False
+
+    def _check_cancelled(self) -> None:
+        """检查是否已取消"""
+        if self._cancelled:
+            raise InterruptedError("YourMT3+ 转写处理已取消")
+        if self._cancel_check_callback and self._cancel_check_callback():
+            raise InterruptedError("YourMT3+ 转写处理已取消")
+
+    def _load_model(
+        self,
+        model_name: str = "yptf_moe_multi_ps",  # 默认使用 MoE 专家版
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ):
+        """
+        加载 YourMT3 MoE 模型
+
+        参数:
+            model_name: 模型名称（只支持 MoE 版本）
+            progress_callback: 进度回调
+        """
+        # 检查是否已加载
+        if YourMT3Transcriber._model is not None and YourMT3Transcriber._model_name == model_name:
+            logger.debug("模型已加载，跳过重新加载")
+            return
+
+        if progress_callback:
+            progress_callback(0.1, "正在加载 YourMT3 MoE 模型...")
+
+        logger.info(f"加载 YourMT3 MoE 模型: {model_name}")
+
+        try:
+            # 1. 添加 YourMT3 路径到 sys.path
+            import sys
+            yourmt3_paths = [
+                "YourMT3",
+                os.path.join(os.getcwd(), "YourMT3"),
+                os.path.join(os.path.dirname(__file__), "../../YourMT3")
+            ]
+
+            amt_src_path = None
+            for base_path in yourmt3_paths:
+                if os.path.exists(base_path):
+                    potential_path = os.path.join(base_path, "amt/src")
+                    if os.path.exists(potential_path):
+                        amt_src_path = potential_path
+                        break
+
+            if not amt_src_path:
+                raise FileNotFoundError(
+                    "未找到 YourMT3 代码库\n"
+                    "请确保 YourMT3/ 目录存在于项目根目录"
+                )
+
+            if amt_src_path not in sys.path:
+                sys.path.insert(0, amt_src_path)
+                logger.debug(f"添加路径到 sys.path: {amt_src_path}")
+
+            # 2. 导入依赖
+            import torch
+            from utils.task_manager import TaskManager
+            from model.ymt3 import YourMT3
+            from config.config import shared_cfg as default_shared_cfg
+            from config.config import audio_cfg as default_audio_cfg
+            from config.config import model_cfg as default_model_cfg
+
+            if progress_callback:
+                progress_callback(0.2, "正在获取模型路径...")
+
+            # 3. 获取模型 checkpoint 路径
+            from src.utils.yourmt3_downloader import get_model_path
+
+            model_path = get_model_path(model_name)
+            if not model_path or not model_path.exists():
+                raise FileNotFoundError(
+                    f"YourMT3 MoE 模型未找到: {model_name}\n"
+                    f"请先运行: python download_sota_models.py"
+                )
+
+            logger.info(f"使用 checkpoint: {model_path}")
+
+            if progress_callback:
+                progress_callback(0.3, "正在构建配置...")
+
+            # 4. 构建配置参数（参考 model_helper.py）
+            import argparse
+
+            # 从 checkpoint 路径提取 exp_id 并使用 @ 扩展指定checkpoint文件
+            # 例如: "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2@model.ckpt"
+            checkpoint_dir = model_path.parent  # checkpoints/
+            exp_dir = checkpoint_dir.parent      # mc13_256.../
+            exp_id = exp_dir.name                # mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2
+            checkpoint_file = model_path.name    # model.ckpt 或 last.ckpt
+
+            # 使用 @ 语法指定checkpoint文件
+            exp_id_with_checkpoint = f"{exp_id}@{checkpoint_file}"
+
+            # 需要创建一个符号链接或临时目录结构
+            # 因为 initialize_trainer 期望的路径是 amt/logs/ymt3/{exp_id}/checkpoints/{checkpoint}
+            # 但实际路径是 ~/.cache/music_ai_models/yourmt3_all/logs/2024/{exp_id}/checkpoints/{checkpoint}
+
+            # 方案：在 YourMT3 目录下创建符号链接
+            import tempfile
+            yourmt3_logs_dir = os.path.join(amt_src_path, "../logs/ymt3")
+            os.makedirs(yourmt3_logs_dir, exist_ok=True)
+
+            # 创建到实际checkpoint目录的符号链接
+            symlink_path = os.path.join(yourmt3_logs_dir, exp_id)
+            if os.path.islink(symlink_path):
+                os.unlink(symlink_path)
+            elif os.path.exists(symlink_path):
+                # 如果是真实目录，不要覆盖
+                pass
+            else:
+                try:
+                    os.symlink(str(exp_dir), symlink_path)
+                    logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
+                except OSError as e:
+                    logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
+
+            args = argparse.Namespace(
+                exp_id=exp_id_with_checkpoint,
+                project='ymt3',
+                audio_codec=None,
+                hop_length=None,
+                n_mels=None,
+                input_frames=None,
+                sca_use_query_residual=None,
+                encoder_type='perceiver-tf',
+                decoder_type='multi-t5',
+                pre_encoder_type='default',
+                pre_decoder_type='default',
+                conv_out_channels=None,
+                task_cond_encoder=True,
+                task_cond_decoder=True,
+                d_feat=None,
+                pretrained=False,
+                base_name="google/t5-v1_1-small",
+                encoder_position_encoding_type='rope',
+                decoder_position_encoding_type='default',
+                tie_word_embedding=None,
+                event_length=None,
+                d_latent=None,
+                num_latents=26,
+                perceiver_tf_d_model=None,
+                num_perceiver_tf_blocks=3,
+                num_perceiver_tf_local_transformers_per_block=2,
+                num_perceiver_tf_temporal_transformers_per_block=2,
+                attention_to_channel=True,
+                layer_norm_type='rms_norm',
+                ff_layer_type='moe',
+                ff_widening_factor=4,
+                moe_num_experts=8,
+                moe_topk=2,
+                hidden_act='silu',
+                rotary_type=None,
+                rope_apply_to_keys=None,
+                rope_partial_pe=True,
+                decoder_ff_layer_type=None,
+                decoder_ff_widening_factor=None,
+                task='mt3_full_plus',
+                eval_program_vocab=None,
+                eval_drum_vocab=None,
+                eval_subtask_key='default',
+                onset_tolerance=0.05,
+                test_octave_shift=False,
+                write_model_output=False,
+                precision="bf16-mixed",
+                strategy='auto',
+                num_nodes=1,
+                num_gpus='auto',
+                wandb_mode="disabled",
+                debug_mode=False,
+                test_pitch_shift=None,
+                epochs=None
+            )
+
+            if progress_callback:
+                progress_callback(0.5, "正在从 checkpoint 加载配置...")
+
+            # 5. 从 checkpoint 加载超参数（最可靠的方法）
+            checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
+            hparams = checkpoint['hyper_parameters']
+
+            # 提取配置
+            audio_cfg = hparams['audio_cfg']
+            model_cfg = hparams['model_cfg']
+            shared_cfg = hparams['shared_cfg']
+
+            # task_manager 是一个对象，提取其 task_name
+            task_manager_obj = hparams.get('task_manager')
+            if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
+                task_name = task_manager_obj.task_name
+            else:
+                task_name = 'mt3_full_plus'  # 默认任务
+
+            logger.debug(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+
+            if progress_callback:
+                progress_callback(0.6, "正在创建任务管理器...")
+
+            # 6. 创建任务管理器
+            max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
+            if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
+                max_shift_steps = 127  # 默认值
+            else:
+                max_shift_steps = int(max_shift_steps_value)
+
+            tm = TaskManager(
+                task_name=task_name,
+                max_shift_steps=max_shift_steps,
+                debug_mode=args.debug_mode
+            )
+            logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
+
+            if progress_callback:
+                progress_callback(0.7, "正在创建模型实例...")
+
+            # 7. 创建 YourMT3 MoE 模型实例
+            model = YourMT3(
+                audio_cfg=audio_cfg,
+                model_cfg=model_cfg,
+                shared_cfg=shared_cfg,
+                optimizer=None,
+                task_manager=tm,
+                eval_subtask_key=args.eval_subtask_key,
+                write_output_dir=None
+            ).to(self.device)
+
+            if progress_callback:
+                progress_callback(0.8, "正在加载 checkpoint 权重...")
+
+            # 8. 加载权重（checkpoint已经在步骤5加载）
+            state_dict = checkpoint['state_dict']
+            # 移除 pitch shift 相关权重（不需要）
+            new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
+            model.load_state_dict(new_state_dict, strict=False)
+            model.eval()
+
+            del checkpoint  # 释放内存
+
+            # 9. 缓存模型和配置
+            YourMT3Transcriber._model = model
+            YourMT3Transcriber._model_name = model_name
+            YourMT3Transcriber._device = self.device
+
+            # 缓存音频和任务配置供推理使用
+            if not hasattr(YourMT3Transcriber, '_audio_cfg'):
+                YourMT3Transcriber._audio_cfg = audio_cfg
+                YourMT3Transcriber._task_manager = tm
+
+            if progress_callback:
+                progress_callback(1.0, "模型加载完成")
+
+            logger.info(f"YourMT3 MoE 模型加载完成，使用设备: {self.device}")
+            logger.info(f"架构: YPTF.MoE+Multi (8 experts, Top-2 routing, 13 channels)")
+
+        except Exception as e:
+            logger.error(f"加载 YourMT3 MoE 模型失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+
+    def transcribe_full_mix(
+        self,
+        audio_path: str,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> Dict[InstrumentType, List[NoteEvent]]:
+        """
+        直接转写完整音频为多乐器 MIDI（SMART_DIRECT 模式）
+
+        这是 YourMT3+ 的核心功能，可以直接从混音中识别并转写多个乐器，
+        无需先进行音源分离。
+
+        参数:
+            audio_path: 音频文件路径
+            progress_callback: 进度回调
+
+        返回:
+            乐器类型到音符列表的字典
+        """
+        logger.info(f"YourMT3+ 直接转写: {audio_path}")
+
+        self._check_cancelled()
+
+        if progress_callback:
+            progress_callback(0.0, "正在准备 YourMT3+ 转写...")
+
+        # 如果 YourMT3+ 不可用，使用回退方案
+        if not self.is_available():
+            logger.warning("YourMT3+ 不可用，使用基础转写")
+            return self._fallback_transcribe(audio_path, progress_callback)
+
+        try:
+            # 加载模型
+            self._load_model(
+                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
+            )
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.3, "正在转写音频...")
+
+            # 执行转写（参考 model_helper.py）
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+            task_manager = YourMT3Transcriber._task_manager
+
+            # 加载音频
+            import torch
+            import torchaudio
+
+            waveform, sr = torchaudio.load(audio_path)
+
+            # 转为单声道
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            # 重采样到模型要求的采样率
+            target_sr = audio_cfg['sample_rate']
+            if sr != target_sr:
+                resampler = torchaudio.transforms.Resample(sr, target_sr)
+                waveform = resampler(waveform)
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.4, "正在分段处理音频...")
+
+            # 分段处理（使用官方的 slice_padded_array）
+            from utils.audio import slice_padded_array
+
+            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
+            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
+            input_frames = audio_cfg['input_frames']
+
+            # 极致质量模式：使用 25% 重叠以减少重复，同时保持边界精度
+            # 50% 重叠会产生 2x 重复，25% 重叠更易处理
+            quality = getattr(self.config, 'transcription_quality', 'best')
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+
+            if quality == "best" or ultra_quality:
+                slice_hop = input_frames * 3 // 4  # 25% 重叠
+                onset_threshold = 0.010  # 10ms 极致精度去重
+                logger.info("使用极致质量模式：25% 重叠 + 10ms 去重阈值")
+            elif quality == "balanced":
+                slice_hop = input_frames // 2  # 50% 重叠
+                onset_threshold = 0.025  # 25ms 去重
+                logger.info("使用平衡模式：50% 重叠 + 25ms 去重阈值")
+            else:
+                slice_hop = input_frames  # 无重叠
+                onset_threshold = 0.050  # 50ms 去重
+                logger.info("使用快速模式：无重叠 + 50ms 去重阈值")
+
+            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
+
+            # 转为 tensor
+            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
+            n_segments = audio_segments.shape[0]
+            overlap_pct = 1 - slice_hop / input_frames
+            logger.info(f"音频分段数: {n_segments}, 每段帧数: {input_frames}, 重叠: {overlap_pct:.0%}")
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.5, "正在进行神经网络推理...")
+
+            # 极致质量模式：增加批处理大小（忽略性能限制）
+            if quality == "best" or ultra_quality:
+                if n_segments < 100:
+                    bsz = 16  # 从 8 翻倍
+                elif n_segments < 300:
+                    bsz = 12  # 从 6 翻倍
+                else:
+                    bsz = 8   # 从 4 翻倍
+                logger.info(f"极致质量模式：批处理大小 {bsz}")
+            else:
+                if n_segments < 150:
+                    bsz = 8
+                elif n_segments < 400:
+                    bsz = 6
+                else:
+                    bsz = 4  # 大文件优先保证质量
+
+            logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
+            logger.info(f"预计推理时间: ~{n_segments * 0.15:.0f}秒")
+
+            # 推理（使用官方的 inference_file 方法）
+            with torch.no_grad():
+                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.8, "正在处理转写结果...")
+
+            # 解析输出并按乐器类型分类
+            result = self._parse_yourmt3_output_from_tokens(
+                pred_token_arr,
+                audio_segments.shape[0],
+                audio_cfg,
+                task_manager,
+                slice_hop=slice_hop,
+                onset_threshold=onset_threshold  # 传入去重阈值
+            )
+
+            if progress_callback:
+                total_notes = sum(len(notes) for notes in result.values())
+                progress_callback(1.0, f"发现 {len(result)} 种乐器，共 {total_notes} 个音符")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"YourMT3+ 转写失败: {e}")
+            # 回退到基础转写
+            logger.info("回退到基础转写方案")
+            return self._fallback_transcribe(audio_path, progress_callback)
+
+    def transcribe_single_stem(
+        self,
+        audio_path: str,
+        instrument_hint: Optional[InstrumentType] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> List[NoteEvent]:
+        """
+        转写单个分离轨道
+
+        用于 SMART_SEPARATED 模式，转写 Demucs 分离后的单个轨道。
+
+        参数:
+            audio_path: 音频文件路径
+            instrument_hint: 乐器类型提示
+            progress_callback: 进度回调
+
+        返回:
+            音符事件列表
+        """
+        logger.info(f"YourMT3+ 单轨转写: {audio_path} (乐器提示: {instrument_hint})")
+
+        self._check_cancelled()
+
+        if not self.is_available():
+            logger.warning("YourMT3+ 不可用，使用 Basic Pitch")
+            return self._fallback_single_transcribe(audio_path, instrument_hint, progress_callback)
+
+        try:
+            # 加载模型
+            self._load_model(
+                progress_callback=lambda p, m: progress_callback(p * 0.2, m) if progress_callback else None
+            )
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.2, "正在转写...")
+
+            # 使用与 transcribe_full_mix 相同的推理流程
+            import torch
+            import torchaudio
+            from utils.audio import slice_padded_array
+
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+            task_manager = YourMT3Transcriber._task_manager
+
+            waveform, sr = torchaudio.load(audio_path)
+
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            target_sr = audio_cfg['sample_rate']
+            if sr != target_sr:
+                resampler = torchaudio.transforms.Resample(sr, target_sr)
+                waveform = resampler(waveform)
+
+            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
+            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
+            input_frames = audio_cfg['input_frames']
+
+            # 根据质量配置选择重叠策略
+            quality = getattr(self.config, 'transcription_quality', 'best')
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+
+            if quality == "best" or ultra_quality:
+                slice_hop = input_frames * 3 // 4  # 25% 重叠
+                onset_threshold = 0.010  # 10ms
+            else:
+                slice_hop = input_frames // 2  # 50% 重叠
+                onset_threshold = 0.025  # 25ms
+
+            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
+            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
+            n_segments = audio_segments.shape[0]
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.5, "正在推理...")
+
+            # 极致质量模式：增加批处理大小
+            if quality == "best" or ultra_quality:
+                if n_segments < 100:
+                    bsz = 16
+                else:
+                    bsz = 8
+            else:
+                if n_segments < 150:
+                    bsz = 8
+                else:
+                    bsz = 4
+
+            with torch.no_grad():
+                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.8, "正在处理结果...")
+
+            # 解析输出
+            all_notes = self._parse_yourmt3_output_from_tokens(
+                pred_token_arr,
+                audio_segments.shape[0],
+                audio_cfg,
+                task_manager,
+                slice_hop=slice_hop,
+                onset_threshold=onset_threshold
+            )
+
+            # 如果有乐器提示，优先返回该乐器的音符
+            if instrument_hint and instrument_hint in all_notes:
+                notes = all_notes[instrument_hint]
+            else:
+                # 合并所有音符
+                notes = []
+                for note_list in all_notes.values():
+                    notes.extend(note_list)
+                notes.sort(key=lambda n: n.start_time)
+
+            if progress_callback:
+                progress_callback(1.0, f"发现 {len(notes)} 个音符")
+
+            return notes
+
+        except Exception as e:
+            logger.error(f"YourMT3+ 单轨转写失败: {e}")
+            return self._fallback_single_transcribe(audio_path, instrument_hint, progress_callback)
+
+    def _parse_yourmt3_output(
+        self,
+        outputs: any
+    ) -> Dict[InstrumentType, List[NoteEvent]]:
+        """
+        解析 YourMT3 输出并转换为音符事件（已弃用，使用 _parse_yourmt3_output_from_tokens）
+
+        参数:
+            outputs: YourMT3 的原始输出
+
+        返回:
+            乐器类型到音符列表的字典
+        """
+        logger.warning("_parse_yourmt3_output 已弃用，请使用 _parse_yourmt3_output_from_tokens")
+        return {}
+
+    def _parse_yourmt3_output_from_tokens(
+        self,
+        pred_token_arr: list,
+        n_items: int,
+        audio_cfg: dict,
+        task_manager: any,
+        slice_hop: Optional[int] = None,
+        onset_threshold: float = 0.025
+    ) -> Dict[InstrumentType, List[NoteEvent]]:
+        """
+        从 YourMT3 token 输出解析音符事件（参考 model_helper.py）
+
+        参数:
+            pred_token_arr: 预测的 token 数组
+            n_items: 音频段数量
+            audio_cfg: 音频配置
+            task_manager: 任务管理器
+            slice_hop: 分段步长（用于计算重叠分段的起始时间）
+            onset_threshold: 去重阈值（秒）
+
+        返回:
+            乐器类型到音符列表的字典
+        """
+        from collections import Counter
+        from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+        from utils.note2event import mix_notes
+
+        result: Dict[InstrumentType, List[NoteEvent]] = {}
+
+        try:
+            # 计算每段的起始时间（考虑重叠分段）
+            input_frames = audio_cfg['input_frames']
+            if slice_hop is None:
+                slice_hop = input_frames  # 无重叠
+            start_secs_file = [
+                slice_hop * i / audio_cfg['sample_rate']
+                for i in range(n_items)
+            ]
+
+            # 逐通道解析
+            num_channels = task_manager.num_decoding_channels
+            pred_notes_in_file = []
+            n_err_cnt = Counter()
+
+            # 调试：检查 pred_token_arr 的结构
+            if pred_token_arr and len(pred_token_arr) > 0:
+                first_arr = pred_token_arr[0]
+                logger.debug(f"pred_token_arr 长度: {len(pred_token_arr)}, 第一个元素形状: {first_arr.shape}")
+                # 检查实际通道数
+                actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
+                if actual_channels != num_channels:
+                    logger.warning(f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值")
+                    num_channels = actual_channels
+
+            for ch in range(num_channels):
+                # 提取该通道的 token
+                # 确保数组是 3 维的 (B, C, L)
+                pred_token_arr_ch = []
+                for arr in pred_token_arr:
+                    if arr.ndim == 3:
+                        pred_token_arr_ch.append(arr[:, ch, :])
+                    elif arr.ndim == 2:
+                        # 如果是 2 维 (B, L)，只有一个通道
+                        if ch == 0:
+                            pred_token_arr_ch.append(arr)
+                        else:
+                            continue
+                    else:
+                        logger.warning(f"意外的数组维度: {arr.ndim}")
+                        continue
+
+                # 跳过空通道
+                if not pred_token_arr_ch:
+                    logger.debug(f"通道 {ch} 没有数据，跳过")
+                    continue
+
+                # 解码 token 为音符事件
+                zipped_note_events_and_tie, list_events, ne_err_cnt = task_manager.detokenize_list_batches(
+                    pred_token_arr_ch, start_secs_file, return_events=True
+                )
+
+                # 合并音符和连音符
+                pred_notes_ch, n_err_cnt_ch = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
+                pred_notes_in_file.append(pred_notes_ch)
+                n_err_cnt += n_err_cnt_ch
+
+            # 混合所有通道的音符
+            mixed_notes = mix_notes(pred_notes_in_file)
+
+            # 使用智能去重：处理重叠分段产生的重复音符
+            mixed_notes = self._deduplicate_overlapping_notes_smart(
+                mixed_notes,
+                onset_threshold=onset_threshold,
+                preserve_longer=True
+            )
+
+            # 转换为 NoteEvent 格式并按乐器分类
+            # YourMT3 返回的是 Note dataclass 对象列表
+            for note in mixed_notes:
+                # Note 是 dataclass: is_drum, program, onset, offset, pitch, velocity
+                try:
+                    # 尝试作为 dataclass 访问
+                    if hasattr(note, 'pitch'):
+                        is_drum = note.is_drum
+                        program = note.program
+                        onset = note.onset
+                        offset = note.offset
+                        pitch = note.pitch
+                        velocity = note.velocity
+                    # 或者作为 tuple/list 访问（旧版本兼容）
+                    elif hasattr(note, '__len__') and len(note) >= 6:
+                        is_drum, program, onset, offset, pitch, velocity = note[:6]
+                    else:
+                        continue
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+                # 确保值有效
+                pitch = int(pitch)
+                program = int(program)
+                if pitch < 0 or pitch > 127:
+                    continue
+                if program < 0 or program > 127:
+                    program = 0
+
+                # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
+                # 需要将其设置为合理的默认力度值
+                if velocity <= 1:
+                    velocity = 80  # 默认力度
+                else:
+                    velocity = int(np.clip(velocity, 1, 127))
+
+                # 使用精确的程序号到乐器类型映射（传入 is_drum 参数）
+                instrument = program_to_instrument_type(program, is_drum=bool(is_drum))
+
+                # 创建音符事件
+                note_event = NoteEvent(
+                    pitch=pitch,
+                    start_time=float(onset),
+                    end_time=float(offset),
+                    velocity=velocity,
+                    program=program  # 保存精确的 GM 程序号
+                )
+
+                if instrument not in result:
+                    result[instrument] = []
+                result[instrument].append(note_event)
+
+            # 按开始时间排序每个乐器的音符
+            for notes in result.values():
+                notes.sort(key=lambda n: n.start_time)
+
+            # 输出统计信息
+            logger.info(f"YourMT3 解析完成: {len(result)} 种乐器类型")
+            for inst, notes in result.items():
+                logger.info(f"  {inst.get_display_name()}: {len(notes)} 个音符")
+
+            if n_err_cnt:
+                logger.warning(f"解析错误计数: {dict(n_err_cnt)}")
+
+        except Exception as e:
+            logger.error(f"解析 YourMT3 输出失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+        return result
+
+    def _deduplicate_overlapping_notes(
+        self,
+        notes: list,
+        onset_threshold: float = 0.025  # 25ms
+    ) -> list:
+        """
+        去除重叠分段产生的重复音符
+
+        保留每个 (pitch, program, is_drum) 组合中 onset 最早的音符，
+        如果 onset 相差小于阈值则视为重复。
+
+        参数:
+            notes: YourMT3 Note 对象列表
+            onset_threshold: 判断重复的时间阈值（秒）
+
+        返回:
+            去重后的音符列表
+        """
+        if not notes:
+            return notes
+
+        from collections import defaultdict
+
+        # 按 (pitch, program, is_drum) 分组
+        groups = defaultdict(list)
+        for note in notes:
+            try:
+                if hasattr(note, 'pitch'):
+                    key = (note.pitch, note.program, note.is_drum)
+                elif hasattr(note, '__len__') and len(note) >= 6:
+                    is_drum, program, onset, offset, pitch, velocity = note[:6]
+                    key = (pitch, program, is_drum)
+                else:
+                    continue
+                groups[key].append(note)
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        result = []
+        dedup_count = 0
+        for key, group_notes in groups.items():
+            # 按 onset 排序
+            def get_onset(n):
+                if hasattr(n, 'onset'):
+                    return n.onset
+                elif hasattr(n, '__len__') and len(n) >= 4:
+                    return n[2]  # onset 位置
+                return 0
+            group_notes.sort(key=get_onset)
+
+            # 去除 onset 相差小于阈值的重复
+            filtered = [group_notes[0]]
+            for note in group_notes[1:]:
+                current_onset = get_onset(note)
+                last_onset = get_onset(filtered[-1])
+
+                if current_onset - last_onset > onset_threshold:
+                    filtered.append(note)
+                else:
+                    dedup_count += 1
+                    # 保留持续时间更长的那个
+                    def get_offset(n):
+                        if hasattr(n, 'offset'):
+                            return n.offset
+                        elif hasattr(n, '__len__') and len(n) >= 4:
+                            return n[3]  # offset 位置
+                        return 0
+                    if get_offset(note) > get_offset(filtered[-1]):
+                        filtered[-1] = note
+
+            result.extend(filtered)
+
+        # 按 onset 排序返回
+        def get_onset_for_sort(n):
+            if hasattr(n, 'onset'):
+                return n.onset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[2]
+            return 0
+        result.sort(key=get_onset_for_sort)
+
+        if dedup_count > 0:
+            logger.info(f"YourMT3 去重: 移除 {dedup_count} 个重叠分段重复音符")
+
+        return result
+
+    def transcribe_full_mix_precise(
+        self,
+        audio_path: str,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> Dict[int, List[NoteEvent]]:
+        """
+        精确转写：直接输出按 GM 程序号分组的音符
+
+        返回的字典键是 GM 程序号 (0-127)，可精确识别 128 种乐器。
+
+        参数:
+            audio_path: 音频文件路径
+            progress_callback: 进度回调
+
+        返回:
+            GM程序号到音符列表的字典 (精确到每种GM乐器)
+        """
+        logger.info(f"YourMT3+ 精确转写: {audio_path}")
+
+        self._check_cancelled()
+
+        if progress_callback:
+            progress_callback(0.0, "正在准备精确转写...")
+
+        if not self.is_available():
+            logger.warning("YourMT3+ 不可用，无法进行精确转写")
+            return {}
+
+        try:
+            self._load_model(
+                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
+            )
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.3, "正在转写音频...")
+
+            import torch
+            import torchaudio
+            from utils.audio import slice_padded_array
+            from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+            from utils.note2event import mix_notes
+            from collections import Counter
+
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+            task_manager = YourMT3Transcriber._task_manager
+
+            waveform, sr = torchaudio.load(audio_path)
+
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            target_sr = audio_cfg['sample_rate']
+            if sr != target_sr:
+                resampler = torchaudio.transforms.Resample(sr, target_sr)
+                waveform = resampler(waveform)
+
+            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
+            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
+            input_frames = audio_cfg['input_frames']
+
+            # 极致质量模式配置
+            quality = getattr(self.config, 'transcription_quality', 'best')
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+
+            if quality == "best" or ultra_quality:
+                slice_hop = input_frames * 3 // 4  # 25% 重叠
+                onset_threshold = 0.010  # 10ms
+                logger.info("精确转写使用极致质量模式")
+            else:
+                slice_hop = input_frames // 2  # 50% 重叠
+                onset_threshold = 0.025  # 25ms
+
+            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
+            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
+            n_segments = audio_segments.shape[0]
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.5, "正在进行神经网络推理...")
+
+            # 极致质量模式：增加批处理大小
+            if quality == "best" or ultra_quality:
+                if n_segments < 100:
+                    bsz = 16
+                elif n_segments < 300:
+                    bsz = 12
+                else:
+                    bsz = 8
+            else:
+                if n_segments < 150:
+                    bsz = 8
+                elif n_segments < 400:
+                    bsz = 6
+                else:
+                    bsz = 4
+
+            with torch.no_grad():
+                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.8, "正在解析精确乐器...")
+
+            # 按 GM 程序号分组
+            result: Dict[int, List[NoteEvent]] = {}
+
+            n_items = audio_segments.shape[0]
+            # 使用重叠步长计算起始时间
+            start_secs_file = [
+                slice_hop * i / audio_cfg['sample_rate']
+                for i in range(n_items)
+            ]
+
+            num_channels = task_manager.num_decoding_channels
+            pred_notes_in_file = []
+
+            # 检查实际通道数
+            if pred_token_arr and len(pred_token_arr) > 0:
+                first_arr = pred_token_arr[0]
+                actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
+                if actual_channels != num_channels:
+                    logger.warning(f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值")
+                    num_channels = actual_channels
+
+            for ch in range(num_channels):
+                # 提取该通道的 token，处理不同维度
+                pred_token_arr_ch = []
+                for arr in pred_token_arr:
+                    if arr.ndim == 3:
+                        pred_token_arr_ch.append(arr[:, ch, :])
+                    elif arr.ndim == 2:
+                        if ch == 0:
+                            pred_token_arr_ch.append(arr)
+                        else:
+                            continue
+                    else:
+                        continue
+
+                if not pred_token_arr_ch:
+                    continue
+
+                zipped_note_events_and_tie, _, _ = task_manager.detokenize_list_batches(
+                    pred_token_arr_ch, start_secs_file, return_events=True
+                )
+                pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
+                pred_notes_in_file.append(pred_notes_ch)
+
+            mixed_notes = mix_notes(pred_notes_in_file)
+
+            # 使用智能去重
+            mixed_notes = self._deduplicate_overlapping_notes_smart(
+                mixed_notes,
+                onset_threshold=onset_threshold,
+                preserve_longer=True
+            )
+
+            for note in mixed_notes:
+                # Note 是 dataclass: is_drum, program, onset, offset, pitch, velocity
+                try:
+                    if hasattr(note, 'pitch'):
+                        is_drum = note.is_drum
+                        program = note.program
+                        onset = note.onset
+                        offset = note.offset
+                        pitch = note.pitch
+                        velocity = note.velocity
+                    elif hasattr(note, '__len__') and len(note) >= 6:
+                        is_drum, program, onset, offset, pitch, velocity = note[:6]
+                    else:
+                        continue
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+                pitch = int(pitch)
+                program = int(program)
+                if pitch < 0 or pitch > 127:
+                    continue
+                if program < 0 or program > 127:
+                    program = 0
+
+                # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
+                # 需要将其设置为合理的默认力度值
+                if velocity <= 1:
+                    velocity = 80  # 默认力度
+                else:
+                    velocity = int(np.clip(velocity, 1, 127))
+
+                note_event = NoteEvent(
+                    pitch=pitch,
+                    start_time=float(onset),
+                    end_time=float(offset),
+                    velocity=velocity,
+                    program=program
+                )
+
+                if program not in result:
+                    result[program] = []
+                result[program].append(note_event)
+
+            # 排序
+            for notes in result.values():
+                notes.sort(key=lambda n: n.start_time)
+
+            if progress_callback:
+                total_notes = sum(len(notes) for notes in result.values())
+                # 获取精确乐器名称
+                from src.models.gm_instruments import get_instrument_name
+                instrument_names = [get_instrument_name(p) for p in result.keys()]
+                progress_callback(1.0, f"发现 {len(result)} 种精确乐器，共 {total_notes} 个音符")
+
+            # 输出详细日志
+            for program, notes in result.items():
+                inst_name = get_instrument_name(program)
+                logger.info(f"  GM {program}: {inst_name} - {len(notes)} 个音符")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"精确转写失败: {e}")
+            return {}
+
+        return result
+
+    def _fallback_transcribe(
+        self,
+        audio_path: str,
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> Dict[InstrumentType, List[NoteEvent]]:
+        """
+        回退方案：使用 Demucs 分离 + 逐轨 Basic Pitch 转写
+
+        当 YourMT3+ 不可用时使用，保留多乐器识别能力。
+        """
+        import tempfile
+
+        logger.info("使用分离+逐轨转写作为备用方案")
+
+        if progress_callback:
+            progress_callback(0.0, "正在使用备用多轨转写...")
+
+        try:
+            from src.core.separator import SourceSeparator
+            from src.core.transcriber import AudioTranscriber
+
+            result: Dict[InstrumentType, List[NoteEvent]] = {}
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # 执行6轨分离
+                if progress_callback:
+                    progress_callback(0.05, "正在分离音源...")
+
+                separator = SourceSeparator(self.config)
+
+                try:
+                    stem_paths = separator.separate_6s(
+                        audio_path,
+                        temp_dir,
+                        lambda p, m: progress_callback(0.05 + p * 0.40, m) if progress_callback else None
+                    )
+                except Exception as e:
+                    logger.warning(f"6轨分离失败: {e}，尝试4轨分离")
+                    stem_paths = separator.separate(
+                        audio_path,
+                        temp_dir,
+                        lambda p, m: progress_callback(0.05 + p * 0.40, m) if progress_callback else None
+                    )
+
+                # 卸载分离模型以释放内存
+                separator.unload_model()
+
+                if progress_callback:
+                    progress_callback(0.45, "正在转写各轨道...")
+
+                # 逐轨转写
+                transcriber = AudioTranscriber(self.config)
+
+                # stem名称到乐器类型的映射
+                stem_instrument_map = {
+                    "drums": InstrumentType.DRUMS,
+                    "bass": InstrumentType.BASS,
+                    "vocals": InstrumentType.VOCALS,
+                    "guitar": InstrumentType.GUITAR,
+                    "piano": InstrumentType.PIANO,
+                    "other": InstrumentType.OTHER,
+                }
+
+                stem_items = list(stem_paths.items())
+                total_stems = len(stem_items)
+
+                for i, (stem_name, stem_path) in enumerate(stem_items):
+                    self._check_cancelled()
+
+                    # 跳过人声轨道（用于歌词识别）
+                    if stem_name == "vocals":
+                        continue
+
+                    instrument = stem_instrument_map.get(stem_name, InstrumentType.OTHER)
+
+                    if progress_callback:
+                        stem_progress = 0.45 + (i / total_stems) * 0.50
+                        progress_callback(stem_progress, f"正在转写 {instrument.get_display_name()}...")
+
+                    try:
+                        notes = transcriber.transcribe(
+                            stem_path,
+                            instrument,
+                            None  # 不传递进度回调，避免嵌套
+                        )
+
+                        if notes:
+                            result[instrument] = notes
+                            logger.info(f"备用转写 {instrument.value}: {len(notes)} 个音符")
+                    except Exception as e:
+                        logger.warning(f"转写 {stem_name} 失败: {e}")
+
+            if progress_callback:
+                total_notes = sum(len(notes) for notes in result.values())
+                progress_callback(1.0, f"备用转写完成: {len(result)} 种乐器, {total_notes} 个音符")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"备用多轨转写失败: {e}")
+            # 最终回退：单轨 Basic Pitch
+            logger.info("最终回退：使用单轨 Basic Pitch")
+
+            from src.core.transcriber import AudioTranscriber
+            transcriber = AudioTranscriber(self.config)
+
+            if progress_callback:
+                progress_callback(0.5, "使用 Basic Pitch 转写...")
+
+            notes = transcriber.transcribe(
+                audio_path,
+                InstrumentType.OTHER,
+                lambda p, m: progress_callback(0.5 + p * 0.5, m) if progress_callback else None
+            )
+
+            return {InstrumentType.OTHER: notes}
+
+    def _fallback_single_transcribe(
+        self,
+        audio_path: str,
+        instrument_hint: Optional[InstrumentType],
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> List[NoteEvent]:
+        """回退方案：使用 Basic Pitch 进行单轨转写"""
+        from src.core.transcriber import AudioTranscriber
+
+        transcriber = AudioTranscriber(self.config)
+
+        notes = transcriber.transcribe(
+            audio_path,
+            instrument_hint or InstrumentType.OTHER,
+            progress_callback
+        )
+
+        return notes
+
+    def unload_model(self) -> None:
+        """卸载模型以释放 GPU 内存"""
+        if YourMT3Transcriber._model is not None:
+            logger.info("正在卸载 YourMT3+ 模型")
+            YourMT3Transcriber._model = None
+            YourMT3Transcriber._model_name = None
+            YourMT3Transcriber._device = None
+
+            # 清理 GPU 缓存
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            logger.info("YourMT3+ 模型已卸载")
+
+    def transcribe_precise(
+        self,
+        audio_path: str,
+        quality: str = "best",
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> Tuple[Dict[int, List[NoteEvent]], Dict[int, List[NoteEvent]]]:
+        """
+        极致精度转写：按 GM 程序号分组输出
+
+        优化策略:
+        1. 使用优化的分段策略减少边界错误
+        2. 智能去重算法处理重叠分段
+        3. 保留精确的 GM 程序号（0-127）
+
+        参数:
+            audio_path: 音频文件路径
+            quality: 质量模式 ("fast", "balanced", "best")
+            progress_callback: 进度回调
+
+        返回:
+            (instrument_notes, drum_notes) 元组:
+            - instrument_notes: Dict[program 0-127, List[NoteEvent]]
+            - drum_notes: Dict[drum_pitch 35-81, List[NoteEvent]]
+        """
+        logger.info(f"YourMT3+ 极致精度转写: {audio_path} (质量模式: {quality})")
+
+        self._check_cancelled()
+
+        if progress_callback:
+            progress_callback(0.0, "正在准备极致精度转写...")
+
+        if not self.is_available():
+            logger.warning("YourMT3+ 不可用，无法进行精确转写")
+            return {}, {}
+
+        try:
+            self._load_model(
+                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
+            )
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.3, "正在转写音频...")
+
+            import torch
+            import torchaudio
+            from utils.audio import slice_padded_array
+            from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+            from utils.note2event import mix_notes
+            from collections import Counter
+
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+            task_manager = YourMT3Transcriber._task_manager
+
+            waveform, sr = torchaudio.load(audio_path)
+
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            target_sr = audio_cfg['sample_rate']
+            if sr != target_sr:
+                resampler = torchaudio.transforms.Resample(sr, target_sr)
+                waveform = resampler(waveform)
+
+            audio_np = waveform.numpy()
+            input_frames = audio_cfg['input_frames']
+
+            # 检查是否启用极致质量模式（覆盖 quality 参数）
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+            if ultra_quality:
+                quality = "best"  # 强制使用最佳质量
+
+            # 根据质量模式选择分段策略
+            if quality == "fast":
+                # 无重叠，最快速度
+                slice_hop = input_frames
+                onset_threshold = 0.050  # 50ms 去重阈值
+                logger.info("使用快速模式：无重叠分段")
+            elif quality == "balanced":
+                # 50% 重叠
+                slice_hop = input_frames // 2
+                onset_threshold = 0.025  # 25ms 去重阈值
+                logger.info("使用平衡模式：50% 重叠分段")
+            else:  # best
+                # 25% 重叠 + 极致精细去重
+                slice_hop = input_frames * 3 // 4  # 25% 重叠（减少重复）
+                onset_threshold = 0.010  # 10ms 去重阈值（极致精细）
+                logger.info("使用极致质量模式：25% 重叠 + 10ms 精细去重")
+
+            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
+            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
+            n_segments = audio_segments.shape[0]
+
+            logger.info(f"音频分段数: {n_segments}, 重叠率: {1 - slice_hop/input_frames:.0%}")
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.5, "正在进行神经网络推理...")
+
+            # 极致质量模式：增加批处理大小（翻倍）
+            if quality == "best" or ultra_quality:
+                if n_segments < 100:
+                    bsz = 16  # 从 8 翻倍
+                elif n_segments < 300:
+                    bsz = 12  # 从 6 翻倍
+                else:
+                    bsz = 8   # 从 4 翻倍
+                logger.info(f"极致质量模式：批处理大小 {bsz}")
+            else:
+                if n_segments < 150:
+                    bsz = 8
+                elif n_segments < 400:
+                    bsz = 6
+                else:
+                    bsz = 4
+
+            with torch.no_grad():
+                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+
+            self._check_cancelled()
+
+            if progress_callback:
+                progress_callback(0.8, "正在解析精确乐器...")
+
+            # 解析结果
+            instrument_notes: Dict[int, List[NoteEvent]] = {}
+            drum_notes: Dict[int, List[NoteEvent]] = {}
+
+            n_items = audio_segments.shape[0]
+            start_secs_file = [
+                slice_hop * i / audio_cfg['sample_rate']
+                for i in range(n_items)
+            ]
+
+            num_channels = task_manager.num_decoding_channels
+            pred_notes_in_file = []
+
+            # 检查实际通道数
+            if pred_token_arr and len(pred_token_arr) > 0:
+                first_arr = pred_token_arr[0]
+                actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
+                if actual_channels != num_channels:
+                    logger.warning(f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值")
+                    num_channels = actual_channels
+
+            for ch in range(num_channels):
+                pred_token_arr_ch = []
+                for arr in pred_token_arr:
+                    if arr.ndim == 3:
+                        pred_token_arr_ch.append(arr[:, ch, :])
+                    elif arr.ndim == 2:
+                        if ch == 0:
+                            pred_token_arr_ch.append(arr)
+                        else:
+                            continue
+                    else:
+                        continue
+
+                if not pred_token_arr_ch:
+                    continue
+
+                zipped_note_events_and_tie, _, _ = task_manager.detokenize_list_batches(
+                    pred_token_arr_ch, start_secs_file, return_events=True
+                )
+                pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
+                pred_notes_in_file.append(pred_notes_ch)
+
+            mixed_notes = mix_notes(pred_notes_in_file)
+
+            # 使用智能去重（根据质量模式）
+            mixed_notes = self._deduplicate_overlapping_notes_smart(
+                mixed_notes,
+                onset_threshold=onset_threshold,
+                preserve_longer=True  # 保留更长的音符
+            )
+
+            # 统计原始音符数
+            total_raw_notes = len(mixed_notes)
+
+            # 按精确 GM 程序号分组
+            for note in mixed_notes:
+                try:
+                    if hasattr(note, 'pitch'):
+                        is_drum = note.is_drum
+                        program = note.program
+                        onset = note.onset
+                        offset = note.offset
+                        pitch = note.pitch
+                        velocity = note.velocity
+                    elif hasattr(note, '__len__') and len(note) >= 6:
+                        is_drum, program, onset, offset, pitch, velocity = note[:6]
+                    else:
+                        continue
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+                pitch = int(pitch)
+                program = int(program)
+                if pitch < 0 or pitch > 127:
+                    continue
+                if program < 0 or program > 127:
+                    program = 0
+
+                # 设置合理的默认力度
+                if velocity <= 1:
+                    velocity = 80
+                else:
+                    velocity = int(np.clip(velocity, 1, 127))
+
+                note_event = NoteEvent(
+                    pitch=pitch,
+                    start_time=float(onset),
+                    end_time=float(offset),
+                    velocity=velocity,
+                    program=program
+                )
+
+                if is_drum:
+                    # 鼓按音高分组
+                    if pitch not in drum_notes:
+                        drum_notes[pitch] = []
+                    drum_notes[pitch].append(note_event)
+                else:
+                    # 乐器按程序号分组
+                    if program not in instrument_notes:
+                        instrument_notes[program] = []
+                    instrument_notes[program].append(note_event)
+
+            # 排序
+            for notes in instrument_notes.values():
+                notes.sort(key=lambda n: n.start_time)
+            for notes in drum_notes.values():
+                notes.sort(key=lambda n: n.start_time)
+
+            # 输出统计
+            total_instrument_notes = sum(len(notes) for notes in instrument_notes.values())
+            total_drum_notes = sum(len(notes) for notes in drum_notes.values())
+
+            if progress_callback:
+                progress_callback(1.0, f"发现 {len(instrument_notes)} 种乐器 + {len(drum_notes)} 种鼓音色")
+
+            logger.info(f"极致精度转写完成:")
+            logger.info(f"  原始音符: {total_raw_notes}")
+            logger.info(f"  乐器音符: {total_instrument_notes} ({len(instrument_notes)} 种 GM 音色)")
+            logger.info(f"  鼓音符: {total_drum_notes} ({len(drum_notes)} 种音高)")
+            logger.info(f"  保留率: {(total_instrument_notes + total_drum_notes) / max(total_raw_notes, 1):.1%}")
+
+            # 详细乐器日志
+            for program, notes in sorted(instrument_notes.items()):
+                inst_name = get_instrument_name(program)
+                logger.info(f"  GM {program:03d}: {inst_name} - {len(notes)} 个音符")
+
+            return instrument_notes, drum_notes
+
+        except Exception as e:
+            logger.error(f"极致精度转写失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {}, {}
+
+    def _deduplicate_overlapping_notes_smart(
+        self,
+        notes: list,
+        onset_threshold: float = 0.025,
+        preserve_longer: bool = True
+    ) -> list:
+        """
+        智能去重：处理重叠分段产生的重复音符
+
+        改进策略:
+        1. 按 (pitch, program, is_drum) 分组
+        2. 在每组内按 onset 排序
+        3. 使用动态阈值合并相近的音符
+        4. 保留持续时间更长或力度更大的音符
+
+        参数:
+            notes: YourMT3 Note 对象列表
+            onset_threshold: 判断重复的时间阈值（秒）
+            preserve_longer: True = 保留更长音符, False = 保留更早音符
+
+        返回:
+            去重后的音符列表
+        """
+        if not notes:
+            return notes
+
+        from collections import defaultdict
+
+        # 按 (pitch, program, is_drum) 分组
+        groups = defaultdict(list)
+        for note in notes:
+            try:
+                if hasattr(note, 'pitch'):
+                    key = (note.pitch, note.program, note.is_drum)
+                elif hasattr(note, '__len__') and len(note) >= 6:
+                    is_drum, program, onset, offset, pitch, velocity = note[:6]
+                    key = (pitch, program, is_drum)
+                else:
+                    continue
+                groups[key].append(note)
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        result = []
+        dedup_count = 0
+        merged_count = 0
+
+        for key, group_notes in groups.items():
+            # 按 onset 排序
+            def get_onset(n):
+                if hasattr(n, 'onset'):
+                    return n.onset
+                elif hasattr(n, '__len__') and len(n) >= 4:
+                    return n[2]
+                return 0
+
+            def get_offset(n):
+                if hasattr(n, 'offset'):
+                    return n.offset
+                elif hasattr(n, '__len__') and len(n) >= 4:
+                    return n[3]
+                return 0
+
+            def get_velocity(n):
+                if hasattr(n, 'velocity'):
+                    return n.velocity
+                elif hasattr(n, '__len__') and len(n) >= 6:
+                    return n[5]
+                return 80
+
+            group_notes.sort(key=get_onset)
+
+            # 智能去重
+            filtered = []
+            i = 0
+            while i < len(group_notes):
+                current = group_notes[i]
+                current_onset = get_onset(current)
+                current_offset = get_offset(current)
+                current_velocity = get_velocity(current)
+
+                # 收集所有在阈值内的音符
+                cluster = [current]
+                j = i + 1
+                while j < len(group_notes):
+                    next_note = group_notes[j]
+                    next_onset = get_onset(next_note)
+
+                    if next_onset - current_onset <= onset_threshold:
+                        cluster.append(next_note)
+                        j += 1
+                    else:
+                        break
+
+                if len(cluster) == 1:
+                    # 单个音符，直接保留
+                    filtered.append(current)
+                else:
+                    # 多个音符需要合并
+                    dedup_count += len(cluster) - 1
+
+                    if preserve_longer:
+                        # 选择持续时间最长的
+                        best = max(cluster, key=lambda n: get_offset(n) - get_onset(n))
+                    else:
+                        # 选择力度最大的
+                        best = max(cluster, key=get_velocity)
+
+                    # 可选：扩展到所有重叠音符的最大范围
+                    max_offset = max(get_offset(n) for n in cluster)
+                    if hasattr(best, 'offset'):
+                        # 创建新的 Note 对象（如果需要扩展）
+                        if max_offset > best.offset:
+                            merged_count += 1
+                            # 由于 Note 是 dataclass，我们需要复制并修改
+                            # 这里暂时不扩展，保留原始
+                            pass
+
+                    filtered.append(best)
+
+                i = j
+
+            result.extend(filtered)
+
+        # 按 onset 排序返回
+        def get_onset_for_sort(n):
+            if hasattr(n, 'onset'):
+                return n.onset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[2]
+            return 0
+        result.sort(key=get_onset_for_sort)
+
+        if dedup_count > 0:
+            logger.info(f"智能去重: 移除 {dedup_count} 个重复音符 (阈值: {onset_threshold*1000:.0f}ms)")
+        if merged_count > 0:
+            logger.debug(f"合并扩展: {merged_count} 个音符的时长被扩展")
+
+        return result

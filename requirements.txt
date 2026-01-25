@@ -1,6 +1,15 @@
-# Core AI/ML dependencies
-torch>=2.0.0
-torchaudio>=2.0.0
+# Core AI/ML dependencies (版本锁定以兼容 pyannote.audio 3.3.2)
+# pyannote.audio 3.3.2 不兼容 torchaudio 2.8+，需要使用 2.1-2.4 版本
+torch>=2.1.0,<2.5.0
+torchaudio>=2.1.0,<2.5.0
+
+# TensorFlow Lite runtime (Basic Pitch 只需要 tflite-runtime，不需要完整 TensorFlow)
+# 这样可以避免与 JAX 的 ml-dtypes 版本冲突
+tflite-runtime>=2.14.0
+
+# NumPy 版本锁定（兼容 numba 和 JAX）
+numpy>=1.24.0,<2.0
+# ml-dtypes 由 JAX 自动管理，无需手动指定
 
 # Audio source separation
 demucs>=4.0.0
@@ -8,15 +17,27 @@ demucs>=4.0.0
 # Audio to MIDI transcription
 basic-pitch>=0.3.0
 
+# YourMT3 MoE 转写依赖
+pytorch-lightning>=2.2.1
+einops>=0.7.0
+transformers>=4.30.0
+mir-eval>=0.7
+deprecated>=1.2.0
+smart-open>=6.0.0
+nest-asyncio>=1.5.0
+
+# 最先进的多乐器转写 (可选，如YourMT3+不可用则回退到basic-pitch)
+# pip install git+https://github.com/mimbres/YourMT3.git
+# yourmt3
+
+# 模型下载工具
+huggingface_hub>=0.20.0
+
 # Professional piano transcription (ByteDance model)
 piano_transcription_inference>=0.0.5
 
 # Instrument classification
 panns-inference>=0.1.0
-
-# Speech recognition and lyrics alignment
-openai-whisper>=20231117
-whisperx>=3.1.0
 
 # MIDI processing
 mido>=1.3.0
@@ -36,5 +57,15 @@ PyQt6-sip>=13.6.0
 tqdm>=4.66.0
 pyyaml>=6.0.0
 
-# 可选：Hugging Face 加速下载（可忽略警告）
-# pip install huggingface_hub[hf_xet]
+# Development and testing
+pytest>=7.4.0
+pytest-timeout>=2.1.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Experiment tracking (optional)
+wandb>=0.15.0
+
+# Additional audio/MIDI tools
+mirdata>=0.3.8
