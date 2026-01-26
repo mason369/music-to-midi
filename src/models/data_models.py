@@ -428,6 +428,17 @@ class Config:
     max_polyphony: int = 40           # 最大复音数：从25提高到40，更好支持钢琴
     aggressive_post_processing: bool = False  # False = 轻量后处理（保留更多音符），True = 激进后处理（更简化）
 
+    # 力度估算设置（从音频振幅恢复动态）
+    estimate_velocity_from_audio: bool = True   # 启用基于振幅的力度估算
+    velocity_range_min: int = 30                # 最小力度
+    velocity_range_max: int = 110               # 最大力度
+
+    # 稀疏轨道过滤设置
+    filter_sparse_tracks: bool = True           # 启用稀疏轨道过滤
+    sparse_track_strategy: str = "merge_family" # 处理策略: "discard", "merge_family", "merge_other", "keep"
+    min_track_note_count: int = 20              # 最小音符数
+    min_track_notes_per_minute: float = 5.0     # 最小音符密度
+
     # 输出设置
     output_dir: str = ""
     save_separated_tracks: bool = True
@@ -459,6 +470,13 @@ class Config:
             "velocity_smoothing": self.velocity_smoothing,
             "max_polyphony": self.max_polyphony,
             "aggressive_post_processing": self.aggressive_post_processing,
+            "estimate_velocity_from_audio": self.estimate_velocity_from_audio,
+            "velocity_range_min": self.velocity_range_min,
+            "velocity_range_max": self.velocity_range_max,
+            "filter_sparse_tracks": self.filter_sparse_tracks,
+            "sparse_track_strategy": self.sparse_track_strategy,
+            "min_track_note_count": self.min_track_note_count,
+            "min_track_notes_per_minute": self.min_track_notes_per_minute,
             "output_dir": self.output_dir,
             "save_separated_tracks": self.save_separated_tracks
         }
