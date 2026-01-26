@@ -1440,6 +1440,35 @@ class MidiGenerator:
             else:
                 normal_instruments[program] = notes
 
+        # 稀疏轨道过滤（如果启用）
+        if getattr(self.config, 'filter_sparse_tracks', True):
+            try:
+                from src.utils.track_filter import handle_sparse_tracks, SparseTrackStrategy
+
+                strategy_str = getattr(self.config, 'sparse_track_strategy', 'merge_family')
+                min_note_count = getattr(self.config, 'min_track_note_count', 20)
+                min_notes_per_minute = getattr(self.config, 'min_track_notes_per_minute', 5.0)
+
+                # 计算音频时长（从音符推断）
+                all_notes = []
+                for notes in normal_instruments.values():
+                    all_notes.extend(notes)
+                audio_duration = max(n.end_time for n in all_notes) if all_notes else 0
+
+                original_count = len(normal_instruments)
+                normal_instruments = handle_sparse_tracks(
+                    normal_instruments,
+                    strategy=SparseTrackStrategy(strategy_str),
+                    min_note_count=min_note_count,
+                    min_notes_per_minute=min_notes_per_minute,
+                    audio_duration=audio_duration
+                )
+
+                if len(normal_instruments) < original_count:
+                    logger.info(f"稀疏轨道过滤: {original_count} -> {len(normal_instruments)} 个轨道")
+            except Exception as e:
+                logger.warning(f"稀疏轨道过滤失败: {e}，跳过过滤")
+
         # 按音符数量排序乐器（优先分配给音符多的）
         sorted_instruments = sorted(
             normal_instruments.items(),

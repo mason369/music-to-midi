@@ -662,6 +662,23 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.8, "正在处理转写结果...")
 
+            # 创建力度估算器（如果启用）
+            velocity_estimator = None
+            if getattr(self.config, 'estimate_velocity_from_audio', True):
+                try:
+                    from src.utils.velocity_estimator import create_velocity_estimator
+                    vel_min = getattr(self.config, 'velocity_range_min', 30)
+                    vel_max = getattr(self.config, 'velocity_range_max', 110)
+                    velocity_estimator = create_velocity_estimator(
+                        audio_path,
+                        velocity_range=(vel_min, vel_max),
+                        precompute=True
+                    )
+                    if velocity_estimator:
+                        logger.info(f"力度估算器已创建，范围: {vel_min}-{vel_max}")
+                except Exception as e:
+                    logger.warning(f"创建力度估算器失败: {e}，将使用默认力度")
+
             # 解析输出并按乐器类型分类
             result = self._parse_yourmt3_output_from_tokens(
                 pred_token_arr,
@@ -669,7 +686,8 @@ class YourMT3Transcriber:
                 audio_cfg,
                 task_manager,
                 slice_hop=slice_hop,
-                onset_threshold=onset_threshold  # 传入去重阈值
+                onset_threshold=onset_threshold,
+                velocity_estimator=velocity_estimator
             )
 
             if progress_callback:
@@ -785,6 +803,21 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.8, "正在处理结果...")
 
+            # 创建力度估算器（如果启用）
+            velocity_estimator = None
+            if getattr(self.config, 'estimate_velocity_from_audio', True):
+                try:
+                    from src.utils.velocity_estimator import create_velocity_estimator
+                    vel_min = getattr(self.config, 'velocity_range_min', 30)
+                    vel_max = getattr(self.config, 'velocity_range_max', 110)
+                    velocity_estimator = create_velocity_estimator(
+                        audio_path,
+                        velocity_range=(vel_min, vel_max),
+                        precompute=True
+                    )
+                except Exception as e:
+                    logger.warning(f"创建力度估算器失败: {e}")
+
             # 解析输出
             all_notes = self._parse_yourmt3_output_from_tokens(
                 pred_token_arr,
@@ -792,7 +825,8 @@ class YourMT3Transcriber:
                 audio_cfg,
                 task_manager,
                 slice_hop=slice_hop,
-                onset_threshold=onset_threshold
+                onset_threshold=onset_threshold,
+                velocity_estimator=velocity_estimator
             )
 
             # 如果有乐器提示，优先返回该乐器的音符
@@ -837,7 +871,8 @@ class YourMT3Transcriber:
         audio_cfg: dict,
         task_manager: any,
         slice_hop: Optional[int] = None,
-        onset_threshold: float = 0.025
+        onset_threshold: float = 0.025,
+        velocity_estimator: Optional[any] = None
     ) -> Dict[InstrumentType, List[NoteEvent]]:
         """
         从 YourMT3 token 输出解析音符事件（参考 model_helper.py）
@@ -849,6 +884,7 @@ class YourMT3Transcriber:
             task_manager: 任务管理器
             slice_hop: 分段步长（用于计算重叠分段的起始时间）
             onset_threshold: 去重阈值（秒）
+            velocity_estimator: 力度估算器（可选，用于从音频振幅恢复动态）
 
         返回:
             乐器类型到音符列表的字典
@@ -956,9 +992,12 @@ class YourMT3Transcriber:
                     program = 0
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
-                # 需要将其设置为合理的默认力度值
+                # 需要从音频振幅估算力度，或使用默认值
                 if velocity <= 1:
-                    velocity = 80  # 默认力度
+                    if velocity_estimator is not None:
+                        velocity = velocity_estimator.estimate_velocity(float(onset))
+                    else:
+                        velocity = 80  # 默认力度
                 else:
                     velocity = int(np.clip(velocity, 1, 127))
 
@@ -1592,6 +1631,23 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.8, "正在解析精确乐器...")
 
+            # 创建力度估算器（如果启用）
+            velocity_estimator = None
+            if getattr(self.config, 'estimate_velocity_from_audio', True):
+                try:
+                    from src.utils.velocity_estimator import create_velocity_estimator
+                    vel_min = getattr(self.config, 'velocity_range_min', 30)
+                    vel_max = getattr(self.config, 'velocity_range_max', 110)
+                    velocity_estimator = create_velocity_estimator(
+                        audio_path,
+                        velocity_range=(vel_min, vel_max),
+                        precompute=True
+                    )
+                    if velocity_estimator:
+                        logger.info(f"力度估算器已创建，范围: {vel_min}-{vel_max}")
+                except Exception as e:
+                    logger.warning(f"创建力度估算器失败: {e}，将使用默认力度")
+
             # 解析结果
             instrument_notes: Dict[int, List[NoteEvent]] = {}
             drum_notes: Dict[int, List[NoteEvent]] = {}
@@ -1671,9 +1727,12 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
-                # 设置合理的默认力度
+                # 从音频振幅估算力度，或使用默认值
                 if velocity <= 1:
-                    velocity = 80
+                    if velocity_estimator is not None:
+                        velocity = velocity_estimator.estimate_velocity(float(onset))
+                    else:
+                        velocity = 80  # 默认力度
                 else:
                     velocity = int(np.clip(velocity, 1, 127))
 
