@@ -108,7 +108,11 @@ class TestYourMT3Integration:
         assert program_to_instrument_type(72) == InstrumentType.WOODWIND
 
         # 测试合成器 (program 80-95)
-        assert program_to_instrument_type(80) == InstrumentType.SYNTH
+        assert program_to_instrument_type(80) == InstrumentType.LEAD_SYNTH
+        assert program_to_instrument_type(88) == InstrumentType.PAD_SYNTH
+
+        # 测试合成音色 (program 96-103)
+        assert program_to_instrument_type(96) == InstrumentType.SYNTH
 
         # 测试无效值
         assert program_to_instrument_type(-1) == InstrumentType.OTHER

@@ -1008,7 +1008,8 @@ class MusicToMidiPipeline:
         logger.warning("当前系统只能输出最多 6 个 MIDI 轨道（Demucs 分离能力）。")
         logger.warning("")
         logger.warning("要支持 >6 种乐器的精确识别，请安装:")
-        logger.warning("  • YourMT3+: bash install_yourmt3.sh")
+        logger.warning("  • YourMT3+: git lfs install && git clone https://huggingface.co/spaces/mimbres/YourMT3")
+        logger.warning("            然后: cd YourMT3 && pip install -r requirements.txt")
         logger.warning("=" * 70)
 
         if progress_callback:

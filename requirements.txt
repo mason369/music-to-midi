@@ -5,7 +5,8 @@ torchaudio>=2.1.0,<2.5.0
 
 # TensorFlow Lite runtime (Basic Pitch 只需要 tflite-runtime，不需要完整 TensorFlow)
 # 这样可以避免与 JAX 的 ml-dtypes 版本冲突
-tflite-runtime>=2.14.0
+tflite-runtime>=2.14.0; platform_system != "Windows"
+tensorflow>=2.15.0,<2.16; platform_system == "Windows"
 
 # NumPy 版本锁定（兼容 numba 和 JAX）
 numpy>=1.24.0,<2.0

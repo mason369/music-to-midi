@@ -229,7 +229,7 @@ class YourMT3Transcriber:
 
             if not has_code:
                 logger.warning("YourMT3+ 不可用：未找到代码")
-                logger.info("安装方法: bash install_yourmt3.sh")
+                logger.info("安装方法: git lfs install && git clone https://huggingface.co/spaces/mimbres/YourMT3 (或 bash install_yourmt3_code.sh)")
                 return False
 
             # 第四步：检查模型权重文件

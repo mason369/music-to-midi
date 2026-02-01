@@ -43,7 +43,21 @@ Coming soon...
   - Windows: `choco install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)
   - Linux: `sudo apt install ffmpeg` (Ubuntu/Debian) or `sudo dnf install ffmpeg` (Fedora)
   - macOS: `brew install ffmpeg`
+- **Git LFS** (optional, required to install YourMT3+ code)
 - **NVIDIA GPU + CUDA** (recommended): For significantly faster processing
+
+### Git LFS Installation
+
+- Windows:
+  - `choco install git-lfs` or `winget install GitHub.GitLFS`
+  - After install: `git lfs install`
+- macOS:
+  - `brew install git-lfs`
+  - After install: `git lfs install`
+- Linux:
+  - Ubuntu/Debian: `sudo apt-get install git-lfs`
+  - Fedora: `sudo dnf install git-lfs`
+  - After install: `git lfs install`
 
 ### Dependency Requirements
 
@@ -52,6 +66,7 @@ Coming soon...
 | PyTorch | 2.1.0 - 2.4.x | pyannote.audio compatibility |
 | torchaudio | 2.1.0 - 2.4.x | Must match PyTorch version |
 | NumPy | < 2.0 | numba/JAX compatibility |
+| TensorFlow | 2.15.x (Windows) | Basic Pitch backend (used on Windows instead of tflite-runtime) |
 | CUDA | 11.8 or 12.1 | GPU acceleration (optional) |
 
 ### Linux Installation (Recommended)
@@ -85,7 +100,13 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 pip install -r requirements.txt
 
 # 5. Install YourMT3+ code (optional, for 128 instrument recognition)
-git clone https://github.com/mimbres/YourMT3.git
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+# Linux optional: only required for GuitarSet preprocessing
+sudo apt-get install sox
+cd ..
 # Or run the install script
 bash install_yourmt3_code.sh
 
@@ -98,6 +119,8 @@ python -m src.main
 
 ### Windows Installation
 
+Note: `tflite-runtime` is not available on Windows. `requirements.txt` uses a platform marker to install `tensorflow` instead, so make sure you are using a recent version of `pip`.
+
 ```bash
 # Clone the repository
 git clone https://github.com/mason369/music-to-midi.git
@@ -107,11 +130,28 @@ cd music-to-midi
 python -m venv venv
 venv\Scripts\activate
 
-# Install PyTorch (CUDA 11.8)
+# Install PyTorch (choose one)
+# CUDA 11.8
 pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+
+# CPU only (no GPU or no CUDA needed)
+pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Optional: install YourMT3+ code (for 128-instrument recognition)
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+cd ..
+
+# Optional: download YourMT3+ models
+python download_sota_models.py
 
 # Run the application
 python -m src.main
@@ -232,6 +272,9 @@ pytest
 # Run specific tests
 pytest tests/test_yourmt3_integration.py -v
 
+# Optional: coverage report (generates htmlcov/ and .coverage)
+pytest --cov=src --cov-report=html
+
 # Format code
 black src/
 isort src/
@@ -303,8 +346,12 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 # Ensure YourMT3 code exists
 ls YourMT3/
 
-# If not exists, clone the repository
-git clone https://github.com/mimbres/YourMT3.git
+# If not exists, clone the repository (requires Git LFS)
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+cd ..
 
 # Download models
 python download_sota_models.py
@@ -326,7 +373,7 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 
 ## Acknowledgments
 
-- [YourMT3+](https://github.com/mimbres/YourMT3) - 2025 AMT Challenge SOTA multi-instrument transcription
+- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 2025 AMT Challenge SOTA multi-instrument transcription
 - [Demucs](https://github.com/facebookresearch/demucs) - Music source separation
 - [PANNs](https://github.com/qiuqiangkong/panns_inference) - Audio pattern analysis and instrument recognition
 - [Basic Pitch](https://github.com/spotify/basic-pitch) - Audio to MIDI transcription
