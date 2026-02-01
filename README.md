@@ -43,7 +43,21 @@
   - Windows: `choco install ffmpeg` 或从 [ffmpeg.org](https://ffmpeg.org/download.html) 下载
   - Linux: `sudo apt install ffmpeg` (Ubuntu/Debian) 或 `sudo dnf install ffmpeg` (Fedora)
   - macOS: `brew install ffmpeg`
+- **Git LFS**（可选，用于安装 YourMT3+ 代码）
 - **NVIDIA GPU + CUDA**（推荐）：使用 CUDA 加速处理，显著提升性能
+
+### Git LFS 安装
+
+- Windows：
+  - `choco install git-lfs` 或 `winget install GitHub.GitLFS`
+  - 安装后执行：`git lfs install`
+- macOS：
+  - `brew install git-lfs`
+  - 安装后执行：`git lfs install`
+- Linux：
+  - Ubuntu/Debian：`sudo apt-get install git-lfs`
+  - Fedora：`sudo dnf install git-lfs`
+  - 安装后执行：`git lfs install`
 
 ### 依赖环境要求
 
@@ -52,6 +66,7 @@
 | PyTorch | 2.1.0 - 2.4.x | pyannote.audio 兼容性要求 |
 | torchaudio | 2.1.0 - 2.4.x | 与 PyTorch 版本对应 |
 | NumPy | < 2.0 | numba/JAX 兼容性 |
+| TensorFlow | 2.15.x（Windows） | Basic Pitch 后端（Windows 用于替代 tflite-runtime） |
 | CUDA | 11.8 或 12.1 | GPU 加速（可选） |
 
 ### Linux 安装（推荐）
@@ -85,7 +100,13 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 pip install -r requirements.txt
 
 # 5. 安装 YourMT3+ 代码库（可选，用于 128 种乐器识别）
-git clone https://github.com/mimbres/YourMT3.git
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+# Linux 可选：仅 GuitarSet 预处理需要
+sudo apt-get install sox
+cd ..
 # 或运行安装脚本
 bash install_yourmt3_code.sh
 
@@ -98,6 +119,8 @@ python -m src.main
 
 ### Windows 安装
 
+注意：Windows 上没有 `tflite-runtime` 发行版，`requirements.txt` 已通过平台条件自动改用 `tensorflow` 作为 Basic Pitch 后端，请确保使用较新的 `pip`。
+
 ```bash
 # 克隆仓库
 git clone https://github.com/mason369/music-to-midi.git
@@ -107,11 +130,28 @@ cd music-to-midi
 python -m venv venv
 venv\Scripts\activate
 
-# 安装 PyTorch（CUDA 11.8）
+# 安装 PyTorch（以下三选一）
+# CUDA 11.8
 pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1
+pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 仅 CPU（无独显或不需要 CUDA）
+pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 可选：安装 YourMT3+ 代码（用于 128 乐器识别）
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+cd ..
+
+# 可选：下载 YourMT3+ 模型
+python download_sota_models.py
 
 # 运行应用
 python -m src.main
@@ -232,6 +272,9 @@ pytest
 # 运行特定测试
 pytest tests/test_yourmt3_integration.py -v
 
+# 可选：生成覆盖率报告（会生成 htmlcov/ 与 .coverage）
+pytest --cov=src --cov-report=html
+
 # 格式化代码
 black src/
 isort src/
@@ -303,8 +346,12 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 # 确保 YourMT3 代码库存在
 ls YourMT3/
 
-# 如果不存在，克隆仓库
-git clone https://github.com/mimbres/YourMT3.git
+# 如果不存在，克隆仓库（需要 Git LFS）
+git lfs install
+git clone https://huggingface.co/spaces/mimbres/YourMT3
+cd YourMT3
+pip install -r requirements.txt
+cd ..
 
 # 下载模型
 python download_sota_models.py
@@ -326,7 +373,7 @@ python download_sota_models.py
 
 ## 致谢
 
-- [YourMT3+](https://github.com/mimbres/YourMT3) - 2025 AMT Challenge SOTA 多乐器转写
+- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 2025 AMT Challenge SOTA 多乐器转写
 - [Demucs](https://github.com/facebookresearch/demucs) - 音乐源分离
 - [PANNs](https://github.com/qiuqiangkong/panns_inference) - 音频模式分析与乐器识别
 - [Basic Pitch](https://github.com/spotify/basic-pitch) - 音频转MIDI转录
