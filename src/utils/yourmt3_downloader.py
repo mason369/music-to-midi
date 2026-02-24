@@ -91,49 +91,30 @@ def get_model_cache_dir() -> Path:
 
 def resolve_model_checkpoint_path(checkpoint_name: str) -> Optional[Path]:
     """
-    将 checkpoint 名称解析为实际文件系统路径
+    将 checkpoint 名称解析为实际文件系统路径。
 
-    参数:
-        checkpoint_name: 配置中的 checkpoint 名称，如 "YPTF.MoE+Multi (PS)"
-
-    返回:
-        指向 .ckpt 文件的 Path 对象，如果未找到返回 None
-
-    示例:
-        >>> resolve_model_checkpoint_path("YPTF.MoE+Multi (PS)")
-        Path('/home/user/.cache/music_ai_models/yourmt3_all/logs/2024/.../checkpoints/model.ckpt')
+    不依赖硬编码目录结构，在整个 cache 目录下递归搜索包含
+    dir_name 的 model.ckpt / last.ckpt，兼容仓库路径前缀变化。
     """
-    # 规范化名称
     normalized_name = checkpoint_name.strip()
 
-    # 查询映射表获取真实目录名
     if normalized_name in CHECKPOINT_FILENAME_MAP:
         dir_name = CHECKPOINT_FILENAME_MAP[normalized_name]
     else:
-        # 假设是完整目录名或旧格式（带 @model.ckpt 后缀）
-        if "@model.ckpt" in normalized_name:
-            dir_name = normalized_name.replace("@model.ckpt", "")
-        else:
-            dir_name = normalized_name
+        dir_name = normalized_name.replace("@model.ckpt", "")
 
-    # 构建搜索路径（YourMT3 官方存储结构）
-    base_dir = Path.home() / ".cache/music_ai_models/yourmt3_all/logs/2024"
-    model_dir = base_dir / dir_name
+    cache_root = Path.home() / ".cache/music_ai_models/yourmt3_all"
+    if not cache_root.exists():
+        return None
 
-    # 查找 checkpoint 文件（按优先级）
-    candidates = [
-        model_dir / "checkpoints/model.ckpt",   # 官方主模型
-        model_dir / "checkpoints/last.ckpt",    # 最新训练checkpoint
-        model_dir / "model.ckpt",               # 兼容旧结构
-    ]
+    # 递归搜索：找到路径中包含 dir_name 的 checkpoint 文件
+    for filename in ("model.ckpt", "last.ckpt"):
+        for path in cache_root.rglob(filename):
+            if dir_name in str(path):
+                logger.debug(f"找到模型 checkpoint: {path}")
+                return path
 
-    for path in candidates:
-        if path.exists():
-            logger.debug(f"找到模型 checkpoint: {path}")
-            return path
-
-    # 未找到模型文件
-    logger.debug(f"未找到模型文件 '{checkpoint_name}' (搜索目录: {model_dir})")
+    logger.debug(f"未找到模型文件 '{checkpoint_name}' (搜索根目录: {cache_root})")
     return None
 
 
@@ -255,17 +236,32 @@ def download_model(
 
                 logger.info(f"下载 checkpoint: {checkpoint_filename}")
 
-                # 处理不同格式的checkpoint名称
-                # 新格式: "YPTF.MoE+Multi (PS)" -> 需要转换为文件名
-                # 旧格式: "mc13_256_all_cross_v6...@model.ckpt" -> 直接使用
-                if checkpoint_filename.endswith(".ckpt"):
-                    # 旧格式，直接使用
-                    actual_filename = checkpoint_filename
+                # 将 checkpoint 名称（如 "YPTF.MoE+Multi (PS)"）映射到实际目录名
+                # 仓库结构：amt/logs/2024/{dir_name}/checkpoints/model.ckpt
+                if checkpoint_filename in CHECKPOINT_FILENAME_MAP:
+                    dir_name = CHECKPOINT_FILENAME_MAP[checkpoint_filename]
+                elif "@model.ckpt" in checkpoint_filename:
+                    dir_name = checkpoint_filename.replace("@model.ckpt", "")
                 else:
-                    # 新格式，需要在仓库中查找对应文件
-                    # 尝试添加常见的扩展名
-                    actual_filename = f"{checkpoint_filename}.ckpt"
-                    logger.info(f"转换checkpoint名称: {checkpoint_filename} -> {actual_filename}")
+                    dir_name = checkpoint_filename
+
+                # 动态查询仓库中的实际 checkpoint 路径，避免硬编码导致路径失效
+                from huggingface_hub import list_repo_files as _list_files
+                repo_files = list(_list_files(YOURMT3_REPO_ID, repo_type="space"))
+                actual_filename = next(
+                    (f for f in repo_files if dir_name in f and f.endswith("model.ckpt")),
+                    None
+                )
+                alt_filename = next(
+                    (f for f in repo_files if dir_name in f and f.endswith("last.ckpt")),
+                    None
+                )
+                if not actual_filename and not alt_filename:
+                    raise FileNotFoundError(
+                        f"在仓库 {YOURMT3_REPO_ID} 中未找到包含 '{dir_name}' 的 checkpoint"
+                    )
+                actual_filename = actual_filename or alt_filename
+                logger.info(f"动态解析仓库路径: {actual_filename}")
 
                 # 设置环境变量以使用镜像
                 old_endpoint = os.environ.get("HF_ENDPOINT")
@@ -274,47 +270,41 @@ def download_model(
 
                 try:
                     # 下载模型checkpoint (支持断点续传)
+                    # repo_type="space" 是必须的，因为模型存放在 HuggingFace Spaces 中
                     try:
                         checkpoint_path = hf_hub_download(
                             repo_id=YOURMT3_REPO_ID,
+                            repo_type="space",
                             filename=actual_filename,
                             cache_dir=str(cache_dir / "hf_cache"),
                             resume_download=True,
                             local_files_only=False,
                         )
                     except Exception as e:
-                        # 如果新格式失败，尝试旧格式
-                        if not checkpoint_filename.endswith(".ckpt"):
-                            logger.warning(f"使用新格式失败: {e}，尝试查找其他可能的文件名")
-                            # 尝试不同的文件名模式
-                            alternative_names = [
-                                checkpoint_filename,  # 原始名称
-                                f"{checkpoint_filename}@model.ckpt",  # 加@model.ckpt后缀
-                                checkpoint_filename.replace(" ", "_"),  # 空格替换为下划线
-                                checkpoint_filename.replace(" ", "_") + ".ckpt",
-                            ]
-                            for alt_name in alternative_names:
-                                try:
-                                    logger.info(f"尝试备选文件名: {alt_name}")
-                                    checkpoint_path = hf_hub_download(
-                                        repo_id=YOURMT3_REPO_ID,
-                                        filename=alt_name,
-                                        cache_dir=str(cache_dir / "hf_cache"),
-                                        resume_download=True,
-                                        local_files_only=False,
-                                    )
-                                    logger.info(f"成功使用文件名: {alt_name}")
-                                    break
-                                except Exception:
-                                    continue
-                            else:
-                                # 所有尝试都失败，抛出原始错误
+                        if alt_filename:
+                            logger.warning(f"model.ckpt 下载失败: {e}，尝试 last.ckpt")
+                            try:
+                                checkpoint_path = hf_hub_download(
+                                    repo_id=YOURMT3_REPO_ID,
+                                    repo_type="space",
+                                    filename=alt_filename,
+                                    cache_dir=str(cache_dir / "hf_cache"),
+                                    resume_download=True,
+                                    local_files_only=False,
+                                )
+                                logger.info(f"成功使用 last.ckpt")
+                            except Exception:
                                 raise e
                         else:
-                            raise
+                            raise e
 
-                    # 复制到目标目录
-                    target_path = model_dir / "model.ckpt"
+                    # 复制到 cache 目录，保留仓库原始相对路径结构
+                    target_dir = (
+                        Path.home() / ".cache/music_ai_models/yourmt3_all" /
+                        Path(actual_filename).parent
+                    )
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = target_dir / "model.ckpt"
                     shutil.copy2(checkpoint_path, target_path)
 
                     # 创建配置文件

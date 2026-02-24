@@ -6,9 +6,9 @@ on:
       - 'v*'
 
 jobs:
-  build-windows:
-    name: 构建 Windows 版本
-    runs-on: windows-latest
+  build-linux:
+    name: 构建 Linux 版本
+    runs-on: ubuntu-22.04
 
     steps:
       - name: 检出代码
@@ -22,11 +22,31 @@ jobs:
 
       - name: 安装系统依赖
         run: |
-          choco install ffmpeg -y
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1 \
+            libportaudio2 \
+            portaudio19-dev \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-util1 \
+            libgl1 \
+            fonts-ubuntu \
+            fonts-dejavu-core
 
       - name: 安装 Python 依赖
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch==2.4.0 torchaudio==2.4.0 \
+            --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
           pip install pyinstaller
 
@@ -36,17 +56,17 @@ jobs:
 
       - name: 创建压缩包
         run: |
-          Compress-Archive -Path dist/MusicToMidi -DestinationPath MusicToMidi-Windows.zip
+          tar -czf MusicToMidi-Linux.tar.gz -C dist MusicToMidi
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MusicToMidi-Windows
-          path: MusicToMidi-Windows.zip
+          name: MusicToMidi-Linux
+          path: MusicToMidi-Linux.tar.gz
 
   release:
     name: 创建 GitHub Release
-    needs: build-windows
+    needs: build-linux
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,10 +75,10 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 下载 Windows 构建产物
+      - name: 下载 Linux 构建产物
         uses: actions/download-artifact@v4
         with:
-          name: MusicToMidi-Windows
+          name: MusicToMidi-Linux
           path: ./artifacts/
 
       - name: 列出构建产物
@@ -68,24 +88,33 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ./artifacts/MusicToMidi-Windows.zip
+            ./artifacts/MusicToMidi-Linux.tar.gz
           body: |
             ## 音乐转MIDI转换器 ${{ github.ref_name }}
 
             ### 下载
-            - **Windows**: MusicToMidi-Windows.zip
+            - **Linux / WSL2**: MusicToMidi-Linux.tar.gz
 
             ### 系统要求
-            - 必须安装 FFmpeg
-            - 推荐使用 NVIDIA GPU 以加速处理
+            - Ubuntu 20.04+ / Debian 11+ / WSL2
+            - Python 3.10+（安装脚本自动处理）
+            - 推荐 NVIDIA GPU + CUDA 加速处理
+
+            ### 快速安装
+            ```bash
+            git clone https://github.com/mason369/music-to-midi.git
+            cd music-to-midi
+            bash install.sh
+            ./run.sh
+            ```
 
             ### 平台支持
-            - ✅ Windows - 已支持
+            - ✅ Linux (Ubuntu/Debian) - 完整支持
+            - ✅ WSL2 (Windows Subsystem for Linux) - 完整支持
             - 🚧 macOS - 计划中
-            - 🚧 Linux - 计划中
 
             ### 更新日志
-            查看 [CHANGELOG](https://github.com/mason369/music-to-midi/blob/main/CHANGELOG.md) 了解详情。
+            查看 [README](https://github.com/mason369/music-to-midi/blob/main/README.md) 了解详情。
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
         env:

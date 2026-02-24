@@ -30,35 +30,8 @@
       "selected": "已选文件"
     },
     "mode": {
-      "piano": "钢琴模式",
-      "smart": "智能识别",
-      "piano_tooltip": "直接将音频转写为多个钢琴轨道，适合钢琴曲目",
-      "smart_tooltip": "使用MT3/YourMT3+智能识别多种乐器，动态输出10+轨道"
-    },
-    "piano": {
-      "track_count": "钢琴轨道数:",
-      "hint": "推荐: 2-4 (左右手分离)",
-      "auto": "自动检测",
-      "auto_tooltip": "根据音频复杂度自动确定最佳轨道数",
-      "auto_hint": "将根据音频复杂度自动确定轨道数 (1-6)"
-    },
-    "smart": {
-      "hint": "选择音频文件后将自动检测乐器"
-    },
-    "transcriber": {
-      "title": "转写引擎",
-      "auto": "自动选择",
-      "mt3": "MT3 (Google Magenta)",
-      "yourmt3": "YourMT3+ (最佳质量)",
-      "basic_pitch": "Basic Pitch (轻量)",
-      "auto_tooltip": "自动选择最佳可用引擎",
-      "mt3_tooltip": "Google Magenta开发，支持34类乐器动态识别",
-      "yourmt3_tooltip": "2025年AMT挑战赛获奖模型，支持多乐器直接转写",
-      "basic_pitch_tooltip": "轻量级模型，适合简单音乐"
-    },
-    "drums": {
-      "separate_voices": "层次化鼓分离",
-      "separate_tooltip": "将鼓轨分为底鼓、军鼓、踩镲等独立轨道"
+      "smart": "YourMT3+ MoE 多乐器转写",
+      "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离"
     },
     "tracks": {
       "title": "轨道设置",

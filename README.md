@@ -4,384 +4,252 @@
   中文 | <a href="./docs/README.md">English</a>
 </p>
 
-将音频文件转换为多轨道MIDI，自动嵌入歌词。支持 128 种 GM 乐器精确识别。
+将音频文件转换为多轨道MIDI，支持 128 种 GM 乐器精确识别。
+
+**平台支持：Linux / WSL2**（需要 WSLg 或 X11 显示服务器）
 
 ## 功能特点
 
-- **双模式处理**：
-  - **钢琴模式**：跳过音源分离，使用 ByteDance 专业钢琴模型直接转换为多轨钢琴MIDI（适合纯钢琴曲）
-  - **智能模式**：使用 YourMT3+ MoE 模型直接识别多种乐器，支持 128 种 GM 乐器精确识别
-- **音源分离**：使用 Demucs v4 自动将音频分离为 6 个轨道（人声、鼓、贝斯、吉他、钢琴、其他）
-- **乐器识别**：使用 PANNs 进行智能乐器检测和分类
-- **多乐器转写**：
-  - **YourMT3+ MoE**（2025 AMT Challenge SOTA）：层次化注意力 Transformer + 混合专家架构，支持 128 种 GM 乐器
-  - **Basic Pitch**（Spotify）：多音高检测备选方案
-  - **ByteDance Piano Transcription**：专业钢琴转写，支持踏板检测
-- **MIDI后处理**：音符量化、力度平滑、去重、复音限制等优化
-- **歌词识别**：识别人声中的歌词，并以单词级时间戳嵌入MIDI
+- **多乐器转写**：使用 YourMT3+ MoE（2025 AMT Challenge 顶级模型）直接识别混音中的多种乐器
+- **128 种 GM 乐器**：输出标准 General MIDI 多轨道 MIDI，精确区分鼓、贝斯、吉他、钢琴等
+- **MIDI 后处理**：音符量化、力度平滑、去重、复音限制等优化
+- **GPU 加速**：自动检测并使用 CUDA（NVIDIA）/ ROCm（AMD）/ CPU
 - **多语言界面**：支持中文和英文界面切换
-- **专业深色主题**：现代化音频软件风格界面设计
+- **深色主题**：现代化音频软件风格界面
 
 ## 平台支持
 
 | 平台 | 状态 | 说明 |
 |------|------|------|
-| Windows | ✅ 已支持 | 完整功能，推荐使用 CUDA |
-| Linux | ✅ 已支持 | 完整功能，推荐 Ubuntu 22.04+ |
+| Linux (Ubuntu/Debian) | ✅ 已支持 | 推荐 Ubuntu 22.04+，完整功能 |
+| WSL2 (Windows 11) | ✅ 已支持 | 需要 WSLg（Win11 内置）|
 | macOS | 🚧 计划中 | Apple Silicon MPS 支持开发中 |
 
-## 截图
-
-即将推出...
-
-## 安装
-
-### 前置要求
-
-- **Python 3.10+**（推荐 3.10 或 3.11，3.12 可能存在兼容性问题）
-- **FFmpeg**：音频处理必需
-  - Windows: `choco install ffmpeg` 或从 [ffmpeg.org](https://ffmpeg.org/download.html) 下载
-  - Linux: `sudo apt install ffmpeg` (Ubuntu/Debian) 或 `sudo dnf install ffmpeg` (Fedora)
-  - macOS: `brew install ffmpeg`
-- **Git LFS**（可选，用于安装 YourMT3+ 代码）
-- **NVIDIA GPU + CUDA**（推荐）：使用 CUDA 加速处理，显著提升性能
-
-### Git LFS 安装
-
-- Windows：
-  - `choco install git-lfs` 或 `winget install GitHub.GitLFS`
-  - 安装后执行：`git lfs install`
-- macOS：
-  - `brew install git-lfs`
-  - 安装后执行：`git lfs install`
-- Linux：
-  - Ubuntu/Debian：`sudo apt-get install git-lfs`
-  - Fedora：`sudo dnf install git-lfs`
-  - 安装后执行：`git lfs install`
-
-### 依赖环境要求
-
-| 依赖 | 版本要求 | 说明 |
-|------|----------|------|
-| PyTorch | 2.1.0 - 2.4.x | pyannote.audio 兼容性要求 |
-| torchaudio | 2.1.0 - 2.4.x | 与 PyTorch 版本对应 |
-| NumPy | < 2.0 | numba/JAX 兼容性 |
-| TensorFlow | 2.15.x（Windows） | Basic Pitch 后端（Windows 用于替代 tflite-runtime） |
-| CUDA | 11.8 或 12.1 | GPU 加速（可选） |
-
-### Linux 安装（推荐）
-
-Linux 是运行本项目的推荐平台，环境配置更简单，GPU 加速更稳定。
+## 快速开始
 
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/mason369/music-to-midi.git
 cd music-to-midi
 
-# 2. 创建虚拟环境（推荐使用 conda）
-conda create -n music2midi python=3.10
-conda activate music2midi
+# 2. 直接运行（首次自动安装所有依赖）
+./run.sh
+```
 
-# 或使用 venv
-python -m venv venv
+`./run.sh` 会自动检测依赖完整性，首次运行或依赖缺失时自动完成：
+- 安装系统包（FFmpeg、PyQt6 所需库、中文/Emoji 字体等）
+- 创建 Python 虚拟环境
+- 安装 PyTorch（根据 GPU 自动选择 CUDA/ROCm/CPU 版本）
+- 安装所有 Python 依赖
+- 克隆 YourMT3+ 代码库
+- 下载 YPTF.MoE+Multi (PS) 模型权重（约 2.5GB）
+
+## 手动安装
+
+如需手动安装，请按以下步骤操作：
+
+### 1. 系统依赖
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    libportaudio2 \
+    portaudio19-dev \
+    libxcb-xinerama0 \
+    libxcb-cursor0 \
+    libxkbcommon-x11-0 \
+    libgl1 \
+    fonts-ubuntu \
+    fonts-dejavu-core \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji
+```
+
+### 2. Python 环境
+
+```bash
+# 创建虚拟环境（推荐 Python 3.10 或 3.11）
+python3.10 -m venv venv
 source venv/bin/activate
 
-# 3. 安装 PyTorch（根据你的 CUDA 版本选择）
-# CUDA 11.8
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
-
+# 安装 PyTorch（按 GPU 选择）
 # CUDA 12.1
 pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 
-# 仅 CPU（不推荐，速度较慢）
+# 仅 CPU（速度较慢）
 pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
 
-# 4. 安装项目依赖
+# 安装项目依赖
 pip install -r requirements.txt
+```
 
-# 5. 安装 YourMT3+ 代码库（可选，用于 128 种乐器识别）
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-# Linux 可选：仅 GuitarSet 预处理需要
-sudo apt-get install sox
-cd ..
-# 或运行安装脚本
+### 3. YourMT3+ 代码库与模型
+
+```bash
+# 克隆 YourMT3 代码库
 bash install_yourmt3_code.sh
 
-# 6. 下载 YourMT3+ 模型（可选）
+# 下载模型权重（约 2.5GB）
 python download_sota_models.py
+```
 
-# 7. 运行应用
+### 4. 运行
+
+```bash
+source venv/bin/activate
 python -m src.main
 ```
 
-### Windows 安装
+## WSL2 配置说明
 
-注意：Windows 上没有 `tflite-runtime` 发行版，`requirements.txt` 已通过平台条件自动改用 `tensorflow` 作为 Basic Pitch 后端，请确保使用较新的 `pip`。
-
-```bash
-# 克隆仓库
-git clone https://github.com/mason369/music-to-midi.git
-cd music-to-midi
-
-# 创建虚拟环境
-python -m venv venv
-venv\Scripts\activate
-
-# 安装 PyTorch（以下三选一）
-# CUDA 11.8
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
-
-# CUDA 12.1
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
-
-# 仅 CPU（无独显或不需要 CUDA）
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 可选：安装 YourMT3+ 代码（用于 128 乐器识别）
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-cd ..
-
-# 可选：下载 YourMT3+ 模型
-python download_sota_models.py
-
-# 运行应用
-python -m src.main
-```
-
-### CUDA 安装指南
-
-#### Linux (Ubuntu/Debian)
+WSL2 下运行 GUI 需要 WSLg（Windows 11 内置），环境变量会自动设置：
 
 ```bash
-# 方法 1: 使用 NVIDIA 官方仓库
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-sudo apt-get install cuda-toolkit-12-1
-
-# 方法 2: 使用 conda（推荐，自动管理）
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
-
-# 验证 CUDA
-python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+# 如果 DISPLAY 未自动设置，添加到 ~/.bashrc
+export DISPLAY=:0
 ```
 
-#### Windows
+验证显示环境：
 
-1. 从 [NVIDIA 官网](https://developer.nvidia.com/cuda-downloads) 下载 CUDA Toolkit
-2. 安装时选择自定义安装，确保勾选 cuDNN
-3. 重启后验证：`nvidia-smi`
+```bash
+echo $DISPLAY        # 应显示 :0
+echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
+```
 
-### 从发布版安装
+如果 WSLg 不可用（Windows 10），可安装 VcXsrv：
+1. 在 Windows 上安装 [VcXsrv](https://sourceforge.net/projects/vcxsrv/)
+2. 启动 XLaunch（勾选 "Disable access control"）
+3. 在 WSL 中：`export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0`
 
-从 [Releases](https://github.com/mason369/music-to-midi/releases) 页面下载预编译版本。
+## 依赖版本说明
+
+| 依赖 | 版本要求 | 说明 |
+|------|----------|------|
+| PyTorch | 2.1.0 - 2.4.x | YourMT3+ 兼容性要求 |
+| torchaudio | 2.1.0 - 2.4.x | 与 PyTorch 版本对应 |
+| NumPy | < 2.0 | numba 兼容性 |
+| CUDA | 11.8 或 12.1 | GPU 加速（可选） |
+| Python | 3.10+ | 推荐 3.10 或 3.11 |
 
 ## 使用方法
 
-1. **打开音频文件**：拖放音频文件（MP3、WAV、FLAC、OGG）或点击浏览选择
-2. **配置输出**：选择输出目录和选项（MIDI、歌词、分离音轨）
-3. **开始处理**：点击"开始"按钮开始转换
-4. **获取结果**：在输出目录中找到MIDI文件、LRC歌词和分离的音轨
+1. **打开音频文件**：拖放音频文件（MP3、WAV、FLAC、OGG 等）或点击浏览选择
+2. **配置输出**：选择输出目录
+3. **开始处理**：点击"开始"按钮
+4. **获取结果**：在输出目录中找到 MIDI 文件
 
 ## 支持的格式
 
-### 输入
-- MP3, WAV, FLAC, OGG, M4A, AAC, WMA
+**输入**：MP3, WAV, FLAC, OGG, M4A, AAC, WMA
 
-### 输出
-- MIDI (.mid) - 嵌入歌词的多轨道MIDI
-- LRC (.lrc) - 同步歌词文件
-- WAV - 分离的音频轨道
+**输出**：MIDI (.mid)
 
-## 技术细节
-
-### 使用的AI模型
-
-| 模型 | 来源 | 用途 | 说明 |
-|------|------|------|------|
-| **YourMT3+ MoE** | KAIST | 多乐器转写 | 2025 AMT Challenge SOTA，混合专家架构，支持 128 种 GM 乐器 |
-| **Demucs v4** | Meta | 音源分离 | 最先进的音源分离，支持 4/6 轨模式 |
-| **PANNs** | KAIST | 乐器识别 | 音频模式分析与乐器分类 |
-| **Basic Pitch** | Spotify | 多音高检测 | 轻量级音频转 MIDI |
-| **Piano Transcription** | ByteDance | 钢琴转写 | 专业钢琴转写，支持踏板检测 |
-| **Whisper + WhisperX** | OpenAI | 语音识别 | 带单词级对齐的歌词识别 |
-
-### 处理模式
-
-| 模式 | 说明 | 适用场景 | 输出轨道数 |
-|------|------|----------|-----------|
-| 钢琴模式 | 跳过分离，生成多轨钢琴MIDI | 纯钢琴曲、简单旋律 | 1-6 轨（自动检测） |
-| 智能模式（标准） | 6轨分离 + 乐器识别 | 完整编曲、多乐器作品 | 最多 6 轨 |
-| 智能模式（精确） | YourMT3+ 直接转写 | 复杂多乐器作品 | 最多 128 种 GM 乐器 |
-
-### 架构
+## 技术架构
 
 ```
-音频输入
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ 模式选择                                              │
-│  ├─ 钢琴模式 ──→ ByteDance Piano Transcription       │
-│  └─ 智能模式 ──→ YourMT3+ MoE 或 Demucs+Basic Pitch  │
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ 智能模式处理流程                                       │
-│  ├──→ YourMT3+ MoE（首选）: 直接多乐器转写            │
-│  │    └── 支持 128 种 GM 乐器精确识别                 │
-│  ├──→ 备选方案: Demucs 6轨分离 + Basic Pitch         │
-│  ├──→ 节拍检测 (librosa)                              │
-│  └──→ 歌词识别 (Whisper + WhisperX)                   │
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ MIDI后处理                                            │
-│  ├──→ 音符量化（可选）                                │
-│  ├──→ 力度平滑                                        │
-│  ├──→ 智能去重（处理重叠分段）                        │
-│  └──→ 复音数限制                                      │
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-输出: MIDI + LRC + WAV
+音频输入 → MusicToMidiPipeline
+              ↓
+          YourMT3+ MoE（YPTF.MoE+Multi PS）
+          直接对完整混音进行多乐器转写
+              ↓
+          MIDI 后处理（量化 / 去重 / 复音限制）
+              ↓
+          多轨道 MIDI 输出（最多 128 种 GM 乐器）
 ```
+
+### 使用的 AI 模型
+
+| 模型 | 来源 | 用途 |
+|------|------|------|
+| **YourMT3+ MoE** | KAIST | 多乐器转写，128 种 GM 乐器（唯一转写引擎） |
 
 ## 开发
 
-### 设置开发环境
-
 ```bash
+source venv/bin/activate
+
 # 安装开发依赖
 pip install -r requirements-dev.txt
 
 # 运行测试
-pytest
+pytest tests/ -v
 
-# 运行特定测试
-pytest tests/test_yourmt3_integration.py -v
-
-# 可选：生成覆盖率报告（会生成 htmlcov/ 与 .coverage）
-pytest --cov=src --cov-report=html
-
-# 格式化代码
+# 代码格式化
 black src/
 isort src/
 
 # 类型检查
 mypy src/
-```
 
-### 构建可执行文件
-
-```bash
-# 安装PyInstaller
-pip install pyinstaller
-
-# 使用项目配置文件构建（推荐）
-pyinstaller MusicToMidi.spec
-
-# 构建产物在 dist/MusicToMidi/ 目录下
-```
-
-### GPU 诊断
-
-```bash
-# 检查 GPU 状态
-python -c "from src.utils.gpu_utils import print_gpu_diagnosis; print_gpu_diagnosis()"
-
-# 检查 YourMT3+ 可用性
-python -c "from src.core.yourmt3_transcriber import YourMT3Transcriber; print(YourMT3Transcriber.is_available())"
+# 代码检查
+flake8 src/ --max-line-length=100
 ```
 
 ## 常见问题
 
-### Linux 环境问题
+**Q: 中文/图标显示为方块（字体渲染问题）**
+```bash
+sudo apt-get install -y fonts-noto-cjk fonts-wqy-zenhei fonts-noto-color-emoji fonts-symbola
+fc-cache -f
+```
+`./run.sh` 首次运行时会自动处理此问题。
+
+**Q: PyQt6 提示 "could not load Qt platform plugin"**
+```bash
+sudo apt-get install libxcb-xinerama0 libxkbcommon-x11-0 libxcb-cursor0
+```
 
 **Q: 提示找不到 libGL.so.1**
 ```bash
-# Ubuntu/Debian
-sudo apt install libgl1-mesa-glx
-
-# CentOS/RHEL
-sudo yum install mesa-libGL
+sudo apt-get install libgl1-mesa-glx
 ```
 
-**Q: PyQt6 无法启动，显示 "could not load Qt platform plugin"**
-```bash
-# 安装 Qt 依赖
-sudo apt install libxcb-xinerama0 libxkbcommon-x11-0
+**Q: WSL2 窗口无法显示**
 
-# 如果在无头服务器上运行，需要虚拟显示
-sudo apt install xvfb
-xvfb-run python -m src.main
+确认 WSLg 已启用（Windows 11 22000+ 默认内置），并检查：
+```bash
+echo $DISPLAY   # 应为 :0
+ls /mnt/wslg    # 应有文件
 ```
 
 **Q: CUDA 不可用**
 ```bash
-# 检查 NVIDIA 驱动
-nvidia-smi
-
-# 检查 PyTorch CUDA
+nvidia-smi                                    # 检查驱动
 python -c "import torch; print(torch.cuda.is_available())"
-
-# 如果返回 False，重新安装正确版本的 PyTorch
-pip uninstall torch torchaudio
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 **Q: YourMT3+ 不可用**
 ```bash
-# 确保 YourMT3 代码库存在
-ls YourMT3/
+ls YourMT3/                    # 检查代码库是否存在
+bash install_yourmt3_code.sh   # 重新安装代码库
+python download_sota_models.py # 重新下载模型
+```
 
-# 如果不存在，克隆仓库（需要 Git LFS）
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-cd ..
+## GPU 诊断
 
-# 下载模型
-python download_sota_models.py
+```bash
+python -c "from src.utils.gpu_utils import print_gpu_diagnosis; print_gpu_diagnosis()"
+python -c "from src.core.yourmt3_transcriber import YourMT3Transcriber; print(YourMT3Transcriber.is_available())"
 ```
 
 ## 贡献
 
-欢迎贡献！请随时提交Pull Request。
+欢迎提交 Pull Request。
 
-1. Fork本仓库
-2. 创建功能分支（`git checkout -b feature/amazing-feature`）
-3. 提交更改（`git commit -m 'Add amazing feature'`）
-4. 推送到分支（`git push origin feature/amazing-feature`）
-5. 创建Pull Request
+1. Fork 本仓库
+2. 创建功能分支：`git checkout -b feature/amazing-feature`
+3. 提交更改：`git commit -m 'feat: add amazing feature'`
+4. 推送分支：`git push origin feature/amazing-feature`
+5. 创建 Pull Request
 
 ## 许可证
 
-本项目采用MIT许可证 - 详见 [LICENSE](./LICENSE) 文件。
+MIT License - 详见 [LICENSE](./LICENSE) 文件。
 
 ## 致谢
 
-- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 2025 AMT Challenge SOTA 多乐器转写
-- [Demucs](https://github.com/facebookresearch/demucs) - 音乐源分离
-- [PANNs](https://github.com/qiuqiangkong/panns_inference) - 音频模式分析与乐器识别
-- [Basic Pitch](https://github.com/spotify/basic-pitch) - 音频转MIDI转录
-- [Piano Transcription](https://github.com/bytedance/piano_transcription) - ByteDance 钢琴转写
-- [Whisper](https://github.com/openai/whisper) - 语音识别
-- [WhisperX](https://github.com/m-bain/whisperX) - 单词级对齐
-- [mido](https://github.com/mido/mido) - MIDI文件处理
-
-## 支持
-
-如果您遇到任何问题，请 [创建issue](https://github.com/mason369/music-to-midi/issues)。
+- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - SOTA 多乐器转写
+- [mido](https://github.com/mido/mido) - MIDI 文件处理
+- [librosa](https://librosa.org/) - 音频分析

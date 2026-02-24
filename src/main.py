@@ -40,10 +40,12 @@ def main():
     logger = setup_logger(log_dir=str(log_dir), level=logging.DEBUG)
 
     # 设置所有 src.* 模块的日志级别为 DEBUG，这样子模块也会输出详细日志
-    logging.getLogger("src").setLevel(logging.DEBUG)
-    # 为 src logger 添加相同的处理器（如果没有的话会继承 root）
+    src_logger = logging.getLogger("src")
+    src_logger.setLevel(logging.DEBUG)
+    # 禁止向 root logger 传播，避免第三方库注入的处理器产生重复输出
+    src_logger.propagate = False
+    # 为 src logger 添加相同的处理器（如果没有的话）
     for handler in logger.handlers:
-        src_logger = logging.getLogger("src")
         if handler not in src_logger.handlers:
             src_logger.addHandler(handler)
 
@@ -52,6 +54,7 @@ def main():
     try:
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QFont, QFontDatabase
 
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config
@@ -69,6 +72,29 @@ def main():
 
         # 应用Fusion样式
         app.setStyle("Fusion")
+
+        # 设置中文字体和Emoji字体（确保中文及图标正确显示）
+        import platform as _platform
+        if _platform.system() != "Windows":
+            available = QFontDatabase.families()
+            # 主字体：优先支持CJK中文的字体
+            ui_font_family = "sans-serif"
+            for family in ("Noto Sans CJK SC", "WenQuanYi Micro Hei",
+                           "WenQuanYi Zen Hei", "Ubuntu"):
+                if family in available:
+                    ui_font_family = family
+                    logger.info(f"已设置应用字体: {family}")
+                    break
+            ui_font = QFont(ui_font_family, 10)
+            app.setFont(ui_font)
+
+            # 设置字体替换：对于无法渲染的字符，回退到Emoji字体
+            for emoji_font in ("Noto Color Emoji", "Symbola"):
+                if emoji_font in available:
+                    QFont.insertSubstitutions(ui_font_family, [emoji_font])
+                    QFont.insertSubstitutions("sans-serif", [emoji_font])
+                    logger.info(f"已设置Emoji回退字体: {emoji_font}")
+                    break
 
         # 创建并显示主窗口
         config = Config()

@@ -2,14 +2,14 @@ name: 构建应用程序
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
-  build-windows:
-    name: 构建 Windows 版本
-    runs-on: windows-latest
+  build-linux:
+    name: 构建 Linux 版本
+    runs-on: ubuntu-22.04
 
     steps:
       - name: 检出代码
@@ -23,11 +23,32 @@ jobs:
 
       - name: 安装系统依赖
         run: |
-          choco install ffmpeg -y
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1 \
+            libportaudio2 \
+            portaudio19-dev \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-util1 \
+            libgl1 \
+            fonts-ubuntu \
+            fonts-dejavu-core \
+            xvfb
 
       - name: 安装 Python 依赖
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch==2.4.0 torchaudio==2.4.0 \
+            --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
           pip install pyinstaller
 
@@ -38,12 +59,12 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MusicToMidi-Windows
+          name: MusicToMidi-Linux
           path: dist/
 
   test:
     name: 运行测试
-    runs-on: windows-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: 检出代码
@@ -57,10 +78,22 @@ jobs:
 
       - name: 安装系统依赖
         run: |
-          choco install ffmpeg -y
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1 \
+            libportaudio2 \
+            portaudio19-dev \
+            libxcb-xinerama0 \
+            libxkbcommon-x11-0 \
+            libgl1 \
+            xvfb
 
       - name: 安装依赖
         run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch==2.4.0 torchaudio==2.4.0 \
+            --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
@@ -70,5 +103,9 @@ jobs:
           flake8 src/ --max-line-length=100 --ignore=E501,W503
 
       - name: 运行测试
+        env:
+          DISPLAY: ':99'
         run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 1
           pytest tests/ -v --tb=short || true
