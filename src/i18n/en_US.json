@@ -30,35 +30,8 @@
       "selected": "Selected file"
     },
     "mode": {
-      "piano": "Piano Mode",
-      "smart": "Smart Detection",
-      "piano_tooltip": "Convert audio directly to multiple piano tracks, ideal for piano music",
-      "smart_tooltip": "Use MT3/YourMT3+ to intelligently detect multiple instruments, can output 10+ tracks"
-    },
-    "piano": {
-      "track_count": "Piano tracks:",
-      "hint": "Recommended: 2-4 (left/right hand separation)",
-      "auto": "Auto detect",
-      "auto_tooltip": "Automatically determine optimal track count based on audio complexity",
-      "auto_hint": "Track count will be auto-detected based on audio complexity (1-6)"
-    },
-    "smart": {
-      "hint": "Instruments will be detected after selecting audio file"
-    },
-    "transcriber": {
-      "title": "Transcription Engine",
-      "auto": "Auto Select",
-      "mt3": "MT3 (Google Magenta)",
-      "yourmt3": "YourMT3+ (Best Quality)",
-      "basic_pitch": "Basic Pitch (Lightweight)",
-      "auto_tooltip": "Automatically select best available engine",
-      "mt3_tooltip": "Google Magenta model, supports 34 instrument classes with dynamic detection",
-      "yourmt3_tooltip": "2025 AMT Challenge winning model, supports multi-instrument direct transcription",
-      "basic_pitch_tooltip": "Lightweight model, suitable for simple music"
-    },
-    "drums": {
-      "separate_voices": "Hierarchical Drum Separation",
-      "separate_tooltip": "Separate drums into kick, snare, hi-hat, etc."
+      "smart": "YourMT3+ MoE Multi-Instrument",
+      "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed"
     },
     "tracks": {
       "title": "Track Settings",

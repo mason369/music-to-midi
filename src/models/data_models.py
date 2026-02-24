@@ -151,8 +151,8 @@ class InstrumentType(Enum):
 
 class ProcessingMode(Enum):
     """处理模式枚举"""
-    PIANO = "piano"         # 钢琴模式（跳过分离，直接转写为钢琴轨道）
-    SMART = "smart"         # 智能识别模式（多乐器转写，动态识别乐器）
+    SMART = "smart"         # YourMT3+ MoE 多乐器转写（唯一模式）
+    PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
 class TranscriptionQuality(Enum):
@@ -333,7 +333,11 @@ class TrackLayout:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrackLayout":
         """从字典创建"""
-        mode = ProcessingMode(data.get("mode", "piano"))
+        mode_str = data.get("mode", "smart")
+        # 兼容旧配置：piano 模式已弃用，映射到 smart
+        if mode_str == "piano":
+            mode_str = "smart"
+        mode = ProcessingMode(mode_str)
         tracks = []
         for t in data.get("tracks", []):
             tracks.append(TrackConfig(
@@ -396,22 +400,14 @@ class Config:
     # 处理设置
     use_gpu: bool = True
     gpu_device: int = 0
-    segment_size: float = 7.8  # Demucs分段大小（内存优化）
 
-    # 轨道系统设置
-    processing_mode: str = "piano"   # "piano" 或 "smart"
-    piano_track_count: int = 2       # 钢琴轨道数量 (1-8)
+    # 处理模式（固定为 smart，即 YourMT3+ MoE）
+    processing_mode: str = "smart"
 
-    # 转写引擎设置
-    transcriber_engine: str = "auto"  # "auto", "yourmt3", "basic_pitch"
-    use_direct_transcription: bool = False  # True = 跳过分离，直接YourMT3+
-    transcription_quality: str = "best"      # "fast", "balanced", "best" - 默认使用最佳质量
+    # 转写引擎设置（仅 YourMT3+）
+    transcription_quality: str = "best"      # "fast", "balanced", "best"
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
-    preserve_all_notes: bool = True          # 保留所有音符（不做激进后处理）
-    ultra_quality_mode: bool = True          # 极致质量模式（忽略性能，最大化质量）
-
-    # 鼓设置
-    separate_drum_voices: bool = False  # 层次化鼓输出（底鼓、军鼓、踩镲等）
+    preserve_all_notes: bool = True          # 保留所有音符
 
     # MIDI设置
     ticks_per_beat: int = 480
@@ -438,16 +434,10 @@ class Config:
             "theme": self.theme,
             "use_gpu": self.use_gpu,
             "gpu_device": self.gpu_device,
-            "segment_size": self.segment_size,
             "processing_mode": self.processing_mode,
-            "piano_track_count": self.piano_track_count,
-            "transcriber_engine": self.transcriber_engine,
-            "use_direct_transcription": self.use_direct_transcription,
             "transcription_quality": self.transcription_quality,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
-            "ultra_quality_mode": self.ultra_quality_mode,
-            "separate_drum_voices": self.separate_drum_voices,
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
             "onset_threshold": self.onset_threshold,
@@ -460,7 +450,7 @@ class Config:
             "max_polyphony": self.max_polyphony,
             "aggressive_post_processing": self.aggressive_post_processing,
             "output_dir": self.output_dir,
-            "save_separated_tracks": self.save_separated_tracks
+            "save_separated_tracks": self.save_separated_tracks,
         }
 
     @classmethod

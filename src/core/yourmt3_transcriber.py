@@ -302,7 +302,8 @@ class YourMT3Transcriber:
             yourmt3_paths = [
                 "YourMT3",
                 os.path.join(os.getcwd(), "YourMT3"),
-                os.path.join(os.path.dirname(__file__), "../../YourMT3")
+                os.path.join(os.path.dirname(__file__), "../../YourMT3"),
+                os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
             ]
 
             amt_src_path = None
@@ -432,7 +433,7 @@ class YourMT3Transcriber:
                 onset_tolerance=0.05,
                 test_octave_shift=False,
                 write_model_output=False,
-                precision="bf16-mixed",
+                precision="bf16-mixed" if self.device.startswith(("cuda", "xpu")) else "32-true",
                 strategy='auto',
                 num_nodes=1,
                 num_gpus='auto',
@@ -553,10 +554,13 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, "正在准备 YourMT3+ 转写...")
 
-        # 如果 YourMT3+ 不可用，使用回退方案
+        # 如果 YourMT3+ 不可用，直接抛出错误（无降级处理）
         if not self.is_available():
-            logger.warning("YourMT3+ 不可用，使用基础转写")
-            return self._fallback_transcribe(audio_path, progress_callback)
+            raise RuntimeError(
+                "YourMT3+ 不可用。\n"
+                "请先安装代码库：bash install.sh\n"
+                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
+            )
 
         try:
             # 加载模型
@@ -680,9 +684,7 @@ class YourMT3Transcriber:
 
         except Exception as e:
             logger.error(f"YourMT3+ 转写失败: {e}")
-            # 回退到基础转写
-            logger.info("回退到基础转写方案")
-            return self._fallback_transcribe(audio_path, progress_callback)
+            raise
 
     def transcribe_single_stem(
         self,
@@ -708,8 +710,7 @@ class YourMT3Transcriber:
         self._check_cancelled()
 
         if not self.is_available():
-            logger.warning("YourMT3+ 不可用，使用 Basic Pitch")
-            return self._fallback_single_transcribe(audio_path, instrument_hint, progress_callback)
+            raise RuntimeError("YourMT3+ 不可用，无法转写")
 
         try:
             # 加载模型
@@ -812,7 +813,7 @@ class YourMT3Transcriber:
 
         except Exception as e:
             logger.error(f"YourMT3+ 单轨转写失败: {e}")
-            return self._fallback_single_transcribe(audio_path, instrument_hint, progress_callback)
+            raise
 
     def _parse_yourmt3_output(
         self,
@@ -1311,142 +1312,6 @@ class YourMT3Transcriber:
 
         return result
 
-    def _fallback_transcribe(
-        self,
-        audio_path: str,
-        progress_callback: Optional[Callable[[float, str], None]] = None
-    ) -> Dict[InstrumentType, List[NoteEvent]]:
-        """
-        回退方案：使用 Demucs 分离 + 逐轨 Basic Pitch 转写
-
-        当 YourMT3+ 不可用时使用，保留多乐器识别能力。
-        """
-        import tempfile
-
-        logger.info("使用分离+逐轨转写作为备用方案")
-
-        if progress_callback:
-            progress_callback(0.0, "正在使用备用多轨转写...")
-
-        try:
-            from src.core.separator import SourceSeparator
-            from src.core.transcriber import AudioTranscriber
-
-            result: Dict[InstrumentType, List[NoteEvent]] = {}
-
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # 执行6轨分离
-                if progress_callback:
-                    progress_callback(0.05, "正在分离音源...")
-
-                separator = SourceSeparator(self.config)
-
-                try:
-                    stem_paths = separator.separate_6s(
-                        audio_path,
-                        temp_dir,
-                        lambda p, m: progress_callback(0.05 + p * 0.40, m) if progress_callback else None
-                    )
-                except Exception as e:
-                    logger.warning(f"6轨分离失败: {e}，尝试4轨分离")
-                    stem_paths = separator.separate(
-                        audio_path,
-                        temp_dir,
-                        lambda p, m: progress_callback(0.05 + p * 0.40, m) if progress_callback else None
-                    )
-
-                # 卸载分离模型以释放内存
-                separator.unload_model()
-
-                if progress_callback:
-                    progress_callback(0.45, "正在转写各轨道...")
-
-                # 逐轨转写
-                transcriber = AudioTranscriber(self.config)
-
-                # stem名称到乐器类型的映射
-                stem_instrument_map = {
-                    "drums": InstrumentType.DRUMS,
-                    "bass": InstrumentType.BASS,
-                    "vocals": InstrumentType.VOCALS,
-                    "guitar": InstrumentType.GUITAR,
-                    "piano": InstrumentType.PIANO,
-                    "other": InstrumentType.OTHER,
-                }
-
-                stem_items = list(stem_paths.items())
-                total_stems = len(stem_items)
-
-                for i, (stem_name, stem_path) in enumerate(stem_items):
-                    self._check_cancelled()
-
-                    # 跳过人声轨道（用于歌词识别）
-                    if stem_name == "vocals":
-                        continue
-
-                    instrument = stem_instrument_map.get(stem_name, InstrumentType.OTHER)
-
-                    if progress_callback:
-                        stem_progress = 0.45 + (i / total_stems) * 0.50
-                        progress_callback(stem_progress, f"正在转写 {instrument.get_display_name()}...")
-
-                    try:
-                        notes = transcriber.transcribe(
-                            stem_path,
-                            instrument,
-                            None  # 不传递进度回调，避免嵌套
-                        )
-
-                        if notes:
-                            result[instrument] = notes
-                            logger.info(f"备用转写 {instrument.value}: {len(notes)} 个音符")
-                    except Exception as e:
-                        logger.warning(f"转写 {stem_name} 失败: {e}")
-
-            if progress_callback:
-                total_notes = sum(len(notes) for notes in result.values())
-                progress_callback(1.0, f"备用转写完成: {len(result)} 种乐器, {total_notes} 个音符")
-
-            return result
-
-        except Exception as e:
-            logger.error(f"备用多轨转写失败: {e}")
-            # 最终回退：单轨 Basic Pitch
-            logger.info("最终回退：使用单轨 Basic Pitch")
-
-            from src.core.transcriber import AudioTranscriber
-            transcriber = AudioTranscriber(self.config)
-
-            if progress_callback:
-                progress_callback(0.5, "使用 Basic Pitch 转写...")
-
-            notes = transcriber.transcribe(
-                audio_path,
-                InstrumentType.OTHER,
-                lambda p, m: progress_callback(0.5 + p * 0.5, m) if progress_callback else None
-            )
-
-            return {InstrumentType.OTHER: notes}
-
-    def _fallback_single_transcribe(
-        self,
-        audio_path: str,
-        instrument_hint: Optional[InstrumentType],
-        progress_callback: Optional[Callable[[float, str], None]] = None
-    ) -> List[NoteEvent]:
-        """回退方案：使用 Basic Pitch 进行单轨转写"""
-        from src.core.transcriber import AudioTranscriber
-
-        transcriber = AudioTranscriber(self.config)
-
-        notes = transcriber.transcribe(
-            audio_path,
-            instrument_hint or InstrumentType.OTHER,
-            progress_callback
-        )
-
-        return notes
-
     def unload_model(self) -> None:
         """卸载模型以释放 GPU 内存"""
         if YourMT3Transcriber._model is not None:
@@ -1458,8 +1323,8 @@ class YourMT3Transcriber:
             # 清理 GPU 缓存
             try:
                 import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                from src.utils.gpu_utils import clear_gpu_memory
+                clear_gpu_memory()
             except Exception:
                 pass
 

@@ -3,6 +3,7 @@
 """
 import os
 import sys
+import platform
 import logging
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -13,19 +14,19 @@ from PyQt6.QtWidgets import (
     QFrame, QSplitter, QGraphicsDropShadowEffect,
     QDialog, QTextEdit, QApplication
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
 from src.models.data_models import (
     Config, ProcessingProgress, ProcessingResult, ProcessingStage,
-    TrackLayout, ProcessingMode
+    TrackLayout
 )
 from src.gui.widgets.dropzone import DropZoneWidget
 from src.gui.widgets.track_panel import TrackPanel
 from src.gui.widgets.progress_widget import ProgressWidget
 from src.gui.workers.processing_worker import ProcessingWorker
 from src.i18n.translator import t, get_translator, set_language, get_resource_path
-from src.utils.gpu_utils import is_cuda_available, get_gpu_info, get_memory_info
+from src.utils.gpu_utils import get_memory_info
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,32 @@ def get_app_dir() -> Path:
     else:
         # 开发环境 - 使用项目根目录
         return Path(__file__).parent.parent.parent
+
+
+def get_ui_font(size: int = 10, bold: bool = False) -> "QFont":
+    """获取跨平台UI字体，支持中文显示"""
+    from PyQt6.QtGui import QFontDatabase
+    weight = QFont.Weight.Bold if bold else QFont.Weight.Normal
+    if platform.system() == "Windows":
+        return QFont("Microsoft YaHei UI", size, weight)
+    else:
+        # Linux/WSL: Noto Sans CJK 支持中文，回退到 Ubuntu/DejaVu
+        available = QFontDatabase.families()
+        for family in ("Noto Sans CJK SC", "WenQuanYi Micro Hei", "Ubuntu", "DejaVu Sans"):
+            if family in available:
+                return QFont(family, size, weight)
+        return QFont("Noto Sans CJK SC", size, weight)
+
+
+def get_monospace_font(size: int = 11) -> "QFont":
+    """获取跨平台等宽字体"""
+    if platform.system() == "Windows":
+        return QFont("Consolas", size)
+    else:
+        font = QFont("Ubuntu Mono", size)
+        if not font.exactMatch():
+            font = QFont("DejaVu Sans Mono", size)
+        return font
 
 
 def get_icon_path(name: str) -> str:
@@ -73,8 +100,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 850)
         self.showMaximized()
 
-        # 设置应用图标
-        icon_path = get_icon_path("app.ico")
+        # 设置应用图标（Linux使用PNG，Windows使用ICO）
+        if platform.system() == "Windows":
+            icon_path = get_icon_path("app.ico")
+        else:
+            icon_path = get_icon_path("app_icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -138,11 +168,11 @@ class MainWindow(QMainWindow):
         title_layout.setSpacing(2)
 
         title_label = QLabel(t("app.name"))
-        title_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+        title_label.setFont(get_ui_font(18, bold=True))
         title_label.setStyleSheet("color: #e0e0e0;")
 
         subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
-        subtitle_label.setFont(QFont("Segoe UI", 10))
+        subtitle_label.setFont(get_ui_font(10))
         subtitle_label.setStyleSheet("color: #8892a0;")
 
         title_layout.addWidget(title_label)
@@ -280,7 +310,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn = QPushButton("▶  " + t("toolbar.start"))
         self.start_btn.setFixedSize(160, 48)
-        self.start_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.start_btn.setFont(get_ui_font(12, bold=True))
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setStyleSheet("""
             QPushButton {
@@ -305,7 +335,7 @@ class MainWindow(QMainWindow):
 
         self.stop_btn = QPushButton("■  " + t("toolbar.stop"))
         self.stop_btn.setFixedSize(120, 48)
-        self.stop_btn.setFont(QFont("Segoe UI", 11))
+        self.stop_btn.setFont(get_ui_font(11))
         self.stop_btn.setEnabled(False)
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
@@ -492,21 +522,45 @@ class MainWindow(QMainWindow):
         # 状态标签
         self.status_label = QLabel(t("status.ready"))
 
-        # GPU/CPU指示器
-        if is_cuda_available():
-            gpu_info = get_gpu_info()
-            gpu_name = gpu_info[0]["name"] if gpu_info else "GPU"
-            self.device_label = QLabel(f"{t('status.gpu')}: {gpu_name}")
-        else:
-            self.device_label = QLabel(f"{t('status.cpu')}")
+        # GPU/CPU 指示器（先显示占位符，后台检测后更新）
+        self.device_label = QLabel("...")
 
         # 内存指示器
         self.memory_label = QLabel()
-        self._update_memory_label()
 
         self.statusbar.addWidget(self.status_label, 1)
         self.statusbar.addPermanentWidget(self.device_label)
         self.statusbar.addPermanentWidget(self.memory_label)
+
+        # 在后台线程中检测 GPU，避免同步 import torch 阻塞 UI 初始化
+        self._start_gpu_detection()
+
+    def _start_gpu_detection(self):
+        """启动后台 GPU 检测线程"""
+        class _GpuDetector(QThread):
+            detected = pyqtSignal(str, str)  # (device_label, memory_text)
+
+            def run(self):
+                try:
+                    from src.utils.gpu_utils import (
+                        is_gpu_available, get_accelerator_label, get_memory_info
+                    )
+                    device_text = get_accelerator_label() if is_gpu_available() else "CPU"
+                    mem_info = get_memory_info()
+                    if mem_info:
+                        used, total = mem_info
+                        mem_text = f"显存: {used:.1f}/{total:.1f}GB"
+                    else:
+                        mem_text = ""
+                    self.detected.emit(device_text, mem_text)
+                except Exception:
+                    self.detected.emit("CPU", "")
+
+        self._gpu_detector = _GpuDetector()
+        self._gpu_detector.detected.connect(
+            lambda dev, mem: (self.device_label.setText(dev), self.memory_label.setText(mem))
+        )
+        self._gpu_detector.start()
 
     def _connect_signals(self):
         """连接信号与槽"""
@@ -557,22 +611,12 @@ class MainWindow(QMainWindow):
         # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
-
-        # 获取轨道布局
-        track_layout = self.track_panel.get_track_layout()
-        self.config.processing_mode = track_layout.mode.value
-        if track_layout.mode == ProcessingMode.PIANO:
-            # 如果轨道列表为空，表示自动检测，设置为 -1
-            if len(track_layout.tracks) == 0:
-                self.config.piano_track_count = -1  # 自动检测
-            else:
-                self.config.piano_track_count = len(track_layout.tracks)
+        self.config.processing_mode = "smart"  # 固定使用 YourMT3+ 智能模式
 
         # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem
         output_dir_with_music_name = os.path.join(self.config.output_dir, music_name)
 
-        # 如果目录已存在，添加数字后缀避免覆盖
         if os.path.exists(output_dir_with_music_name):
             counter = 2
             while True:
@@ -583,16 +627,14 @@ class MainWindow(QMainWindow):
                     break
                 counter += 1
 
-        # 确保输出目录存在
         os.makedirs(output_dir_with_music_name, exist_ok=True)
 
-        # 创建工作线程
         self.worker = ProcessingWorker(
             self.current_file,
             output_dir_with_music_name,
             self.config,
             self,
-            track_layout=track_layout
+            track_layout=self.track_panel.get_track_layout()
         )
 
         self.worker.progress_updated.connect(self._on_progress)
@@ -812,7 +854,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid #3a4a6a;
                 border-radius: 6px;
                 padding: 8px;
-                font-family: Consolas, monospace;
+                font-family: 'Ubuntu Mono', 'DejaVu Sans Mono', Consolas, monospace;
                 font-size: 11px;
                 color: #e0e0e0;
             }
