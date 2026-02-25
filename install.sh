@@ -370,7 +370,7 @@ if [ -f "YourMT3/requirements.txt" ]; then
 fi
 
 # ───────────────────────── 下载 SOTA 模型权重 ─────────────────────────
-info "下载 YourMT3+ SOTA 模型权重（YPTF.MoE+Multi PS，约 2.5GB）..."
+info "下载 YourMT3+ SOTA 模型权重（YPTF.MoE+Multi PS，约 800MB）..."
 info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_models.py"
 
 "$PYTHON" "${REPO_DIR}/download_sota_models.py" && \

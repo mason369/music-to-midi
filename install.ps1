@@ -632,7 +632,7 @@ if (Test-Path $yourmt3Req) {
 }
 
 # --- 第 13 步/共 13 步：下载 SOTA 模型权重 ---
-Write-Info "第 13 步/共 13 步  下载 YourMT3+ SOTA 模型权重（约 2.5 GB）..."
+Write-Info "第 13 步/共 13 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
 Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_sota_models.py"
 
 Set-Location $REPO_DIR
