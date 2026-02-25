@@ -12,6 +12,11 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 所有日志
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 警告
 os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
 
+# 限制 OpenMP/MKL 线程数，防止 PyTorch 多线程与 PyQt QThread 冲突导致堆内存损坏
+# 必须在 import torch 之前设置，否则无效
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+
 # 抑制 Python 警告
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)

@@ -62,48 +62,46 @@ Write-Info "第 1 步/共 13 步  检测 Python 版本..."
 
 $PYTHON_BIN = $null
 
-foreach ($cmd in @("py", "python")) {
+# 优先使用 py launcher 指定兼容版本（3.10~3.12），避免选中过新的 Python（3.13+ 尚未被 PyTorch 完全支持）
+foreach ($ver in @("-3.12", "-3.11", "-3.10")) {
     try {
-        $verStr = & $cmd -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
+        $verStr = & py $ver -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
         if ($LASTEXITCODE -eq 0 -and ("$verStr" -match '^(\d+)\.(\d+)')) {
-            $major = [int]$Matches[1]
-            $minor = [int]$Matches[2]
-            if ($major -ge 3 -and $minor -ge 10) {
-                $PYTHON_BIN = $cmd
-                Write-Ok "找到 Python $verStr ($cmd)"
-                break
-            }
+            $PYTHON_BIN = "py $ver"
+            Write-Ok "找到 Python $verStr (py $ver)"
+            break
         }
     }
-    catch {
-        # 该命令不存在，尝试下一个
-    }
+    catch {}
 }
 
+# 回退：检测 py / python 命令，但限制版本 3.10~3.12
 if (-not $PYTHON_BIN) {
-    foreach ($ver in @("-3.11", "-3.10")) {
+    foreach ($cmd in @("py", "python")) {
         try {
-            $verStr = & py $ver -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
+            $verStr = & $cmd -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
             if ($LASTEXITCODE -eq 0 -and ("$verStr" -match '^(\d+)\.(\d+)')) {
                 $major = [int]$Matches[1]
                 $minor = [int]$Matches[2]
-                if ($major -ge 3 -and $minor -ge 10) {
-                    $PYTHON_BIN = "py $ver"
-                    Write-Ok "找到 Python $verStr (py $ver)"
+                if ($major -eq 3 -and $minor -ge 10 -and $minor -le 12) {
+                    $PYTHON_BIN = $cmd
+                    Write-Ok "找到 Python $verStr ($cmd)"
                     break
+                } elseif ($major -eq 3 -and $minor -gt 12) {
+                    Write-Warn "检测到 Python $verStr，版本过新（PyTorch 尚未支持 3.13+）"
+                    Write-Warn "  建议安装 Python 3.11 或 3.12: winget install Python.Python.3.11"
                 }
             }
         }
-        catch {
-            # 版本不存在，尝试下一个
-        }
+        catch {}
     }
 }
 
 if (-not $PYTHON_BIN) {
-    Write-Host "[错误] 未找到 Python 3.10+。" -ForegroundColor Red
-    Write-Host "  请访问 https://www.python.org/downloads/ 下载" -ForegroundColor Yellow
-    Write-Host "  或执行: winget install Python.Python.3.11" -ForegroundColor Yellow
+    Write-Host "[错误] 未找到兼容的 Python 版本（需要 3.10~3.12）。" -ForegroundColor Red
+    Write-Host "  当前系统可能安装了过新的 Python（3.13+），PyTorch 尚不支持。" -ForegroundColor Yellow
+    Write-Host "  请安装 Python 3.11: winget install Python.Python.3.11" -ForegroundColor Yellow
+    Write-Host "  或访问 https://www.python.org/downloads/ 下载 3.11 或 3.12" -ForegroundColor Yellow
     exit 1
 }
 
@@ -396,7 +394,7 @@ if (-not $TORCH_INSTALLED) {
     }
 
     Write-Info "正在安装 PyTorch ($TORCH_LABEL)..."
-    & "$PIP" install torch==2.4.0 torchaudio==2.4.0 --index-url "$TORCH_INDEX"
+    & "$PIP" install "torch>=2.1.0" "torchaudio>=2.1.0" --index-url "$TORCH_INDEX"
     if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 安装失败" }
     Write-Ok "PyTorch ($TORCH_LABEL) 安装成功"
 }
