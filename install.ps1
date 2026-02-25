@@ -642,11 +642,18 @@ try {
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "SOTA 模型权重下载成功"
     } else {
-        Write-Warn "模型下载失败。请手动执行: venv\Scripts\python.exe download_sota_models.py"
+        Write-Host ""
+        Write-Host "  !! 模型下载失败 !!" -ForegroundColor Red
+        Write-Host "  可能原因：网络问题 / SSL 证书验证失败 / 代理环境" -ForegroundColor Yellow
+        Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
+        Write-Host ""
     }
 }
 catch {
-    Write-Warn "模型下载失败。请手动执行: venv\Scripts\python.exe download_sota_models.py"
+    Write-Host ""
+    Write-Host "  !! 模型下载失败 !!" -ForegroundColor Red
+    Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
+    Write-Host ""
 }
 
 # --- 完成 ---

@@ -103,7 +103,26 @@ def _get_torch():
     except ImportError:
         return None
     except OSError as e:
-        logger.warning(f"torch 加载失败（可能是路径含非 ASCII 字符）: {e}")
+        import re
+        # 判断是否是路径特殊字符导致的问题
+        err_str = str(e)
+        # 从错误信息中提取 DLL 路径
+        path_match = re.search(r'Error loading "([^"]+)"', err_str)
+        dll_path = path_match.group(1) if path_match else ""
+        has_special = bool(re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', dll_path))
+
+        if has_special:
+            logger.warning(f"torch 加载失败（路径含特殊字符）: {e}")
+            logger.warning("建议将项目移动到纯英文且无空格的路径，如 C:\\MusicToMidi")
+        else:
+            logger.warning(f"torch DLL 加载失败: {e}")
+            logger.warning(
+                "可能原因：\n"
+                "  1. 未安装 Visual C++ Redistributable 2022: "
+                "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
+                "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
+            )
         return None
 
 
