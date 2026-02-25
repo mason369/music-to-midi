@@ -6,10 +6,51 @@ YourMT3+ 模型下载工具
 """
 import logging
 import os
+import ssl
+import urllib.request
 from pathlib import Path
 from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _fix_ssl_if_needed():
+    """
+    检测并修复 SSL 证书验证问题。
+    在企业网络/校园网/代理环境下，HTTPS 流量可能被拦截导致证书验证失败。
+    """
+    test_url = "https://huggingface.co"
+    try:
+        req = urllib.request.Request(test_url, method="HEAD")
+        urllib.request.urlopen(req, timeout=10)
+        return
+    except (ssl.SSLCertVerificationError, urllib.error.URLError):
+        pass
+    except Exception:
+        pass
+
+    # 尝试 certifi
+    try:
+        import certifi
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        req = urllib.request.Request(test_url, method="HEAD")
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        urllib.request.urlopen(req, timeout=10, context=ctx)
+        logger.info("已使用 certifi 证书修复 SSL 验证")
+        return
+    except Exception:
+        pass
+
+    # 回退：跳过验证
+    logger.warning("SSL 证书验证失败，将跳过验证（可能处于代理/企业网络环境）")
+    os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
+    os.environ["CURL_CA_BUNDLE"] = ""
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception:
+        pass
 
 # Hugging Face 镜像站点列表（用于国内网络环境）
 HF_MIRRORS = [
@@ -198,6 +239,9 @@ def download_model(
         progress_callback(0.0, f"准备下载 {model_info['name']}...")
 
     logger.info(f"开始下载 YourMT3+ 模型: {model_name}")
+
+    # 修复 SSL 证书问题（企业网络/校园网/代理环境）
+    _fix_ssl_if_needed()
 
     # 检查是否已下载
     existing_path = get_model_path(model_name)
