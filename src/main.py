@@ -23,19 +23,36 @@ import platform as _plat
 if _plat.system() == "Windows":
     try:
         import importlib.util as _ilu
-        import ctypes as _ct
+        import re as _re
         _spec = _ilu.find_spec("torch")
         if _spec and _spec.origin:
             _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
-            if os.path.isdir(_torch_lib):
-                # 获取 8.3 短路径名，消除空格/括号/非ASCII
+            if os.path.isdir(_torch_lib) and _re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', _torch_lib):
+                import ctypes as _ct
+                import glob as _gl
+                # 获取 8.3 短路径名
                 _buf = _ct.create_unicode_buffer(512)
                 _ret = _ct.windll.kernel32.GetShortPathNameW(_torch_lib, _buf, 512)
                 _short = _buf.value if 0 < _ret < 512 else _torch_lib
+                # 注入 PATH
                 _path = os.environ.get("PATH", "")
                 if _short not in _path:
                     os.environ["PATH"] = _short + os.pathsep + _path
                 os.add_dll_directory(_short)
+                # 预加载 VC++ 运行时
+                for _vcrt in ("vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"):
+                    try:
+                        _ct.CDLL(_vcrt)
+                    except OSError:
+                        pass
+                # 用短路径预加载所有 torch DLL
+                _k32 = _ct.WinDLL("kernel32.dll", use_last_error=True)
+                _k32.LoadLibraryW.restype = _ct.c_void_p
+                for _dll in sorted(_gl.glob(os.path.join(_short, "*.dll"))):
+                    try:
+                        _k32.LoadLibraryW(_dll)
+                    except Exception:
+                        pass
     except Exception:
         pass
     del _plat

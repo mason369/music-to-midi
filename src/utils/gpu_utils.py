@@ -28,8 +28,12 @@ def _get_short_path(long_path: str) -> str:
 def _fix_torch_dll_path():
     """
     修复 Windows 特殊路径下 PyTorch DLL 加载失败的问题。
-    路径中的空格、括号、中文/日文等字符都可能导致 c10.dll 加载失败。
-    通过获取 8.3 短路径名并注入 PATH + os.add_dll_directory() 双重保障。
+
+    PyTorch 的 _load_dll_libraries() 用完整长路径调用 LoadLibraryExW，
+    路径中的空格、括号、中文等字符会导致 c10.dll 加载失败（WinError 1114）。
+
+    解决方案：在 import torch 之前，用 8.3 短路径预加载所有 torch DLL，
+    这样 PyTorch 再次加载时发现 DLL 已在内存中，不会重复加载。
     """
     if platform.system() != "Windows":
         return
@@ -42,31 +46,50 @@ def _fix_torch_dll_path():
         if not os.path.isdir(torch_lib):
             return
 
-        # 获取短路径名，消除空格/括号/非ASCII
-        torch_lib_short = _get_short_path(torch_lib)
+        # 检查路径是否包含特殊字符（空格、括号、非 ASCII）
+        import re
+        if not re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', torch_lib):
+            return  # 路径正常，无需修复
 
-        # 方法 1：注入 PATH 环境变量（PyTorch _load_dll_libraries 依赖此路径）
+        torch_lib_short = _get_short_path(torch_lib)
+        if torch_lib_short == torch_lib:
+            # 短路径获取失败（可能 8.3 名称被禁用），回退到 PATH 注入
+            current_path = os.environ.get("PATH", "")
+            if torch_lib not in current_path:
+                os.environ["PATH"] = torch_lib + os.pathsep + current_path
+            try:
+                os.add_dll_directory(torch_lib)
+            except OSError:
+                pass
+            return
+
+        # 注入短路径到 PATH 和 DLL 搜索目录
         current_path = os.environ.get("PATH", "")
         if torch_lib_short not in current_path:
             os.environ["PATH"] = torch_lib_short + os.pathsep + current_path
-
-        # 方法 2：os.add_dll_directory（Python 3.8+ 的 DLL 搜索路径）
         try:
             os.add_dll_directory(torch_lib_short)
         except OSError:
             pass
 
-        # 同时处理子目录（torch_cuda, torch_cpu 等）
-        for sub in ("torch_cuda", "torch_cpu"):
-            p = os.path.join(torch_lib, sub)
-            if os.path.isdir(p):
-                p_short = _get_short_path(p)
-                if p_short not in os.environ.get("PATH", ""):
-                    os.environ["PATH"] = p_short + os.pathsep + os.environ.get("PATH", "")
-                try:
-                    os.add_dll_directory(p_short)
-                except OSError:
-                    pass
+        # 预加载 VC++ 运行时（c10.dll 的前置依赖）
+        import ctypes
+        for vcrt in ("vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"):
+            try:
+                ctypes.CDLL(vcrt)
+            except OSError:
+                pass
+
+        # 用短路径预加载所有 torch DLL，使其驻留内存
+        # PyTorch 再次加载时会发现已在内存中，跳过路径解析
+        import glob
+        kernel32 = ctypes.WinDLL("kernel32.dll", use_last_error=True)
+        kernel32.LoadLibraryW.restype = ctypes.c_void_p
+        for dll in sorted(glob.glob(os.path.join(torch_lib_short, "*.dll"))):
+            try:
+                kernel32.LoadLibraryW(dll)
+            except Exception:
+                pass
     except Exception:
         pass
 
