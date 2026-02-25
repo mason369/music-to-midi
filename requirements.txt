@@ -2,8 +2,8 @@
 # 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / Demucs / PANNs / ByteDance 钢琴模型）
 
 # PyTorch 核心（兼容 YourMT3+ 和 pytorch-lightning）
-torch>=2.1.0
-torchaudio>=2.1.0
+torch>=2.1.0,<2.10.0
+torchaudio>=2.1.0,<2.10.0
 
 # NumPy 版本锁定（兼容 numba）
 numpy>=1.24.0,<2.0
