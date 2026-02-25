@@ -261,7 +261,8 @@ class YourMT3Transcriber:
                     "external/YourMT3",
                     os.path.join(os.getcwd(), "external/YourMT3"),
                     os.path.join(os.path.dirname(__file__), "../../YourMT3"),
-                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3")
+                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
+                    os.path.join(str(Path.home()), ".cache/music_ai_models/yourmt3_all"),
                 ]
 
                 for path in yourmt3_paths:
@@ -356,6 +357,7 @@ class YourMT3Transcriber:
                 os.path.join(os.getcwd(), "YourMT3"),
                 os.path.join(os.path.dirname(__file__), "../../YourMT3"),
                 os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
+                os.path.join(str(Path.home()), ".cache/music_ai_models/yourmt3_all"),
             ]
 
             amt_src_path = None
