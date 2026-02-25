@@ -182,9 +182,56 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 
 ### 使用的 AI 模型
 
-| 模型 | 来源 | 用途 |
-|------|------|------|
-| **YourMT3+ MoE** | KAIST | 多乐器转写，128 种 GM 乐器（唯一转写引擎） |
+本项目使用 **YPTF.MoE+Multi (PS)** — YourMT3+ 系列中的最高性能变体。
+
+| 项目 | 详情 |
+|------|------|
+| 模型全称 | YPTF.MoE+Multi (PS) |
+| 检查点 | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2` |
+| 来源 | [KAIST - YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3)（[arXiv:2407.04822](https://arxiv.org/abs/2407.04822)） |
+| 架构 | Perceiver Transformer 编码器 + Multi-T5 解码器 |
+| MoE | 8 专家, Top-2 路由, SiLU 激活 |
+| 位置编码 | RoPE（部分旋转位置编码） |
+| 归一化 | RMSNorm |
+| 训练增强 | Pitch Shift 音高偏移增强（PS） |
+| 模型大小 | ~2.5 GB |
+| 任务类型 | `mt3_full_plus`（128 种 GM 乐器 + 鼓） |
+
+#### 性能基准（Slakh2100 数据集）
+
+| 指标 | YPTF.MoE+Multi (PS) | MT3 (Google 基线) |
+|------|---------------------|-------------------|
+| Multi F1 | **0.7484** | 0.62 |
+| Frame F1 | 0.8487 | — |
+| Onset F1 | 0.8419 | — |
+| Offset F1 | 0.6961 | — |
+| Drum Onset F1 | 0.9113 | — |
+
+各乐器 Onset F1：Bass 0.93 / Piano 0.88 / Guitar 0.82 / Synth Lead 0.82 / Brass 0.73 / Strings 0.73
+
+#### 仓库内可用模型变体
+
+| 模型 | MoE | Pitch Shift | 大小 | 说明 |
+|------|-----|-------------|------|------|
+| YPTF.MoE+Multi (PS) | ✅ 8专家 | ✅ | 2.5 GB | **默认，最高性能** |
+| YPTF.MoE+Multi (noPS) | ✅ 8专家 | ❌ | 2.5 GB | 无音高偏移增强 |
+| YPTF+Multi (PS) | ❌ | ✅ | 2.0 GB | 标准 Perceiver，较轻量 |
+| YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | 标准 Perceiver，无增强 |
+| YourMT3+ 传统版 | ❌ | ❌ | 2.0 GB | 旧版兼容 |
+
+#### 未来可关注的转写模型
+
+| 模型 | 来源 | 类型 | 状态 | 说明 |
+|------|------|------|------|------|
+| [MT3](https://github.com/magenta/mt3) | Google Magenta | 多乐器 | ✅ 已开源 | Transformer 编码-解码，YourMT3+ 的基础架构，Multi F1=0.62 (Slakh) |
+| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | 钢琴 | ✅ 已开源 | 基于 Whisper 架构的钢琴转写，2025 年用于生成 100 万+ MIDI 数据集 |
+| Streaming AMT | arXiv 2025 | 多乐器 | 📄 论文阶段 | 卷积编码器 + 自回归 Transformer 解码器，支持实时流式转写，性能接近离线 SOTA |
+| 2025 AMT Challenge 冠军方案 | ISMIR 2025 | 多乐器 | 📄 论文阶段 | 8 支队伍参赛，2 支超越 MT3 基线，聚焦合成古典音乐转写 |
+| CVC 评估框架 | ISMIR 2025 | 评估方法 | 📄 论文阶段 | 跨版本一致性（Cross-Version Consistency），无需标注的评估方法，适用于管弦乐场景 |
+| [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | 多任务 | ✅ 已开源 | 支持钢琴/鼓/人声/和弦转写，2025 年无重大更新 |
+| [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | 通用 | ✅ 已开源 | 轻量级单音/复音转写，适合快速推理，精度低于 MT3 系列 |
+
+> **趋势总结**：2025 年多乐器 AMT 仍以 MT3/YourMT3+ 系 Transformer 架构为主导。钢琴转写最为成熟（Aria-AMT5），多乐器和吉他指法转写仍是活跃研究方向。实时流式转写和大规模无标注评估是新兴热点。
 
 ## 开发
 

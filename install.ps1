@@ -57,6 +57,29 @@ Write-Host "  Music to MIDI  -  Windows 安装程序" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+# --- 检测安装路径是否包含非 ASCII 字符（中文/日文等）---
+# PyTorch 在 Windows 上无法正确加载非 ASCII 路径下的 DLL（c10.dll 等）
+$nonAscii = [regex]::IsMatch($REPO_DIR, '[^\x00-\x7F]')
+if ($nonAscii) {
+    Write-Host ""
+    Write-Host "  !! 警告: 安装路径包含非 ASCII 字符（如中文用户名）!!" -ForegroundColor Red
+    Write-Host "  当前路径: $REPO_DIR" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  PyTorch 在 Windows 上可能无法加载此路径下的 DLL，" -ForegroundColor Yellow
+    Write-Host "  导致运行时出现 'DLL 初始化例程失败' 错误。" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  建议将项目移动到纯英文路径，例如:" -ForegroundColor Green
+    Write-Host "    C:\MusicToMidi" -ForegroundColor Green
+    Write-Host "    D:\Projects\music-to-midi" -ForegroundColor Green
+    Write-Host ""
+    $continue = Read-Host "  是否仍要继续安装？(y/N)"
+    if ($continue -ne 'y' -and $continue -ne 'Y') {
+        Write-Host "  已取消安装。请将项目移动到纯英文路径后重试。" -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Warn "继续安装（路径问题可能导致运行失败）..."
+}
+
 # --- 第 1 步/共 13 步：检测 Python 版本 ---
 Write-Info "第 1 步/共 13 步  检测 Python 版本..."
 

@@ -9,12 +9,41 @@ from typing import List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _fix_torch_dll_path():
+    """
+    修复 Windows 非 ASCII 路径下 PyTorch DLL 加载失败的问题。
+    PyTorch 内部使用的 DLL 加载器无法正确处理中文/日文等路径，
+    需要在 import torch 之前通过 os.add_dll_directory() 显式注册。
+    """
+    if platform.system() != "Windows":
+        return
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("torch")
+        if spec is None or spec.origin is None:
+            return
+        torch_lib = os.path.join(os.path.dirname(spec.origin), "lib")
+        if os.path.isdir(torch_lib):
+            os.add_dll_directory(torch_lib)
+            # 同时注册可能存在的第三方 DLL 目录（如 fbgemm 依赖）
+            for sub in ("", "torch_cuda", "torch_cpu"):
+                p = os.path.join(torch_lib, sub) if sub else torch_lib
+                if os.path.isdir(p) and p != torch_lib:
+                    os.add_dll_directory(p)
+    except Exception:
+        pass
+
+
 def _get_torch():
     """获取 torch 模块，失败返回 None"""
     try:
+        _fix_torch_dll_path()
         import torch
         return torch
     except ImportError:
+        return None
+    except OSError as e:
+        logger.warning(f"torch 加载失败（可能是路径含非 ASCII 字符）: {e}")
         return None
 
 
