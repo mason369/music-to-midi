@@ -264,17 +264,24 @@ Per-instrument Onset F1: Bass 0.93 / Piano 0.88 / Guitar 0.82 / Synth Lead 0.82 
 | YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | Standard Perceiver, no augmentation |
 | YourMT3+ Legacy | ❌ | ❌ | 2.0 GB | Backward compatibility |
 
-#### Future / Alternative Transcription Models
+#### Future / Emerging Transcription Models
 
-| Model | Source | Type | Status | Notes |
-|-------|--------|------|--------|-------|
-| [MT3](https://github.com/magenta/mt3) | Google Magenta | Multi-instrument | ✅ Open Source | Transformer enc-dec, base architecture of YourMT3+, Multi F1=0.62 (Slakh) |
-| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open Source | Whisper-based piano transcription, used to generate 1M+ MIDI dataset in 2025 |
+Models and research directions that emerged after 2025:
+
+| Model / Direction | Source | Type | Status | Notes |
+|-------------------|--------|------|--------|-------|
+| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open Source | Whisper-based piano transcription, used to generate 1M+ MIDI dataset in 2025, new piano SOTA |
 | Streaming AMT | arXiv 2025 | Multi-instrument | 📄 Paper | Conv encoder + autoregressive Transformer decoder, real-time streaming, near offline SOTA |
 | 2025 AMT Challenge Winners | ISMIR 2025 | Multi-instrument | 📄 Paper | 8 teams competed, 2 beat MT3 baseline, focused on synthesized classical music |
 | CVC Framework | ISMIR 2025 | Evaluation | 📄 Paper | Cross-Version Consistency, annotation-free evaluation for orchestral scenarios |
-| [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | Multi-task | ✅ Open Source | Piano/drums/vocal/chord transcription, no major 2025 update |
-| [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | General | ✅ Open Source | Lightweight mono/polyphonic, fast inference, lower accuracy than MT3 family |
+
+#### Existing Models in the Same Domain
+
+| Model | Source | Type | Notes |
+|-------|--------|------|-------|
+| [MT3](https://github.com/magenta/mt3) | Google Magenta | Multi-instrument | Transformer enc-dec, base architecture of YourMT3+, Multi F1=0.62 (Slakh) |
+| [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | Multi-task | Piano/drums/vocal/chord transcription, no major 2025 update |
+| [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | General | Lightweight mono/polyphonic, fast inference, lower accuracy than MT3 family |
 
 > **Trend Summary**: As of 2025, multi-instrument AMT is still dominated by MT3/YourMT3+ Transformer architectures. Piano transcription is the most mature area (Aria-AMT5). Multi-instrument and guitar tablature transcription remain active research frontiers. Real-time streaming and large-scale annotation-free evaluation are emerging topics.
 
