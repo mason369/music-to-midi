@@ -17,6 +17,21 @@ os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 
+# 修复 Windows 非 ASCII 路径（如中文用户名）下 PyTorch DLL 加载失败的问题
+# 必须在任何 import torch 之前执行
+import platform as _plat
+if _plat.system() == "Windows":
+    try:
+        import importlib.util
+        _spec = importlib.util.find_spec("torch")
+        if _spec and _spec.origin:
+            _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
+            if os.path.isdir(_torch_lib):
+                os.add_dll_directory(_torch_lib)
+    except Exception:
+        pass
+    del _plat
+
 # 抑制 Python 警告
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)

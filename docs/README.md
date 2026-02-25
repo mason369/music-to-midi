@@ -227,9 +227,56 @@ Download the latest release from the [Releases](https://github.com/mason369/musi
 
 ### AI Models Used
 
-| Model | Source | Purpose |
-|-------|--------|---------|
-| **YourMT3+ MoE** | KAIST | Multi-instrument transcription, 128 GM instruments (sole transcription engine) |
+This project uses **YPTF.MoE+Multi (PS)** — the highest-performance variant in the YourMT3+ family.
+
+| Item | Details |
+|------|---------|
+| Full Name | YPTF.MoE+Multi (PS) |
+| Checkpoint | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2` |
+| Source | [KAIST - YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) ([arXiv:2407.04822](https://arxiv.org/abs/2407.04822)) |
+| Architecture | Perceiver Transformer Encoder + Multi-T5 Decoder |
+| MoE | 8 Experts, Top-2 Routing, SiLU Activation |
+| Position Encoding | RoPE (Partial Rotary Position Embedding) |
+| Normalization | RMSNorm |
+| Training Augmentation | Pitch Shift (PS) |
+| Model Size | ~2.5 GB |
+| Task Type | `mt3_full_plus` (128 GM instruments + drums) |
+
+#### Benchmark (Slakh2100 Dataset)
+
+| Metric | YPTF.MoE+Multi (PS) | MT3 (Google Baseline) |
+|--------|---------------------|----------------------|
+| Multi F1 | **0.7484** | 0.62 |
+| Frame F1 | 0.8487 | — |
+| Onset F1 | 0.8419 | — |
+| Offset F1 | 0.6961 | — |
+| Drum Onset F1 | 0.9113 | — |
+
+Per-instrument Onset F1: Bass 0.93 / Piano 0.88 / Guitar 0.82 / Synth Lead 0.82 / Brass 0.73 / Strings 0.73
+
+#### Available Model Variants
+
+| Model | MoE | Pitch Shift | Size | Notes |
+|-------|-----|-------------|------|-------|
+| YPTF.MoE+Multi (PS) | ✅ 8 experts | ✅ | 2.5 GB | **Default, highest performance** |
+| YPTF.MoE+Multi (noPS) | ✅ 8 experts | ❌ | 2.5 GB | Without pitch shift augmentation |
+| YPTF+Multi (PS) | ❌ | ✅ | 2.0 GB | Standard Perceiver, lighter |
+| YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | Standard Perceiver, no augmentation |
+| YourMT3+ Legacy | ❌ | ❌ | 2.0 GB | Backward compatibility |
+
+#### Future / Alternative Transcription Models
+
+| Model | Source | Type | Status | Notes |
+|-------|--------|------|--------|-------|
+| [MT3](https://github.com/magenta/mt3) | Google Magenta | Multi-instrument | ✅ Open Source | Transformer enc-dec, base architecture of YourMT3+, Multi F1=0.62 (Slakh) |
+| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open Source | Whisper-based piano transcription, used to generate 1M+ MIDI dataset in 2025 |
+| Streaming AMT | arXiv 2025 | Multi-instrument | 📄 Paper | Conv encoder + autoregressive Transformer decoder, real-time streaming, near offline SOTA |
+| 2025 AMT Challenge Winners | ISMIR 2025 | Multi-instrument | 📄 Paper | 8 teams competed, 2 beat MT3 baseline, focused on synthesized classical music |
+| CVC Framework | ISMIR 2025 | Evaluation | 📄 Paper | Cross-Version Consistency, annotation-free evaluation for orchestral scenarios |
+| [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | Multi-task | ✅ Open Source | Piano/drums/vocal/chord transcription, no major 2025 update |
+| [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | General | ✅ Open Source | Lightweight mono/polyphonic, fast inference, lower accuracy than MT3 family |
+
+> **Trend Summary**: As of 2025, multi-instrument AMT is still dominated by MT3/YourMT3+ Transformer architectures. Piano transcription is the most mature area (Aria-AMT5). Multi-instrument and guitar tablature transcription remain active research frontiers. Real-time streaming and large-scale annotation-free evaluation are emerging topics.
 
 ### Architecture
 

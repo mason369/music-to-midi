@@ -21,7 +21,10 @@ import numpy as np
 
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
-from src.utils.gpu_utils import get_device, get_optimal_batch_size
+from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path
+
+# 在任何 import torch 之前修复 Windows 非 ASCII 路径 DLL 加载问题
+_fix_torch_dll_path()
 
 logger = logging.getLogger(__name__)
 
