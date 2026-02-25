@@ -9,11 +9,27 @@ from typing import List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _get_short_path(long_path: str) -> str:
+    """
+    获取 Windows 8.3 短路径名，消除空格、括号、非 ASCII 等特殊字符。
+    例如 'D:\\music-to-midi-master (1)\\...' → 'D:\\MUSIC-~1\\...'
+    """
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(512)
+        ret = ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 512)
+        if ret > 0 and ret < 512:
+            return buf.value
+    except Exception:
+        pass
+    return long_path
+
+
 def _fix_torch_dll_path():
     """
-    修复 Windows 非 ASCII 路径下 PyTorch DLL 加载失败的问题。
-    PyTorch 内部使用的 DLL 加载器无法正确处理中文/日文等路径，
-    需要在 import torch 之前通过 os.add_dll_directory() 显式注册。
+    修复 Windows 特殊路径下 PyTorch DLL 加载失败的问题。
+    路径中的空格、括号、中文/日文等字符都可能导致 c10.dll 加载失败。
+    通过获取 8.3 短路径名并注入 PATH + os.add_dll_directory() 双重保障。
     """
     if platform.system() != "Windows":
         return
@@ -23,13 +39,34 @@ def _fix_torch_dll_path():
         if spec is None or spec.origin is None:
             return
         torch_lib = os.path.join(os.path.dirname(spec.origin), "lib")
-        if os.path.isdir(torch_lib):
-            os.add_dll_directory(torch_lib)
-            # 同时注册可能存在的第三方 DLL 目录（如 fbgemm 依赖）
-            for sub in ("", "torch_cuda", "torch_cpu"):
-                p = os.path.join(torch_lib, sub) if sub else torch_lib
-                if os.path.isdir(p) and p != torch_lib:
-                    os.add_dll_directory(p)
+        if not os.path.isdir(torch_lib):
+            return
+
+        # 获取短路径名，消除空格/括号/非ASCII
+        torch_lib_short = _get_short_path(torch_lib)
+
+        # 方法 1：注入 PATH 环境变量（PyTorch _load_dll_libraries 依赖此路径）
+        current_path = os.environ.get("PATH", "")
+        if torch_lib_short not in current_path:
+            os.environ["PATH"] = torch_lib_short + os.pathsep + current_path
+
+        # 方法 2：os.add_dll_directory（Python 3.8+ 的 DLL 搜索路径）
+        try:
+            os.add_dll_directory(torch_lib_short)
+        except OSError:
+            pass
+
+        # 同时处理子目录（torch_cuda, torch_cpu 等）
+        for sub in ("torch_cuda", "torch_cpu"):
+            p = os.path.join(torch_lib, sub)
+            if os.path.isdir(p):
+                p_short = _get_short_path(p)
+                if p_short not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = p_short + os.pathsep + os.environ.get("PATH", "")
+                try:
+                    os.add_dll_directory(p_short)
+                except OSError:
+                    pass
     except Exception:
         pass
 
