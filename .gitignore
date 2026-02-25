@@ -81,7 +81,6 @@ pyvenv.cfg
 Thumbs.db
 
 # Project specific
-/YourMT3/
 /models/
 /tools/ffmpeg/bin/
 *.wav

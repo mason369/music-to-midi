@@ -66,7 +66,6 @@ cd music-to-midi
   - Windows: `choco install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)
   - Linux: `sudo apt install ffmpeg` (Ubuntu/Debian) or `sudo dnf install ffmpeg` (Fedora)
   - macOS: `brew install ffmpeg`
-- **Git LFS** (optional, required to install YourMT3+ code)
 - **NVIDIA GPU + CUDA** (recommended): For significantly faster processing
 
 ### Git LFS Installation
@@ -122,21 +121,10 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 # 4. Install project dependencies
 pip install -r requirements.txt
 
-# 5. Install YourMT3+ code (optional, for 128 instrument recognition)
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-# Linux optional: only required for GuitarSet preprocessing
-sudo apt-get install sox
-cd ..
-# Or run the install script
-bash install_yourmt3_code.sh
-
-# 6. Download YourMT3+ models (optional)
+# 5. Download YourMT3+ models
 python download_sota_models.py
 
-# 7. Run the application
+# 6. Run the application
 python -m src.main
 ```
 
@@ -166,14 +154,7 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 # Install dependencies
 pip install -r requirements.txt
 
-# Optional: install YourMT3+ code (for 128-instrument recognition)
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-cd ..
-
-# Optional: download YourMT3+ models
+# Download YourMT3+ models
 python download_sota_models.py
 
 # Run the application
@@ -383,16 +364,6 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 
 **Q: YourMT3+ not available**
 ```bash
-# Ensure YourMT3 code exists
-ls YourMT3/
-
-# If not exists, clone the repository (requires Git LFS)
-git lfs install
-git clone https://huggingface.co/spaces/mimbres/YourMT3
-cd YourMT3
-pip install -r requirements.txt
-cd ..
-
 # Download models
 python download_sota_models.py
 ```

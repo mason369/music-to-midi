@@ -34,10 +34,6 @@ if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido" 2>/dev/n
     warn "核心 Python 包缺失"; NEED_INSTALL=true
 fi
 
-if ! $NEED_INSTALL && [ ! -d "${REPO_DIR}/YourMT3/amt/src" ]; then
-    warn "YourMT3 代码库不存在"; NEED_INSTALL=true
-fi
-
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from src.utils.yourmt3_downloader import is_model_available

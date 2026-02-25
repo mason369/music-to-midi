@@ -88,8 +88,8 @@ if ($nonAscii -or $hasSpaceOrParen) {
     Write-Warn "继续安装（路径问题可能导致运行失败）..."
 }
 
-# --- 第 1 步/共 13 步：检测 Python 版本 ---
-Write-Info "第 1 步/共 13 步  检测 Python 版本..."
+# --- 第 1 步/共 11 步：检测 Python 版本 ---
+Write-Info "第 1 步/共 11 步  检测 Python 版本..."
 
 $PYTHON_BIN = $null
 
@@ -138,8 +138,8 @@ if (-not $PYTHON_BIN) {
 
 $PYTHON_CMD = $PYTHON_BIN -split ' '
 
-# --- 第 2 步/共 13 步：检测 git ---
-Write-Info "第 2 步/共 13 步  检测 git..."
+# --- 第 2 步/共 11 步：检测 git ---
+Write-Info "第 2 步/共 11 步  检测 git..."
 
 try {
     $gitVer = & git --version 2>&1
@@ -151,8 +151,8 @@ catch {
     exit 1
 }
 
-# --- 第 3 步/共 13 步：检测 ffmpeg ---
-Write-Info "第 3 步/共 13 步  检测 ffmpeg..."
+# --- 第 3 步/共 11 步：检测 ffmpeg ---
+Write-Info "第 3 步/共 11 步  检测 ffmpeg..."
 
 $FFMPEG_OK = $false
 try {
@@ -285,8 +285,8 @@ catch {
     }
 }
 
-# --- 第 4 步/共 13 步：检测并安装 Visual C++ Redistributable 2022 ---
-Write-Info "第 4 步/共 13 步  检测 Visual C++ Redistributable 2022 x64..."
+# --- 第 4 步/共 11 步：检测并安装 Visual C++ Redistributable 2022 ---
+Write-Info "第 4 步/共 11 步  检测 Visual C++ Redistributable 2022 x64..."
 
 $vcRedistOk = $false
 $vcRegPaths = @(
@@ -339,8 +339,8 @@ if (-not $vcRedistOk) {
     }
 }
 
-# --- 第 5 步/共 13 步：创建 Python 虚拟环境 ---
-Write-Info "第 5 步/共 13 步  创建 Python 虚拟环境..."
+# --- 第 5 步/共 11 步：创建 Python 虚拟环境 ---
+Write-Info "第 5 步/共 11 步  创建 Python 虚拟环境..."
 
 if (-not (Test-Path $VENV_DIR) -or -not (Test-Path $PYTHON)) {
     if ((Test-Path $VENV_DIR) -and -not (Test-Path $PYTHON)) {
@@ -364,15 +364,15 @@ if (Test-Path $sitePackages) {
         Remove-Item $pkg.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-# --- 第 6 步/共 13 步：升级 pip ---
-Write-Info "第 6 步/共 13 步  升级 pip..."
+# --- 第 6 步/共 11 步：升级 pip ---
+Write-Info "第 6 步/共 11 步  升级 pip..."
 
 & "$PYTHON" -m pip install --upgrade pip setuptools wheel
 if ($LASTEXITCODE -ne 0) { Write-Err "pip 升级失败" }
 Write-Ok "pip 升级成功"
 
-# --- 第 7 步/共 13 步：检测 GPU / 安装 PyTorch ---
-Write-Info "第 7 步/共 13 步  检测 GPU / 安装 PyTorch..."
+# --- 第 7 步/共 11 步：检测 GPU / 安装 PyTorch ---
+Write-Info "第 7 步/共 11 步  检测 GPU / 安装 PyTorch..."
 
 $TORCH_INSTALLED = $false
 $torchDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Directory `
@@ -487,8 +487,8 @@ shutil.rmtree(extract_dir, ignore_errors=True)
     Write-Ok "libomp140.x86_64.dll 已存在"
 }
 
-# --- 第 8 步/共 13 步：Intel GPU 加速（可选）---
-Write-Info "第 8 步/共 13 步  检测 Intel GPU 加速（可选）..."
+# --- 第 8 步/共 11 步：Intel GPU 加速（可选）---
+Write-Info "第 8 步/共 11 步  检测 Intel GPU 加速（可选）..."
 
 # 预先检查：若已安装 IPEX 但 torch 无法正常导入，说明版本不兼容，自动卸载
 $preIpexDir = Join-Path $VENV_DIR "Lib\site-packages\intel_extension_for_pytorch"
@@ -549,16 +549,16 @@ if ($intelGpuFound) {
     Write-Info "未检测到 Intel GPU（Arc/Xe/UHD/Iris），跳过 IPEX 安装"
 }
 
-# --- 第 9 步/共 13 步：安装项目依赖 ---
-Write-Info "第 9 步/共 13 步  安装项目 Python 依赖..."
+# --- 第 9 步/共 11 步：安装项目依赖 ---
+Write-Info "第 9 步/共 11 步  安装项目 Python 依赖..."
 
 Set-Location $REPO_DIR
 & "$PIP" install -r (Join-Path $REPO_DIR "requirements.txt")
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
-# --- 第 10 步/共 13 步：验证核心依赖 ---
-Write-Info "第 10 步/共 13 步  验证核心依赖..."
+# --- 第 10 步/共 11 步：验证核心依赖 ---
+Write-Info "第 10 步/共 11 步  验证核心依赖..."
 
 foreach ($dep in @("PyQt6", "torch", "librosa", "mido", "soundfile", "pytorch_lightning")) {
     Write-Info "  正在验证 $dep..."
@@ -579,60 +579,8 @@ if ($FFMPEG_OK) {
     Write-Warn "  ffmpeg 未安装（已在第 3 步提示）"
 }
 
-# --- 第 11 步/共 13 步：克隆 YourMT3 仓库 ---
-Write-Info "第 11 步/共 13 步  克隆 YourMT3 仓库（仅代码，不含模型权重）..."
-
-$yourmt3Dir = Join-Path $REPO_DIR "YourMT3"
-$yourmt3Src = Join-Path $yourmt3Dir "amt\src"
-
-if ((Test-Path $yourmt3Dir) -and (Test-Path $yourmt3Src)) {
-    Write-Ok "YourMT3 仓库已存在，跳过克隆"
-} else {
-    $prevLfs = [System.Environment]::GetEnvironmentVariable("GIT_LFS_SKIP_SMUDGE", "Process")
-    try {
-        $env:GIT_LFS_SKIP_SMUDGE = "1"
-        Set-Location $REPO_DIR
-        & git clone --depth 1 --progress https://huggingface.co/spaces/mimbres/YourMT3 YourMT3
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "YourMT3 仓库克隆成功"
-        } else {
-            Write-Warn "YourMT3 克隆失败（无法连接 huggingface.co），第 13 步下载模型时会自动包含所需代码"
-        }
-    }
-    catch {
-        Write-Warn "YourMT3 克隆失败（无法连接 huggingface.co），第 13 步下载模型时会自动包含所需代码"
-    }
-    finally {
-        if ($null -eq $prevLfs) {
-            Remove-Item Env:GIT_LFS_SKIP_SMUDGE -ErrorAction SilentlyContinue
-        } else {
-            $env:GIT_LFS_SKIP_SMUDGE = $prevLfs
-        }
-    }
-}
-
-# --- 第 12 步/共 13 步：安装 YourMT3 依赖 ---
-Write-Info "第 12 步/共 13 步  安装 YourMT3 Python 依赖..."
-
-$yourmt3Req = Join-Path $REPO_DIR "YourMT3\requirements.txt"
-if (Test-Path $yourmt3Req) {
-    try {
-        & "$PIP" install -r "$yourmt3Req"
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "YourMT3 依赖安装成功"
-        } else {
-            Write-Warn "YourMT3 部分依赖安装失败"
-        }
-    }
-    catch {
-        Write-Warn "YourMT3 依赖安装失败，请稍后手动执行: pip install -r YourMT3\requirements.txt"
-    }
-} else {
-    Write-Warn "未找到 YourMT3\requirements.txt（克隆未成功），YourMT3 依赖将随模型下载自动获取"
-}
-
-# --- 第 13 步/共 13 步：下载 SOTA 模型权重 ---
-Write-Info "第 13 步/共 13 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
+# --- 第 11 步/共 11 步：下载 SOTA 模型权重 ---
+Write-Info "第 11 步/共 11 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
 Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_sota_models.py"
 
 Set-Location $REPO_DIR
@@ -653,57 +601,6 @@ catch {
     Write-Host "  !! 模型下载失败 !!" -ForegroundColor Red
     Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
     Write-Host ""
-}
-
-# --- 第 13.5 步：如果 YourMT3 目录不存在，从缓存创建目录链接 ---
-$yourmt3Dir = Join-Path $REPO_DIR "YourMT3"
-$cacheDir = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cache\music_ai_models\yourmt3_all"
-$cacheSrc = Join-Path $cacheDir "amt\src"
-
-if (-not (Test-Path $yourmt3Dir) -and (Test-Path $cacheSrc)) {
-    Write-Info "YourMT3 仓库未克隆成功，从模型缓存创建目录链接..."
-    try {
-        New-Item -ItemType Junction -Path $yourmt3Dir -Target $cacheDir -Force | Out-Null
-        Write-Ok "已创建目录链接: YourMT3 -> $cacheDir"
-    }
-    catch {
-        # Junction 失败时回退到复制
-        Write-Warn "创建目录链接失败，尝试复制文件..."
-        try {
-            Copy-Item -Path $cacheDir -Destination $yourmt3Dir -Recurse -Force
-            Write-Ok "已从缓存复制 YourMT3 代码到项目目录"
-        }
-        catch {
-            Write-Warn "复制失败: $_"
-        }
-    }
-}
-
-# --- 第 13.6 步：补装 YourMT3 依赖（如果第 12 步跳过了）---
-$yourmt3Req = Join-Path $REPO_DIR "YourMT3\requirements.txt"
-if (-not $yourmt3Req) {
-    $yourmt3Req = Join-Path $REPO_DIR "YourMT3\amt\src\requirements.txt"
-}
-if (Test-Path $yourmt3Req) {
-    $checkImport = & "$PYTHON" -c "
-import sys
-sys.path.insert(0, r'$(Join-Path $REPO_DIR 'YourMT3\amt\src')')
-try:
-    from model.ymt3 import YourMT3
-    sys.exit(0)
-except ImportError as e:
-    print(f'缺少依赖: {e}')
-    sys.exit(1)
-" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "补装 YourMT3 Python 依赖..."
-        & "$PIP" install einops "transformers>=4.30.0" deprecated smart-open --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "YourMT3 依赖补装成功"
-        } else {
-            Write-Warn "YourMT3 依赖补装部分失败"
-        }
-    }
 }
 
 # --- 完成 ---

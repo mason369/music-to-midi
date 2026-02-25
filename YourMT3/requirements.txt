@@ -1,0 +1,16 @@
+python-dotenv
+--extra-index-url https://download.pytorch.org/whl/cu113
+torch
+torchaudio
+yt-dlp
+https://github.com/coletdjnz/yt-dlp-youtube-oauth2/archive/refs/heads/master.zip
+mido
+git+https://github.com/craffel/mir_eval.git
+lightning>=2.2.1
+deprecated
+librosa
+einops
+transformers==4.45.1
+numpy==1.26.4
+wandb
+gradio_log

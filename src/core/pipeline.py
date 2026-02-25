@@ -100,8 +100,7 @@ class MusicToMidiPipeline:
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
                 "YourMT3+ 不可用。\n\n"
-                "请先安装 YourMT3+ 代码库和模型权重：\n"
-                "  bash install_yourmt3_code.sh\n"
+                "请先下载模型权重：\n"
                 "  python download_sota_models.py\n\n"
                 "详见 README.md 中的安装说明。"
             )
