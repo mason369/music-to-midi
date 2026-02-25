@@ -21,7 +21,7 @@ import numpy as np
 
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
-from src.utils.gpu_utils import get_device
+from src.utils.gpu_utils import get_device, get_optimal_batch_size
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +165,20 @@ class YourMT3Transcriber:
         """
         self.config = config
         self.device = get_device(config.use_gpu, config.gpu_device)
+
+        # DirectML 不支持 YourMT3 所需的高级操作（ComplexFloat STFT、RoPE 等），回退 CPU
+        if "privateuseone" in self.device:
+            logger.warning("DirectML 不兼容 YourMT3 模型（STFT/RoPE 算子不支持），回退 CPU 模式")
+            self.device = "cpu"
+
+        # CPU 模式下限制 OpenMP 线程数，防止与 PyQt QThread 冲突导致堆内存损坏
+        if self.device == "cpu":
+            import torch
+            os.environ['OMP_NUM_THREADS'] = '1'
+            os.environ['MKL_NUM_THREADS'] = '1'
+            torch.set_num_threads(1)
+            logger.debug("CPU 模式：已限制 OpenMP/MKL 线程数为 1（防止与 GUI 线程冲突）")
+
         self._cancelled = False
         self._cancel_check_callback = None
 
@@ -380,11 +394,16 @@ class YourMT3Transcriber:
                 # 如果是真实目录，不要覆盖
                 pass
             else:
-                try:
-                    os.symlink(str(exp_dir), symlink_path)
-                    logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
-                except OSError as e:
-                    logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
+                import sys as _sys
+                if _sys.platform == "win32":
+                    # Windows 普通用户无 symlink 权限；模型通过绝对路径直接加载，无需符号链接
+                    logger.debug("Windows 环境跳过符号链接创建，使用绝对路径加载模型")
+                else:
+                    try:
+                        os.symlink(str(exp_dir), symlink_path)
+                        logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
+                    except OSError as e:
+                        logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
 
             args = argparse.Namespace(
                 exp_id=exp_id_with_checkpoint,
@@ -637,22 +656,7 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.5, "正在进行神经网络推理...")
 
-            # 极致质量模式：增加批处理大小（忽略性能限制）
-            if quality == "best" or ultra_quality:
-                if n_segments < 100:
-                    bsz = 16  # 从 8 翻倍
-                elif n_segments < 300:
-                    bsz = 12  # 从 6 翻倍
-                else:
-                    bsz = 8   # 从 4 翻倍
-                logger.info(f"极致质量模式：批处理大小 {bsz}")
-            else:
-                if n_segments < 150:
-                    bsz = 8
-                elif n_segments < 400:
-                    bsz = 6
-                else:
-                    bsz = 4  # 大文件优先保证质量
+            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
             logger.info(f"预计推理时间: ~{n_segments * 0.15:.0f}秒")
@@ -766,17 +770,7 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.5, "正在推理...")
 
-            # 极致质量模式：增加批处理大小
-            if quality == "best" or ultra_quality:
-                if n_segments < 100:
-                    bsz = 16
-                else:
-                    bsz = 8
-            else:
-                if n_segments < 150:
-                    bsz = 8
-                else:
-                    bsz = 4
+            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             with torch.no_grad():
                 pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
@@ -1168,21 +1162,7 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.5, "正在进行神经网络推理...")
 
-            # 极致质量模式：增加批处理大小
-            if quality == "best" or ultra_quality:
-                if n_segments < 100:
-                    bsz = 16
-                elif n_segments < 300:
-                    bsz = 12
-                else:
-                    bsz = 8
-            else:
-                if n_segments < 150:
-                    bsz = 8
-                elif n_segments < 400:
-                    bsz = 6
-                else:
-                    bsz = 4
+            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             with torch.no_grad():
                 pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
@@ -1432,22 +1412,7 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(0.5, "正在进行神经网络推理...")
 
-            # 极致质量模式：增加批处理大小（翻倍）
-            if quality == "best" or ultra_quality:
-                if n_segments < 100:
-                    bsz = 16  # 从 8 翻倍
-                elif n_segments < 300:
-                    bsz = 12  # 从 6 翻倍
-                else:
-                    bsz = 8   # 从 4 翻倍
-                logger.info(f"极致质量模式：批处理大小 {bsz}")
-            else:
-                if n_segments < 150:
-                    bsz = 8
-                elif n_segments < 400:
-                    bsz = 6
-                else:
-                    bsz = 4
+            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             with torch.no_grad():
                 pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)

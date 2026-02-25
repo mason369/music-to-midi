@@ -83,6 +83,7 @@ Thumbs.db
 # Project specific
 /YourMT3/
 /models/
+/tools/ffmpeg/bin/
 *.wav
 *.mp3
 *.flac
