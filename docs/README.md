@@ -4,21 +4,22 @@
   <a href="./README_zh.md">中文</a> | English
 </p>
 
-Convert audio files to multi-track MIDI with automatic lyrics embedding. Supports 128 GM instrument recognition.
+Convert audio files to multi-track MIDI with automatic 128 GM instrument recognition.
+
+**Platform Support: Windows / Linux / WSL2**
+
+## Screenshots
+
+| Windows | Linux |
+|---------|-------|
+| ![Windows Demo](../resources/icons/Windows演示.png) | ![Linux Demo](../resources/icons/Linux演示.png) |
 
 ## Features
 
-- **Dual Processing Modes**:
-  - **Piano Mode**: Skip source separation, use ByteDance professional piano model to convert audio to multi-track piano MIDI (ideal for solo piano pieces)
-  - **Smart Mode**: Use YourMT3+ MoE model for direct multi-instrument recognition, supporting 128 GM instruments
-- **Source Separation**: Automatically separate audio into 6 tracks (vocals, drums, bass, guitar, piano, other) using Demucs v4
-- **Instrument Recognition**: Smart instrument detection and classification using PANNs
-- **Multi-Instrument Transcription**:
-  - **YourMT3+ MoE** (2025 AMT Challenge SOTA): Hierarchical attention Transformer + Mixture of Experts, supports 128 GM instruments
-  - **Basic Pitch** (Spotify): Polyphonic pitch detection as fallback
-  - **ByteDance Piano Transcription**: Professional piano transcription with pedal detection
+- **Multi-Instrument Transcription**: Uses YourMT3+ MoE (2025 AMT Challenge SOTA) for direct multi-instrument recognition from mixed audio
+- **128 GM Instruments**: Outputs standard General MIDI multi-track MIDI, accurately distinguishing drums, bass, guitar, piano, etc.
 - **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
-- **Lyrics Recognition**: Recognize lyrics from vocals and embed them into MIDI with word-level timestamps
+- **GPU Acceleration**: Auto-detects and uses CUDA (NVIDIA) / ROCm (AMD) / CPU
 - **Multi-language UI**: Support for English and Chinese interface
 - **Professional Dark Theme**: Modern audio software-style interface design
 
@@ -26,13 +27,35 @@ Convert audio files to multi-track MIDI with automatic lyrics embedding. Support
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows | ✅ Supported | Full functionality, CUDA recommended |
-| Linux | ✅ Supported | Full functionality, Ubuntu 22.04+ recommended |
+| Windows 10/11 (x64) | ✅ Supported | Double-click `run.bat` to launch |
+| Linux (Ubuntu/Debian) | ✅ Supported | Full functionality, Ubuntu 22.04+ recommended |
+| WSL2 (Windows 11) | ✅ Supported | Requires WSLg (built-in on Win11) |
 | macOS | 🚧 Planned | Apple Silicon MPS support in development |
 
-## Screenshots
+## Quick Start
 
-Coming soon...
+### Windows
+
+```
+1. Clone or download the repository
+2. Double-click run.bat (auto-installs all dependencies on first run)
+```
+
+Or use PowerShell:
+```powershell
+powershell -ExecutionPolicy Bypass -File run.ps1
+```
+
+### Linux
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/mason369/music-to-midi.git
+cd music-to-midi
+
+# 2. Run directly (auto-installs all dependencies on first run)
+./run.sh
+```
 
 ## Installation
 
@@ -63,11 +86,11 @@ Coming soon...
 
 | Dependency | Version | Notes |
 |------------|---------|-------|
-| PyTorch | 2.1.0 - 2.4.x | pyannote.audio compatibility |
+| PyTorch | 2.1.0 - 2.4.x | YourMT3+ compatibility |
 | torchaudio | 2.1.0 - 2.4.x | Must match PyTorch version |
-| NumPy | < 2.0 | numba/JAX compatibility |
-| TensorFlow | 2.15.x (Windows) | Basic Pitch backend (used on Windows instead of tflite-runtime) |
+| NumPy | < 2.0 | numba compatibility |
 | CUDA | 11.8 or 12.1 | GPU acceleration (optional) |
+| Python | 3.10+ | 3.10 or 3.11 recommended |
 
 ### Linux Installation (Recommended)
 
@@ -198,64 +221,27 @@ Download the latest release from the [Releases](https://github.com/mason369/musi
 - MP3, WAV, FLAC, OGG, M4A, AAC, WMA
 
 ### Output
-- MIDI (.mid) - Multi-track MIDI with lyrics embedded
-- LRC (.lrc) - Synchronized lyrics file
-- WAV - Separated audio tracks
+- MIDI (.mid) - Multi-track MIDI
 
 ## Technical Details
 
 ### AI Models Used
 
-| Model | Source | Purpose | Description |
-|-------|--------|---------|-------------|
-| **YourMT3+ MoE** | KAIST | Multi-instrument transcription | 2025 AMT Challenge SOTA, Mixture of Experts, supports 128 GM instruments |
-| **Demucs v4** | Meta | Source separation | State-of-the-art music source separation, supports 4/6 track modes |
-| **PANNs** | KAIST | Instrument recognition | Audio pattern analysis and classification |
-| **Basic Pitch** | Spotify | Polyphonic pitch detection | Lightweight audio-to-MIDI |
-| **Piano Transcription** | ByteDance | Piano transcription | Professional piano transcription with pedal detection |
-| **Whisper + WhisperX** | OpenAI | Speech recognition | Lyrics recognition with word-level alignment |
-
-### Processing Modes
-
-| Mode | Description | Use Case | Output Tracks |
-|------|-------------|----------|---------------|
-| Piano Mode | Skip separation, generate multi-track piano MIDI | Solo piano pieces, simple melodies | 1-6 tracks (auto-detected) |
-| Smart Mode (Standard) | 6-track separation + instrument recognition | Full arrangements | Up to 6 tracks |
-| Smart Mode (Precise) | YourMT3+ direct transcription | Complex multi-instrument works | Up to 128 GM instruments |
+| Model | Source | Purpose |
+|-------|--------|---------|
+| **YourMT3+ MoE** | KAIST | Multi-instrument transcription, 128 GM instruments (sole transcription engine) |
 
 ### Architecture
 
 ```
-Audio Input
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ Mode Selection                                       │
-│  ├─ Piano Mode ──→ ByteDance Piano Transcription    │
-│  └─ Smart Mode ──→ YourMT3+ MoE or Demucs+Basic Pitch│
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ Smart Mode Processing Pipeline                       │
-│  ├──→ YourMT3+ MoE (preferred): Direct multi-instrument│
-│  │    └── Supports 128 GM instruments               │
-│  ├──→ Fallback: Demucs 6-track + Basic Pitch        │
-│  ├──→ Beat Detection (librosa)                      │
-│  └──→ Lyrics Recognition (Whisper + WhisperX)       │
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│ MIDI Post-processing                                 │
-│  ├──→ Note Quantization (optional)                  │
-│  ├──→ Velocity Smoothing                            │
-│  ├──→ Smart Deduplication (handles overlap segments)│
-│  └──→ Polyphony Limiting                            │
-└─────────────────────────────────────────────────────┘
-    │
-    ▼
-Output: MIDI + LRC + WAV
+Audio Input → MusicToMidiPipeline
+                ↓
+            YourMT3+ MoE (YPTF.MoE+Multi PS)
+            Direct multi-instrument transcription from mixed audio
+                ↓
+            MIDI Post-processing (quantization / dedup / polyphony limit)
+                ↓
+            Multi-track MIDI Output (up to 128 GM instruments)
 ```
 
 ## Development
@@ -374,13 +360,8 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 ## Acknowledgments
 
 - [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 2025 AMT Challenge SOTA multi-instrument transcription
-- [Demucs](https://github.com/facebookresearch/demucs) - Music source separation
-- [PANNs](https://github.com/qiuqiangkong/panns_inference) - Audio pattern analysis and instrument recognition
-- [Basic Pitch](https://github.com/spotify/basic-pitch) - Audio to MIDI transcription
-- [Piano Transcription](https://github.com/bytedance/piano_transcription) - ByteDance piano transcription
-- [Whisper](https://github.com/openai/whisper) - Speech recognition
-- [WhisperX](https://github.com/m-bain/whisperX) - Word-level alignment
 - [mido](https://github.com/mido/mido) - MIDI file handling
+- [librosa](https://librosa.org/) - Audio analysis
 
 ## Support
 

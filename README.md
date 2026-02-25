@@ -6,7 +6,13 @@
 
 将音频文件转换为多轨道MIDI，支持 128 种 GM 乐器精确识别。
 
-**平台支持：Linux / WSL2**（需要 WSLg 或 X11 显示服务器）
+**平台支持：Windows / Linux / WSL2**
+
+## 截图演示
+
+| Windows | Linux |
+|---------|-------|
+| ![Windows 演示](resources/icons/Windows演示.png) | ![Linux 演示](resources/icons/Linux演示.png) |
 
 ## 功能特点
 
@@ -21,11 +27,26 @@
 
 | 平台 | 状态 | 说明 |
 |------|------|------|
+| Windows 10/11 (x64) | ✅ 已支持 | 双击 `run.bat` 一键启动 |
 | Linux (Ubuntu/Debian) | ✅ 已支持 | 推荐 Ubuntu 22.04+，完整功能 |
 | WSL2 (Windows 11) | ✅ 已支持 | 需要 WSLg（Win11 内置）|
 | macOS | 🚧 计划中 | Apple Silicon MPS 支持开发中 |
 
 ## 快速开始
+
+### Windows
+
+```
+1. 克隆或下载仓库
+2. 双击 run.bat（首次自动安装所有依赖）
+```
+
+或使用 PowerShell：
+```powershell
+powershell -ExecutionPolicy Bypass -File run.ps1
+```
+
+### Linux / WSL2
 
 ```bash
 # 1. 克隆仓库
@@ -36,7 +57,7 @@ cd music-to-midi
 ./run.sh
 ```
 
-`./run.sh` 会自动检测依赖完整性，首次运行或依赖缺失时自动完成：
+启动脚本会自动检测依赖完整性，首次运行或依赖缺失时自动完成：
 - 安装系统包（FFmpeg、PyQt6 所需库、中文/Emoji 字体等）
 - 创建 Python 虚拟环境
 - 安装 PyTorch（根据 GPU 自动选择 CUDA/ROCm/CPU 版本）

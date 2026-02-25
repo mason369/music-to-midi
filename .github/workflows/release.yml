@@ -64,9 +64,48 @@ jobs:
           name: MusicToMidi-Linux
           path: MusicToMidi-Linux.tar.gz
 
+  build-windows:
+    name: 构建 Windows 版本
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 安装 FFmpeg
+        run: choco install ffmpeg -y
+
+      - name: 安装 Python 依赖
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 使用 PyInstaller 构建
+        run: |
+          pyinstaller MusicToMidi.spec
+
+      - name: 创建压缩包
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\MusicToMidi -DestinationPath MusicToMidi-Windows.zip
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicToMidi-Windows
+          path: MusicToMidi-Windows.zip
+
   release:
     name: 创建 GitHub Release
-    needs: build-linux
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,6 +120,12 @@ jobs:
           name: MusicToMidi-Linux
           path: ./artifacts/
 
+      - name: 下载 Windows 构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicToMidi-Windows
+          path: ./artifacts/
+
       - name: 列出构建产物
         run: ls -la ./artifacts/
 
@@ -89,18 +134,25 @@ jobs:
         with:
           files: |
             ./artifacts/MusicToMidi-Linux.tar.gz
+            ./artifacts/MusicToMidi-Windows.zip
           body: |
             ## 音乐转MIDI转换器 ${{ github.ref_name }}
 
             ### 下载
-            - **Linux / WSL2**: MusicToMidi-Linux.tar.gz
+            - **Windows**: MusicToMidi-Windows.zip
+            - **Linux**: MusicToMidi-Linux.tar.gz
 
             ### 系统要求
-            - Ubuntu 20.04+ / Debian 11+ / WSL2
-            - Python 3.10+（安装脚本自动处理）
+            - Windows 10/11 (x64) 或 Ubuntu 20.04+ / Debian 11+
             - 推荐 NVIDIA GPU + CUDA 加速处理
 
-            ### 快速安装
+            ### Windows 快速开始
+            ```
+            1. 解压 MusicToMidi-Windows.zip
+            2. 双击 run.bat 启动（首次自动安装依赖）
+            ```
+
+            ### Linux 快速开始
             ```bash
             git clone https://github.com/mason369/music-to-midi.git
             cd music-to-midi
@@ -109,12 +161,13 @@ jobs:
             ```
 
             ### 平台支持
+            - ✅ Windows 10/11 (x64) - 完整支持
             - ✅ Linux (Ubuntu/Debian) - 完整支持
             - ✅ WSL2 (Windows Subsystem for Linux) - 完整支持
             - 🚧 macOS - 计划中
 
             ### 更新日志
-            查看 [README](https://github.com/mason369/music-to-midi/blob/main/README.md) 了解详情。
+            查看 [README](https://github.com/mason369/music-to-midi/blob/master/README.md) 了解详情。
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
         env:

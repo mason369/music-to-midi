@@ -36,3 +36,4 @@ PyQt6-sip>=13.6.0
 # 工具
 tqdm>=4.66.0
 pyyaml>=6.0.0
+psutil>=5.9.0

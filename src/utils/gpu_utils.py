@@ -2,6 +2,8 @@
 GPU检测和管理工具 - 支持 CUDA (NVIDIA)、ROCm (AMD)、MPS (Apple)、Intel XPU 和 CPU
 """
 import logging
+import os
+import platform
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ def get_accelerator_type() -> str:
         'rocm'  - AMD GPU (ROCm，通过 torch.cuda 接口)
         'mps'   - Apple Silicon GPU (Metal Performance Shaders)
         'xpu'   - Intel GPU (通过 Intel Extension for PyTorch)
+        'directml' - 任意 GPU (通过 DirectML，支持 NVIDIA/AMD/Intel)
         'cpu'   - 无GPU加速，回退到CPU
     """
     torch = _get_torch()
@@ -50,11 +53,19 @@ def get_accelerator_type() -> str:
     except ImportError:
         pass
 
+    # DirectML（跨厂商 GPU 加速：NVIDIA/AMD/Intel，Windows 专用）
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            return "directml"
+    except ImportError:
+        pass
+
     return "cpu"
 
 
 def is_gpu_available() -> bool:
-    """检查是否有任何类型的GPU加速可用（CUDA、ROCm、MPS 或 Intel XPU）"""
+    """检查是否有任何类型的GPU加速可用（CUDA、ROCm、MPS、Intel XPU 或 DirectML）"""
     return get_accelerator_type() != "cpu"
 
 
@@ -110,12 +121,24 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
             logger.info("使用 Intel XPU: xpu:0")
             return "xpu:0"
 
+    if accel == "directml":
+        try:
+            import torch_directml
+            idx = min(gpu_index, torch_directml.device_count() - 1) if torch_directml.device_count() > 0 else 0
+            device = torch_directml.device(idx)
+            name = torch_directml.device_name(idx)
+            logger.info(f"使用 DirectML GPU: {name} ({device})")
+            return str(device)
+        except Exception:
+            logger.info("使用 DirectML: privateuseone:0")
+            return "privateuseone:0"
+
     logger.info("未检测到GPU，使用 CPU")
     return "cpu"
 
 
 def get_gpu_count() -> int:
-    """获取可用GPU数量（CUDA/ROCm/XPU）"""
+    """获取可用GPU数量（CUDA/ROCm/XPU/DirectML）"""
     torch = _get_torch()
     if torch is None:
         return 0
@@ -127,6 +150,12 @@ def get_gpu_count() -> int:
     if accel == "xpu":
         try:
             return torch.xpu.device_count() if hasattr(torch, 'xpu') else 0
+        except Exception:
+            return 1
+    if accel == "directml":
+        try:
+            import torch_directml
+            return torch_directml.device_count()
         except Exception:
             return 1
     return 0
@@ -192,6 +221,22 @@ def get_gpu_info() -> List[dict]:
         except Exception as e:
             logger.warning(f"获取 Intel XPU 信息失败: {e}")
 
+    elif accel == "directml":
+        try:
+            import torch_directml
+            count = torch_directml.device_count()
+            for i in range(count):
+                name = torch_directml.device_name(i).strip('\x00').strip()
+                gpus.append({
+                    "index": i,
+                    "name": name,
+                    "type": "DirectML",
+                    "total_memory": 0,
+                    "total_memory_gb": 0.0,
+                })
+        except Exception as e:
+            logger.warning(f"获取 DirectML GPU 信息失败: {e}")
+
     return gpus
 
 
@@ -210,6 +255,9 @@ def get_memory_info(device: str = None) -> Optional[Tuple[float, float]]:
         return None
 
     if device is None:
+        accel = get_accelerator_type()
+        if accel == "cpu":
+            return None
         device = get_device()
 
     try:
@@ -269,7 +317,7 @@ def get_accelerator_label() -> str:
         name = gpus[0]["name"]
         accel_type = gpus[0]["type"]
         return f"{accel_type}: {name}"
-    labels = {"cuda": "CUDA GPU", "rocm": "ROCm GPU", "mps": "Apple MPS", "xpu": "Intel XPU"}
+    labels = {"cuda": "CUDA GPU", "rocm": "ROCm GPU", "mps": "Apple MPS", "xpu": "Intel XPU", "directml": "DirectML GPU"}
     return labels.get(accel, "GPU")
 
 
@@ -384,3 +432,163 @@ def print_gpu_diagnosis() -> None:
             print(f"    {name}")
 
     print("\n" + "=" * 50)
+
+
+def get_system_performance_profile() -> dict:
+    """
+    检测系统硬件配置，返回性能档位信息。
+
+    返回:
+        {
+            "tier": "high" | "medium" | "low",
+            "ram_gb": float,
+            "cpu_cores": int,
+            "has_gpu": bool,
+            "gpu_vram_gb": float | None,
+            "device": str,
+        }
+    """
+    import psutil
+
+    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    cpu_cores = os.cpu_count() or 1
+    try:
+        physical_cores = psutil.cpu_count(logical=False) or cpu_cores
+    except Exception:
+        physical_cores = cpu_cores
+
+    has_gpu = is_gpu_available()
+    gpu_vram_gb = None
+    device = get_device()
+    accel = get_accelerator_type()
+
+    if has_gpu:
+        mem = get_memory_info(device)
+        if mem:
+            gpu_vram_gb = mem[1]
+
+    # 分档逻辑
+    if accel == "directml":
+        # DirectML：集显共享系统内存，按 RAM 分档；独显按显存分档
+        gpus = get_gpu_info()
+        gpu_name = gpus[0]["name"].lower() if gpus else ""
+        is_integrated = any(k in gpu_name for k in ("uhd", "iris", "vega", "radeon graphics"))
+        if is_integrated:
+            # 集显共享系统 RAM，按 CPU 模式分档但标记为有 GPU
+            if ram_gb >= 30 and physical_cores >= 8:
+                tier = "high"
+            elif ram_gb >= 14 and physical_cores >= 4:
+                tier = "medium"
+            else:
+                tier = "low"
+        else:
+            # 独显（Arc/Radeon RX/GeForce 等）
+            tier = "high" if ram_gb >= 14 else "medium"
+    elif has_gpu and gpu_vram_gb is not None and gpu_vram_gb >= 6:
+        tier = "high"
+    elif has_gpu:
+        tier = "medium"
+    elif ram_gb >= 30 and physical_cores >= 8:
+        tier = "high"
+    elif ram_gb >= 14 and physical_cores >= 4:
+        tier = "medium"
+    else:
+        tier = "low"
+
+    profile = {
+        "tier": tier,
+        "ram_gb": round(ram_gb, 1),
+        "cpu_cores": physical_cores,
+        "has_gpu": has_gpu,
+        "gpu_vram_gb": round(gpu_vram_gb, 1) if gpu_vram_gb else None,
+        "device": device,
+    }
+    logger.info(f"系统性能档位: {tier} (RAM={profile['ram_gb']}GB, "
+                f"CPU={physical_cores}核, GPU={'有' if has_gpu else '无'}"
+                f"{f', VRAM={gpu_vram_gb:.1f}GB' if gpu_vram_gb else ''})")
+    return profile
+
+
+def get_optimal_batch_size(n_segments: int, quality: str, device: str,
+                           ultra_quality: bool = False) -> int:
+    """
+    根据系统性能档位、分段数、质量模式和设备，动态计算最优批处理大小。
+
+    参数:
+        n_segments: 音频分段数
+        quality: "fast" | "balanced" | "best"
+        device: 设备字符串 (如 "cpu", "cuda:0")
+        ultra_quality: 是否启用极致质量
+
+    返回:
+        推荐的 batch size
+    """
+    profile = get_system_performance_profile()
+    tier = profile["tier"]
+    is_best = (quality == "best" or ultra_quality)
+
+    # GPU 模式（含 DirectML）
+    is_gpu_device = profile["has_gpu"] and not device.startswith("cpu")
+    is_directml = "privateuseone" in device
+
+    if is_gpu_device and not is_directml:
+        # CUDA/ROCm/MPS/XPU：按显存分档
+        vram = profile["gpu_vram_gb"] or 4.0
+        if is_best:
+            if vram >= 10:
+                bsz_table = {100: 16, 300: 12, 999999: 8}
+            elif vram >= 6:
+                bsz_table = {100: 12, 300: 8, 999999: 6}
+            else:
+                bsz_table = {100: 8, 300: 6, 999999: 4}
+        else:
+            if vram >= 10:
+                bsz_table = {150: 12, 400: 8, 999999: 6}
+            elif vram >= 6:
+                bsz_table = {150: 8, 400: 6, 999999: 4}
+            else:
+                bsz_table = {150: 6, 400: 4, 999999: 2}
+    elif is_directml:
+        # DirectML：集显共享系统内存，按 tier 分档（与 CPU 类似但有 GPU 加速）
+        if tier == "high":
+            if is_best:
+                bsz_table = {100: 8, 300: 6, 999999: 4}
+            else:
+                bsz_table = {150: 6, 400: 4, 999999: 2}
+        elif tier == "medium":
+            if is_best:
+                bsz_table = {100: 4, 300: 3, 999999: 2}
+            else:
+                bsz_table = {150: 4, 400: 2, 999999: 1}
+        else:
+            if is_best:
+                bsz_table = {100: 2, 300: 1, 999999: 1}
+            else:
+                bsz_table = {150: 2, 400: 1, 999999: 1}
+    else:
+        # CPU 模式：按 RAM 和核心数分档
+        if tier == "high":
+            if is_best:
+                bsz_table = {100: 8, 300: 6, 999999: 4}
+            else:
+                bsz_table = {150: 6, 400: 4, 999999: 2}
+        elif tier == "medium":
+            if is_best:
+                bsz_table = {100: 2, 300: 1, 999999: 1}
+            else:
+                bsz_table = {150: 2, 400: 1, 999999: 1}
+        else:
+            if is_best:
+                bsz_table = {100: 2, 300: 1, 999999: 1}
+            else:
+                bsz_table = {150: 2, 400: 1, 999999: 1}
+
+    bsz = 1
+    for threshold, size in sorted(bsz_table.items()):
+        if n_segments < threshold:
+            bsz = size
+            break
+
+    logger.info(f"动态批处理: tier={tier}, segments={n_segments}, "
+                f"quality={quality}, bsz={bsz}")
+    return bsz
