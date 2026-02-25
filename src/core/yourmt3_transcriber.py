@@ -15,6 +15,19 @@ import os
 import sys
 from io import StringIO
 from pathlib import Path
+
+
+def _load_audio(audio_path):
+    """用 soundfile 加载音频，绕过 torchaudio 2.9+ 强制使用 torchcodec 的问题"""
+    import torch
+    import soundfile as sf
+    data, sr = sf.read(audio_path, dtype='float32')
+    waveform = torch.from_numpy(data)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    else:
+        waveform = waveform.T  # (samples, channels) -> (channels, samples)
+    return waveform, sr
 from typing import List, Optional, Callable, Dict, Tuple, Union
 from contextlib import contextmanager
 import numpy as np
@@ -640,7 +653,7 @@ class YourMT3Transcriber:
             import torch
             import torchaudio
 
-            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
+            waveform, sr = _load_audio(audio_path)
 
             # 转为单声道
             if waveform.shape[0] > 1:
@@ -775,7 +788,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
+            waveform, sr = _load_audio(audio_path)
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
@@ -1166,7 +1179,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
+            waveform, sr = _load_audio(audio_path)
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
@@ -1405,7 +1418,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
+            waveform, sr = _load_audio(audio_path)
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
