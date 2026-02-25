@@ -63,7 +63,7 @@ cd music-to-midi
 - 安装 PyTorch（根据 GPU 自动选择 CUDA/ROCm/CPU 版本）
 - 安装所有 Python 依赖
 - 克隆 YourMT3+ 代码库
-- 下载 YPTF.MoE+Multi (PS) 模型权重（约 2.5GB）
+- 下载 YPTF.MoE+Multi (PS) 模型权重（约 800MB）
 
 ## 手动安装
 
@@ -112,7 +112,7 @@ pip install -r requirements.txt
 # 克隆 YourMT3 代码库
 bash install_yourmt3_code.sh
 
-# 下载模型权重（约 2.5GB）
+# 下载模型权重（约 800MB）
 python download_sota_models.py
 ```
 
@@ -194,7 +194,7 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 | 位置编码 | RoPE（部分旋转位置编码） |
 | 归一化 | RMSNorm |
 | 训练增强 | Pitch Shift 音高偏移增强（PS） |
-| 模型大小 | ~2.5 GB |
+| 模型大小 | ~724 MB |
 | 任务类型 | `mt3_full_plus`（128 种 GM 乐器 + 鼓） |
 
 #### 性能基准（Slakh2100 数据集）
@@ -213,8 +213,8 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 
 | 模型 | MoE | Pitch Shift | 大小 | 说明 |
 |------|-----|-------------|------|------|
-| YPTF.MoE+Multi (PS) | ✅ 8专家 | ✅ | 2.5 GB | **默认，最高性能** |
-| YPTF.MoE+Multi (noPS) | ✅ 8专家 | ❌ | 2.5 GB | 无音高偏移增强 |
+| YPTF.MoE+Multi (PS) | ✅ 8专家 | ✅ | 724 MB | **默认，最高性能** |
+| YPTF.MoE+Multi (noPS) | ✅ 8专家 | ❌ | 724 MB | 无音高偏移增强 |
 | YPTF+Multi (PS) | ❌ | ✅ | 2.0 GB | 标准 Perceiver，较轻量 |
 | YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | 标准 Perceiver，无增强 |
 | YourMT3+ 传统版 | ❌ | ❌ | 2.0 GB | 旧版兼容 |

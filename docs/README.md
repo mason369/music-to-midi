@@ -239,7 +239,7 @@ This project uses **YPTF.MoE+Multi (PS)** — the highest-performance variant in
 | Position Encoding | RoPE (Partial Rotary Position Embedding) |
 | Normalization | RMSNorm |
 | Training Augmentation | Pitch Shift (PS) |
-| Model Size | ~2.5 GB |
+| Model Size | ~724 MB |
 | Task Type | `mt3_full_plus` (128 GM instruments + drums) |
 
 #### Benchmark (Slakh2100 Dataset)
@@ -258,8 +258,8 @@ Per-instrument Onset F1: Bass 0.93 / Piano 0.88 / Guitar 0.82 / Synth Lead 0.82 
 
 | Model | MoE | Pitch Shift | Size | Notes |
 |-------|-----|-------------|------|-------|
-| YPTF.MoE+Multi (PS) | ✅ 8 experts | ✅ | 2.5 GB | **Default, highest performance** |
-| YPTF.MoE+Multi (noPS) | ✅ 8 experts | ❌ | 2.5 GB | Without pitch shift augmentation |
+| YPTF.MoE+Multi (PS) | ✅ 8 experts | ✅ | 724 MB | **Default, highest performance** |
+| YPTF.MoE+Multi (noPS) | ✅ 8 experts | ❌ | 724 MB | Without pitch shift augmentation |
 | YPTF+Multi (PS) | ❌ | ✅ | 2.0 GB | Standard Perceiver, lighter |
 | YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | Standard Perceiver, no augmentation |
 | YourMT3+ Legacy | ❌ | ❌ | 2.0 GB | Backward compatibility |
