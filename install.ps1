@@ -655,6 +655,30 @@ catch {
     Write-Host ""
 }
 
+# --- 第 13.5 步：如果 YourMT3 目录不存在，从缓存创建目录链接 ---
+$yourmt3Dir = Join-Path $REPO_DIR "YourMT3"
+$cacheDir = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cache\music_ai_models\yourmt3_all"
+$cacheSrc = Join-Path $cacheDir "amt\src"
+
+if (-not (Test-Path $yourmt3Dir) -and (Test-Path $cacheSrc)) {
+    Write-Info "YourMT3 仓库未克隆成功，从模型缓存创建目录链接..."
+    try {
+        New-Item -ItemType Junction -Path $yourmt3Dir -Target $cacheDir -Force | Out-Null
+        Write-Ok "已创建目录链接: YourMT3 -> $cacheDir"
+    }
+    catch {
+        # Junction 失败时回退到复制
+        Write-Warn "创建目录链接失败，尝试复制文件..."
+        try {
+            Copy-Item -Path $cacheDir -Destination $yourmt3Dir -Recurse -Force
+            Write-Ok "已从缓存复制 YourMT3 代码到项目目录"
+        }
+        catch {
+            Write-Warn "复制失败: $_"
+        }
+    }
+}
+
 # --- 完成 ---
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green

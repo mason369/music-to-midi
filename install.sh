@@ -377,6 +377,21 @@ info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_m
     success "SOTA 模型权重下载完成" || \
     warn "模型下载失败，可稍后手动运行: venv/bin/python download_sota_models.py"
 
+# 如果 YourMT3 目录不存在，从缓存创建符号链接
+YOURMT3_DIR="${REPO_DIR}/YourMT3"
+CACHE_DIR="${HOME}/.cache/music_ai_models/yourmt3_all"
+if [ ! -d "$YOURMT3_DIR" ] && [ -d "$CACHE_DIR/amt/src" ]; then
+    info "YourMT3 仓库未克隆成功，从模型缓存创建符号链接..."
+    if ln -s "$CACHE_DIR" "$YOURMT3_DIR" 2>/dev/null; then
+        success "已创建符号链接: YourMT3 -> $CACHE_DIR"
+    else
+        warn "创建符号链接失败，尝试复制文件..."
+        cp -r "$CACHE_DIR" "$YOURMT3_DIR" && \
+            success "已从缓存复制 YourMT3 代码到项目目录" || \
+            warn "复制失败"
+    fi
+fi
+
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
 cat > "${REPO_DIR}/run.sh" << 'LAUNCH_EOF'
