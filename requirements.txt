@@ -17,6 +17,9 @@ deprecated>=1.2.0
 smart-open>=6.0.0
 nest-asyncio>=1.5.0
 wandb>=0.15.0
+scipy>=1.0.0
+scikit-learn>=1.0.0
+torchmetrics>=0.11.0
 
 # 模型下载
 huggingface_hub>=0.20.0

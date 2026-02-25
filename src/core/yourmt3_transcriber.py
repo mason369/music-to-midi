@@ -640,7 +640,7 @@ class YourMT3Transcriber:
             import torch
             import torchaudio
 
-            waveform, sr = torchaudio.load(audio_path)
+            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
 
             # 转为单声道
             if waveform.shape[0] > 1:
@@ -775,7 +775,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path)
+            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
@@ -1166,7 +1166,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path)
+            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
@@ -1405,7 +1405,7 @@ class YourMT3Transcriber:
             audio_cfg = YourMT3Transcriber._audio_cfg
             task_manager = YourMT3Transcriber._task_manager
 
-            waveform, sr = torchaudio.load(audio_path)
+            waveform, sr = torchaudio.load(audio_path, backend="soundfile")
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
