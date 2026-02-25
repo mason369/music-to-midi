@@ -11,7 +11,7 @@ numpy>=1.24.0,<2.0
 # YourMT3+ 依赖
 pytorch-lightning>=2.2.1
 einops>=0.7.0
-transformers>=4.30.0
+transformers==4.45.1
 mir-eval>=0.7
 deprecated>=1.2.0
 smart-open>=6.0.0
