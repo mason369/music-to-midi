@@ -60,6 +60,10 @@ if _plat.system() == "Windows":
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
 try:
     import torch  # noqa: F401
+    # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
+    # 强制使用 soundfile 后端（已在 requirements.txt 中包含）
+    import torchaudio
+    torchaudio.set_audio_backend("soundfile")
 except Exception:
     pass
 
