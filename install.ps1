@@ -679,6 +679,33 @@ if (-not (Test-Path $yourmt3Dir) -and (Test-Path $cacheSrc)) {
     }
 }
 
+# --- 第 13.6 步：补装 YourMT3 依赖（如果第 12 步跳过了）---
+$yourmt3Req = Join-Path $REPO_DIR "YourMT3\requirements.txt"
+if (-not $yourmt3Req) {
+    $yourmt3Req = Join-Path $REPO_DIR "YourMT3\amt\src\requirements.txt"
+}
+if (Test-Path $yourmt3Req) {
+    $checkImport = & "$PYTHON" -c "
+import sys
+sys.path.insert(0, r'$(Join-Path $REPO_DIR 'YourMT3\amt\src')')
+try:
+    from model.ymt3 import YourMT3
+    sys.exit(0)
+except ImportError as e:
+    print(f'缺少依赖: {e}')
+    sys.exit(1)
+" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "补装 YourMT3 Python 依赖..."
+        & "$PIP" install einops "transformers>=4.30.0" deprecated smart-open --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "YourMT3 依赖补装成功"
+        } else {
+            Write-Warn "YourMT3 依赖补装部分失败"
+        }
+    }
+}
+
 # --- 完成 ---
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
