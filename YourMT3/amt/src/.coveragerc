@@ -1,0 +1,5 @@
+[run]
+omit = 
+    train.py
+    test.py
+    install*.py

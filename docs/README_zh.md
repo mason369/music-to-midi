@@ -89,8 +89,7 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 # 4. 安装项目依赖
 pip install -r requirements.txt
 
-# 5. YourMT3+ 代码库与模型
-bash install_yourmt3_code.sh
+# 5. 下载模型权重
 python download_sota_models.py
 
 # 6. 运行
@@ -187,8 +186,6 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 **Q: YourMT3+ 不可用**
 ```bash
-ls YourMT3/
-bash install_yourmt3_code.sh
 python download_sota_models.py
 ```
 

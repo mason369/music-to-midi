@@ -262,7 +262,6 @@ class YourMT3Transcriber:
                     os.path.join(os.getcwd(), "external/YourMT3"),
                     os.path.join(os.path.dirname(__file__), "../../YourMT3"),
                     os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
-                    os.path.join(str(Path.home()), ".cache/music_ai_models/yourmt3_all"),
                 ]
 
                 for path in yourmt3_paths:
@@ -283,7 +282,7 @@ class YourMT3Transcriber:
 
             if not has_code:
                 logger.warning("YourMT3+ 不可用：未找到代码")
-                logger.info("安装方法: git lfs install && git clone https://huggingface.co/spaces/mimbres/YourMT3 (或 bash install_yourmt3_code.sh)")
+                logger.info("请确保 YourMT3/ 目录存在于项目根目录，并运行 python download_sota_models.py 下载模型")
                 return False
 
             # 第四步：检查模型权重文件
@@ -358,7 +357,6 @@ class YourMT3Transcriber:
                 os.path.join(os.getcwd(), "YourMT3"),
                 os.path.join(os.path.dirname(__file__), "../../YourMT3"),
                 os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
-                os.path.join(str(Path.home()), ".cache/music_ai_models/yourmt3_all"),
             ]
 
             amt_src_path = None

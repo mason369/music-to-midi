@@ -86,8 +86,7 @@ def download_ultimate_moe():
             )
 
         allow_patterns = [p for p in [model_ckpt_path, last_ckpt_path] if p]
-        allow_patterns += ["amt/src/**", "requirements.txt"]
-        print(f"将下载：{allow_patterns[:2]}")
+        print(f"将下载：{allow_patterns}")
 
         snapshot_download(
             repo_id=REPO_ID,

@@ -62,7 +62,6 @@ cd music-to-midi
 - 创建 Python 虚拟环境
 - 安装 PyTorch（根据 GPU 自动选择 CUDA/ROCm/CPU 版本）
 - 安装所有 Python 依赖
-- 克隆 YourMT3+ 代码库
 - 下载 YPTF.MoE+Multi (PS) 模型权重（约 800MB）
 
 ## 手动安装
@@ -106,12 +105,9 @@ pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.
 pip install -r requirements.txt
 ```
 
-### 3. YourMT3+ 代码库与模型
+### 3. 下载模型权重
 
 ```bash
-# 克隆 YourMT3 代码库
-bash install_yourmt3_code.sh
-
 # 下载模型权重（约 800MB）
 python download_sota_models.py
 ```
@@ -297,8 +293,6 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 **Q: YourMT3+ 不可用**
 ```bash
-ls YourMT3/                    # 检查代码库是否存在
-bash install_yourmt3_code.sh   # 重新安装代码库
 python download_sota_models.py # 重新下载模型
 ```
 

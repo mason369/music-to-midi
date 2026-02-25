@@ -340,35 +340,6 @@ else
     success "  ffmpeg $FFMPEG_VER OK"
 fi
 
-# ───────────────────────── YourMT3 代码库安装 ─────────────────────────
-cd "$REPO_DIR"
-
-if [ -d "YourMT3" ] && [ -d "YourMT3/amt/src" ]; then
-    success "YourMT3 代码库已存在，跳过克隆"
-else
-    if ! command -v git >/dev/null 2>&1; then
-        warn "未找到 git，跳过 YourMT3 代码库安装（可手动运行 bash install_yourmt3_code.sh）"
-    else
-        info "克隆 YourMT3 代码库（仅代码，不含模型权重）..."
-        GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --progress \
-            https://huggingface.co/spaces/mimbres/YourMT3 YourMT3 || true
-
-        if [ -d "YourMT3" ]; then
-            success "YourMT3 代码库克隆完成"
-        else
-            warn "YourMT3 克隆失败（无法连接 huggingface.co），下载模型时会自动包含所需代码"
-        fi
-    fi
-fi
-
-# 安装 YourMT3 Python 依赖（如果代码库存在）
-if [ -f "YourMT3/requirements.txt" ]; then
-    info "安装 YourMT3 Python 依赖..."
-    "$PIP" install -r YourMT3/requirements.txt && \
-        success "YourMT3 依赖安装完成" || \
-        warn "YourMT3 依赖安装部分失败（可稍后手动运行: bash install_yourmt3_code.sh）"
-fi
-
 # ───────────────────────── 下载 SOTA 模型权重 ─────────────────────────
 info "下载 YourMT3+ SOTA 模型权重（YPTF.MoE+Multi PS，约 800MB）..."
 info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_models.py"
@@ -376,36 +347,6 @@ info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_m
 "$PYTHON" "${REPO_DIR}/download_sota_models.py" && \
     success "SOTA 模型权重下载完成" || \
     warn "模型下载失败，可稍后手动运行: venv/bin/python download_sota_models.py"
-
-# 如果 YourMT3 目录不存在，从缓存创建符号链接
-YOURMT3_DIR="${REPO_DIR}/YourMT3"
-CACHE_DIR="${HOME}/.cache/music_ai_models/yourmt3_all"
-if [ ! -d "$YOURMT3_DIR" ] && [ -d "$CACHE_DIR/amt/src" ]; then
-    info "YourMT3 仓库未克隆成功，从模型缓存创建符号链接..."
-    if ln -s "$CACHE_DIR" "$YOURMT3_DIR" 2>/dev/null; then
-        success "已创建符号链接: YourMT3 -> $CACHE_DIR"
-    else
-        warn "创建符号链接失败，尝试复制文件..."
-        cp -r "$CACHE_DIR" "$YOURMT3_DIR" && \
-            success "已从缓存复制 YourMT3 代码到项目目录" || \
-            warn "复制失败"
-    fi
-fi
-
-# 补装 YourMT3 依赖（如果第 12 步跳过了）
-YOURMT3_AMT_SRC="${REPO_DIR}/YourMT3/amt/src"
-if [ -d "$YOURMT3_AMT_SRC" ]; then
-    if ! "$PYTHON" -c "
-import sys
-sys.path.insert(0, '$YOURMT3_AMT_SRC')
-from model.ymt3 import YourMT3
-" 2>/dev/null; then
-        info "补装 YourMT3 Python 依赖..."
-        "$PIP" install einops "transformers>=4.30.0" deprecated smart-open --quiet && \
-            success "YourMT3 依赖补装成功" || \
-            warn "YourMT3 依赖补装部分失败"
-    fi
-fi
 
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
@@ -498,7 +439,6 @@ echo -e "  ${GREEN}source venv/bin/activate && python -m src.main${NC}"
 echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
-echo -e "  ${GREEN}✔${NC} YourMT3+ 代码库"
 echo -e "  ${GREEN}✔${NC} YPTF.MoE+Multi (PS) 模型权重"
 echo ""
 echo -e "  ${BOLD}若模型下载失败，可手动补下：${NC}"
