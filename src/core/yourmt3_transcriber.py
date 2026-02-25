@@ -276,7 +276,8 @@ class YourMT3Transcriber:
                                 logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
                                 has_code = True
                                 break
-                            except ImportError:
+                            except ImportError as ie:
+                                logger.debug(f"从 {amt_src_path} 导入失败: {ie}")
                                 sys.path.remove(amt_src_path)
                                 continue
 

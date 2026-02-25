@@ -392,6 +392,21 @@ if [ ! -d "$YOURMT3_DIR" ] && [ -d "$CACHE_DIR/amt/src" ]; then
     fi
 fi
 
+# 补装 YourMT3 依赖（如果第 12 步跳过了）
+YOURMT3_AMT_SRC="${REPO_DIR}/YourMT3/amt/src"
+if [ -d "$YOURMT3_AMT_SRC" ]; then
+    if ! "$PYTHON" -c "
+import sys
+sys.path.insert(0, '$YOURMT3_AMT_SRC')
+from model.ymt3 import YourMT3
+" 2>/dev/null; then
+        info "补装 YourMT3 Python 依赖..."
+        "$PIP" install einops "transformers>=4.30.0" deprecated smart-open --quiet && \
+            success "YourMT3 依赖补装成功" || \
+            warn "YourMT3 依赖补装部分失败"
+    fi
+fi
+
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
 cat > "${REPO_DIR}/run.sh" << 'LAUNCH_EOF'
