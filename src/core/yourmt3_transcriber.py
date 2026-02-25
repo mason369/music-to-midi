@@ -23,10 +23,45 @@ from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent
 from src.models.gm_instruments import get_instrument_name
 from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path
 
-# 在任何 import torch 之前修复 Windows 非 ASCII 路径 DLL 加载问题
+# 在任何 import torch 之前修复 Windows 特殊路径 DLL 加载问题
 _fix_torch_dll_path()
 
 logger = logging.getLogger(__name__)
+
+
+def _import_torch():
+    """
+    安全导入 torch，失败时给出清晰的错误提示而非原始 OSError。
+    所有需要 import torch 的地方应调用此函数。
+    """
+    try:
+        import torch
+        return torch
+    except OSError as e:
+        import re
+        err_str = str(e)
+        path_match = re.search(r'Error loading "([^"]+)"', err_str)
+        dll_path = path_match.group(1) if path_match else ""
+        has_special = bool(re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', dll_path))
+
+        msg = "PyTorch DLL 加载失败，无法启动转写引擎。\n\n"
+        if has_special:
+            msg += (
+                "检测到路径含特殊字符（空格/括号/中文等），这会导致 PyTorch 无法加载。\n"
+                "请将项目移动到纯英文且无空格的路径，如 C:\\MusicToMidi\n"
+            )
+        else:
+            msg += (
+                "可能原因及解决方法：\n"
+                "1. 未安装 Visual C++ Redistributable 2022\n"
+                "   下载安装: https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                "2. PyTorch 安装不完整\n"
+                "   执行: venv\\Scripts\\pip install --force-reinstall torch\n"
+                "3. libomp140.x86_64.dll 缺失\n"
+                "   重新运行 install.bat 可自动修复\n"
+            )
+        msg += f"\n原始错误: {e}"
+        raise RuntimeError(msg) from e
 
 
 @contextmanager
@@ -176,7 +211,7 @@ class YourMT3Transcriber:
 
         # CPU 模式下限制 OpenMP 线程数，防止与 PyQt QThread 冲突导致堆内存损坏
         if self.device == "cpu":
-            import torch
+            torch = _import_torch()
             os.environ['OMP_NUM_THREADS'] = '1'
             os.environ['MKL_NUM_THREADS'] = '1'
             torch.set_num_threads(1)
@@ -190,7 +225,7 @@ class YourMT3Transcriber:
         """严格检查 YourMT3+ 是否真正可用（所有依赖+模型）"""
         try:
             # 第一步：检查 PyTorch
-            import torch
+            torch = _import_torch()
             logger.debug("✓ PyTorch 已安装")
 
             # 第二步：检查其他必需依赖
