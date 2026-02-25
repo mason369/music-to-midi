@@ -394,7 +394,7 @@ if (-not $TORCH_INSTALLED) {
     }
 
     Write-Info "正在安装 PyTorch ($TORCH_LABEL)..."
-    & "$PIP" install "torch>=2.1.0" "torchaudio>=2.1.0" --index-url "$TORCH_INDEX"
+    & "$PIP" install "torch>=2.1.0,<2.10.0" "torchaudio>=2.1.0,<2.10.0" --index-url "$TORCH_INDEX"
     if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 安装失败" }
     Write-Ok "PyTorch ($TORCH_LABEL) 安装成功"
 }
