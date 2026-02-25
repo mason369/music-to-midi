@@ -57,24 +57,32 @@ Write-Host "  Music to MIDI  -  Windows 安装程序" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# --- 检测安装路径是否包含非 ASCII 字符（中文/日文等）---
-# PyTorch 在 Windows 上无法正确加载非 ASCII 路径下的 DLL（c10.dll 等）
+# --- 检测安装路径是否包含特殊字符（中文/日文/空格/括号等）---
+# PyTorch 在 Windows 上无法正确加载含特殊字符路径下的 DLL（c10.dll 等）
 $nonAscii = [regex]::IsMatch($REPO_DIR, '[^\x00-\x7F]')
-if ($nonAscii) {
+$hasSpaceOrParen = [regex]::IsMatch($REPO_DIR, '[\s\(\)]')
+if ($nonAscii -or $hasSpaceOrParen) {
     Write-Host ""
-    Write-Host "  !! 警告: 安装路径包含非 ASCII 字符（如中文用户名）!!" -ForegroundColor Red
+    Write-Host "  !! 警告: 安装路径包含特殊字符 !!" -ForegroundColor Red
     Write-Host "  当前路径: $REPO_DIR" -ForegroundColor Yellow
+    Write-Host ""
+    if ($nonAscii) {
+        Write-Host "  检测到非 ASCII 字符（如中文用户名）。" -ForegroundColor Yellow
+    }
+    if ($hasSpaceOrParen) {
+        Write-Host "  检测到空格或括号（如路径中的 '(1)'）。" -ForegroundColor Yellow
+    }
     Write-Host ""
     Write-Host "  PyTorch 在 Windows 上可能无法加载此路径下的 DLL，" -ForegroundColor Yellow
     Write-Host "  导致运行时出现 'DLL 初始化例程失败' 错误。" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  建议将项目移动到纯英文路径，例如:" -ForegroundColor Green
+    Write-Host "  建议将项目移动到纯英文且无空格的路径，例如:" -ForegroundColor Green
     Write-Host "    C:\MusicToMidi" -ForegroundColor Green
     Write-Host "    D:\Projects\music-to-midi" -ForegroundColor Green
     Write-Host ""
     $continue = Read-Host "  是否仍要继续安装？(y/N)"
     if ($continue -ne 'y' -and $continue -ne 'Y') {
-        Write-Host "  已取消安装。请将项目移动到纯英文路径后重试。" -ForegroundColor Yellow
+        Write-Host "  已取消安装。请将项目移动到无特殊字符的路径后重试。" -ForegroundColor Yellow
         exit 0
     }
     Write-Warn "继续安装（路径问题可能导致运行失败）..."

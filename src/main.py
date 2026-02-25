@@ -17,17 +17,25 @@ os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 
-# 修复 Windows 非 ASCII 路径（如中文用户名）下 PyTorch DLL 加载失败的问题
+# 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
 # 必须在任何 import torch 之前执行
 import platform as _plat
 if _plat.system() == "Windows":
     try:
-        import importlib.util
-        _spec = importlib.util.find_spec("torch")
+        import importlib.util as _ilu
+        import ctypes as _ct
+        _spec = _ilu.find_spec("torch")
         if _spec and _spec.origin:
             _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
             if os.path.isdir(_torch_lib):
-                os.add_dll_directory(_torch_lib)
+                # 获取 8.3 短路径名，消除空格/括号/非ASCII
+                _buf = _ct.create_unicode_buffer(512)
+                _ret = _ct.windll.kernel32.GetShortPathNameW(_torch_lib, _buf, 512)
+                _short = _buf.value if 0 < _ret < 512 else _torch_lib
+                _path = os.environ.get("PATH", "")
+                if _short not in _path:
+                    os.environ["PATH"] = _short + os.pathsep + _path
+                os.add_dll_directory(_short)
     except Exception:
         pass
     del _plat
