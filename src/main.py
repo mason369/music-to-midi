@@ -57,6 +57,12 @@ if _plat.system() == "Windows":
         pass
     del _plat
 
+# 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
+try:
+    import torch  # noqa: F401
+except Exception:
+    pass
+
 # 抑制 Python 警告
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)

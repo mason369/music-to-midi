@@ -596,12 +596,11 @@ if ((Test-Path $yourmt3Dir) -and (Test-Path $yourmt3Src)) {
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "YourMT3 仓库克隆成功"
         } else {
-            Write-Warn "YourMT3 克隆返回非零退出码"
+            Write-Warn "YourMT3 克隆失败（无法连接 huggingface.co），第 13 步下载模型时会自动包含所需代码"
         }
     }
     catch {
-        Write-Warn "YourMT3 克隆失败，请稍后手动执行："
-        Write-Warn '  $env:GIT_LFS_SKIP_SMUDGE=1; git clone --depth 1 https://huggingface.co/spaces/mimbres/YourMT3 YourMT3'
+        Write-Warn "YourMT3 克隆失败（无法连接 huggingface.co），第 13 步下载模型时会自动包含所需代码"
     }
     finally {
         if ($null -eq $prevLfs) {
@@ -629,7 +628,7 @@ if (Test-Path $yourmt3Req) {
         Write-Warn "YourMT3 依赖安装失败，请稍后手动执行: pip install -r YourMT3\requirements.txt"
     }
 } else {
-    Write-Warn "未找到 YourMT3\requirements.txt，请确保已成功克隆仓库。"
+    Write-Warn "未找到 YourMT3\requirements.txt（克隆未成功），YourMT3 依赖将随模型下载自动获取"
 }
 
 # --- 第 13 步/共 13 步：下载 SOTA 模型权重 ---

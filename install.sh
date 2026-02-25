@@ -356,7 +356,7 @@ else
         if [ -d "YourMT3" ]; then
             success "YourMT3 代码库克隆完成"
         else
-            warn "YourMT3 克隆失败，可稍后手动运行: bash install_yourmt3_code.sh"
+            warn "YourMT3 克隆失败（无法连接 huggingface.co），下载模型时会自动包含所需代码"
         fi
     fi
 fi
