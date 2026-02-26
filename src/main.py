@@ -71,8 +71,18 @@ if _plat.system() == "Windows":
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
 try:
     import torch  # noqa: F401
-    # 环境变量对当前进程的 PyTorch 可能无效，必须显式调用 set_num_threads
-    torch.set_num_threads(int(os.environ.get('OMP_NUM_THREADS', '1')))
+    # 使用全部物理核心，避免默认 1 线程限制
+    try:
+        import psutil as _psutil
+        _cores = _psutil.cpu_count(logical=False) or (os.cpu_count() or 4)
+        del _psutil
+    except ImportError:
+        _cores = os.cpu_count() or 4
+    torch.set_num_threads(int(os.environ.get('OMP_NUM_THREADS', str(_cores))))
+    del _cores
+    # 固定输入尺寸下启用 cuDNN 自动调优（约提升 10-30% 推理速度）
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
     # 强制使用 soundfile 后端（已在 requirements.txt 中包含）
     import torchaudio

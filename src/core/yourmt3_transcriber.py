@@ -243,11 +243,25 @@ class YourMT3Transcriber:
         import torch
         from src.utils.gpu_utils import clear_gpu_memory
 
+        use_autocast = self.device.startswith("cuda")
+        # bf16 匹配训练精度（bf16-mixed），精度更高；不支持时 fallback 到 fp16
+        autocast_dtype = torch.float16
+        if use_autocast:
+            try:
+                if torch.cuda.is_bf16_supported():
+                    autocast_dtype = torch.bfloat16
+            except Exception:
+                pass
+
         while bsz >= 1:
             try:
                 logger.info(f"YourMT3 推理: bsz={bsz}, segments={audio_segments.shape[0]}, device={self.device}")
                 with torch.no_grad():
-                    pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+                    if use_autocast:
+                        with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+                            pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+                    else:
+                        pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
                 return pred_token_arr
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and bsz > 1:
@@ -380,8 +394,10 @@ class YourMT3Transcriber:
             model_name: 模型名称（只支持 MoE 版本）
             progress_callback: 进度回调
         """
-        # 检查是否已加载
-        if YourMT3Transcriber._model is not None and YourMT3Transcriber._model_name == model_name:
+        # 检查是否已加载（同时验证设备，避免设备切换后使用旧缓存）
+        if (YourMT3Transcriber._model is not None and
+                YourMT3Transcriber._model_name == model_name and
+                YourMT3Transcriber._device == self.device):
             logger.debug("模型已加载，跳过重新加载")
             return
 
@@ -610,11 +626,8 @@ class YourMT3Transcriber:
             YourMT3Transcriber._model = model
             YourMT3Transcriber._model_name = model_name
             YourMT3Transcriber._device = self.device
-
-            # 缓存音频和任务配置供推理使用
-            if not hasattr(YourMT3Transcriber, '_audio_cfg'):
-                YourMT3Transcriber._audio_cfg = audio_cfg
-                YourMT3Transcriber._task_manager = tm
+            YourMT3Transcriber._audio_cfg = audio_cfg
+            YourMT3Transcriber._task_manager = tm
 
             if progress_callback:
                 progress_callback(1.0, "模型加载完成")
@@ -1042,6 +1055,10 @@ class YourMT3Transcriber:
                 # 使用精确的程序号到乐器类型映射（传入 is_drum 参数）
                 instrument = program_to_instrument_type(program, is_drum=bool(is_drum))
 
+                # 跳过无效音符（onset >= offset）
+                if float(onset) >= float(offset):
+                    continue
+
                 # 创建音符事件
                 note_event = NoteEvent(
                     pitch=pitch,
@@ -1114,14 +1131,24 @@ class YourMT3Transcriber:
 
         result = []
         dedup_count = 0
+
+        # 辅助函数提到循环外
+        def get_onset(n):
+            if hasattr(n, 'onset'):
+                return n.onset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[2]
+            return 0
+
+        def get_offset(n):
+            if hasattr(n, 'offset'):
+                return n.offset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[3]
+            return 0
+
         for key, group_notes in groups.items():
             # 按 onset 排序
-            def get_onset(n):
-                if hasattr(n, 'onset'):
-                    return n.onset
-                elif hasattr(n, '__len__') and len(n) >= 4:
-                    return n[2]  # onset 位置
-                return 0
             group_notes.sort(key=get_onset)
 
             # 去除 onset 相差小于阈值的重复
@@ -1135,25 +1162,13 @@ class YourMT3Transcriber:
                 else:
                     dedup_count += 1
                     # 保留持续时间更长的那个
-                    def get_offset(n):
-                        if hasattr(n, 'offset'):
-                            return n.offset
-                        elif hasattr(n, '__len__') and len(n) >= 4:
-                            return n[3]  # offset 位置
-                        return 0
                     if get_offset(note) > get_offset(filtered[-1]):
                         filtered[-1] = note
 
             result.extend(filtered)
 
         # 按 onset 排序返回
-        def get_onset_for_sort(n):
-            if hasattr(n, 'onset'):
-                return n.onset
-            elif hasattr(n, '__len__') and len(n) >= 4:
-                return n[2]
-            return 0
-        result.sort(key=get_onset_for_sort)
+        result.sort(key=get_onset)
 
         if dedup_count > 0:
             logger.info(f"YourMT3 去重: 移除 {dedup_count} 个重叠分段重复音符")
@@ -1375,8 +1390,6 @@ class YourMT3Transcriber:
             logger.error(f"精确转写失败: {e}")
             return {}
 
-        return result
-
     def unload_model(self) -> None:
         """卸载模型以释放 GPU 内存"""
         if YourMT3Transcriber._model is not None:
@@ -1384,6 +1397,11 @@ class YourMT3Transcriber:
             YourMT3Transcriber._model = None
             YourMT3Transcriber._model_name = None
             YourMT3Transcriber._device = None
+            # 同步清理配置缓存，避免设备切换后使用过期数据
+            if hasattr(YourMT3Transcriber, '_audio_cfg'):
+                del YourMT3Transcriber._audio_cfg
+            if hasattr(YourMT3Transcriber, '_task_manager'):
+                del YourMT3Transcriber._task_manager
 
             # 清理 GPU 缓存
             try:
@@ -1708,29 +1726,30 @@ class YourMT3Transcriber:
         dedup_count = 0
         merged_count = 0
 
+        # 辅助函数提到循环外，避免每次迭代重新定义
+        def get_onset(n):
+            if hasattr(n, 'onset'):
+                return n.onset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[2]
+            return 0
+
+        def get_offset(n):
+            if hasattr(n, 'offset'):
+                return n.offset
+            elif hasattr(n, '__len__') and len(n) >= 4:
+                return n[3]
+            return 0
+
+        def get_velocity(n):
+            if hasattr(n, 'velocity'):
+                return n.velocity
+            elif hasattr(n, '__len__') and len(n) >= 6:
+                return n[5]
+            return 80
+
         for key, group_notes in groups.items():
             # 按 onset 排序
-            def get_onset(n):
-                if hasattr(n, 'onset'):
-                    return n.onset
-                elif hasattr(n, '__len__') and len(n) >= 4:
-                    return n[2]
-                return 0
-
-            def get_offset(n):
-                if hasattr(n, 'offset'):
-                    return n.offset
-                elif hasattr(n, '__len__') and len(n) >= 4:
-                    return n[3]
-                return 0
-
-            def get_velocity(n):
-                if hasattr(n, 'velocity'):
-                    return n.velocity
-                elif hasattr(n, '__len__') and len(n) >= 6:
-                    return n[5]
-                return 80
-
             group_notes.sort(key=get_onset)
 
             # 智能去重
@@ -1786,13 +1805,7 @@ class YourMT3Transcriber:
             result.extend(filtered)
 
         # 按 onset 排序返回
-        def get_onset_for_sort(n):
-            if hasattr(n, 'onset'):
-                return n.onset
-            elif hasattr(n, '__len__') and len(n) >= 4:
-                return n[2]
-            return 0
-        result.sort(key=get_onset_for_sort)
+        result.sort(key=get_onset)
 
         if dedup_count > 0:
             logger.info(f"智能去重: 移除 {dedup_count} 个重复音符 (阈值: {onset_threshold*1000:.0f}ms)")

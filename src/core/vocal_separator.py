@@ -116,13 +116,13 @@ class VocalSeparator:
                          f"耗时={time.time() - load_start:.1f}s")
 
             ref = wav.mean(0)
-            wav = (wav - ref.mean()) / ref.std()
+            ref_std = ref.std()
+            if ref_std < 1e-7:
+                ref_std = torch.tensor(1.0)
+            wav = (wav - ref.mean()) / ref_std
             wav = wav.to(self._device)
-
-            # 动态计算 Demucs 性能参数
-            available_mem = get_available_memory_gb()
-            # num_workers: GPU 模式下用多线程预加载数据；CPU 模式下设 0 避免与 PyTorch 内部线程过度订阅
             is_cpu = self._device == "cpu" or self._device.startswith("cpu")
+            available_mem = get_available_memory_gb()
             num_workers = 0 if is_cpu else max(1, get_optimal_thread_count() // 2)
 
             # 计算分段信息（BagOfModels 包装器没有 segment，从内部模型获取）
@@ -171,22 +171,22 @@ class VocalSeparator:
                         progress_callback(overall, f"正在分离人声与伴奏... 已用时 {elapsed:.0f}s, 预计剩余 {remaining:.0f}s")
                     logger.debug(f"Demucs 推理中: {elapsed:.0f}s / ~{estimated_total:.0f}s 估计")
 
+            # overlap 和 shifts 提升分离纯净度（尤其人声）
+            # GPU 模式可以更激进，CPU 模式适度
+            if is_cpu:
+                overlap = 0.25   # 默认值
+                shifts = 1       # 1 次随机偏移平均
+            else:
+                overlap = 0.5    # 50% 重叠，显著减少边界伪影
+                shifts = 3       # 3 次随机偏移平均，大幅提升纯净度
+
+            logger.info(f"Demucs 质量参数: overlap={overlap}, shifts={shifts}")
+
             if progress_callback:
                 ticker = threading.Thread(target=_progress_ticker, daemon=True)
                 ticker.start()
 
             try:
-                # overlap 和 shifts 提升分离纯净度（尤其人声）
-                # GPU 模式可以更激进，CPU 模式适度
-                if is_cpu:
-                    overlap = 0.25   # 默认值
-                    shifts = 1       # 1 次随机偏移平均
-                else:
-                    overlap = 0.5    # 50% 重叠，显著减少边界伪影
-                    shifts = 3       # 3 次随机偏移平均，大幅提升纯净度
-
-                logger.info(f"Demucs 质量参数: overlap={overlap}, shifts={shifts}")
-
                 sources = apply_model(
                     model, wav[None], device=self._device,
                     split=True, num_workers=num_workers,
@@ -203,54 +203,55 @@ class VocalSeparator:
             logger.error(f"音频分离失败: {e}")
             raise RuntimeError(f"音频分离失败: {e}") from e
 
-        self._check_cancelled()
+        try:
+            self._check_cancelled()
 
-        if progress_callback:
-            progress_callback(0.8, "正在保存分离结果...")
+            if progress_callback:
+                progress_callback(0.8, "正在保存分离结果...")
 
-        # 还原归一化
-        sources = sources * ref.std() + ref.mean()
+            # 还原归一化（使用保护后的 ref_std）
+            sources = sources * ref_std + ref.mean()
 
-        # htdemucs 输出 stems 顺序与 model.sources 对应
-        source_names = model.sources  # e.g. ['drums', 'bass', 'other', 'vocals']
-        sources_dict = dict(zip(source_names, sources))
+            # htdemucs 输出 stems 顺序与 model.sources 对应
+            source_names = model.sources  # e.g. ['drums', 'bass', 'other', 'vocals']
+            sources_dict = dict(zip(source_names, sources))
 
-        if "vocals" not in sources_dict:
-            available = list(sources_dict.keys())
-            raise RuntimeError(
-                f"Demucs 输出中未找到 vocals stem，可用 stems: {available}"
-            )
+            if "vocals" not in sources_dict:
+                available = list(sources_dict.keys())
+                raise RuntimeError(
+                    f"Demucs 输出中未找到 vocals stem，可用 stems: {available}"
+                )
 
-        vocals = sources_dict["vocals"]  # tensor (channels, samples)
-        non_vocal_keys = [k for k in sources_dict if k != "vocals"]
-        accompaniment = sources_dict[non_vocal_keys[0]]
-        for k in non_vocal_keys[1:]:
-            accompaniment = accompaniment + sources_dict[k]
+            vocals = sources_dict["vocals"]  # tensor (channels, samples)
+            non_vocal_keys = [k for k in sources_dict if k != "vocals"]
+            accompaniment = sources_dict[non_vocal_keys[0]]
+            for k in non_vocal_keys[1:]:
+                accompaniment = accompaniment + sources_dict[k]
 
-        sample_rate = model.samplerate
+            sample_rate = model.samplerate
 
-        # 转为 numpy 并保存
-        vocals_np = vocals.cpu().numpy()
-        accompaniment_np = accompaniment.cpu().numpy()
+            # 转为 numpy 并保存
+            vocals_np = vocals.cpu().numpy()
+            accompaniment_np = accompaniment.cpu().numpy()
 
-        # demucs 输出形状: (channels, samples)
-        # soundfile 需要 (samples, channels)
-        if vocals_np.ndim == 2:
-            vocals_np = vocals_np.T
-            accompaniment_np = accompaniment_np.T
+            # demucs 输出形状: (channels, samples)
+            # soundfile 需要 (samples, channels)
+            if vocals_np.ndim == 2:
+                vocals_np = vocals_np.T
+                accompaniment_np = accompaniment_np.T
 
-        vocals_path = os.path.join(output_dir, f"{stem}_vocals.wav")
-        accompaniment_path = os.path.join(output_dir, f"{stem}_accompaniment.wav")
+            vocals_path = os.path.join(output_dir, f"{stem}_vocals.wav")
+            accompaniment_path = os.path.join(output_dir, f"{stem}_accompaniment.wav")
 
-        sf.write(vocals_path, vocals_np, sample_rate)
-        sf.write(accompaniment_path, accompaniment_np, sample_rate)
+            sf.write(vocals_path, vocals_np, sample_rate)
+            sf.write(accompaniment_path, accompaniment_np, sample_rate)
 
-        logger.info(f"人声已保存: {vocals_path}")
-        logger.info(f"伴奏已保存: {accompaniment_path}")
-
-        # 卸载模型释放显存
-        del model, sources, vocals, accompaniment, wav
-        clear_gpu_memory()
+            logger.info(f"人声已保存: {vocals_path}")
+            logger.info(f"伴奏已保存: {accompaniment_path}")
+        finally:
+            # 无论成功或失败都释放 GPU 资源
+            del model, sources, wav
+            clear_gpu_memory()
 
         if progress_callback:
             progress_callback(1.0, "分离完成")
