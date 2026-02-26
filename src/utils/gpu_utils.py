@@ -675,22 +675,22 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
     is_directml = "privateuseone" in device
 
     if is_gpu_device and not is_directml:
-        # CUDA/ROCm/MPS/XPU：按显存分档
+        # CUDA/ROCm/MPS/XPU：按显存分档，尽量吃满 VRAM
         vram = profile["gpu_vram_gb"] or 4.0
         if is_best:
             if vram >= 10:
-                bsz_table = {100: 16, 300: 12, 999999: 8}
+                bsz_table = {100: 24, 300: 20, 999999: 16}
             elif vram >= 6:
-                bsz_table = {100: 12, 300: 8, 999999: 6}
+                bsz_table = {100: 16, 300: 12, 999999: 10}
             else:
-                bsz_table = {100: 8, 300: 6, 999999: 4}
+                bsz_table = {100: 12, 300: 10, 999999: 8}
         else:
             if vram >= 10:
-                bsz_table = {150: 12, 400: 8, 999999: 6}
+                bsz_table = {150: 20, 400: 16, 999999: 12}
             elif vram >= 6:
-                bsz_table = {150: 8, 400: 6, 999999: 4}
+                bsz_table = {150: 12, 400: 10, 999999: 8}
             else:
-                bsz_table = {150: 6, 400: 4, 999999: 2}
+                bsz_table = {150: 10, 400: 8, 999999: 6}
     elif is_directml:
         # DirectML：集显共享系统内存，按 tier 分档（与 CPU 类似但有 GPU 加速）
         if tier == "high":

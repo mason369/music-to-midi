@@ -238,6 +238,29 @@ class YourMT3Transcriber:
         self._cancelled = False
         self._cancel_check_callback = None
 
+    def _inference_with_oom_retry(self, model, bsz, audio_segments, progress_callback=None):
+        """执行推理，VRAM 不足时自动减半 batch size 重试"""
+        import torch
+        from src.utils.gpu_utils import clear_gpu_memory
+
+        while bsz >= 1:
+            try:
+                logger.info(f"YourMT3 推理: bsz={bsz}, segments={audio_segments.shape[0]}, device={self.device}")
+                with torch.no_grad():
+                    pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+                return pred_token_arr
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower() and bsz > 1:
+                    old_bsz = bsz
+                    bsz = max(1, bsz // 2)
+                    logger.warning(f"VRAM 不足 (bsz={old_bsz})，自动回退到 bsz={bsz}")
+                    clear_gpu_memory()
+                    if progress_callback:
+                        progress_callback(0.5, f"显存不足，降低批处理到 {bsz} 重试...")
+                else:
+                    raise
+        raise RuntimeError("YourMT3 推理失败：即使 bsz=1 也无法完成")
+
     @classmethod
     def is_available(cls) -> bool:
         """严格检查 YourMT3+ 是否真正可用（所有依赖+模型）"""
@@ -719,8 +742,7 @@ class YourMT3Transcriber:
             logger.info(f"预计推理时间: ~{n_segments * 0.15:.0f}秒")
 
             # 推理（使用官方的 inference_file 方法）
-            with torch.no_grad():
-                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
 
             self._check_cancelled()
 
@@ -829,8 +851,7 @@ class YourMT3Transcriber:
 
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
-            with torch.no_grad():
-                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
 
             self._check_cancelled()
 
@@ -1005,6 +1026,10 @@ class YourMT3Transcriber:
                 if pitch < 0 or pitch > 127:
                     continue
                 if program < 0 or program > 127:
+                    program = 0
+
+                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                if program in (100, 101):
                     program = 0
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
@@ -1221,8 +1246,7 @@ class YourMT3Transcriber:
 
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
-            with torch.no_grad():
-                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
 
             self._check_cancelled()
 
@@ -1304,6 +1328,10 @@ class YourMT3Transcriber:
                 if pitch < 0 or pitch > 127:
                     continue
                 if program < 0 or program > 127:
+                    program = 0
+
+                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                if program in (100, 101):
                     program = 0
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
@@ -1471,8 +1499,7 @@ class YourMT3Transcriber:
 
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
-            with torch.no_grad():
-                pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
 
             self._check_cancelled()
 
@@ -1558,6 +1585,10 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
+                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                if program in (100, 101):
+                    program = 0
+
                 # 设置合理的默认力度
                 if velocity <= 1:
                     velocity = 80
@@ -1589,7 +1620,22 @@ class YourMT3Transcriber:
             for notes in drum_notes.values():
                 notes.sort(key=lambda n: n.start_time)
 
-            # 输出统计
+            # 过滤误识别乐器：音符数过少的乐器轨道很可能是模型幻觉
+            total_instrument_notes = sum(len(notes) for notes in instrument_notes.values())
+            min_note_ratio = 0.005  # 占总音符数 0.5% 以下
+            min_note_abs = 15       # 绝对数量低于 15
+            filtered_programs = []
+            for program, notes in list(instrument_notes.items()):
+                ratio = len(notes) / max(total_instrument_notes, 1)
+                if len(notes) < min_note_abs and ratio < min_note_ratio:
+                    filtered_programs.append((program, len(notes)))
+                    del instrument_notes[program]
+
+            if filtered_programs:
+                for prog, cnt in filtered_programs:
+                    logger.info(f"  过滤误识别乐器: GM {prog:03d} ({get_instrument_name(prog)}) - 仅 {cnt} 个音符")
+
+            # 重新统计
             total_instrument_notes = sum(len(notes) for notes in instrument_notes.values())
             total_drum_notes = sum(len(notes) for notes in drum_notes.values())
 
