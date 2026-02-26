@@ -46,8 +46,8 @@ class TrackPanel(QGroupBox):
         """)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(8)
 
         # 模式选择器
         mode_row = QHBoxLayout()

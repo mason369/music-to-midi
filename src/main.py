@@ -127,9 +127,9 @@ def main():
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config
 
-        # 启用高DPI缩放
+        # 高DPI缩放：使用 Floor 策略避免界面过大导致文字被遮挡
         QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+            Qt.HighDpiScaleFactorRoundingPolicy.Floor
         )
 
         # 创建应用程序

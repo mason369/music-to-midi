@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self._apply_modern_style()
 
         self.setWindowTitle(t("app.name"))
-        self.setMinimumSize(1000, 850)
+        self.setMinimumSize(900, 700)
         self.showMaximized()
 
         # 设置应用图标（Linux使用PNG，Windows使用ICO）
@@ -114,8 +114,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(24, 16, 24, 16)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 10, 16, 10)
+        main_layout.setSpacing(10)
 
         # 顶部标题区域
         header_widget = self._create_header()
@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
 
         # 文件输入拖放区域
         self.dropzone = DropZoneWidget()
-        self.dropzone.setMinimumHeight(180)
+        self.dropzone.setMinimumHeight(120)
         self._add_shadow(self.dropzone)
 
         # 轨道面板
@@ -168,11 +168,11 @@ class MainWindow(QMainWindow):
         title_layout.setSpacing(2)
 
         title_label = QLabel(t("app.name"))
-        title_label.setFont(get_ui_font(18, bold=True))
+        title_label.setFont(get_ui_font(15, bold=True))
         title_label.setStyleSheet("color: #e0e0e0;")
 
         subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
-        subtitle_label.setFont(get_ui_font(10))
+        subtitle_label.setFont(get_ui_font(9))
         subtitle_label.setStyleSheet("color: #8892a0;")
 
         title_layout.addWidget(title_label)
@@ -216,8 +216,8 @@ class MainWindow(QMainWindow):
             }
         """)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(16, 20, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(8)
 
         # 输出目录
         dir_layout = QHBoxLayout()
@@ -309,8 +309,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 8, 0, 0)
 
         self.start_btn = QPushButton("▶  " + t("toolbar.start"))
-        self.start_btn.setFixedSize(160, 48)
-        self.start_btn.setFont(get_ui_font(12, bold=True))
+        self.start_btn.setFixedSize(140, 40)
+        self.start_btn.setFont(get_ui_font(11, bold=True))
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setStyleSheet("""
             QPushButton {
@@ -334,8 +334,8 @@ class MainWindow(QMainWindow):
         """)
 
         self.stop_btn = QPushButton("■  " + t("toolbar.stop"))
-        self.stop_btn.setFixedSize(120, 48)
-        self.stop_btn.setFont(get_ui_font(11))
+        self.stop_btn.setFixedSize(100, 40)
+        self.stop_btn.setFont(get_ui_font(10))
         self.stop_btn.setEnabled(False)
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
