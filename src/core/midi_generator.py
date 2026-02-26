@@ -1548,7 +1548,7 @@ class MidiGenerator:
 
                     singing_track.append(MetaMessage('track_name', name="Vocals", time=0))
 
-                    # 人声使用钢琴音色（GM 0），与 _generate_vocal_midi 保持一致
+                    # 人声使用钢琴音色（GM 0）
                     singing_track.append(Message(
                         'program_change',
                         channel=midi_channel,
