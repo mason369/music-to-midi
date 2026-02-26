@@ -60,7 +60,7 @@ class InstrumentType(Enum):
             InstrumentType.DRUMS: 0,      # 鼓使用通道10，不需要音色
             InstrumentType.BASS: 32,      # Acoustic Bass
             InstrumentType.GUITAR: 24,    # Acoustic Guitar (nylon)
-            InstrumentType.VOCALS: 52,    # Choir Aahs
+            InstrumentType.VOCALS: 0,     # Acoustic Grand Piano
             InstrumentType.STRINGS: 48,   # String Ensemble 1
             InstrumentType.BRASS: 56,     # Trumpet
             InstrumentType.WOODWIND: 73,  # Flute

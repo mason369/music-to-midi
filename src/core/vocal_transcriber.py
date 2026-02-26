@@ -67,7 +67,7 @@ class VocalTranscriber:
             pitch_jump_threshold: 音高跳变阈值（半音），超过则分割新音符
 
         返回:
-            List[NoteEvent]，program=52 (Choir Aahs)
+            List[NoteEvent]，program=0 (Acoustic Grand Piano)
         """
         import torch
         import torchcrepe

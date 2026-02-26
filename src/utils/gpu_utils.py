@@ -392,6 +392,7 @@ def clear_gpu_memory() -> None:
     accel = get_accelerator_type()
     try:
         if accel in ("cuda", "rocm") and torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
             logger.info("GPU显存缓存已清除")
         elif accel == "mps" and hasattr(torch.mps, 'empty_cache'):
@@ -591,14 +592,15 @@ def get_system_performance_profile() -> dict:
             "device": str,
         }
     """
-    import psutil
-
-    ram_gb = psutil.virtual_memory().total / (1024 ** 3)
-    cpu_cores = os.cpu_count() or 1
     try:
-        physical_cores = psutil.cpu_count(logical=False) or cpu_cores
-    except Exception:
-        physical_cores = cpu_cores
+        import psutil
+        ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        physical_cores = psutil.cpu_count(logical=False) or (os.cpu_count() or 1)
+    except ImportError:
+        # psutil 未安装时使用保守估计
+        ram_gb = 8.0
+        physical_cores = os.cpu_count() or 1
+    cpu_cores = os.cpu_count() or 1
 
     has_gpu = is_gpu_available()
     gpu_vram_gb = None
@@ -674,23 +676,42 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
     is_gpu_device = profile["has_gpu"] and not device.startswith("cpu")
     is_directml = "privateuseone" in device
 
+    is_cuda = device.startswith("cuda")
+
     if is_gpu_device and not is_directml:
-        # CUDA/ROCm/MPS/XPU：按显存分档，尽量吃满 VRAM
         vram = profile["gpu_vram_gb"] or 4.0
-        if is_best:
-            if vram >= 10:
-                bsz_table = {100: 24, 300: 20, 999999: 16}
-            elif vram >= 6:
-                bsz_table = {100: 16, 300: 12, 999999: 10}
+        if is_cuda:
+            # CUDA：autocast 混合精度节省约 30-40% 显存，bsz 适度提升
+            if is_best:
+                if vram >= 10:
+                    bsz_table = {100: 36, 300: 28, 999999: 24}
+                elif vram >= 6:
+                    bsz_table = {100: 24, 300: 18, 999999: 14}
+                else:
+                    bsz_table = {100: 16, 300: 14, 999999: 10}
             else:
-                bsz_table = {100: 12, 300: 10, 999999: 8}
+                if vram >= 10:
+                    bsz_table = {150: 28, 400: 24, 999999: 18}
+                elif vram >= 6:
+                    bsz_table = {150: 18, 400: 14, 999999: 12}
+                else:
+                    bsz_table = {150: 14, 400: 12, 999999: 8}
         else:
-            if vram >= 10:
-                bsz_table = {150: 20, 400: 16, 999999: 12}
-            elif vram >= 6:
-                bsz_table = {150: 12, 400: 10, 999999: 8}
+            # ROCm/MPS/XPU：无 fp16 autocast，使用保守 bsz
+            if is_best:
+                if vram >= 10:
+                    bsz_table = {100: 24, 300: 20, 999999: 16}
+                elif vram >= 6:
+                    bsz_table = {100: 16, 300: 12, 999999: 10}
+                else:
+                    bsz_table = {100: 12, 300: 10, 999999: 8}
             else:
-                bsz_table = {150: 10, 400: 8, 999999: 6}
+                if vram >= 10:
+                    bsz_table = {150: 20, 400: 16, 999999: 12}
+                elif vram >= 6:
+                    bsz_table = {150: 12, 400: 10, 999999: 8}
+                else:
+                    bsz_table = {150: 10, 400: 8, 999999: 6}
     elif is_directml:
         # DirectML：集显共享系统内存，按 tier 分档（与 CPU 类似但有 GPU 加速）
         if tier == "high":

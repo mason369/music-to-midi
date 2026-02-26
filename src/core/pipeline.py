@@ -146,9 +146,12 @@ class MusicToMidiPipeline:
         finally:
             try:
                 self.yourmt3_transcriber.unload_model()
+            except Exception as e:
+                logger.warning(f"模型卸载失败: {e}")
+            try:
                 clear_gpu_memory()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"GPU内存清理失败: {e}")
 
         self._check_cancelled()
 
@@ -293,9 +296,12 @@ class MusicToMidiPipeline:
         finally:
             try:
                 self.yourmt3_transcriber.unload_model()
+            except Exception as e:
+                logger.warning(f"模型卸载失败: {e}")
+            try:
                 clear_gpu_memory()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"GPU内存清理失败: {e}")
 
         self._check_cancelled()
 
@@ -401,7 +407,7 @@ class MusicToMidiPipeline:
             # 后处理
             processed = self.midi_generator.post_process_minimal(notes, tempo)
 
-            # 人声轨道，通道 0，program 52 (Choir Aahs)
+            # 人声轨道，通道 0，program 0 (钢琴)
             vocal_track = MidiTrack()
             midi.tracks.append(vocal_track)
             vocal_track.append(MetaMessage('track_name', name="Vocals", time=0))

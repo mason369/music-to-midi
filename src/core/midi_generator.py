@@ -1,6 +1,7 @@
 """
 MIDI生成模块 - 支持歌词嵌入和后处理优化
 """
+import heapq
 import logging
 import os
 from typing import List, Dict, Optional, Tuple
@@ -37,7 +38,7 @@ class MidiGenerator:
     PROGRAM_MAP = {
         TrackType.DRUMS: 0,      # 鼓组不需要音色变更
         TrackType.BASS: 33,      # 电贝斯（指弹）
-        TrackType.VOCALS: 52,    # 合唱
+        TrackType.VOCALS: 0,     # 原声大钢琴
         TrackType.OTHER: 0       # 原声大钢琴
     }
 
@@ -310,22 +311,21 @@ class MidiGenerator:
         # 按开始时间和音高排序
         sorted_notes = sorted(notes, key=lambda n: (n.start_time, n.pitch))
 
+        # 用 dict 按音高跟踪最后保留的音符索引，避免 O(n²) 的 result.remove()
         result = []
+        pitch_last: dict = {}  # pitch -> index in result
         for note in sorted_notes:
-            is_duplicate = False
-            for existing in result:
-                # 检查是否是相同音高且时间重叠
-                if (existing.pitch == note.pitch and
-                    abs(existing.start_time - note.start_time) < time_threshold):
-                    # 保留较长的音符
+            idx = pitch_last.get(note.pitch)
+            if idx is not None:
+                existing = result[idx]
+                if abs(existing.start_time - note.start_time) < time_threshold:
                     if note.duration > existing.duration:
-                        result.remove(existing)
-                    else:
-                        is_duplicate = True
-                    break
-
-            if not is_duplicate:
-                result.append(note)
+                        result[idx] = note
+                        pitch_last[note.pitch] = idx
+                    # else: 保留 existing，跳过 note
+                    continue
+            pitch_last[note.pitch] = len(result)
+            result.append(note)
 
         removed_count = len(notes) - len(result)
         if removed_count > 0:
@@ -435,16 +435,16 @@ class MidiGenerator:
         # 按开始时间排序
         sorted_notes = sorted(notes, key=lambda n: (n.start_time, -n.velocity))
 
+        # 用堆追踪活跃音符的结束时间，避免 O(n²) 的全量扫描
         result = []
+        active_ends = []  # min-heap of end_time
         for note in sorted_notes:
-            # 计算在该音符开始时还在发声的音符数
-            active_notes = sum(
-                1 for n in result
-                if n.start_time <= note.start_time < n.end_time
-            )
-
-            if active_notes < max_polyphony:
+            # 弹出已结束的音符
+            while active_ends and active_ends[0] <= note.start_time:
+                heapq.heappop(active_ends)
+            if len(active_ends) < max_polyphony:
                 result.append(note)
+                heapq.heappush(active_ends, note.end_time)
 
         removed_count = len(notes) - len(result)
         if removed_count > 0:
@@ -1548,18 +1548,18 @@ class MidiGenerator:
 
                     singing_track.append(MetaMessage('track_name', name="Vocals", time=0))
 
-                    # 使用 Choir Aahs (52) 作为人声音色
+                    # 人声使用钢琴音色（GM 0），与 _generate_vocal_midi 保持一致
                     singing_track.append(Message(
                         'program_change',
                         channel=midi_channel,
-                        program=52,  # Choir Aahs
+                        program=0,  # Acoustic Grand Piano
                         time=0
                     ))
 
                     self._write_notes_to_track(singing_track, processed_notes, midi_channel, tempo)
                     singing_track.append(MetaMessage('end_of_track', time=0))
 
-                    logger.info(f"人声轨道: {len(processed_notes)} 个音符，通道 {midi_channel}，音色 Choir Aahs")
+                    logger.info(f"人声轨道: {len(processed_notes)} 个音符，通道 {midi_channel}，音色 Acoustic Grand Piano")
                 else:
                     logger.warning(f"无法分配人声通道，跳过 {len(all_singing_notes)} 个音符")
 
@@ -1734,7 +1734,7 @@ class MidiGenerator:
                 'channel': channel
             })
 
-        # 按 tick 排序
+        # 按 tick 排序，同 tick 内 note_off(False=0) 先于 note_on(True=1)
         events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
 
         # 写入事件
