@@ -3,7 +3,7 @@
 
 处理模式：
 1. SMART: YourMT3+ 直接对完整混音进行极致精度转写
-2. VOCAL_SPLIT: Demucs 分离人声与伴奏，伴奏用 YourMT3+ 转写，人声用 CREPE 转写
+2. VOCAL_SPLIT: Demucs 分离人声与伴奏，均使用 YourMT3+ 分别转写
 """
 import logging
 import time
@@ -28,7 +28,7 @@ class MusicToMidiPipeline:
 
     处理模式：
         SMART: 使用 YourMT3+ MoE 直接对完整混音进行多乐器转写。
-        VOCAL_SPLIT: Demucs 分离人声与伴奏，分别转写后输出两个 MIDI 文件。
+        VOCAL_SPLIT: Demucs 分离人声与伴奏，均使用 YourMT3+ 分别转写后输出两个 MIDI 文件。
     """
 
     def __init__(self, config: Config):
@@ -200,9 +200,8 @@ class MusicToMidiPipeline:
         )
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """人声分离模式：Demucs 分离 → YourMT3+ 转写伴奏 → CREPE 转写人声"""
+        """人声分离模式：Demucs 分离 → YourMT3+ 分别转写伴奏和人声"""
         from src.core.vocal_separator import VocalSeparator
-        from src.core.vocal_transcriber import VocalTranscriber
 
         start_time = time.time()
 
@@ -215,14 +214,10 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
 
         # ── 检查依赖 ──
-        logger.info("正在检查依赖: Demucs, torchcrepe, YourMT3+...")
+        logger.info("正在检查依赖: Demucs, YourMT3+...")
         if not VocalSeparator.is_available():
             raise RuntimeError(
                 "Demucs 不可用。请安装: pip install demucs>=4.0.0"
-            )
-        if not VocalTranscriber.is_available():
-            raise RuntimeError(
-                "torchcrepe 不可用。请安装: pip install torchcrepe>=0.0.20"
             )
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
@@ -300,6 +295,34 @@ class MusicToMidiPipeline:
         except Exception as e:
             logger.error(f"伴奏转写失败: {e}", exc_info=True)
             raise RuntimeError(f"伴奏转写失败: {e}") from e
+
+        self._check_cancelled()
+
+        acc_total = sum(len(n) for n in instrument_notes.values()) + \
+                    sum(len(n) for n in drum_notes.values())
+        logger.info(f"伴奏转写完成: {len(instrument_notes)} 种乐器, {acc_total} 个音符")
+
+        self._report(ProcessingStage.TRANSCRIPTION, 1.0, 0.60, f"伴奏转写完成：{acc_total} 个音符")
+
+        # ── 阶段4：YourMT3+ 转写人声 (60-85%) ──
+        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.60, "正在用 YourMT3+ 转写人声...")
+        logger.info(f"开始 YourMT3+ 人声转写: {vocals_path}")
+
+        def _vocal_cb(p: float, msg: str) -> None:
+            overall = 0.60 + p * 0.25
+            self._report(ProcessingStage.VOCAL_TRANSCRIPTION, p, overall, msg)
+
+        try:
+            vocal_instrument_notes, vocal_drum_notes = self.yourmt3_transcriber.transcribe_precise(
+                audio_path=vocals_path,
+                quality=quality,
+                progress_callback=_vocal_cb,
+            )
+        except InterruptedError:
+            raise
+        except Exception as e:
+            logger.error(f"人声转写失败: {e}", exc_info=True)
+            raise RuntimeError(f"人声转写失败: {e}") from e
         finally:
             try:
                 self.yourmt3_transcriber.unload_model()
@@ -310,44 +333,16 @@ class MusicToMidiPipeline:
             except Exception as e:
                 logger.warning(f"GPU内存清理失败: {e}")
 
+        vocal_total = sum(len(n) for n in vocal_instrument_notes.values()) + \
+                      sum(len(n) for n in vocal_drum_notes.values())
+        logger.info(f"人声转写完成: {len(vocal_instrument_notes)} 种乐器, {vocal_total} 个音符")
+
+        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 1.0, 0.85,
+                     f"人声转写完成：{vocal_total} 个音符")
         self._check_cancelled()
 
-        acc_total = sum(len(n) for n in instrument_notes.values()) + \
-                    sum(len(n) for n in drum_notes.values())
-        logger.info(f"伴奏转写完成: {len(instrument_notes)} 种乐器, {acc_total} 个音符")
-
-        self._report(ProcessingStage.TRANSCRIPTION, 1.0, 0.70, f"伴奏转写完成：{acc_total} 个音符")
-
-        # ── 阶段4：CREPE 转写人声 (70-90%) ──
-        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.70, "正在转写人声...")
-        logger.info(f"开始 CREPE 人声转写: {vocals_path}")
-
-        vocal_transcriber = VocalTranscriber()
-        vocal_transcriber.set_cancel_check(lambda: self._cancelled)
-
-        def _vocal_cb(p: float, msg: str) -> None:
-            overall = 0.70 + p * 0.20
-            self._report(ProcessingStage.VOCAL_TRANSCRIPTION, p, overall, msg)
-
-        try:
-            vocal_notes = vocal_transcriber.transcribe(
-                audio_path=vocals_path,
-                progress_callback=_vocal_cb,
-            )
-        except InterruptedError:
-            raise
-        except Exception as e:
-            logger.error(f"人声转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"人声转写失败: {e}") from e
-
-        logger.info(f"人声转写完成: {len(vocal_notes)} 个音符")
-
-        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 1.0, 0.90,
-                     f"人声转写完成：{len(vocal_notes)} 个音符")
-        self._check_cancelled()
-
-        # ── 阶段5：生成两个 MIDI 文件 (90-95%) ──
-        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.90, "正在生成 MIDI 文件...")
+        # ── 阶段5：生成两个 MIDI 文件 (85-95%) ──
+        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, "正在生成 MIDI 文件...")
         logger.info("开始生成 MIDI 文件...")
 
         accompaniment_midi_path = str(Path(output_dir) / f"{stem}_accompaniment.mid")
@@ -363,8 +358,14 @@ class MusicToMidiPipeline:
                 quality=quality,
             )
 
-            # 人声 MIDI（单轨）
-            self._generate_vocal_midi(vocal_notes, tempo, vocal_midi_path)
+            # 人声 MIDI（同样使用 v2 生成器）
+            vocal_midi_path = self.midi_generator.generate_from_precise_instruments_v2(
+                instrument_notes=vocal_instrument_notes,
+                drum_notes=vocal_drum_notes,
+                tempo=tempo,
+                output_path=vocal_midi_path,
+                quality=quality,
+            )
 
         except Exception as e:
             logger.error(f"MIDI 生成失败: {e}", exc_info=True)
@@ -389,44 +390,3 @@ class MusicToMidiPipeline:
             accompaniment_midi_path=accompaniment_midi_path,
             separated_audio=separated,
         )
-
-    def _generate_vocal_midi(
-        self,
-        notes: list,
-        tempo: float,
-        output_path: str,
-    ) -> str:
-        """用 MidiGenerator 的底层方法生成单轨人声 MIDI"""
-        from mido import MidiFile, MidiTrack, Message, MetaMessage
-        import os
-
-        midi = MidiFile(type=1, ticks_per_beat=self.config.ticks_per_beat)
-
-        # 主轨道
-        main_track = MidiTrack()
-        midi.tracks.append(main_track)
-        main_track.append(MetaMessage('set_tempo', tempo=int(60_000_000 / tempo), time=0))
-        main_track.append(MetaMessage(
-            'time_signature', numerator=4, denominator=4,
-            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0
-        ))
-        main_track.append(MetaMessage('end_of_track', time=0))
-
-        if notes:
-            # 后处理
-            processed = self.midi_generator.post_process_minimal(notes, tempo)
-
-            # 人声轨道，通道 0，program 0 (钢琴)
-            vocal_track = MidiTrack()
-            midi.tracks.append(vocal_track)
-            vocal_track.append(MetaMessage('track_name', name="Vocals", time=0))
-            vocal_track.append(Message('program_change', channel=0, program=0, time=0))
-            self.midi_generator._write_notes_to_track(vocal_track, processed, 0, tempo)
-            vocal_track.append(MetaMessage('end_of_track', time=0))
-
-            logger.info(f"人声 MIDI: {len(processed)} 个音符")
-
-        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-        midi.save(output_path)
-        logger.info(f"人声 MIDI 已保存: {output_path}")
-        return output_path
