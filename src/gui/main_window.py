@@ -567,6 +567,7 @@ class MainWindow(QMainWindow):
         self.dropzone.file_selected.connect(self._on_file_selected)
         self.start_btn.clicked.connect(self._start_processing)
         self.stop_btn.clicked.connect(self._stop_processing)
+        self.track_panel.mode_changed.connect(self.progress_widget.set_mode)
 
     def _on_file_selected(self, file_path: str):
         """处理文件选择"""
@@ -611,7 +612,7 @@ class MainWindow(QMainWindow):
         # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
-        self.config.processing_mode = "smart"  # 固定使用 YourMT3+ 智能模式
+        self.config.processing_mode = self.track_panel.get_processing_mode()
 
         # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem
@@ -644,6 +645,7 @@ class MainWindow(QMainWindow):
         # 更新UI
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.track_panel.mode_combo.setEnabled(False)
         self.progress_widget.reset()
         self.status_label.setText(t("status.processing"))
 
@@ -659,6 +661,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.track_panel.mode_combo.setEnabled(True)
         self.status_label.setText(t("status.ready"))
 
     def _on_progress(self, progress: ProcessingProgress):
@@ -670,6 +673,7 @@ class MainWindow(QMainWindow):
         """处理完成"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.track_panel.mode_combo.setEnabled(True)
         self.save_action.setEnabled(True)
 
         self.status_label.setText(
@@ -706,14 +710,24 @@ class MainWindow(QMainWindow):
         layout.addLayout(header_layout)
 
         # 结果信息
-        info_text = f"""
-        <p style="color: #b0b8c8; line-height: 1.6;">
-        <b>MIDI文件:</b> {result.midi_path}<br>
-        <b>轨道数:</b> {len(result.tracks)}<br>
-        <b>音符数:</b> {sum(len(track.notes) for track in result.tracks)}<br>
-        <b>处理时间:</b> {result.processing_time:.1f}秒
-        </p>
-        """
+        if result.vocal_midi_path:
+            # 人声分离模式：显示两个 MIDI 文件
+            info_text = f"""
+            <p style="color: #b0b8c8; line-height: 1.6;">
+            <b>{t('dialogs.complete.accompaniment_midi')}:</b> {result.accompaniment_midi_path}<br>
+            <b>{t('dialogs.complete.vocal_midi')}:</b> {result.vocal_midi_path}<br>
+            <b>处理时间:</b> {result.processing_time:.1f}秒
+            </p>
+            """
+        else:
+            info_text = f"""
+            <p style="color: #b0b8c8; line-height: 1.6;">
+            <b>MIDI文件:</b> {result.midi_path}<br>
+            <b>轨道数:</b> {len(result.tracks)}<br>
+            <b>音符数:</b> {sum(len(track.notes) for track in result.tracks)}<br>
+            <b>处理时间:</b> {result.processing_time:.1f}秒
+            </p>
+            """
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         info_label.setStyleSheet("""
@@ -749,9 +763,7 @@ class MainWindow(QMainWindow):
         """)
         open_folder_btn.clicked.connect(lambda: self._open_output_folder(result.midi_path))
 
-        # 打开MIDI文件按钮
-        open_file_btn = QPushButton("🎵  " + t("dialogs.complete.openFile"))
-        open_file_btn.setStyleSheet("""
+        midi_btn_style = """
             QPushButton {
                 padding: 10px 20px;
                 background: #2a3f5f;
@@ -765,10 +777,31 @@ class MainWindow(QMainWindow):
                 background: #3a5a7c;
                 border-color: #4a9eff;
             }
-        """)
-        open_file_btn.clicked.connect(lambda: self._open_midi_file(result.midi_path))
+        """
 
-        # 确定按钮
+        if result.vocal_midi_path:
+            # 人声分离模式：两个打开按钮
+            open_acc_btn = QPushButton("🎵  " + t("dialogs.complete.accompaniment_midi"))
+            open_acc_btn.setStyleSheet(midi_btn_style)
+            open_acc_btn.clicked.connect(lambda: self._open_midi_file(result.accompaniment_midi_path))
+
+            open_vocal_btn = QPushButton("🎤  " + t("dialogs.complete.vocal_midi"))
+            open_vocal_btn.setStyleSheet(midi_btn_style)
+            open_vocal_btn.clicked.connect(lambda: self._open_midi_file(result.vocal_midi_path))
+
+            btn_layout.addWidget(open_folder_btn)
+            btn_layout.addWidget(open_acc_btn)
+            btn_layout.addWidget(open_vocal_btn)
+        else:
+            # 智能模式：单个打开按钮
+            open_file_btn = QPushButton("🎵  " + t("dialogs.complete.openFile"))
+            open_file_btn.setStyleSheet(midi_btn_style)
+            open_file_btn.clicked.connect(lambda: self._open_midi_file(result.midi_path))
+
+            btn_layout.addWidget(open_folder_btn)
+            btn_layout.addWidget(open_file_btn)
+
+        btn_layout.addStretch()
         ok_btn = QPushButton(t("dialogs.complete.ok"))
         ok_btn.setStyleSheet("""
             QPushButton {
@@ -786,8 +819,6 @@ class MainWindow(QMainWindow):
         """)
         ok_btn.clicked.connect(dialog.accept)
 
-        btn_layout.addWidget(open_folder_btn)
-        btn_layout.addWidget(open_file_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
         layout.addLayout(btn_layout)
@@ -826,6 +857,7 @@ class MainWindow(QMainWindow):
         """处理错误"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.track_panel.mode_combo.setEnabled(True)
         self.status_label.setText(t("status.error"))
 
         # 创建自定义错误对话框

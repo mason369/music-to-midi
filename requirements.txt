@@ -37,6 +37,12 @@ PyQt6>=6.6.0
 PyQt6-Qt6>=6.6.0
 PyQt6-sip>=13.6.0
 
+# 人声分离（Demucs）
+demucs>=4.0.0
+
+# 人声音高追踪（CREPE）
+torchcrepe>=0.0.20
+
 # 工具
 tqdm>=4.66.0
 pyyaml>=6.0.0

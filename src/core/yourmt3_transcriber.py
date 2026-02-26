@@ -34,7 +34,7 @@ import numpy as np
 
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
-from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path
+from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path, get_optimal_thread_count
 
 # 在任何 import torch 之前修复 Windows 特殊路径 DLL 加载问题
 _fix_torch_dll_path()
@@ -222,13 +222,16 @@ class YourMT3Transcriber:
             logger.warning("DirectML 不兼容 YourMT3 模型（STFT/RoPE 算子不支持），回退 CPU 模式")
             self.device = "cpu"
 
-        # CPU 模式下限制 OpenMP 线程数，防止与 PyQt QThread 冲突导致堆内存损坏
+        # CPU 模式下动态设置线程数，充分利用多核 CPU 同时保留 2 核给 GUI
         if self.device == "cpu":
             torch = _import_torch()
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
-            torch.set_num_threads(1)
-            logger.debug("CPU 模式：已限制 OpenMP/MKL 线程数为 1（防止与 GUI 线程冲突）")
+            optimal_threads = get_optimal_thread_count()
+            # 注意：os.environ 设置仅对子进程生效（当前进程的 OpenMP 在 import torch 时已初始化）
+            # torch.set_num_threads() 才是运行时生效的 API
+            os.environ['OMP_NUM_THREADS'] = str(optimal_threads)
+            os.environ['MKL_NUM_THREADS'] = str(optimal_threads)
+            torch.set_num_threads(optimal_threads)
+            logger.debug(f"CPU 模式：已设置 PyTorch 线程数为 {optimal_threads}")
 
         self._cancelled = False
         self._cancel_check_callback = None

@@ -12,10 +12,21 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 所有日志
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 警告
 os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
 
-# 限制 OpenMP/MKL 线程数，防止 PyTorch 多线程与 PyQt QThread 冲突导致堆内存损坏
-# 必须在 import torch 之前设置，否则无效
-os.environ.setdefault('OMP_NUM_THREADS', '1')
-os.environ.setdefault('MKL_NUM_THREADS', '1')
+# 动态设置 OpenMP/MKL 线程数（必须在 import torch 之前，否则无效）
+# 使用全部物理核心，最大化 CPU 利用率
+try:
+    import psutil as _psutil
+    _phys = _psutil.cpu_count(logical=False) or (os.cpu_count() or 4)
+except Exception:
+    _phys = os.cpu_count() or 4
+_omp_threads = str(max(2, _phys))
+os.environ.setdefault('OMP_NUM_THREADS', _omp_threads)
+os.environ.setdefault('MKL_NUM_THREADS', _omp_threads)
+del _omp_threads, _phys
+try:
+    del _psutil
+except NameError:
+    pass
 
 # 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
 # 必须在任何 import torch 之前执行
@@ -60,6 +71,8 @@ if _plat.system() == "Windows":
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
 try:
     import torch  # noqa: F401
+    # 环境变量对当前进程的 PyTorch 可能无效，必须显式调用 set_num_threads
+    torch.set_num_threads(int(os.environ.get('OMP_NUM_THREADS', '1')))
     # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
     # 强制使用 soundfile 后端（已在 requirements.txt 中包含）
     import torchaudio

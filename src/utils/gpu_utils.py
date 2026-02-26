@@ -542,6 +542,41 @@ def print_gpu_diagnosis() -> None:
     print("\n" + "=" * 50)
 
 
+def get_available_memory_gb() -> float:
+    """
+    获取当前系统可用内存（GB）。
+
+    返回:
+        可用内存（GB），失败时返回 4.0 作为保守默认值
+    """
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        logger.warning("无法获取可用内存，使用默认值 4.0 GB")
+        return 4.0
+
+
+def get_optimal_thread_count() -> int:
+    """
+    返回推荐的 PyTorch 线程数。
+
+    策略：使用全部物理核心，最大化 CPU 利用率。
+
+    返回:
+        推荐线程数
+    """
+    try:
+        import psutil
+        physical_cores = psutil.cpu_count(logical=False) or (os.cpu_count() or 4)
+    except Exception:
+        physical_cores = os.cpu_count() or 4
+
+    threads = max(2, physical_cores)
+    logger.debug(f"推荐线程数: {threads}（物理核数: {physical_cores}）")
+    return threads
+
+
 def get_system_performance_profile() -> dict:
     """
     检测系统硬件配置，返回性能档位信息。
@@ -674,22 +709,31 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
             else:
                 bsz_table = {150: 2, 400: 1, 999999: 1}
     else:
-        # CPU 模式：按 RAM 和核心数分档
+        # CPU 模式：根据可用内存动态计算批处理大小，尽量吃满资源
+        available_mem = get_available_memory_gb()
+        # 每段约需 0.5GB 内存，使用可用内存的 90%
+        mem_based_bsz = max(1, int(available_mem * 0.9 / 0.5))
+
         if tier == "high":
+            cap = 16 if is_best else 12
             if is_best:
-                bsz_table = {100: 8, 300: 6, 999999: 4}
+                bsz_table = {100: min(cap, mem_based_bsz), 300: min(cap, mem_based_bsz), 999999: min(cap, mem_based_bsz)}
             else:
-                bsz_table = {150: 6, 400: 4, 999999: 2}
+                bsz_table = {150: min(cap, mem_based_bsz), 400: min(cap, mem_based_bsz), 999999: min(cap, mem_based_bsz)}
         elif tier == "medium":
+            cap = 12 if is_best else 8
             if is_best:
-                bsz_table = {100: 2, 300: 1, 999999: 1}
+                bsz_table = {100: min(cap, mem_based_bsz), 300: min(cap, mem_based_bsz), 999999: min(cap, mem_based_bsz)}
             else:
-                bsz_table = {150: 2, 400: 1, 999999: 1}
+                bsz_table = {150: min(cap, mem_based_bsz), 400: min(cap, mem_based_bsz), 999999: min(cap, mem_based_bsz)}
         else:
+            cap = 6 if is_best else 4
             if is_best:
-                bsz_table = {100: 2, 300: 1, 999999: 1}
+                bsz_table = {100: min(cap, mem_based_bsz), 300: min(cap, mem_based_bsz), 999999: max(1, min(cap, mem_based_bsz))}
             else:
-                bsz_table = {150: 2, 400: 1, 999999: 1}
+                bsz_table = {150: min(cap, mem_based_bsz), 400: min(cap, mem_based_bsz), 999999: max(1, min(cap, mem_based_bsz))}
+
+        logger.info(f"CPU 动态内存: 可用={available_mem:.1f}GB, 内存推算bsz={mem_based_bsz}, cap={cap}")
 
     bsz = 1
     for threshold, size in sorted(bsz_table.items()):

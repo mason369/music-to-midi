@@ -30,8 +30,15 @@
       "selected": "Selected file"
     },
     "mode": {
+      "label": "Processing Mode",
       "smart": "YourMT3+ MoE Multi-Instrument",
-      "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed"
+      "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed",
+      "vocal_split": "Vocal Split + Separate Transcription",
+      "vocal_split_tooltip": "Separate vocals and accompaniment with Demucs, transcribe accompaniment with YourMT3+ and vocals with CREPE pitch tracking, outputs two independent MIDI files",
+      "smart_desc": "🎵  YourMT3+ MoE  —  Multi-Instrument Transcription",
+      "smart_hint": "Transcribe full audio directly, recognizes 128 GM instruments.\nTrack count is determined automatically by the model.",
+      "vocal_split_desc": "🎤  Demucs + CREPE  —  Vocal Split + Separate Transcription",
+      "vocal_split_hint": "Separate vocals and accompaniment with Demucs, transcribe accompaniment\nwith YourMT3+ and vocals with CREPE pitch tracking, outputs two MIDI files."
     },
     "tracks": {
       "title": "Track Settings",
@@ -76,6 +83,7 @@
         "preprocessing": "Preprocessing",
         "separation": "Separation",
         "transcription": "Transcription",
+        "vocal_transcription": "Vocal Transcription",
         "synthesis": "Synthesis",
         "complete": "Complete"
       }
@@ -164,7 +172,9 @@
       "title": "Conversion Complete",
       "openFolder": "Open Folder",
       "openFile": "Open MIDI File",
-      "ok": "OK"
+      "ok": "OK",
+      "accompaniment_midi": "Accompaniment MIDI",
+      "vocal_midi": "Vocal MIDI"
     }
   },
   "quality": {

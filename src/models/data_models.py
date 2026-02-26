@@ -151,7 +151,8 @@ class InstrumentType(Enum):
 
 class ProcessingMode(Enum):
     """处理模式枚举"""
-    SMART = "smart"         # YourMT3+ MoE 多乐器转写（唯一模式）
+    SMART = "smart"         # YourMT3+ MoE 多乐器转写
+    VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
@@ -167,6 +168,7 @@ class ProcessingStage(Enum):
     PREPROCESSING = "preprocessing"
     SEPARATION = "separation"
     TRANSCRIPTION = "transcription"
+    VOCAL_TRANSCRIPTION = "vocal_transcription"
     SYNTHESIS = "synthesis"
     COMPLETE = "complete"
 
@@ -388,6 +390,9 @@ class ProcessingResult:
     tracks: List[Track] = field(default_factory=list)
     beat_info: Optional[BeatInfo] = None
     processing_time: float = 0.0             # 总处理时间（秒）
+    vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
+    accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
+    separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径 {"vocals": ..., "no_vocals": ...}
 
 
 @dataclass
