@@ -43,6 +43,7 @@ class StageIndicator(QWidget):
             ProcessingStage.PREPROCESSING: "preprocessing",
             ProcessingStage.SEPARATION: "separation",
             ProcessingStage.TRANSCRIPTION: "transcription",
+            ProcessingStage.VOCAL_TRANSCRIPTION: "vocal_transcription",
             ProcessingStage.SYNTHESIS: "synthesis",
             ProcessingStage.COMPLETE: "complete"
         }
@@ -102,6 +103,8 @@ class ProgressWidget(QGroupBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.stage_indicators = {}
+        self._arrow_labels = []
+        self._stages_layout = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -162,34 +165,58 @@ class ProgressWidget(QGroupBox):
             }
         """)
 
-        # 阶段指示器
-        stages_layout = QHBoxLayout()
-        stages_layout.setSpacing(5)
-
-        stages = [
-            ProcessingStage.PREPROCESSING,
-            ProcessingStage.SEPARATION,
-            ProcessingStage.TRANSCRIPTION,
-            ProcessingStage.SYNTHESIS
-        ]
-
-        for i, stage in enumerate(stages):
-            indicator = StageIndicator(stage)
-            self.stage_indicators[stage] = indicator
-            stages_layout.addWidget(indicator)
-
-            # 阶段之间添加箭头
-            if i < len(stages) - 1:
-                arrow = QLabel("→")
-                arrow.setStyleSheet("color: #4a5a6a;")
-                stages_layout.addWidget(arrow)
-
-        stages_layout.addStretch()
+        # 阶段指示器容器
+        self._stages_layout = QHBoxLayout()
+        self._stages_layout.setSpacing(5)
+        self._build_stage_indicators("smart")
 
         layout.addWidget(self.current_label)
         layout.addWidget(self.progress_bar)
         layout.addSpacing(10)
-        layout.addLayout(stages_layout)
+        layout.addLayout(self._stages_layout)
+
+    def _build_stage_indicators(self, mode: str):
+        """根据处理模式构建阶段指示器"""
+        # 清除布局中所有项（指示器、箭头、stretch）
+        while self._stages_layout.count():
+            item = self._stages_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.stage_indicators.clear()
+        self._arrow_labels.clear()
+
+        if mode == "vocal_split":
+            stages = [
+                ProcessingStage.PREPROCESSING,
+                ProcessingStage.SEPARATION,
+                ProcessingStage.TRANSCRIPTION,
+                ProcessingStage.VOCAL_TRANSCRIPTION,
+                ProcessingStage.SYNTHESIS
+            ]
+        else:
+            stages = [
+                ProcessingStage.PREPROCESSING,
+                ProcessingStage.TRANSCRIPTION,
+                ProcessingStage.SYNTHESIS
+            ]
+
+        for i, stage in enumerate(stages):
+            indicator = StageIndicator(stage)
+            self.stage_indicators[stage] = indicator
+            self._stages_layout.addWidget(indicator)
+
+            if i < len(stages) - 1:
+                arrow = QLabel("→")
+                arrow.setStyleSheet("color: #4a5a6a;")
+                self._arrow_labels.append(arrow)
+                self._stages_layout.addWidget(arrow)
+
+        self._stages_layout.addStretch()
+
+    def set_mode(self, mode: str):
+        """切换处理模式时更新阶段指示器"""
+        self._build_stage_indicators(mode)
 
     def update_progress(self, progress: ProcessingProgress):
         """更新进度显示"""
@@ -201,13 +228,10 @@ class ProgressWidget(QGroupBox):
 
         # 更新阶段指示器
         current_stage = progress.stage
-        stage_order = [
-            ProcessingStage.PREPROCESSING,
-            ProcessingStage.SEPARATION,
-            ProcessingStage.TRANSCRIPTION,
-            ProcessingStage.SYNTHESIS,
-            ProcessingStage.COMPLETE
-        ]
+
+        # 构建当前模式的阶段顺序（包含 COMPLETE 用于判断）
+        displayed_stages = list(self.stage_indicators.keys())
+        stage_order = displayed_stages + [ProcessingStage.COMPLETE]
 
         current_idx = stage_order.index(current_stage) if current_stage in stage_order else 0
 

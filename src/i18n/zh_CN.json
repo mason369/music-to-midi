@@ -30,8 +30,15 @@
       "selected": "已选文件"
     },
     "mode": {
+      "label": "处理模式",
       "smart": "YourMT3+ MoE 多乐器转写",
-      "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离"
+      "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离",
+      "vocal_split": "人声分离 + 分别转写",
+      "vocal_split_tooltip": "先用 Demucs 分离人声与伴奏，伴奏用 YourMT3+ 转写，人声用 CREPE 音高追踪转写，输出两个独立 MIDI 文件",
+      "smart_desc": "🎵  YourMT3+ MoE  —  多乐器智能转写",
+      "smart_hint": "直接对完整音频进行转写，精确识别 128 种 GM 乐器。\n轨道数量由模型自动决定，无需手动配置。",
+      "vocal_split_desc": "🎤  Demucs + CREPE  —  人声分离 + 分别转写",
+      "vocal_split_hint": "先用 Demucs 分离人声与伴奏，伴奏用 YourMT3+ 转写，\n人声用 CREPE 音高追踪转写，输出两个独立 MIDI 文件。"
     },
     "tracks": {
       "title": "轨道设置",
@@ -76,6 +83,7 @@
         "preprocessing": "预处理",
         "separation": "音源分离",
         "transcription": "音频转写",
+        "vocal_transcription": "人声转写",
         "synthesis": "MIDI合成",
         "complete": "完成"
       }
@@ -164,7 +172,9 @@
       "title": "转换完成",
       "openFolder": "打开文件夹",
       "openFile": "打开MIDI文件",
-      "ok": "确定"
+      "ok": "确定",
+      "accompaniment_midi": "伴奏MIDI",
+      "vocal_midi": "人声MIDI"
     }
   },
   "quality": {
