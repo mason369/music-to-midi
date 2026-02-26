@@ -255,13 +255,17 @@ class YourMT3Transcriber:
 
         while bsz >= 1:
             try:
-                logger.info(f"YourMT3 推理: bsz={bsz}, segments={audio_segments.shape[0]}, device={self.device}")
+                logger.info(f"YourMT3 推理: bsz={bsz}, segments={audio_segments.shape[0]}, device={self.device}, autocast={autocast_dtype}")
+                import time as _time
+                _infer_start = _time.time()
                 with torch.no_grad():
                     if use_autocast:
                         with torch.autocast(device_type="cuda", dtype=autocast_dtype):
                             pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
                     else:
                         pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+                _infer_elapsed = _time.time() - _infer_start
+                logger.info(f"YourMT3 推理完成: 耗时={_infer_elapsed:.1f}s, 输出 tokens shape={pred_token_arr.shape if hasattr(pred_token_arr, 'shape') else len(pred_token_arr)}")
                 return pred_token_arr
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and bsz > 1:
@@ -409,6 +413,7 @@ class YourMT3Transcriber:
         try:
             # 1. 添加 YourMT3 路径到 sys.path
             import sys
+            logger.info("正在查找 YourMT3 代码库路径...")
             yourmt3_paths = [
                 "YourMT3",
                 os.path.join(os.getcwd(), "YourMT3"),
@@ -432,15 +437,17 @@ class YourMT3Transcriber:
 
             if amt_src_path not in sys.path:
                 sys.path.insert(0, amt_src_path)
-                logger.debug(f"添加路径到 sys.path: {amt_src_path}")
+                logger.info(f"添加路径到 sys.path: {amt_src_path}")
 
             # 2. 导入依赖
+            logger.info("正在导入 YourMT3 依赖模块...")
             import torch
             from utils.task_manager import TaskManager
             from model.ymt3 import YourMT3
             from config.config import shared_cfg as default_shared_cfg
             from config.config import audio_cfg as default_audio_cfg
             from config.config import model_cfg as default_model_cfg
+            logger.info("YourMT3 依赖模块导入完成")
 
             if progress_callback:
                 progress_callback(0.2, "正在获取模型路径...")
@@ -562,8 +569,10 @@ class YourMT3Transcriber:
                 progress_callback(0.5, "正在从 checkpoint 加载配置...")
 
             # 5. 从 checkpoint 加载超参数（最可靠的方法）
+            logger.info(f"正在加载 checkpoint: {model_path} ...")
             checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
             hparams = checkpoint['hyper_parameters']
+            logger.info("Checkpoint 加载完成，正在提取配置...")
 
             # 提取配置
             audio_cfg = hparams['audio_cfg']
@@ -577,7 +586,7 @@ class YourMT3Transcriber:
             else:
                 task_name = 'mt3_full_plus'  # 默认任务
 
-            logger.debug(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+            logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
 
             if progress_callback:
                 progress_callback(0.6, "正在创建任务管理器...")
@@ -600,6 +609,7 @@ class YourMT3Transcriber:
                 progress_callback(0.7, "正在创建模型实例...")
 
             # 7. 创建 YourMT3 MoE 模型实例
+            logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
             model = YourMT3(
                 audio_cfg=audio_cfg,
                 model_cfg=model_cfg,
@@ -609,16 +619,19 @@ class YourMT3Transcriber:
                 eval_subtask_key=args.eval_subtask_key,
                 write_output_dir=None
             ).to(self.device)
+            logger.info("模型实例创建完成")
 
             if progress_callback:
                 progress_callback(0.8, "正在加载 checkpoint 权重...")
 
             # 8. 加载权重（checkpoint已经在步骤5加载）
+            logger.info("正在加载 checkpoint 权重到模型...")
             state_dict = checkpoint['state_dict']
             # 移除 pitch shift 相关权重（不需要）
             new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
             model.load_state_dict(new_state_dict, strict=False)
             model.eval()
+            logger.info(f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
 
             del checkpoint  # 释放内存
 
@@ -695,16 +708,20 @@ class YourMT3Transcriber:
             import torchaudio
 
             waveform, sr = _load_audio(audio_path)
+            logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}")
 
             # 转为单声道
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
+                logger.info("已转为单声道")
 
             # 重采样到模型要求的采样率
             target_sr = audio_cfg['sample_rate']
             if sr != target_sr:
+                logger.info(f"正在重采样: {sr} -> {target_sr}")
                 resampler = torchaudio.transforms.Resample(sr, target_sr)
                 waveform = resampler(waveform)
+                logger.info("重采样完成")
 
             self._check_cancelled()
 
@@ -971,6 +988,7 @@ class YourMT3Transcriber:
                     num_channels = actual_channels
 
             for ch in range(num_channels):
+                logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
                 # 提取该通道的 token
                 # 确保数组是 3 维的 (B, C, L)
                 pred_token_arr_ch = []
@@ -1004,8 +1022,10 @@ class YourMT3Transcriber:
 
             # 混合所有通道的音符
             mixed_notes = mix_notes(pred_notes_in_file)
+            logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
 
             # 使用智能去重：处理重叠分段产生的重复音符
+            logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
             mixed_notes = self._deduplicate_overlapping_notes_smart(
                 mixed_notes,
                 onset_threshold=onset_threshold,
@@ -1290,6 +1310,7 @@ class YourMT3Transcriber:
                     num_channels = actual_channels
 
             for ch in range(num_channels):
+                logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
                 # 提取该通道的 token，处理不同维度
                 pred_token_arr_ch = []
                 for arr in pred_token_arr:
@@ -1470,14 +1491,18 @@ class YourMT3Transcriber:
             task_manager = YourMT3Transcriber._task_manager
 
             waveform, sr = _load_audio(audio_path)
+            logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}, 时长={waveform.shape[-1]/sr:.1f}秒")
 
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
+                logger.info("已转为单声道")
 
             target_sr = audio_cfg['sample_rate']
             if sr != target_sr:
+                logger.info(f"正在重采样: {sr} -> {target_sr}")
                 resampler = torchaudio.transforms.Resample(sr, target_sr)
                 waveform = resampler(waveform)
+                logger.info("重采样完成")
 
             audio_np = waveform.numpy()
             input_frames = audio_cfg['input_frames']
@@ -1516,6 +1541,7 @@ class YourMT3Transcriber:
                 progress_callback(0.5, "正在进行神经网络推理...")
 
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
+            logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
 
             pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
 
@@ -1525,6 +1551,7 @@ class YourMT3Transcriber:
                 progress_callback(0.8, "正在解析精确乐器...")
 
             # 解析结果
+            logger.info("正在解析 token 输出为音符事件...")
             instrument_notes: Dict[int, List[NoteEvent]] = {}
             drum_notes: Dict[int, List[NoteEvent]] = {}
 
@@ -1546,6 +1573,7 @@ class YourMT3Transcriber:
                     num_channels = actual_channels
 
             for ch in range(num_channels):
+                logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
                 pred_token_arr_ch = []
                 for arr in pred_token_arr:
                     if arr.ndim == 3:
@@ -1568,8 +1596,10 @@ class YourMT3Transcriber:
                 pred_notes_in_file.append(pred_notes_ch)
 
             mixed_notes = mix_notes(pred_notes_in_file)
+            logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
 
             # 使用智能去重（根据质量模式）
+            logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
             mixed_notes = self._deduplicate_overlapping_notes_smart(
                 mixed_notes,
                 onset_threshold=onset_threshold,

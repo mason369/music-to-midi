@@ -90,8 +90,14 @@ class VocalSeparator:
         logger.info(f"加载 Demucs htdemucs 模型，设备: {self._device}")
 
         try:
+            logger.info("正在下载/加载 Demucs htdemucs 预训练模型...")
+            import time as _time
+            _load_start = _time.time()
             model = get_model("htdemucs")
+            logger.info(f"Demucs 模型加载完成: 耗时={_time.time() - _load_start:.1f}s")
+            logger.info(f"正在将模型移至 {self._device}...")
             model.to(self._device)
+            logger.info("模型已就绪")
         except Exception as e:
             logger.error(f"Demucs 模型加载失败: {e}")
             raise RuntimeError(f"Demucs 模型加载失败: {e}") from e
