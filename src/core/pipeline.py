@@ -98,6 +98,7 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理 (智能模式): {audio_path}")
 
         # ── 检查 YourMT3+ 是否可用 ──
+        logger.info("正在检查 YourMT3+ 可用性...")
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
                 "YourMT3+ 不可用。\n\n"
@@ -105,6 +106,7 @@ class MusicToMidiPipeline:
                 "  python download_sota_models.py\n\n"
                 "详见 README.md 中的安装说明。"
             )
+        logger.info("YourMT3+ 可用性检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
@@ -167,6 +169,7 @@ class MusicToMidiPipeline:
         # ── 阶段3：生成 MIDI ──
         self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, "正在生成 MIDI 文件...")
         self._check_cancelled()
+        logger.info("开始生成 MIDI 文件...")
 
         try:
             midi_path = self.midi_generator.generate_from_precise_instruments_v2(
@@ -212,6 +215,7 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
 
         # ── 检查依赖 ──
+        logger.info("正在检查依赖: Demucs, torchcrepe, YourMT3+...")
         if not VocalSeparator.is_available():
             raise RuntimeError(
                 "Demucs 不可用。请安装: pip install demucs>=4.0.0"
@@ -227,6 +231,7 @@ class MusicToMidiPipeline:
                 "  python download_sota_models.py\n\n"
                 "详见 README.md 中的安装说明。"
             )
+        logger.info("所有依赖检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 (0-5%) ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
@@ -268,6 +273,8 @@ class MusicToMidiPipeline:
 
         vocals_path = separated["vocals"]
         accompaniment_path = separated["no_vocals"]
+        logger.info(f"人声文件: {vocals_path}")
+        logger.info(f"伴奏文件: {accompaniment_path}")
 
         self._report(ProcessingStage.SEPARATION, 1.0, 0.35, "人声分离完成")
         self._check_cancelled()
@@ -313,6 +320,7 @@ class MusicToMidiPipeline:
 
         # ── 阶段4：CREPE 转写人声 (70-90%) ──
         self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.70, "正在转写人声...")
+        logger.info(f"开始 CREPE 人声转写: {vocals_path}")
 
         vocal_transcriber = VocalTranscriber()
         vocal_transcriber.set_cancel_check(lambda: self._cancelled)
@@ -340,6 +348,7 @@ class MusicToMidiPipeline:
 
         # ── 阶段5：生成两个 MIDI 文件 (90-95%) ──
         self._report(ProcessingStage.SYNTHESIS, 0.0, 0.90, "正在生成 MIDI 文件...")
+        logger.info("开始生成 MIDI 文件...")
 
         accompaniment_midi_path = str(Path(output_dir) / f"{stem}_accompaniment.mid")
         vocal_midi_path = str(Path(output_dir) / f"{stem}_vocal.mid")

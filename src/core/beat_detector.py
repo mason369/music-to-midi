@@ -58,13 +58,17 @@ class BeatDetector:
         logger.info(f"正在检测节拍: {audio_path}")
 
         # 22050Hz 对节拍检测已足够，避免 44100Hz 浪费内存和计算
+        logger.info("正在加载音频用于节拍检测 (sr=22050)...")
         y, sr = librosa.load(audio_path, sr=22050)
+        logger.info(f"音频加载完成: {len(y)/sr:.1f}秒, {len(y)} 采样点")
 
         if progress_callback:
             progress_callback(0.2, "正在使用多算法分析速度...")
 
         # 使用多算法检测 BPM
+        logger.info("开始多算法 BPM 检测...")
         tempo, all_tempos = self._detect_multi_method(y, sr)
+        logger.info(f"多算法 BPM 检测完成: {tempo:.1f} BPM, 候选值: {all_tempos}")
 
         if progress_callback:
             progress_callback(0.5, "正在查找节拍位置...")

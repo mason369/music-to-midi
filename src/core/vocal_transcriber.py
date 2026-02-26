@@ -87,18 +87,24 @@ class VocalTranscriber:
 
         # 加载音频
         audio_np, sr = sf.read(audio_path, dtype="float32")
+        logger.info(f"人声音频加载完成: shape={audio_np.shape}, sr={sr}")
 
         # 转为单声道
         if audio_np.ndim == 2:
             audio_np = audio_np.mean(axis=1)
+            logger.info("已转为单声道")
 
         # torchcrepe 需要 16kHz
         if sr != 16000:
             import librosa
+            logger.info(f"正在重采样: {sr} -> 16000")
             audio_np = librosa.resample(audio_np, orig_sr=sr, target_sr=16000)
             sr = 16000
+            logger.info("重采样完成")
 
         audio_tensor = torch.from_numpy(audio_np).unsqueeze(0).to(self._device)
+        duration_sec = len(audio_np) / sr
+        logger.info(f"人声音频时长: {duration_sec:.1f}秒, 设备: {self._device}")
 
         self._check_cancelled()
 
@@ -120,6 +126,8 @@ class VocalTranscriber:
             crepe_batch_size = 512
         logger.info(f"CREPE batch_size={crepe_batch_size}（可用内存={available_mem:.1f}GB）")
 
+        import time as _time
+        _crepe_start = _time.time()
         try:
             pitch, periodicity = torchcrepe.predict(
                 audio_tensor,
@@ -135,6 +143,10 @@ class VocalTranscriber:
         except Exception as e:
             logger.error(f"CREPE 音高追踪失败: {e}")
             raise RuntimeError(f"CREPE 音高追踪失败: {e}") from e
+
+        _crepe_elapsed = _time.time() - _crepe_start
+        logger.info(f"CREPE 音高追踪完成: 耗时={_crepe_elapsed:.1f}s, "
+                     f"帧数={pitch.shape[-1]}")
 
         self._check_cancelled()
 
