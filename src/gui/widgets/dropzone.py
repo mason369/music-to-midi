@@ -27,19 +27,19 @@ class DropZoneWidget(QWidget):
     def _setup_ui(self):
         """设置用户界面"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 50, 30, 50)
+        layout.setContentsMargins(20, 30, 20, 30)
 
         # 图标
         self.icon_label = QLabel("🎵")
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet("font-size: 48px;")
+        self.icon_label.setStyleSheet("font-size: 36px;")
 
         # 标题
         self.title_label = QLabel(t("main.dropzone.title"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setStyleSheet("""
             QLabel {
-                font-size: 18px;
+                font-size: 15px;
                 font-weight: bold;
                 color: #e0e0e0;
             }
