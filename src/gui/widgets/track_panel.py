@@ -26,18 +26,18 @@ class TrackPanel(QGroupBox):
         self.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
-                font-size: 13px;
+                font-size: 11px;
                 color: #e0e0e0;
                 border: 1px solid #3a4a6a;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 8px;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 6px;
                 background: #1f2940;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 16px;
-                padding: 0 8px;
+                left: 12px;
+                padding: 0 6px;
                 background: #1f2940;
             }
             QLabel {
@@ -46,15 +46,15 @@ class TrackPanel(QGroupBox):
         """)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(10, 10, 10, 8)
+        main_layout.setSpacing(4)
 
         # 模式选择器
         mode_row = QHBoxLayout()
         mode_row.setSpacing(10)
 
         mode_label = QLabel(t("main.mode.label") + ":")
-        mode_label.setStyleSheet("font-size: 12px; color: #b0b8c8; font-weight: normal;")
+        mode_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
         self._mode_label = mode_label
 
         self.mode_combo = QComboBox()
@@ -63,13 +63,13 @@ class TrackPanel(QGroupBox):
         self.mode_combo.setToolTip(t("main.mode.smart_tooltip"))
         self.mode_combo.setStyleSheet("""
             QComboBox {
-                padding: 6px 12px;
+                padding: 4px 10px;
                 border: 1px solid #3a4a6a;
-                border-radius: 6px;
+                border-radius: 5px;
                 background: #16213e;
                 color: #e0e0e0;
-                font-size: 12px;
-                min-width: 220px;
+                font-size: 11px;
+                min-width: 200px;
             }
             QComboBox:hover {
                 border-color: #4a9eff;
@@ -105,10 +105,10 @@ class TrackPanel(QGroupBox):
         self.mode_desc_label.setWordWrap(True)
         self.mode_desc_label.setStyleSheet("""
             QLabel {
-                font-size: 13px;
+                font-size: 11px;
                 color: #4a9eff;
                 font-weight: bold;
-                padding: 4px 0;
+                padding: 2px 0;
             }
         """)
 
@@ -118,9 +118,9 @@ class TrackPanel(QGroupBox):
         self.hint_label.setWordWrap(True)
         self.hint_label.setStyleSheet("""
             QLabel {
-                font-size: 12px;
+                font-size: 10px;
                 color: #8892a0;
-                padding: 2px 0;
+                padding: 1px 0;
             }
         """)
 

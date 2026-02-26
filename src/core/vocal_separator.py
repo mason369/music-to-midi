@@ -152,16 +152,23 @@ class VocalSeparator:
             _done = threading.Event()
 
             def _progress_ticker():
-                """基于已用时间估算进度，每 5 秒更新一次"""
-                # CPU 模式下 Demucs 大约 0.05-0.15x 实时速度
-                estimated_total = duration_sec / 0.1  # 保守估计
-                while not _done.wait(5.0):
+                """基于已用时间估算进度，每 3 秒更新一次"""
+                # 根据设备和 shifts 估算速度
+                # GPU ~6x 实时（shifts=1），shifts=3 约 2x 实时
+                # CPU ~0.1x 实时（shifts=1）
+                if is_cpu:
+                    speed_est = 0.1
+                else:
+                    speed_est = 6.0 / max(shifts, 1)
+                estimated_total = duration_sec / speed_est
+                while not _done.wait(3.0):
                     elapsed = time.time() - sep_start
                     # 进度从 0.25 到 0.75（留 0.75-0.8 给保存）
                     pct = min(0.95, elapsed / max(estimated_total, 1))
                     overall = 0.25 + pct * 0.50
+                    remaining = max(0, estimated_total - elapsed)
                     if progress_callback:
-                        progress_callback(overall, f"正在分离人声与伴奏... 已用时 {elapsed:.0f}s")
+                        progress_callback(overall, f"正在分离人声与伴奏... 已用时 {elapsed:.0f}s, 预计剩余 {remaining:.0f}s")
                     logger.debug(f"Demucs 推理中: {elapsed:.0f}s / ~{estimated_total:.0f}s 估计")
 
             if progress_callback:
@@ -169,9 +176,21 @@ class VocalSeparator:
                 ticker.start()
 
             try:
+                # overlap 和 shifts 提升分离纯净度（尤其人声）
+                # GPU 模式可以更激进，CPU 模式适度
+                if is_cpu:
+                    overlap = 0.25   # 默认值
+                    shifts = 1       # 1 次随机偏移平均
+                else:
+                    overlap = 0.5    # 50% 重叠，显著减少边界伪影
+                    shifts = 3       # 3 次随机偏移平均，大幅提升纯净度
+
+                logger.info(f"Demucs 质量参数: overlap={overlap}, shifts={shifts}")
+
                 sources = apply_model(
                     model, wav[None], device=self._device,
                     split=True, num_workers=num_workers,
+                    overlap=overlap, shifts=shifts,
                 )[0]
             finally:
                 _done.set()

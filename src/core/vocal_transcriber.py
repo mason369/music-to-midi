@@ -158,6 +158,10 @@ class VocalTranscriber:
         # 标记有声帧
         voiced = conf_np >= confidence_threshold
 
+        # 平滑置信度：填补因人声分离不纯净导致的短暂置信度下降（≤80ms 的间隙）
+        gap_fill_frames = int(0.08 / frame_duration)  # 80ms
+        voiced = self._fill_short_gaps(voiced, gap_fill_frames)
+
         # 音符分割
         notes = self._segment_notes(
             midi_pitch=midi_pitch,
@@ -260,7 +264,55 @@ class VocalTranscriber:
             if note:
                 notes.append(note)
 
+        # 合并相邻同音高音符（间隔 ≤ 100ms 且音高相同视为同一音符）
+        notes = self._merge_nearby_notes(notes, max_gap=0.10)
+
         return notes
+
+    @staticmethod
+    def _fill_short_gaps(voiced: "np.ndarray", max_gap_frames: int) -> "np.ndarray":
+        """填补短暂的无声间隙，避免人声分离不纯净导致的断音"""
+        result = voiced.copy()
+        n = len(result)
+        i = 0
+        while i < n:
+            if not result[i]:
+                # 找到无声段的结束位置
+                j = i
+                while j < n and not result[j]:
+                    j += 1
+                gap_len = j - i
+                # 如果间隙足够短且两侧都有声，则填补
+                if gap_len <= max_gap_frames and i > 0 and j < n:
+                    result[i:j] = True
+                i = j
+            else:
+                i += 1
+        return result
+
+    @staticmethod
+    def _merge_nearby_notes(notes: List["NoteEvent"], max_gap: float = 0.10) -> List["NoteEvent"]:
+        """合并相邻的同音高音符，消除因短暂中断产生的断音"""
+        if len(notes) <= 1:
+            return notes
+
+        merged = [notes[0]]
+        for note in notes[1:]:
+            prev = merged[-1]
+            gap = note.start_time - prev.end_time
+            # 同音高且间隔很短 → 合并
+            if note.pitch == prev.pitch and gap <= max_gap:
+                # 扩展前一个音符的结束时间，取较大的 velocity
+                merged[-1] = NoteEvent(
+                    pitch=prev.pitch,
+                    start_time=prev.start_time,
+                    end_time=note.end_time,
+                    velocity=max(prev.velocity, note.velocity),
+                    program=prev.program,
+                )
+            else:
+                merged.append(note)
+        return merged
 
     def _make_note(
         self,

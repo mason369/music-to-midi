@@ -114,8 +114,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(16, 10, 16, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 6, 12, 6)
+        main_layout.setSpacing(6)
 
         # 顶部标题区域
         header_widget = self._create_header()
@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
 
         # 文件输入拖放区域
         self.dropzone = DropZoneWidget()
-        self.dropzone.setMinimumHeight(120)
+        self.dropzone.setMinimumHeight(90)
         self._add_shadow(self.dropzone)
 
         # 轨道面板
@@ -152,34 +152,34 @@ class MainWindow(QMainWindow):
         """创建顶部标题区域"""
         header = QWidget()
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setContentsMargins(0, 0, 0, 4)
 
         # 图标
         icon_label = QLabel()
         icon_path = get_icon_path("icon_48.png")
         if os.path.exists(icon_path):
             pixmap = QPixmap(icon_path)
-            icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
+            icon_label.setPixmap(pixmap.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio,
                                                Qt.TransformationMode.SmoothTransformation))
-        icon_label.setFixedSize(48, 48)
+        icon_label.setFixedSize(36, 36)
 
         # 标题文字
         title_layout = QVBoxLayout()
         title_layout.setSpacing(2)
 
         title_label = QLabel(t("app.name"))
-        title_label.setFont(get_ui_font(15, bold=True))
+        title_label.setFont(get_ui_font(13, bold=True))
         title_label.setStyleSheet("color: #e0e0e0;")
 
         subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
-        subtitle_label.setFont(get_ui_font(9))
+        subtitle_label.setFont(get_ui_font(8))
         subtitle_label.setStyleSheet("color: #8892a0;")
 
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle_label)
 
         layout.addWidget(icon_label)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
         layout.addLayout(title_layout)
         layout.addStretch()
 
@@ -200,24 +200,24 @@ class MainWindow(QMainWindow):
         group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
-                font-size: 13px;
+                font-size: 11px;
                 color: #e0e0e0;
                 border: 1px solid #3a4a6a;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 8px;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 6px;
                 background: #1f2940;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 16px;
-                padding: 0 8px;
+                left: 12px;
+                padding: 0 6px;
                 background: #1f2940;
             }
         """)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 12, 10, 8)
+        layout.setSpacing(6)
 
         # 输出目录
         dir_layout = QHBoxLayout()
@@ -227,12 +227,12 @@ class MainWindow(QMainWindow):
         self.output_dir_edit.setText(str(get_app_dir() / "MidiOutput"))
         self.output_dir_edit.setStyleSheet("""
             QLineEdit {
-                padding: 8px 12px;
+                padding: 5px 10px;
                 border: 1px solid #3a4a6a;
-                border-radius: 6px;
+                border-radius: 5px;
                 background: #16213e;
                 color: #e0e0e0;
-                font-size: 12px;
+                font-size: 11px;
             }
             QLineEdit:focus {
                 border-color: #4a9eff;
@@ -242,10 +242,10 @@ class MainWindow(QMainWindow):
         self.browse_dir_btn = QPushButton(t("main.output.browse"))
         self.browse_dir_btn.setStyleSheet("""
             QPushButton {
-                padding: 8px 16px;
+                padding: 5px 12px;
                 background: #2a3f5f;
                 border: 1px solid #3a4a6a;
-                border-radius: 6px;
+                border-radius: 5px;
                 color: #e0e0e0;
                 font-weight: 500;
             }
@@ -266,14 +266,14 @@ class MainWindow(QMainWindow):
 
         checkbox_style = """
             QCheckBox {
-                font-size: 12px;
+                font-size: 11px;
                 color: #b0b8c8;
-                spacing: 8px;
+                spacing: 6px;
             }
             QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
+                width: 14px;
+                height: 14px;
+                border-radius: 3px;
                 border: 2px solid #3a4a6a;
                 background: #16213e;
             }
@@ -306,19 +306,19 @@ class MainWindow(QMainWindow):
     def _create_action_buttons(self) -> QHBoxLayout:
         """创建操作按钮布局"""
         layout = QHBoxLayout()
-        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setContentsMargins(0, 4, 0, 0)
 
         self.start_btn = QPushButton("▶  " + t("toolbar.start"))
-        self.start_btn.setFixedSize(140, 40)
-        self.start_btn.setFont(get_ui_font(11, bold=True))
+        self.start_btn.setFixedSize(120, 34)
+        self.start_btn.setFont(get_ui_font(10, bold=True))
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setStyleSheet("""
             QPushButton {
                 background: #4a9eff;
                 color: white;
                 font-weight: bold;
-                padding: 12px 24px;
-                border-radius: 10px;
+                padding: 8px 18px;
+                border-radius: 8px;
                 border: none;
             }
             QPushButton:hover {
@@ -334,16 +334,16 @@ class MainWindow(QMainWindow):
         """)
 
         self.stop_btn = QPushButton("■  " + t("toolbar.stop"))
-        self.stop_btn.setFixedSize(100, 40)
-        self.stop_btn.setFont(get_ui_font(10))
+        self.stop_btn.setFixedSize(90, 34)
+        self.stop_btn.setFont(get_ui_font(9))
         self.stop_btn.setEnabled(False)
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setStyleSheet("""
             QPushButton {
                 background: #e05050;
                 color: white;
-                padding: 12px 20px;
-                border-radius: 10px;
+                padding: 8px 14px;
+                border-radius: 8px;
                 border: none;
             }
             QPushButton:hover {

@@ -27,19 +27,19 @@ class DropZoneWidget(QWidget):
     def _setup_ui(self):
         """设置用户界面"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 30, 20, 30)
+        layout.setContentsMargins(12, 16, 12, 16)
 
         # 图标
         self.icon_label = QLabel("🎵")
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet("font-size: 36px;")
+        self.icon_label.setStyleSheet("font-size: 28px;")
 
         # 标题
         self.title_label = QLabel(t("main.dropzone.title"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setStyleSheet("""
             QLabel {
-                font-size: 15px;
+                font-size: 13px;
                 font-weight: bold;
                 color: #e0e0e0;
             }
@@ -50,25 +50,25 @@ class DropZoneWidget(QWidget):
         self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.subtitle_label.setStyleSheet("""
             QLabel {
-                font-size: 13px;
+                font-size: 11px;
                 color: #8892a0;
             }
         """)
 
         # 浏览按钮
         self.browse_btn = QPushButton("📂  " + t("main.output.browse"))
-        self.browse_btn.setFixedWidth(160)
-        self.browse_btn.setFixedHeight(42)
+        self.browse_btn.setFixedWidth(130)
+        self.browse_btn.setFixedHeight(32)
         self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.browse_btn.setStyleSheet("""
             QPushButton {
                 background: #4a9eff;
                 color: white;
-                font-size: 13px;
+                font-size: 11px;
                 font-weight: 600;
-                border-radius: 8px;
+                border-radius: 6px;
                 border: none;
-                padding: 10px 20px;
+                padding: 6px 14px;
             }
             QPushButton:hover {
                 background: #5aafff;
@@ -84,12 +84,12 @@ class DropZoneWidget(QWidget):
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_label.setStyleSheet("""
             QLabel {
-                font-size: 14px;
+                font-size: 11px;
                 color: #e0e0e0;
                 font-weight: 500;
-                padding: 12px 20px;
+                padding: 8px 14px;
                 background: #2a3f5f;
-                border-radius: 8px;
+                border-radius: 6px;
                 border: 1px solid #3a5a7c;
             }
         """)
@@ -100,7 +100,7 @@ class DropZoneWidget(QWidget):
         self.format_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.format_label.setStyleSheet("""
             QLabel {
-                font-size: 11px;
+                font-size: 10px;
                 color: #6a7a8a;
             }
         """)
@@ -108,10 +108,10 @@ class DropZoneWidget(QWidget):
         # 添加组件
         layout.addStretch()
         layout.addWidget(self.icon_label)
-        layout.addSpacing(8)
+        layout.addSpacing(4)
         layout.addWidget(self.title_label)
         layout.addWidget(self.subtitle_label)
-        layout.addSpacing(20)
+        layout.addSpacing(10)
 
         btn_container = QWidget()
         btn_layout = QVBoxLayout(btn_container)
@@ -119,9 +119,9 @@ class DropZoneWidget(QWidget):
         btn_layout.addWidget(self.browse_btn)
         layout.addWidget(btn_container)
 
-        layout.addSpacing(8)
+        layout.addSpacing(4)
         layout.addWidget(self.format_label)
-        layout.addSpacing(12)
+        layout.addSpacing(6)
         layout.addWidget(self.file_label)
         layout.addStretch()
 
