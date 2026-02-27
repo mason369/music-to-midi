@@ -15,9 +15,57 @@ os.environ["ABSL_MIN_LOG_LEVEL"] = "3"
 os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
 os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, APP_DIR)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("music-to-midi-web")
+
+
+# ── 确保 YourMT3 源码可用 ──
+def ensure_yourmt3_code():
+    """从 HF Space 仓库下载 YourMT3 源代码（GitHub 仓库不含源码）"""
+    yourmt3_dir = os.path.join(APP_DIR, "YourMT3")
+    amt_src = os.path.join(yourmt3_dir, "amt", "src")
+
+    if not os.path.exists(os.path.join(amt_src, "model", "ymt3.py")):
+        logger.info("Downloading YourMT3 source code from HF Space...")
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            "mimbres/YourMT3",
+            repo_type="space",
+            local_dir=yourmt3_dir,
+            allow_patterns=["amt/src/**"],
+            ignore_patterns=["*.ckpt", "*.bin", "*.safetensors",
+                             "amt/logs/**", "*.DS_Store"],
+        )
+        logger.info("YourMT3 source code downloaded")
+    else:
+        logger.info("YourMT3 source code already present")
+
+    # 关键：在导入任何 src 模块前，将 YourMT3/amt/src 加入 sys.path
+    if os.path.exists(amt_src) and amt_src not in sys.path:
+        sys.path.insert(0, amt_src)
+        logger.info(f"Added YourMT3 path: {amt_src}")
+
+    # 验证导入可用
+    try:
+        from model.ymt3 import YourMT3  # noqa: F401
+        logger.info("YourMT3 code import OK")
+    except Exception as e:
+        logger.warning(f"YourMT3 code import failed: {e}")
+
+
+try:
+    ensure_yourmt3_code()
+except Exception as e:
+    logger.warning(f"Failed to setup YourMT3: {e}")
+
+
 # ── Monkey-patch: 修复 gradio_client schema 解析 bug ──
-# gradio_client.utils.get_type() 对 additionalProperties=true（布尔值）
-# 执行 `"const" in schema` 导致 TypeError: argument of type 'bool' is not iterable
 try:
     import gradio_client.utils as _gcu
     _original_json_schema = _gcu._json_schema_to_python_type
@@ -31,88 +79,74 @@ try:
 except Exception:
     pass
 
+
+# ── ZeroGPU 支持 ──
+try:
+    import spaces
+    ZERO_GPU = True
+    logger.info("ZeroGPU (spaces) available")
+except ImportError:
+    ZERO_GPU = False
+    logger.info("Running without ZeroGPU")
+
+
 import gradio as gr
 
-# 确保 src 可以被 import
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, APP_DIR)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("music-to-midi-web")
-
-
-
-# ── 确保 YourMT3 源码可用 ──
-def ensure_yourmt3_code():
-    """克隆 YourMT3 仓库（如果不存在）"""
-    yourmt3_dir = os.path.join(APP_DIR, "YourMT3")
-    if os.path.exists(os.path.join(yourmt3_dir, "amt", "src", "model", "ymt3.py")):
-        logger.info("YourMT3 source code already present")
-        return
-    logger.info("Cloning YourMT3 repository...")
-    subprocess.run(
-        ["git", "clone", "--depth=1", "https://github.com/mimbres/YourMT3.git", yourmt3_dir],
-        check=True,
-        timeout=300,
-    )
-    logger.info("YourMT3 source code cloned successfully")
-
-
-try:
-    ensure_yourmt3_code()
-except Exception as e:
-    logger.warning(f"Failed to clone YourMT3: {e}")
-
-
-# ── 延迟导入核心模块（在 YourMT3 代码就绪后）──
+# ── 延迟导入核心模块（在 YourMT3 路径就绪后）──
 from src.models.data_models import Config, ProcessingStage
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 
 
-# ── 模型预加载 ──
-def ensure_model():
-    """启动时检查并下载 YourMT3+ MoE 模型权重"""
-    if not YourMT3Transcriber.is_available():
-        logger.info("Model not found, downloading YourMT3+ MoE ...")
+# ── 模型预下载（仅下载权重，不加载到内存）──
+def ensure_model_weights():
+    """确保模型权重已下载（不检查 is_available，只检查文件）"""
+    try:
+        from src.utils.yourmt3_downloader import get_model_path, DEFAULT_MODEL
+        model_path = get_model_path(DEFAULT_MODEL)
+        if model_path and model_path.exists():
+            logger.info(f"Model weights found: {model_path}")
+            return
+    except Exception:
+        pass
+
+    logger.info("Model weights not found, downloading...")
+    try:
         from download_sota_models import download_ultimate_moe
         download_ultimate_moe()
-        logger.info("Model download complete")
-    else:
-        logger.info("YourMT3+ model is ready")
+        logger.info("Model weights downloaded")
+    except Exception as e:
+        logger.warning(f"Model download failed (will retry on first use): {e}")
 
 
 try:
-    ensure_model()
+    ensure_model_weights()
 except Exception as e:
-    logger.warning(f"Model preload failed (will retry on first use): {e}")
+    logger.warning(f"Model preload failed: {e}")
 
 
 # ── 设备信息 ──
 def get_device_label():
-    """获取当前设备标签"""
     try:
-        from src.utils.gpu_utils import get_accelerator_label, is_gpu_available
-        if is_gpu_available():
-            return get_accelerator_label()
+        import torch
+        if torch.cuda.is_available():
+            return f"GPU ({torch.cuda.get_device_name(0)})"
         return "CPU"
     except Exception:
         return "CPU"
 
 
-DEVICE_LABEL = get_device_label()
-
-
 # ── 核心转换函数 ──
-def convert_audio_to_midi(audio_path, mode, quality, progress=gr.Progress()):
-    """执行音频到 MIDI 的转换"""
+def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
+    """实际执行转换的内部函数"""
     from src.core.pipeline import MusicToMidiPipeline
     from src.utils.gpu_utils import clear_gpu_memory
 
     if audio_path is None:
         raise gr.Error("请先上传音频文件")
+
+    # 确保模型权重可用
+    ensure_model_weights()
 
     config = Config()
     config.processing_mode = "vocal_split" if mode == "人声分离 + 分别转写" else "smart"
@@ -158,13 +192,14 @@ def convert_audio_to_midi(audio_path, mode, quality, progress=gr.Progress()):
             output_files.append(result.accompaniment_midi_path)
 
     # 构建状态文本
+    device_label = get_device_label()
     bpm_str = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
     status_lines = [
         "--- 转换完成 ---",
         f"耗时: {result.processing_time:.1f} 秒",
         f"总音符数: {result.total_notes}",
         f"BPM: {bpm_str}",
-        f"设备: {DEVICE_LABEL}",
+        f"设备: {device_label}",
     ]
     if result.vocal_midi_path:
         status_lines.append(f"伴奏 MIDI: {Path(result.accompaniment_midi_path).name}")
@@ -173,6 +208,16 @@ def convert_audio_to_midi(audio_path, mode, quality, progress=gr.Progress()):
         status_lines.append(f"MIDI 文件: {Path(result.midi_path).name}")
 
     return output_files, "\n".join(status_lines)
+
+
+# ── 根据环境包装 GPU 装饰器 ──
+if ZERO_GPU:
+    @spaces.GPU
+    def convert_audio_to_midi(audio_path, mode, quality, progress=gr.Progress()):
+        return _convert_impl(audio_path, mode, quality, progress)
+else:
+    def convert_audio_to_midi(audio_path, mode, quality, progress=gr.Progress()):
+        return _convert_impl(audio_path, mode, quality, progress)
 
 
 # ── 模式切换时更新说明 ──
@@ -289,6 +334,8 @@ CUSTOM_CSS = """
 
 
 # ── 构建 Gradio 界面 ──
+DEVICE_LABEL = get_device_label()
+
 with gr.Blocks(
     title="Music to MIDI",
     css=CUSTOM_CSS,
@@ -363,9 +410,10 @@ with gr.Blocks(
                 size="lg",
             )
 
-            # 设备信息（模拟桌面版状态栏）
+            # 设备信息
+            gpu_note = " (ZeroGPU: 转换时自动分配)" if ZERO_GPU else ""
             gr.Markdown(
-                f"当前设备: **{DEVICE_LABEL}**",
+                f"当前设备: **{DEVICE_LABEL}**{gpu_note}",
                 elem_classes="device-badge",
             )
 
