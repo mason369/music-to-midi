@@ -3,7 +3,7 @@
 
 处理模式：
 1. SMART: YourMT3+ 直接对完整混音进行极致精度转写
-2. VOCAL_SPLIT: Demucs 分离人声与伴奏，均使用 YourMT3+ 分别转写
+2. VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写
 """
 import logging
 import time
@@ -28,7 +28,7 @@ class MusicToMidiPipeline:
 
     处理模式：
         SMART: 使用 YourMT3+ MoE 直接对完整混音进行多乐器转写。
-        VOCAL_SPLIT: Demucs 分离人声与伴奏，均使用 YourMT3+ 分别转写后输出两个 MIDI 文件。
+        VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写后输出两个 MIDI 文件。
     """
 
     def __init__(self, config: Config):
@@ -200,7 +200,7 @@ class MusicToMidiPipeline:
         )
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """人声分离模式：Demucs 分离 → YourMT3+ 分别转写伴奏和人声"""
+        """人声分离模式：BS-RoFormer 分离 → YourMT3+ 分别转写伴奏和人声"""
         from src.core.vocal_separator import VocalSeparator
 
         start_time = time.time()
@@ -214,10 +214,10 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
 
         # ── 检查依赖 ──
-        logger.info("正在检查依赖: Demucs, YourMT3+...")
+        logger.info("正在检查依赖: BS-RoFormer, YourMT3+...")
         if not VocalSeparator.is_available():
             raise RuntimeError(
-                "Demucs 不可用。请安装: pip install demucs>=4.0.0"
+                "人声分离不可用。请安装: pip install audio-separator>=0.36.0"
             )
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
@@ -244,7 +244,7 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        # ── 阶段2：Demucs 人声分离 (5-35%) ──
+        # ── 阶段2：BS-RoFormer 人声分离 (5-35%) ──
         self._report(ProcessingStage.SEPARATION, 0.0, 0.05, "正在分离人声与伴奏...")
 
         separator = VocalSeparator()

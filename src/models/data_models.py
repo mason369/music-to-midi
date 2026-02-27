@@ -139,8 +139,8 @@ class InstrumentType(Enum):
         return names_en.get(self, self.value)
 
     def get_stem_source(self) -> str:
-        """获取该乐器对应的 Demucs 分离轨道来源"""
-        # Demucs 6s 只有这些轨道：drums, bass, vocals, guitar, piano, other
+        """获取该乐器对应的音源分离轨道来源"""
+        # 音源分离模型只有这些轨道：drums, bass, vocals, guitar, piano, other
         # 其他乐器都来自 other 轨道
         direct_stems = {
             InstrumentType.DRUMS: "drums",

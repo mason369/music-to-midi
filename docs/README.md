@@ -246,7 +246,7 @@ src/
 │   ├── yourmt3_transcriber.py       # YourMT3+ transcriber wrapper
 │   ├── beat_detector.py             # Beat/BPM detection
 │   ├── midi_generator.py            # MIDI generation & post-processing
-│   └── vocal_separator.py           # Demucs vocal separation
+│   └── vocal_separator.py           # BS-RoFormer vocal separation
 ├── gui/                             # PyQt6 graphical interface
 │   ├── main_window.py               # Main window (MainWindow)
 │   ├── widgets/
@@ -378,31 +378,24 @@ Design highlights:
 
 ### Vocal Separation: VocalSeparator
 
-`src/core/vocal_separator.py` (~280 lines) wraps Meta's Demucs v4 (htdemucs) model.
+`src/core/vocal_separator.py` (~200 lines) wraps the BS-RoFormer model via audio-separator library.
 
 ```
 Audio file
     ↓
-Demucs htdemucs model
-    ├── GPU mode: overlap=0.5, shifts=3 (high quality)
-    └── CPU mode: overlap=0.25, shifts=1 (conservative)
+BS-RoFormer model (SDR 12.97)
     ↓
-4 stems:
-    ├── drums.wav
-    ├── bass.wav
-    ├── other.wav
-    └── vocals.wav
-    ↓
-Merge: drums + bass + other → no_vocals.wav
+2 stems:
+    ├── vocals.wav
+    └── instrumental.wav (→ renamed to accompaniment.wav)
     ↓
 Output: {"vocals": path, "no_vocals": path}
 ```
 
 Key parameters:
-- `shifts`: random time offset count — multiple inferences averaged to reduce artifacts
-- `overlap`: segment overlap ratio — higher means smoother boundaries
-- Dynamic segmentation: ~7.8s per segment, segment count auto-calculated from audio length
-- Background progress thread: updates every 3 seconds (Demucs doesn't provide fine-grained callbacks)
+- Model: `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (auto-downloaded on first use)
+- Model cache: `~/.music-to-midi/models/audio-separator/`
+- Background progress thread: updates every 3 seconds (audio-separator doesn't provide fine-grained callbacks)
 
 ---
 

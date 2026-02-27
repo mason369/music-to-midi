@@ -34,11 +34,11 @@
       "smart": "YourMT3+ MoE Multi-Instrument",
       "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed",
       "vocal_split": "Vocal Split + Separate Transcription",
-      "vocal_split_tooltip": "Separate vocals and accompaniment with Demucs, transcribe both with YourMT3+ independently, outputs two independent MIDI files",
+      "vocal_split_tooltip": "Separate vocals and accompaniment with BS-RoFormer, transcribe both with YourMT3+ independently, outputs two independent MIDI files",
       "smart_desc": "🎵  YourMT3+ MoE  —  Multi-Instrument Transcription",
       "smart_hint": "Transcribe full audio directly, recognizes 128 GM instruments.\nTrack count is determined automatically by the model.",
-      "vocal_split_desc": "🎤  Demucs + YourMT3+  —  Vocal Split + Separate Transcription",
-      "vocal_split_hint": "Separate vocals and accompaniment with Demucs, transcribe both\nwith YourMT3+ independently, outputs two MIDI files."
+      "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  Vocal Split + Separate Transcription",
+      "vocal_split_hint": "Separate vocals and accompaniment with BS-RoFormer, transcribe both\nwith YourMT3+ independently, outputs two MIDI files."
     },
     "tracks": {
       "title": "Track Settings",

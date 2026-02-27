@@ -839,7 +839,7 @@ class YourMT3Transcriber:
         """
         转写单个分离轨道
 
-        用于 SMART_SEPARATED 模式，转写 Demucs 分离后的单个轨道。
+        用于 SMART_SEPARATED 模式，转写人声分离后的单个轨道。
 
         参数:
             audio_path: 音频文件路径

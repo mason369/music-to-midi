@@ -33,6 +33,17 @@ a = Analysis(
         'librosa',
         'soundfile',
         'audioread',
+        # 人声分离（audio-separator + BS-RoFormer）
+        'audio_separator',
+        'audio_separator.separator',
+        'onnxruntime',
+        'onnx2torch',
+        'rotary_embedding_torch',
+        'beartype',
+        'julius',
+        'ml_collections',
+        'pydub',
+        'samplerate',
         # 数值计算
         'numpy',
         'scipy',
