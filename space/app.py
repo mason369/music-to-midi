@@ -399,8 +399,9 @@ CUSTOM_CSS = """
 """
 
 # ── JavaScript: 独立日志轮询（不依赖 Gradio 事件队列）──
-LOG_POLL_JS = """
-() => {
+# 注意：字符串不能以换行符开头，否则 Gradio 的
+# new Function('return ' + js)() 会因 ASI 导致 return undefined
+LOG_POLL_JS = """() => {
     setInterval(async () => {
         try {
             const resp = await fetch('./api/read_logs', {
@@ -417,8 +418,7 @@ LOG_POLL_JS = """
             }
         } catch(e) {}
     }, 2000);
-}
-"""
+}"""
 
 
 # ── 构建 Gradio 界面 ──
