@@ -37,6 +37,39 @@ for _name in ("music-to-midi-web", "src.core", "src.utils"):
     logging.getLogger(_name).addHandler(_file_handler)
 
 
+def clear_logs():
+    """清空日志文件（通过 handler 的流正确重置位置，避免 null bytes）"""
+    try:
+        _file_handler.acquire()
+        try:
+            _file_handler.stream.seek(0)
+            _file_handler.stream.truncate(0)
+            _file_handler.stream.flush()
+        finally:
+            _file_handler.release()
+    except Exception:
+        pass
+
+
+def read_logs():
+    """读取日志文件的最新内容（供前端轮询）"""
+    try:
+        # 先刷新 handler 缓冲区，确保最新日志已写入磁盘
+        try:
+            _file_handler.flush()
+        except Exception:
+            pass
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        # 移除可能残留的 null bytes
+        content = content.replace("\x00", "")
+        lines = content.strip().split("\n")
+        # 保留最后 50 行
+        return "\n".join(lines[-50:]) if lines and lines[0] else ""
+    except Exception:
+        return ""
+
+
 # ── 确保 YourMT3 源码可用 ──
 def ensure_yourmt3_code():
     """从 HF Space 仓库下载 YourMT3 源代码（GitHub 仓库不含源码）"""
@@ -137,11 +170,7 @@ except Exception as e:
     logger.warning(f"Model preload failed: {e}")
 
 # 启动完成后清空日志，避免启动日志残留在用户界面
-try:
-    with open(LOG_FILE, "w", encoding="utf-8") as _f:
-        _f.write("")
-except Exception:
-    pass
+clear_logs()
 
 
 # ── 设备信息 ──
@@ -153,28 +182,6 @@ def get_device_label():
         return "CPU"
     except Exception:
         return "CPU"
-
-
-# ── 实时日志读取 ──
-def read_logs():
-    """读取日志文件的最新内容（供前端轮询）"""
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        lines = content.strip().split("\n")
-        # 保留最后 50 行
-        return "\n".join(lines[-50:]) if lines else ""
-    except Exception:
-        return ""
-
-
-def clear_logs():
-    """清空日志文件"""
-    try:
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-    except Exception:
-        pass
 
 
 # ── 核心转换函数 ──
@@ -275,7 +282,7 @@ else:
 def update_mode_info(mode):
     if mode == "人声分离 + 分别转写":
         return (
-            "**Demucs + YourMT3+** — 先用 Demucs 分离人声与伴奏，"
+            "**BS-RoFormer + YourMT3+** — 先用 BS-RoFormer 分离人声与伴奏，"
             "再分别用 YourMT3+ 转写，输出两个独立 MIDI 文件。"
         )
     return (
