@@ -66,7 +66,7 @@ if _plat.system() == "Windows":
                         pass
     except Exception:
         pass
-    del _plat
+del _plat
 
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
 try:
@@ -102,7 +102,7 @@ warnings.filterwarnings('ignore', module='basic_pitch')
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.getLogger('keras').setLevel(logging.ERROR)
 logging.getLogger('absl').setLevel(logging.ERROR)
-logging.getLogger('root').setLevel(logging.ERROR)
+logging.getLogger().setLevel(logging.ERROR)  # 根 logger
 
 from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment

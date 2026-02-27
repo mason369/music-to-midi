@@ -96,7 +96,7 @@ class DropZoneWidget(QWidget):
         self.file_label.hide()
 
         # 支持格式提示
-        self.format_label = QLabel("支持格式: MP3, WAV, FLAC, OGG, M4A")
+        self.format_label = QLabel(t("main.dropzone.subtitle"))
         self.format_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.format_label.setStyleSheet("""
             QLabel {
@@ -204,4 +204,5 @@ class DropZoneWidget(QWidget):
         """更新当前语言的文本"""
         self.title_label.setText(t("main.dropzone.title"))
         self.subtitle_label.setText(t("main.dropzone.subtitle"))
+        self.format_label.setText(t("main.dropzone.subtitle"))
         self.browse_btn.setText("📂  " + t("main.output.browse"))

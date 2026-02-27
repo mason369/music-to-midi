@@ -12,7 +12,7 @@ from typing import Optional, Callable
 
 from src.models.data_models import (
     Config, ProcessingResult, ProcessingProgress,
-    ProcessingStage, Track, TrackType, TrackLayout, ProcessingMode
+    ProcessingStage, Track, TrackType, ProcessingMode
 )
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.core.beat_detector import BeatDetector
@@ -68,7 +68,6 @@ class MusicToMidiPipeline:
         audio_path: str,
         output_dir: str,
         progress_callback: Optional[Callable[[ProcessingProgress], None]] = None,
-        track_layout: Optional[TrackLayout] = None,
     ) -> ProcessingResult:
         """
         处理音频文件并输出 MIDI。
@@ -197,6 +196,7 @@ class MusicToMidiPipeline:
             tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
             beat_info=beat_info,
             processing_time=processing_time,
+            total_notes=total_notes,
         )
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
@@ -266,6 +266,9 @@ class MusicToMidiPipeline:
             logger.error(f"人声分离失败: {e}", exc_info=True)
             raise RuntimeError(f"人声分离失败: {e}") from e
 
+        if not separated or "vocals" not in separated or "no_vocals" not in separated:
+            raise RuntimeError("人声分离失败: 输出不完整，缺少 vocals 或 no_vocals")
+
         vocals_path = separated["vocals"]
         accompaniment_path = separated["no_vocals"]
         logger.info(f"人声文件: {vocals_path}")
@@ -281,7 +284,7 @@ class MusicToMidiPipeline:
         quality = self.config.transcription_quality
 
         def _transcribe_cb(p: float, msg: str) -> None:
-            overall = 0.35 + p * 0.35
+            overall = 0.35 + p * 0.25
             self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
 
         try:
@@ -295,6 +298,15 @@ class MusicToMidiPipeline:
         except Exception as e:
             logger.error(f"伴奏转写失败: {e}", exc_info=True)
             raise RuntimeError(f"伴奏转写失败: {e}") from e
+        finally:
+            try:
+                self.yourmt3_transcriber.unload_model()
+            except Exception as e:
+                logger.warning(f"伴奏转写后模型卸载失败: {e}")
+            try:
+                clear_gpu_memory()
+            except Exception as e:
+                logger.warning(f"伴奏转写后GPU内存清理失败: {e}")
 
         self._check_cancelled()
 
@@ -386,6 +398,7 @@ class MusicToMidiPipeline:
             tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
             beat_info=beat_info,
             processing_time=processing_time,
+            total_notes=acc_total + vocal_total,
             vocal_midi_path=vocal_midi_path,
             accompaniment_midi_path=accompaniment_midi_path,
             separated_audio=separated,

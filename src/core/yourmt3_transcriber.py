@@ -13,6 +13,7 @@ YourMT3+ 转写器模块
 import logging
 import os
 import sys
+import threading
 from io import StringIO
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def _load_audio(audio_path):
     return waveform, sr
 
 
-from typing import List, Optional, Callable, Dict, Tuple, Union
+from typing import Any, List, Optional, Callable, Dict, Tuple, Union
 from contextlib import contextmanager
 import numpy as np
 
@@ -208,6 +209,9 @@ class YourMT3Transcriber:
     _model = None
     _model_name = None
     _device = None
+    _model_lock = threading.Lock()
+    _audio_cfg = None
+    _task_manager = None
 
     def __init__(self, config: Config):
         """
@@ -250,7 +254,7 @@ class YourMT3Transcriber:
             try:
                 if torch.cuda.is_bf16_supported():
                     autocast_dtype = torch.bfloat16
-            except Exception:
+            except (RuntimeError, AttributeError):
                 pass
 
         while bsz >= 1:
@@ -399,11 +403,12 @@ class YourMT3Transcriber:
             progress_callback: 进度回调
         """
         # 检查是否已加载（同时验证设备，避免设备切换后使用旧缓存）
-        if (YourMT3Transcriber._model is not None and
-                YourMT3Transcriber._model_name == model_name and
-                YourMT3Transcriber._device == self.device):
-            logger.debug("模型已加载，跳过重新加载")
-            return
+        with YourMT3Transcriber._model_lock:
+            if (YourMT3Transcriber._model is not None and
+                    YourMT3Transcriber._model_name == model_name and
+                    YourMT3Transcriber._device == self.device):
+                logger.debug("模型已加载，跳过重新加载")
+                return
 
         if progress_callback:
             progress_callback(0.1, "正在加载 YourMT3 MoE 模型...")
@@ -570,77 +575,86 @@ class YourMT3Transcriber:
 
             # 5. 从 checkpoint 加载超参数（最可靠的方法）
             logger.info(f"正在加载 checkpoint: {model_path} ...")
-            checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
-            hparams = checkpoint['hyper_parameters']
-            logger.info("Checkpoint 加载完成，正在提取配置...")
+            checkpoint = None
+            try:
+                try:
+                    checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
+                except Exception as e:
+                    raise RuntimeError(f"Checkpoint 文件加载失败（可能已损坏）: {e}") from e
 
-            # 提取配置
-            audio_cfg = hparams['audio_cfg']
-            model_cfg = hparams['model_cfg']
-            shared_cfg = hparams['shared_cfg']
+                if 'hyper_parameters' not in checkpoint:
+                    raise RuntimeError("Checkpoint 格式无效: 缺少 'hyper_parameters' 键")
+                hparams = checkpoint['hyper_parameters']
+                logger.info("Checkpoint 加载完成，正在提取配置...")
 
-            # task_manager 是一个对象，提取其 task_name
-            task_manager_obj = hparams.get('task_manager')
-            if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
-                task_name = task_manager_obj.task_name
-            else:
-                task_name = 'mt3_full_plus'  # 默认任务
+                # 提取配置
+                audio_cfg = hparams['audio_cfg']
+                model_cfg = hparams['model_cfg']
+                shared_cfg = hparams['shared_cfg']
 
-            logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+                # task_manager 是一个对象，提取其 task_name
+                task_manager_obj = hparams.get('task_manager')
+                if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
+                    task_name = task_manager_obj.task_name
+                else:
+                    task_name = 'mt3_full_plus'  # 默认任务
 
-            if progress_callback:
-                progress_callback(0.6, "正在创建任务管理器...")
+                logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
 
-            # 6. 创建任务管理器
-            max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
-            if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
-                max_shift_steps = 127  # 默认值
-            else:
-                max_shift_steps = int(max_shift_steps_value)
+                if progress_callback:
+                    progress_callback(0.6, "正在创建任务管理器...")
 
-            tm = TaskManager(
-                task_name=task_name,
-                max_shift_steps=max_shift_steps,
-                debug_mode=args.debug_mode
-            )
-            logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
+                # 6. 创建任务管理器
+                max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
+                if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
+                    max_shift_steps = 127  # 默认值
+                else:
+                    max_shift_steps = int(max_shift_steps_value)
 
-            if progress_callback:
-                progress_callback(0.7, "正在创建模型实例...")
+                tm = TaskManager(
+                    task_name=task_name,
+                    max_shift_steps=max_shift_steps,
+                    debug_mode=args.debug_mode
+                )
+                logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
 
-            # 7. 创建 YourMT3 MoE 模型实例
-            logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
-            model = YourMT3(
-                audio_cfg=audio_cfg,
-                model_cfg=model_cfg,
-                shared_cfg=shared_cfg,
-                optimizer=None,
-                task_manager=tm,
-                eval_subtask_key=args.eval_subtask_key,
-                write_output_dir=None
-            ).to(self.device)
-            logger.info("模型实例创建完成")
+                if progress_callback:
+                    progress_callback(0.7, "正在创建模型实例...")
 
-            if progress_callback:
-                progress_callback(0.8, "正在加载 checkpoint 权重...")
+                # 7. 创建 YourMT3 MoE 模型实例
+                logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
+                model = YourMT3(
+                    audio_cfg=audio_cfg,
+                    model_cfg=model_cfg,
+                    shared_cfg=shared_cfg,
+                    optimizer=None,
+                    task_manager=tm,
+                    eval_subtask_key=args.eval_subtask_key,
+                    write_output_dir=None
+                ).to(self.device)
+                logger.info("模型实例创建完成")
 
-            # 8. 加载权重（checkpoint已经在步骤5加载）
-            logger.info("正在加载 checkpoint 权重到模型...")
-            state_dict = checkpoint['state_dict']
-            # 移除 pitch shift 相关权重（不需要）
-            new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
-            model.load_state_dict(new_state_dict, strict=False)
-            model.eval()
-            logger.info(f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+                if progress_callback:
+                    progress_callback(0.8, "正在加载 checkpoint 权重...")
 
-            del checkpoint  # 释放内存
+                # 8. 加载权重（checkpoint已经在步骤5加载）
+                logger.info("正在加载 checkpoint 权重到模型...")
+                state_dict = checkpoint['state_dict']
+                # 移除 pitch shift 相关权重（不需要）
+                new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
+                model.load_state_dict(new_state_dict, strict=False)
+                model.eval()
+                logger.info(f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+            finally:
+                del checkpoint  # 确保异常时也释放 checkpoint 内存
 
             # 9. 缓存模型和配置
-            YourMT3Transcriber._model = model
-            YourMT3Transcriber._model_name = model_name
-            YourMT3Transcriber._device = self.device
-            YourMT3Transcriber._audio_cfg = audio_cfg
-            YourMT3Transcriber._task_manager = tm
+            with YourMT3Transcriber._model_lock:
+                YourMT3Transcriber._model = model
+                YourMT3Transcriber._model_name = model_name
+                YourMT3Transcriber._device = self.device
+                YourMT3Transcriber._audio_cfg = audio_cfg
+                YourMT3Transcriber._task_manager = tm
 
             if progress_callback:
                 progress_callback(1.0, "模型加载完成")
@@ -699,9 +713,14 @@ class YourMT3Transcriber:
                 progress_callback(0.3, "正在转写音频...")
 
             # 执行转写（参考 model_helper.py）
-            model = YourMT3Transcriber._model
-            audio_cfg = YourMT3Transcriber._audio_cfg
-            task_manager = YourMT3Transcriber._task_manager
+            # 在锁内读取类变量快照，避免与其他线程的 _load_model 竞争
+            with YourMT3Transcriber._model_lock:
+                model = YourMT3Transcriber._model
+                audio_cfg = YourMT3Transcriber._audio_cfg
+                task_manager = YourMT3Transcriber._task_manager
+
+            if model is None or audio_cfg is None or task_manager is None:
+                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
 
             # 加载音频
             import torch
@@ -738,7 +757,7 @@ class YourMT3Transcriber:
             # 极致质量模式：使用 25% 重叠以减少重复，同时保持边界精度
             # 50% 重叠会产生 2x 重复，25% 重叠更易处理
             quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
 
             if quality == "best" or ultra_quality:
                 slice_hop = input_frames * 3 // 4  # 25% 重叠
@@ -841,9 +860,13 @@ class YourMT3Transcriber:
             import torchaudio
             from utils.audio import slice_padded_array
 
-            model = YourMT3Transcriber._model
-            audio_cfg = YourMT3Transcriber._audio_cfg
-            task_manager = YourMT3Transcriber._task_manager
+            with YourMT3Transcriber._model_lock:
+                model = YourMT3Transcriber._model
+                audio_cfg = YourMT3Transcriber._audio_cfg
+                task_manager = YourMT3Transcriber._task_manager
+
+            if model is None or audio_cfg is None or task_manager is None:
+                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
 
             waveform, sr = _load_audio(audio_path)
 
@@ -861,7 +884,7 @@ class YourMT3Transcriber:
 
             # 根据质量配置选择重叠策略
             quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
 
             if quality == "best" or ultra_quality:
                 slice_hop = input_frames * 3 // 4  # 25% 重叠
@@ -917,28 +940,13 @@ class YourMT3Transcriber:
             logger.error(f"YourMT3+ 单轨转写失败: {e}")
             raise
 
-    def _parse_yourmt3_output(
-        self,
-        outputs: any
-    ) -> Dict[InstrumentType, List[NoteEvent]]:
-        """
-        解析 YourMT3 输出并转换为音符事件（已弃用，使用 _parse_yourmt3_output_from_tokens）
-
-        参数:
-            outputs: YourMT3 的原始输出
-
-        返回:
-            乐器类型到音符列表的字典
-        """
-        logger.warning("_parse_yourmt3_output 已弃用，请使用 _parse_yourmt3_output_from_tokens")
-        return {}
 
     def _parse_yourmt3_output_from_tokens(
         self,
         pred_token_arr: list,
         n_items: int,
         audio_cfg: dict,
-        task_manager: any,
+        task_manager: Any,
         slice_hop: Optional[int] = None,
         onset_threshold: float = 0.025
     ) -> Dict[InstrumentType, List[NoteEvent]]:
@@ -1061,14 +1069,15 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
-                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
+                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
                 if program in (100, 101):
                     program = 0
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
                 # 需要将其设置为合理的默认力度值
                 if velocity <= 1:
-                    velocity = 80  # 默认力度
+                    velocity = self.config.default_velocity
                 else:
                     velocity = int(np.clip(velocity, 1, 127))
 
@@ -1108,90 +1117,6 @@ class YourMT3Transcriber:
             logger.error(f"解析 YourMT3 输出失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
-        return result
-
-    def _deduplicate_overlapping_notes(
-        self,
-        notes: list,
-        onset_threshold: float = 0.025  # 25ms
-    ) -> list:
-        """
-        去除重叠分段产生的重复音符
-
-        保留每个 (pitch, program, is_drum) 组合中 onset 最早的音符，
-        如果 onset 相差小于阈值则视为重复。
-
-        参数:
-            notes: YourMT3 Note 对象列表
-            onset_threshold: 判断重复的时间阈值（秒）
-
-        返回:
-            去重后的音符列表
-        """
-        if not notes:
-            return notes
-
-        from collections import defaultdict
-
-        # 按 (pitch, program, is_drum) 分组
-        groups = defaultdict(list)
-        for note in notes:
-            try:
-                if hasattr(note, 'pitch'):
-                    key = (note.pitch, note.program, note.is_drum)
-                elif hasattr(note, '__len__') and len(note) >= 6:
-                    is_drum, program, onset, offset, pitch, velocity = note[:6]
-                    key = (pitch, program, is_drum)
-                else:
-                    continue
-                groups[key].append(note)
-            except (AttributeError, TypeError, ValueError):
-                continue
-
-        result = []
-        dedup_count = 0
-
-        # 辅助函数提到循环外
-        def get_onset(n):
-            if hasattr(n, 'onset'):
-                return n.onset
-            elif hasattr(n, '__len__') and len(n) >= 4:
-                return n[2]
-            return 0
-
-        def get_offset(n):
-            if hasattr(n, 'offset'):
-                return n.offset
-            elif hasattr(n, '__len__') and len(n) >= 4:
-                return n[3]
-            return 0
-
-        for key, group_notes in groups.items():
-            # 按 onset 排序
-            group_notes.sort(key=get_onset)
-
-            # 去除 onset 相差小于阈值的重复
-            filtered = [group_notes[0]]
-            for note in group_notes[1:]:
-                current_onset = get_onset(note)
-                last_onset = get_onset(filtered[-1])
-
-                if current_onset - last_onset > onset_threshold:
-                    filtered.append(note)
-                else:
-                    dedup_count += 1
-                    # 保留持续时间更长的那个
-                    if get_offset(note) > get_offset(filtered[-1]):
-                        filtered[-1] = note
-
-            result.extend(filtered)
-
-        # 按 onset 排序返回
-        result.sort(key=get_onset)
-
-        if dedup_count > 0:
-            logger.info(f"YourMT3 去重: 移除 {dedup_count} 个重叠分段重复音符")
 
         return result
 
@@ -1240,9 +1165,13 @@ class YourMT3Transcriber:
             from utils.note2event import mix_notes
             from collections import Counter
 
-            model = YourMT3Transcriber._model
-            audio_cfg = YourMT3Transcriber._audio_cfg
-            task_manager = YourMT3Transcriber._task_manager
+            with YourMT3Transcriber._model_lock:
+                model = YourMT3Transcriber._model
+                audio_cfg = YourMT3Transcriber._audio_cfg
+                task_manager = YourMT3Transcriber._task_manager
+
+            if model is None or audio_cfg is None or task_manager is None:
+                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
 
             waveform, sr = _load_audio(audio_path)
 
@@ -1260,7 +1189,7 @@ class YourMT3Transcriber:
 
             # 极致质量模式配置
             quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
 
             if quality == "best" or ultra_quality:
                 slice_hop = input_frames * 3 // 4  # 25% 重叠
@@ -1366,14 +1295,19 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
-                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                # 跳过无效音符（零时长或负时长）
+                if float(onset) >= float(offset):
+                    continue
+
+                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
+                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
                 if program in (100, 101):
                     program = 0
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
                 # 需要将其设置为合理的默认力度值
                 if velocity <= 1:
-                    velocity = 80  # 默认力度
+                    velocity = self.config.default_velocity
                 else:
                     velocity = int(np.clip(velocity, 1, 127))
 
@@ -1395,9 +1329,6 @@ class YourMT3Transcriber:
 
             if progress_callback:
                 total_notes = sum(len(notes) for notes in result.values())
-                # 获取精确乐器名称
-                from src.models.gm_instruments import get_instrument_name
-                instrument_names = [get_instrument_name(p) for p in result.keys()]
                 progress_callback(1.0, f"发现 {len(result)} 种精确乐器，共 {total_notes} 个音符")
 
             # 输出详细日志
@@ -1413,26 +1344,25 @@ class YourMT3Transcriber:
 
     def unload_model(self) -> None:
         """卸载模型以释放 GPU 内存"""
-        if YourMT3Transcriber._model is not None:
-            logger.info("正在卸载 YourMT3+ 模型")
-            YourMT3Transcriber._model = None
-            YourMT3Transcriber._model_name = None
-            YourMT3Transcriber._device = None
-            # 同步清理配置缓存，避免设备切换后使用过期数据
-            if hasattr(YourMT3Transcriber, '_audio_cfg'):
-                del YourMT3Transcriber._audio_cfg
-            if hasattr(YourMT3Transcriber, '_task_manager'):
-                del YourMT3Transcriber._task_manager
+        with YourMT3Transcriber._model_lock:
+            if YourMT3Transcriber._model is not None:
+                logger.info("正在卸载 YourMT3+ 模型")
+                YourMT3Transcriber._model = None
+                YourMT3Transcriber._model_name = None
+                YourMT3Transcriber._device = None
+                # 同步清理配置缓存，避免设备切换后使用过期数据
+                YourMT3Transcriber._audio_cfg = None
+                YourMT3Transcriber._task_manager = None
 
-            # 清理 GPU 缓存
-            try:
-                import torch
-                from src.utils.gpu_utils import clear_gpu_memory
-                clear_gpu_memory()
-            except Exception:
-                pass
+                # 清理 GPU 缓存
+                try:
+                    import torch
+                    from src.utils.gpu_utils import clear_gpu_memory
+                    clear_gpu_memory()
+                except Exception:
+                    pass
 
-            logger.info("YourMT3+ 模型已卸载")
+                logger.info("YourMT3+ 模型已卸载")
 
     def transcribe_precise(
         self,
@@ -1508,7 +1438,7 @@ class YourMT3Transcriber:
             input_frames = audio_cfg['input_frames']
 
             # 检查是否启用极致质量模式（覆盖 quality 参数）
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', True)
+            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
             if ultra_quality:
                 quality = "best"  # 强制使用最佳质量
 
@@ -1633,13 +1563,19 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
-                # YourMT3 人声程序号 (100/101) 映射为钢琴 (GM 0)
+                # 跳过无效音符（零时长或负时长）
+                if float(onset) >= float(offset):
+                    continue
+
+                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
+                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
                 if program in (100, 101):
                     program = 0
 
-                # 设置合理的默认力度
+                # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
+                # 需要将其设置为合理的默认力度值
                 if velocity <= 1:
-                    velocity = 80
+                    velocity = self.config.default_velocity
                 else:
                     velocity = int(np.clip(velocity, 1, 127))
 
@@ -1704,10 +1640,8 @@ class YourMT3Transcriber:
             return instrument_notes, drum_notes
 
         except Exception as e:
-            logger.error(f"极致精度转写失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {}, {}
+            logger.error(f"极致精度转写失败: {e}", exc_info=True)
+            raise RuntimeError(f"极致精度转写失败: {e}") from e
 
     def _deduplicate_overlapping_notes_smart(
         self,
@@ -1754,7 +1688,6 @@ class YourMT3Transcriber:
 
         result = []
         dedup_count = 0
-        merged_count = 0
 
         # 辅助函数提到循环外，避免每次迭代重新定义
         def get_onset(n):
@@ -1818,16 +1751,6 @@ class YourMT3Transcriber:
                         # 选择力度最大的
                         best = max(cluster, key=get_velocity)
 
-                    # 可选：扩展到所有重叠音符的最大范围
-                    max_offset = max(get_offset(n) for n in cluster)
-                    if hasattr(best, 'offset'):
-                        # 创建新的 Note 对象（如果需要扩展）
-                        if max_offset > best.offset:
-                            merged_count += 1
-                            # 由于 Note 是 dataclass，我们需要复制并修改
-                            # 这里暂时不扩展，保留原始
-                            pass
-
                     filtered.append(best)
 
                 i = j
@@ -1839,7 +1762,5 @@ class YourMT3Transcriber:
 
         if dedup_count > 0:
             logger.info(f"智能去重: 移除 {dedup_count} 个重复音符 (阈值: {onset_threshold*1000:.0f}ms)")
-        if merged_count > 0:
-            logger.debug(f"合并扩展: {merged_count} 个音符的时长被扩展")
 
         return result

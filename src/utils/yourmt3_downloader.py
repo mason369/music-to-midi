@@ -260,13 +260,13 @@ def download_model(
 
     # 尝试使用不同的镜像站点下载
     for mirror_idx, endpoint in enumerate(HF_MIRRORS):
+        mirror_msg = "官方站点" if endpoint is None else endpoint
         try:
             # 尝试使用 huggingface_hub 下载
             try:
                 from huggingface_hub import hf_hub_download
                 import shutil
 
-                mirror_msg = "官方站点" if endpoint is None else endpoint
                 if progress_callback:
                     progress_callback(0.1, f"尝试从 {mirror_msg} 下载...")
 
