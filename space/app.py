@@ -18,11 +18,23 @@ os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, APP_DIR)
 
+# ── 实时日志文件（供前端轮询读取）──
+LOG_FILE = "/tmp/midi_process.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("music-to-midi-web")
+
+# 将关键模块的日志同时写入文件，供前端实时展示
+_file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+))
+_file_handler.setLevel(logging.INFO)
+for _name in ("music-to-midi-web", "src.core", "src.utils"):
+    logging.getLogger(_name).addHandler(_file_handler)
 
 
 # ── 确保 YourMT3 源码可用 ──
@@ -136,6 +148,28 @@ def get_device_label():
         return "CPU"
 
 
+# ── 实时日志读取 ──
+def read_logs():
+    """读取日志文件的最新内容（供前端轮询）"""
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        lines = content.strip().split("\n")
+        # 保留最后 50 行
+        return "\n".join(lines[-50:]) if lines else ""
+    except Exception:
+        return ""
+
+
+def clear_logs():
+    """清空日志文件"""
+    try:
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+    except Exception:
+        pass
+
+
 # ── 核心转换函数 ──
 def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
     """实际执行转换的内部函数"""
@@ -144,6 +178,15 @@ def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
 
     if audio_path is None:
         raise gr.Error("请先上传音频文件")
+
+    # 清空旧日志，开始新的处理
+    clear_logs()
+    logger.info("=" * 40)
+    logger.info("开始音频转 MIDI 处理")
+    logger.info(f"音频文件: {Path(audio_path).name}")
+    logger.info(f"处理模式: {mode}")
+    logger.info(f"转写质量: {quality}")
+    logger.info("=" * 40)
 
     # 确保模型权重可用
     ensure_model_weights()
@@ -173,7 +216,7 @@ def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
             progress_callback=on_progress,
         )
     except Exception as e:
-        logger.error(f"Conversion failed: {e}", exc_info=True)
+        logger.error(f"转换失败: {e}")
         raise gr.Error(f"转换失败: {e}")
     finally:
         try:
@@ -207,6 +250,7 @@ def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
     else:
         status_lines.append(f"MIDI 文件: {Path(result.midi_path).name}")
 
+    logger.info("转换完成!")
     return output_files, "\n".join(status_lines)
 
 
@@ -286,6 +330,15 @@ CUSTOM_CSS = """
     border-radius: 8px !important;
     font-family: 'Consolas', 'Ubuntu Mono', monospace !important;
     font-size: 13px !important;
+}
+.log-box textarea {
+    background: #0d1117 !important;
+    color: #8dc891 !important;
+    border: 1px solid #2a3a4a !important;
+    border-radius: 8px !important;
+    font-family: 'Consolas', 'Ubuntu Mono', monospace !important;
+    font-size: 12px !important;
+    line-height: 1.5 !important;
 }
 .section-title {
     color: #e0e0e0 !important;
@@ -424,7 +477,7 @@ with gr.Blocks(
             status_output = gr.Textbox(
                 label="状态",
                 interactive=False,
-                lines=8,
+                lines=7,
                 placeholder="等待转换...",
                 elem_classes="result-box",
             )
@@ -435,12 +488,29 @@ with gr.Blocks(
                 file_count="multiple",
             )
 
+            gr.Markdown("**控制台日志**", elem_classes="section-title")
+            log_output = gr.Textbox(
+                label="实时处理日志",
+                interactive=False,
+                lines=12,
+                max_lines=20,
+                placeholder="日志输出将在此处显示...",
+                elem_classes="log-box",
+            )
+
     # ── 按钮事件 ──
     convert_btn.click(
         fn=convert_audio_to_midi,
         inputs=[audio_input, mode_radio, quality_radio],
         outputs=[file_output, status_output],
         api_name="convert",
+    )
+
+    # ── 日志实时轮询（每 2 秒读取一次日志文件）──
+    demo.load(
+        fn=read_logs,
+        outputs=[log_output],
+        every=2,
     )
 
     # ── 底部 ──
