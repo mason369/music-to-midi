@@ -947,7 +947,6 @@ class YourMT3Transcriber:
             logger.error(f"YourMT3+ 单轨转写失败: {e}")
             raise
 
-
     def _parse_yourmt3_output_from_tokens(
         self,
         pred_token_arr: list,
