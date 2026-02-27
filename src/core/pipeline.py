@@ -345,8 +345,25 @@ class MusicToMidiPipeline:
             except Exception as e:
                 logger.warning(f"GPU内存清理失败: {e}")
 
-        vocal_total = sum(len(n) for n in vocal_instrument_notes.values()) + \
-                      sum(len(n) for n in vocal_drum_notes.values())
+        # 人声 MIDI 只保留人声旋律（GM 0 钢琴），丢弃模型幻觉出的其他乐器和鼓
+        raw_inst_count = len(vocal_instrument_notes)
+        raw_note_count = sum(len(n) for n in vocal_instrument_notes.values())
+        raw_drum_count = sum(len(n) for n in vocal_drum_notes.values())
+
+        if 0 in vocal_instrument_notes:
+            vocal_instrument_notes = {0: vocal_instrument_notes[0]}
+        else:
+            vocal_instrument_notes = {}
+        vocal_drum_notes = {}
+
+        kept = sum(len(n) for n in vocal_instrument_notes.values())
+        logger.info(
+            f"人声过滤: 保留 GM 000 钢琴 {kept} 个音符, "
+            f"丢弃 {raw_inst_count - len(vocal_instrument_notes)} 种乐器 "
+            f"({raw_note_count - kept} 个音符) + {raw_drum_count} 个鼓音符"
+        )
+
+        vocal_total = kept
         logger.info(f"人声转写完成: {len(vocal_instrument_notes)} 种乐器, {vocal_total} 个音符")
 
         self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 1.0, 0.85,
@@ -354,6 +371,7 @@ class MusicToMidiPipeline:
         self._check_cancelled()
 
         # ── 阶段5：生成两个 MIDI 文件 (85-95%) ──
+        self._check_cancelled()
         self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, "正在生成 MIDI 文件...")
         logger.info("开始生成 MIDI 文件...")
 
@@ -369,6 +387,8 @@ class MusicToMidiPipeline:
                 output_path=accompaniment_midi_path,
                 quality=quality,
             )
+
+            self._check_cancelled()
 
             # 人声 MIDI（同样使用 v2 生成器）
             vocal_midi_path = self.midi_generator.generate_from_precise_instruments_v2(
