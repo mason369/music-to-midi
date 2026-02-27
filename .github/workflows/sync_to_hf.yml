@@ -1,0 +1,65 @@
+name: 同步到 Hugging Face Spaces
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/core/**'
+      - 'src/models/**'
+      - 'src/utils/**'
+      - 'src/i18n/**'
+      - 'space/**'
+      - 'download_sota_models.py'
+      - 'pyproject.toml'
+
+  # 支持手动触发
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: 同步到 HF Space
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 构建 Space 目录并推送
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -e
+
+          WORK="/tmp/hf_space"
+          rm -rf "$WORK"
+          mkdir -p "$WORK/src"
+
+          # ── 根文件 ──
+          cp space/app.py          "$WORK/"
+          cp space/requirements.txt "$WORK/"
+          cp space/README.md       "$WORK/"
+          cp download_sota_models.py "$WORK/"
+          cp pyproject.toml        "$WORK/"
+
+          # ── 核心源码（排除 GUI） ──
+          cp src/__init__.py "$WORK/src/"
+          for dir in core models utils i18n; do
+            cp -r "src/$dir" "$WORK/src/"
+          done
+
+          # ── 清理不需要的文件 ──
+          find "$WORK" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          rm -rf "$WORK/src/gui" 2>/dev/null || true
+
+          # ── 推送到 HF Space ──
+          cd "$WORK"
+          git init -b main
+          git lfs install
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git remote add space "https://mason369:${HF_TOKEN}@huggingface.co/spaces/mason369/music-to-midi"
+          git add .
+          git commit -m "sync: $(git -C $GITHUB_WORKSPACE log -1 --format='%h %s')"
+          git push space main --force
