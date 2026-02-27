@@ -4,7 +4,6 @@ Music to MIDI - Gradio Web 界面
 """
 import os
 import sys
-import subprocess
 import tempfile
 import logging
 from pathlib import Path
@@ -399,6 +398,28 @@ CUSTOM_CSS = """
 }
 """
 
+# ── JavaScript: 独立日志轮询（不依赖 Gradio 事件队列）──
+LOG_POLL_JS = """
+() => {
+    setInterval(async () => {
+        try {
+            const resp = await fetch('./api/read_logs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({data: []})
+            });
+            const json = await resp.json();
+            const logText = (json.data && json.data[0]) ? json.data[0] : '';
+            const ta = document.querySelector('.log-box textarea');
+            if (ta && logText) {
+                ta.value = logText;
+                ta.scrollTop = ta.scrollHeight;
+            }
+        } catch(e) {}
+    }, 2000);
+}
+"""
+
 
 # ── 构建 Gradio 界面 ──
 DEVICE_LABEL = get_device_label()
@@ -406,6 +427,7 @@ DEVICE_LABEL = get_device_label()
 with gr.Blocks(
     title="Music to MIDI",
     css=CUSTOM_CSS,
+    js=LOG_POLL_JS,
     theme=gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
         neutral_hue=gr.themes.colors.slate,
@@ -520,12 +542,11 @@ with gr.Blocks(
         api_name="convert",
     )
 
-    # ── 日志实时轮询（每 2 秒读取一次日志文件）──
-    # queue=False 确保轮询不受转换任务阻塞
+    # ── 日志 API 端点（供 JavaScript 轮询调用）──
+    # queue=False 允许 JS 直接 POST 调用，不受转换任务队列阻塞
     demo.load(
         fn=read_logs,
         outputs=[log_output],
-        every=2,
         queue=False,
     )
 
