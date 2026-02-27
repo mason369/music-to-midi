@@ -116,12 +116,12 @@ class VocalSeparator:
 
             # 加载音频并重采样到模型采样率
             load_start = time.time()
-            with AudioFile(audio_path) as af:
-                wav = af.read(
-                    streams=0,
-                    samplerate=model.samplerate,
-                    channels=model.audio_channels,
-                )
+            af = AudioFile(audio_path)
+            wav = af.read(
+                streams=0,
+                samplerate=model.samplerate,
+                channels=model.audio_channels,
+            )
             duration_sec = wav.shape[-1] / model.samplerate
             logger.info(f"音频加载完成: {duration_sec:.1f}秒, 采样率={model.samplerate}Hz, "
                          f"耗时={time.time() - load_start:.1f}s")

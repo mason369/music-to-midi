@@ -179,8 +179,8 @@ def program_to_instrument_type(program: int, is_drum: bool = False) -> Instrumen
             return InstrumentType.STRINGS
         if program == 107:  # Koto
             return InstrumentType.HARP
-        if program == 110:  # Bagpipe
-            return InstrumentType.WOODWIND
+        if program == 110:  # Fiddle (小提琴)
+            return InstrumentType.STRINGS
         return InstrumentType.OTHER
 
     # Percussive (112-119)
@@ -410,10 +410,18 @@ class YourMT3Transcriber:
                 logger.debug("模型已加载，跳过重新加载")
                 return
 
-        if progress_callback:
-            progress_callback(0.1, "正在加载 YourMT3 MoE 模型...")
+        # 解析友好模型名称
+        from src.utils.yourmt3_downloader import YOURMT3_MODELS
+        model_info = YOURMT3_MODELS.get(model_name, {})
+        friendly_name = model_info.get("name", model_name)
+        features = ", ".join(model_info.get("features", []))
 
-        logger.info(f"加载 YourMT3 MoE 模型: {model_name}")
+        if progress_callback:
+            progress_callback(0.1, f"正在加载 {friendly_name}...")
+
+        logger.info(f"加载模型: {friendly_name}")
+        if features:
+            logger.info(f"模型特性: {features}")
 
         try:
             # 1. 添加 YourMT3 路径到 sys.path
@@ -659,11 +667,10 @@ class YourMT3Transcriber:
             if progress_callback:
                 progress_callback(1.0, "模型加载完成")
 
-            logger.info(f"YourMT3 MoE 模型加载完成，使用设备: {self.device}")
-            logger.info(f"架构: YPTF.MoE+Multi (8 experts, Top-2 routing, 13 channels)")
+            logger.info(f"模型加载完成: {friendly_name}, 设备: {self.device}")
 
         except Exception as e:
-            logger.error(f"加载 YourMT3 MoE 模型失败: {e}")
+            logger.error(f"加载模型 {friendly_name} 失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
             raise
@@ -1416,9 +1423,10 @@ class YourMT3Transcriber:
             from utils.note2event import mix_notes
             from collections import Counter
 
-            model = YourMT3Transcriber._model
-            audio_cfg = YourMT3Transcriber._audio_cfg
-            task_manager = YourMT3Transcriber._task_manager
+            with YourMT3Transcriber._model_lock:
+                model = YourMT3Transcriber._model
+                audio_cfg = YourMT3Transcriber._audio_cfg
+                task_manager = YourMT3Transcriber._task_manager
 
             waveform, sr = _load_audio(audio_path)
             logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}, 时长={waveform.shape[-1]/sr:.1f}秒")

@@ -139,5 +139,9 @@ def convert_to_wav(input_path: str, output_path: str, sr: int = 44100) -> str:
         转换后文件的路径
     """
     audio, _ = load_audio(input_path, sr=sr, mono=False)
+    # librosa.load(mono=False) 返回 (channels, samples)
+    # soundfile.write 期望 (samples,) 或 (samples, channels)
+    if audio.ndim == 2:
+        audio = audio.T
     save_audio(output_path, audio, sr)
     return output_path

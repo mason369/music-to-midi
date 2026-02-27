@@ -589,17 +589,36 @@ class MidiGenerator:
                 pitch_counts = Counter(n.pitch for n in vibrato_group)
                 main_pitch = pitch_counts.most_common(1)[0][0]
 
-                # 将所有音符统一到主音高
+                # 统一音高后，合并时间重叠的音符（避免同音高双触发）
+                unified = []
                 for note in vibrato_group:
                     if note.pitch != main_pitch:
                         smoothed_count += 1
-                    result.append(NoteEvent(
+                    unified.append(NoteEvent(
                         pitch=main_pitch,
                         start_time=note.start_time,
                         end_time=note.end_time,
                         velocity=note.velocity,
                         program=note.program
                     ))
+
+                # 按开始时间排序后合并重叠区间
+                unified.sort(key=lambda n: n.start_time)
+                merged = [unified[0]]
+                for note in unified[1:]:
+                    prev = merged[-1]
+                    if note.start_time <= prev.end_time:
+                        # 重叠：扩展结束时间，取较大力度
+                        merged[-1] = NoteEvent(
+                            pitch=main_pitch,
+                            start_time=prev.start_time,
+                            end_time=max(prev.end_time, note.end_time),
+                            velocity=max(prev.velocity, note.velocity),
+                            program=prev.program,
+                        )
+                    else:
+                        merged.append(note)
+                result.extend(merged)
             else:
                 result.append(current)
 
@@ -1521,9 +1540,37 @@ class MidiGenerator:
         # 按开始时间排序
         sorted_notes = sorted(notes, key=lambda n: n.start_time)
 
+        # 解决同音高重叠：前一个音符在后一个开始前截断，避免 note_off 提前终止后续音符
+        from collections import defaultdict
+        pitch_groups: Dict[int, List[NoteEvent]] = defaultdict(list)
+        for note in sorted_notes:
+            pitch_groups[note.pitch].append(note)
+
+        resolved_notes = []
+        for pitch, group in pitch_groups.items():
+            group.sort(key=lambda n: n.start_time)
+            for k in range(len(group) - 1):
+                if group[k].end_time > group[k + 1].start_time:
+                    # 截断前一个音符，留 1 tick 的间隔（约 1ms）
+                    new_end = group[k + 1].start_time - 0.001
+                    if new_end > group[k].start_time:
+                        group[k] = NoteEvent(
+                            pitch=group[k].pitch,
+                            start_time=group[k].start_time,
+                            end_time=new_end,
+                            velocity=group[k].velocity,
+                            program=group[k].program,
+                        )
+                    else:
+                        # 前一个音符太短，直接丢弃
+                        group[k] = None
+            resolved_notes.extend(n for n in group if n is not None)
+
+        resolved_notes.sort(key=lambda n: n.start_time)
+
         # 创建音符开/关事件
         events = []
-        for note in sorted_notes:
+        for note in resolved_notes:
             start_tick = self._time_to_ticks(note.start_time, tempo)
             end_tick = self._time_to_ticks(note.end_time, tempo)
 
