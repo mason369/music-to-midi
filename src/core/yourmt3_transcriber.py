@@ -303,8 +303,13 @@ class YourMT3Transcriber:
             # 第三步：尝试导入 YourMT3 核心模块
             has_code = False
 
-            # 方式1：从 model.ymt3 导入（官方仓库结构，需要先添加路径）
-            # 这种方式只有在路径已配置时才会成功，跳过以避免混淆日志
+            # 方式1：直接尝试导入（路径可能已由外部预配置，如 Space 的 app.py）
+            try:
+                from model.ymt3 import YourMT3  # noqa: F811
+                logger.debug("✓ YourMT3+ 代码可用（路径已预配置）")
+                has_code = True
+            except ImportError:
+                pass
 
             # 方式2：从 yourmt3 包导入（pip 安装的包）
             try:

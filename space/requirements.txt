@@ -5,11 +5,11 @@
 torch>=2.1.0,<2.10.0
 torchaudio>=2.1.0,<2.10.0
 
-# NumPy（兼容 numba）
+# NumPy（兼容 numba，Python 3.10 可用 1.x）
 numpy>=1.24.0,<2.0
 
-# YourMT3+ 依赖
-pytorch-lightning>=2.2.1
+# YourMT3+ 依赖（使用 lightning 而非 pytorch-lightning，与官方 Space 一致）
+lightning>=2.2.1
 einops>=0.7.0
 transformers==4.45.1
 mir-eval>=0.7
@@ -19,6 +19,7 @@ nest-asyncio>=1.5.0
 scipy>=1.0.0
 scikit-learn>=1.0.0
 torchmetrics>=0.11.0
+wandb
 
 # 模型下载
 huggingface_hub>=0.20.0
@@ -35,6 +36,9 @@ demucs>=4.0.0
 
 # Web UI（锁定版本避免 API schema bug）
 gradio==4.44.1
+
+# ZeroGPU 支持
+spaces
 
 # 工具
 tqdm>=4.66.0
