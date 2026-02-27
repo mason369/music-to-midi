@@ -168,8 +168,8 @@ class BeatDetector:
             # 获取最大响应对应的 BPM
             tempo_freqs = librosa.tempo_frequencies(tempogram.shape[0], sr=sr)
             tempogram_mean = np.mean(tempogram, axis=1)
-            # 只考虑 60-200 BPM 范围内的峰值
-            valid_mask = (tempo_freqs >= 60) & (tempo_freqs <= 200)
+            # 只考虑 40-240 BPM 范围内的峰值
+            valid_mask = (tempo_freqs >= 40) & (tempo_freqs <= 240)
             if np.any(valid_mask):
                 valid_indices = np.where(valid_mask)[0]
                 best_idx = valid_indices[np.argmax(tempogram_mean[valid_indices])]
@@ -204,12 +204,12 @@ class BeatDetector:
     def _correct_octave_error(
         self,
         tempo: float,
-        valid_range: Tuple[float, float] = (60.0, 200.0)
+        valid_range: Tuple[float, float] = (40.0, 240.0)
     ) -> float:
         """
         倍频误差修正
 
-        将 BPM 修正到合理范围内（60-200）
+        将 BPM 修正到合理范围内（40-240）
 
         参数:
             tempo: 原始 BPM
@@ -302,6 +302,9 @@ class BeatDetector:
         """
         检测下拍（每小节的第一拍）
 
+        使用 onset strength 在每 4 拍窗口中选择最强拍作为下拍起点，
+        然后以此为基准每 4 拍标记一个下拍。
+
         参数:
             y: 音频信号
             sr: 采样率
@@ -313,22 +316,26 @@ class BeatDetector:
         try:
             import librosa
 
+            if len(beat_times) < 4:
+                return None
+
             # 计算起始强度
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
 
-            # 获取节拍强度
+            # 获取每个 beat 对应的 onset strength
             beat_frames = librosa.time_to_frames(beat_times, sr=sr)
-            beat_frames = beat_frames[beat_frames < len(onset_env)]
+            beat_frames = np.clip(beat_frames, 0, len(onset_env) - 1)
 
-            if len(beat_frames) < 4:
-                return None
+            beat_strengths = onset_env[beat_frames]
 
-            # 查找强拍（潜在下拍）
-            # 假设 4/4 拍号
+            # 在前 4 拍中找到 onset strength 最强的作为第一个下拍
+            search_range = min(4, len(beat_strengths))
+            first_downbeat_idx = int(np.argmax(beat_strengths[:search_range]))
+
+            # 从第一个下拍开始，每 4 拍取一个下拍
             downbeats = []
-            for i in range(0, len(beat_times), 4):
-                if i < len(beat_times):
-                    downbeats.append(beat_times[i])
+            for i in range(first_downbeat_idx, len(beat_times), 4):
+                downbeats.append(beat_times[i])
 
             return downbeats
 
