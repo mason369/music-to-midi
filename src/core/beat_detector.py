@@ -82,8 +82,8 @@ class BeatDetector:
         if progress_callback:
             progress_callback(0.8, "正在检测下拍...")
 
-        # 尝试检测下拍
-        downbeats = self._detect_downbeats(y, sr, beat_times)
+        # 尝试检测下拍并推断拍号
+        downbeats, beats_per_bar = self._detect_downbeats(y, sr, beat_times)
 
         if progress_callback:
             progress_callback(1.0, f"BPM: {tempo:.1f}")
@@ -92,7 +92,7 @@ class BeatDetector:
             bpm=tempo,
             beat_times=beat_times.tolist(),
             downbeats=downbeats,
-            time_signature=(4, 4)
+            time_signature=(beats_per_bar, 4)
         )
 
         logger.info(f"多算法检测 BPM: {tempo:.1f}, 候选值: {all_tempos}")
@@ -264,7 +264,7 @@ class BeatDetector:
         current_cluster: List[float] = [sorted_candidates[0]]
 
         for tempo in sorted_candidates[1:]:
-            if tempo - current_cluster[0] <= cluster_threshold:
+            if tempo - current_cluster[-1] <= cluster_threshold:
                 current_cluster.append(tempo)
             else:
                 clusters.append(current_cluster)
@@ -298,12 +298,12 @@ class BeatDetector:
         y: np.ndarray,
         sr: int,
         beat_times: np.ndarray
-    ) -> Optional[list]:
+    ) -> Tuple[Optional[list], int]:
         """
         检测下拍（每小节的第一拍）
 
-        使用 onset strength 在每 4 拍窗口中选择最强拍作为下拍起点，
-        然后以此为基准每 4 拍标记一个下拍。
+        通过比较不同拍号假设（2/4, 3/4, 4/4, 6/8）下的节拍强度周期性，
+        自动推断拍号并标记下拍位置。
 
         参数:
             y: 音频信号
@@ -311,13 +311,13 @@ class BeatDetector:
             beat_times: 节拍时间
 
         返回:
-            下拍时间列表或 None
+            (下拍时间列表或 None, 每小节拍数)
         """
         try:
             import librosa
 
             if len(beat_times) < 4:
-                return None
+                return None, 4
 
             # 计算起始强度
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
@@ -328,20 +328,59 @@ class BeatDetector:
 
             beat_strengths = onset_env[beat_frames]
 
-            # 在前 4 拍中找到 onset strength 最强的作为第一个下拍
-            search_range = min(4, len(beat_strengths))
+            # 自动推断每小节的拍数：对节拍强度序列做自相关分析
+            # 候选拍号：2/4, 3/4, 4/4, 6/8
+            candidates_bpb = [2, 3, 4, 6]
+            best_bpb = 4  # 默认 4/4
+            best_score = -1.0
+
+            if len(beat_strengths) >= 8:
+                # 归一化节拍强度
+                bs_norm = beat_strengths - np.mean(beat_strengths)
+                bs_std = np.std(bs_norm)
+                if bs_std > 1e-6:
+                    bs_norm = bs_norm / bs_std
+
+                for bpb in candidates_bpb:
+                    if len(beat_strengths) < bpb * 2:
+                        continue
+                    # 计算以 bpb 为周期的自相关值
+                    n = len(bs_norm)
+                    if bpb < n:
+                        corr = np.mean(bs_norm[:n - bpb] * bs_norm[bpb:])
+                    else:
+                        corr = 0.0
+
+                    # 同时计算下拍位置的平均强度（越高越好）
+                    downbeat_strengths = []
+                    for offset in range(bpb):
+                        avg = np.mean(beat_strengths[offset::bpb])
+                        downbeat_strengths.append(avg)
+                    # 下拍强度对比：最强位置与平均值的差异
+                    contrast = max(downbeat_strengths) - np.mean(downbeat_strengths)
+
+                    # 综合评分：自相关 + 强度对比
+                    score = corr * 0.6 + contrast * 0.4
+                    if score > best_score:
+                        best_score = score
+                        best_bpb = bpb
+
+            logger.debug(f"推断每小节拍数: {best_bpb}")
+
+            # 在前 best_bpb 拍中找到 onset strength 最强的作为第一个下拍
+            search_range = min(best_bpb, len(beat_strengths))
             first_downbeat_idx = int(np.argmax(beat_strengths[:search_range]))
 
-            # 从第一个下拍开始，每 4 拍取一个下拍
+            # 从第一个下拍开始，按推断的拍号间距标记下拍
             downbeats = []
-            for i in range(first_downbeat_idx, len(beat_times), 4):
+            for i in range(first_downbeat_idx, len(beat_times), best_bpb):
                 downbeats.append(beat_times[i])
 
-            return downbeats
+            return downbeats, best_bpb
 
         except Exception as e:
             logger.warning(f"无法检测下拍: {e}")
-            return None
+            return None, 4
 
     def estimate_tempo(self, audio_path: str) -> float:
         """

@@ -241,6 +241,12 @@ class VocalSeparator:
             for k in non_vocal_keys[1:]:
                 accompaniment = accompaniment + sources_dict[k]
 
+            # 防止 stems 相加后超出 [-1, 1] 范围（削波保护）
+            max_val = accompaniment.abs().max()
+            if max_val > 1.0:
+                accompaniment = accompaniment / max_val
+                logger.info(f"伴奏 stems 合并后峰值 {max_val:.2f} 超限，已归一化")
+
             sample_rate = model.samplerate
 
             # 转为 numpy 并保存

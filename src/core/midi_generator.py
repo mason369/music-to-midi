@@ -88,7 +88,7 @@ class MidiGenerator:
         meta_track.name = "Conductor"
 
         # 设置速度
-        tempo = max(1.0, min(300.0, tempo))
+        tempo = max(1.0, min(500.0, tempo))
         tempo_value = mido.bpm2tempo(tempo)
         meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
 
@@ -222,7 +222,8 @@ class MidiGenerator:
             MIDI ticks
         """
         # ticks = time * (ticks_per_beat * bpm / 60)
-        ticks = int(time_seconds * self.ticks_per_beat * tempo / 60)
+        # 使用 round() 而非 int()，避免系统性向下截断导致累计时序偏移
+        ticks = round(time_seconds * self.ticks_per_beat * tempo / 60)
         return ticks
 
     def _ticks_to_time(self, ticks: int, tempo: float) -> float:
@@ -1007,7 +1008,7 @@ class MidiGenerator:
         meta_track.name = "Conductor"
 
         # 设置速度
-        tempo = max(1.0, min(300.0, tempo))
+        tempo = max(1.0, min(500.0, tempo))
         tempo_value = mido.bpm2tempo(tempo)
         meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
 
@@ -1296,7 +1297,7 @@ class MidiGenerator:
         midi.tracks.append(main_track)
 
         # 添加速度
-        tempo = max(1.0, min(300.0, tempo))
+        tempo = max(1.0, min(500.0, tempo))
         tempo_microseconds = mido.bpm2tempo(tempo)
         main_track.append(MetaMessage('set_tempo', tempo=tempo_microseconds, time=0))
 
