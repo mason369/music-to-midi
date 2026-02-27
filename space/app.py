@@ -136,6 +136,13 @@ try:
 except Exception as e:
     logger.warning(f"Model preload failed: {e}")
 
+# 启动完成后清空日志，避免启动日志残留在用户界面
+try:
+    with open(LOG_FILE, "w", encoding="utf-8") as _f:
+        _f.write("")
+except Exception:
+    pass
+
 
 # ── 设备信息 ──
 def get_device_label():
@@ -507,10 +514,12 @@ with gr.Blocks(
     )
 
     # ── 日志实时轮询（每 2 秒读取一次日志文件）──
+    # queue=False 确保轮询不受转换任务阻塞
     demo.load(
         fn=read_logs,
         outputs=[log_output],
         every=2,
+        queue=False,
     )
 
     # ── 底部 ──
