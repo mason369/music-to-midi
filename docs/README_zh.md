@@ -170,7 +170,7 @@ src/
 │   ├── yourmt3_transcriber.py       # YourMT3+ 转写器封装
 │   ├── beat_detector.py             # 节拍/BPM 检测
 │   ├── midi_generator.py            # MIDI 生成与后处理
-│   └── vocal_separator.py           # Demucs 人声分离
+│   └── vocal_separator.py           # BS-RoFormer 人声分离
 ├── gui/                             # PyQt6 图形界面
 │   ├── main_window.py               # 主窗口 (MainWindow)
 │   ├── widgets/
@@ -302,31 +302,24 @@ BeatInfo(bpm, beat_times, downbeats, time_signature)
 
 ### 人声分离：VocalSeparator
 
-`src/core/vocal_separator.py` (~280 行) 封装 Meta 的 Demucs v4 (htdemucs) 模型。
+`src/core/vocal_separator.py` (~200 行) 通过 audio-separator 库封装 BS-RoFormer 模型。
 
 ```
 音频文件
     ↓
-Demucs htdemucs 模型
-    ├── GPU 模式: overlap=0.5, shifts=3 (高质量)
-    └── CPU 模式: overlap=0.25, shifts=1 (保守)
+BS-RoFormer 模型 (SDR 12.97)
     ↓
-4 个 stem:
-    ├── drums.wav
-    ├── bass.wav
-    ├── other.wav
-    └── vocals.wav
-    ↓
-合并: drums + bass + other → no_vocals.wav
+2 个 stem:
+    ├── vocals.wav
+    └── instrumental.wav (→ 重命名为 accompaniment.wav)
     ↓
 输出: {"vocals": path, "no_vocals": path}
 ```
 
 关键参数：
-- `shifts`: 随机时间偏移次数，多次推理取平均以减少伪影
-- `overlap`: 分段重叠比例，越高边界越平滑
-- 动态分段：每段 ~7.8 秒，根据音频长度自动计算分段数
-- 后台进度线程：每 3 秒更新一次进度（Demucs 不提供细粒度回调）
+- 模型: `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (首次使用时自动下载)
+- 模型缓存: `~/.music-to-midi/models/audio-separator/`
+- 后台进度线程：每 3 秒更新一次进度（audio-separator 不提供细粒度回调）
 
 ---
 

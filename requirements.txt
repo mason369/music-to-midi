@@ -1,12 +1,13 @@
 # Music to MIDI - Python 依赖
-# 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / Demucs / PANNs / ByteDance 钢琴模型）
+# 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / PANNs / ByteDance 钢琴模型）
 
 # PyTorch 核心（兼容 YourMT3+ 和 pytorch-lightning）
-torch>=2.1.0,<2.10.0
-torchaudio>=2.1.0,<2.10.0
+torch>=2.3.0,<2.10.0
+torchaudio>=2.3.0,<2.10.0
 
-# NumPy 版本锁定（兼容 numba）
-numpy>=1.24.0,<2.0
+# NumPy（numba 0.64 支持 <2.5，librosa/pytorch-lightning 均兼容）
+numpy>=2.0.0
+numba>=0.60.0
 
 # YourMT3+ 依赖
 pytorch-lightning>=2.2.1
@@ -37,8 +38,9 @@ PyQt6>=6.6.0
 PyQt6-Qt6>=6.6.0
 PyQt6-sip>=13.6.0
 
-# 人声分离（Demucs）
-demucs>=4.0.0
+# 人声分离（audio-separator + BS-RoFormer）
+audio-separator>=0.36.0
+onnxruntime>=1.16.0
 
 # 工具
 tqdm>=4.66.0

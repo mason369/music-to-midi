@@ -20,7 +20,7 @@ short_description: 将音乐智能转换为多轨道 MIDI 文件
 ## 功能
 
 - **多乐器转写**：直接识别 128 种 GM 乐器，自动分配轨道
-- **人声分离模式**：先用 Demucs 分离人声与伴奏，再分别转写为独立 MIDI
+- **人声分离模式**：先用 BS-RoFormer 分离人声与伴奏，再分别转写为独立 MIDI
 - **节拍检测**：自动检测 BPM 并嵌入 MIDI
 - **支持多种格式**：MP3, WAV, FLAC, OGG, M4A
 
@@ -34,7 +34,7 @@ short_description: 将音乐智能转换为多轨道 MIDI 文件
 ## 技术栈
 
 - **转写引擎**: [YourMT3+](https://github.com/mimbres/YourMT3) MoE (Mixture of Experts)
-- **人声分离**: [Demucs](https://github.com/facebookresearch/demucs) htdemucs
+- **人声分离**: [audio-separator](https://github.com/karafra/audio-separator) BS-RoFormer (SDR 12.97)
 - **节拍检测**: librosa
 - **Web 框架**: Gradio
 

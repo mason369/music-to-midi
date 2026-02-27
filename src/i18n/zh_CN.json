@@ -34,11 +34,11 @@
       "smart": "YourMT3+ MoE 多乐器转写",
       "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离",
       "vocal_split": "人声分离 + 分别转写",
-      "vocal_split_tooltip": "先用 Demucs 分离人声与伴奏，再分别用 YourMT3+ 转写，输出两个独立 MIDI 文件",
+      "vocal_split_tooltip": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写，输出两个独立 MIDI 文件",
       "smart_desc": "🎵  YourMT3+ MoE  —  多乐器智能转写",
       "smart_hint": "直接对完整音频进行转写，精确识别 128 种 GM 乐器。\n轨道数量由模型自动决定，无需手动配置。",
-      "vocal_split_desc": "🎤  Demucs + YourMT3+  —  人声分离 + 分别转写",
-      "vocal_split_hint": "先用 Demucs 分离人声与伴奏，再分别用 YourMT3+ 转写，\n输出两个独立 MIDI 文件。"
+      "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  人声分离 + 分别转写",
+      "vocal_split_hint": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写，\n输出两个独立 MIDI 文件。"
     },
     "tracks": {
       "title": "轨道设置",
