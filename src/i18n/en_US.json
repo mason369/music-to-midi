@@ -26,7 +26,7 @@
   "main": {
     "dropzone": {
       "title": "Drop audio file here, or click to select",
-      "subtitle": "Supports MP3, WAV, FLAC, OGG",
+      "subtitle": "Supports MP3, WAV, FLAC, OGG, M4A",
       "selected": "Selected file"
     },
     "mode": {

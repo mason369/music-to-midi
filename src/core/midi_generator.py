@@ -4,8 +4,8 @@ MIDI生成模块 - 支持歌词嵌入和后处理优化
 import heapq
 import logging
 import os
-from typing import List, Dict, Optional, Tuple
 from copy import deepcopy
+from typing import List, Dict, Optional, Tuple
 import mido
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
@@ -88,6 +88,7 @@ class MidiGenerator:
         meta_track.name = "Conductor"
 
         # 设置速度
+        tempo = max(1.0, min(300.0, tempo))
         tempo_value = mido.bpm2tempo(tempo)
         meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
 
@@ -176,7 +177,7 @@ class MidiGenerator:
             })
 
         # 按 tick 排序事件
-        events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
+        events.sort(key=lambda e: (e['tick'], e['type'] != 'note_off'))
 
         # 添加带增量时间的事件
         current_tick = 0
@@ -269,6 +270,9 @@ class MidiGenerator:
         beats_per_grid = grid_map.get(grid, 0.25)
 
         # 计算网格时间（秒）
+        if tempo <= 0:
+            logger.warning("tempo 为 0 或负数，跳过量化")
+            return list(notes)
         grid_time = beats_per_grid * 60 / tempo
 
         quantized = []
@@ -284,7 +288,8 @@ class MidiGenerator:
                 pitch=note.pitch,
                 start_time=quantized_start,
                 end_time=quantized_start + quantized_duration,
-                velocity=note.velocity
+                velocity=note.velocity,
+                program=note.program
             ))
 
         logger.debug(f"已量化 {len(notes)} 个音符到 {grid} 网格")
@@ -381,7 +386,8 @@ class MidiGenerator:
                 pitch=note.pitch,
                 start_time=note.start_time,
                 end_time=note.end_time,
-                velocity=smoothed_velocity
+                velocity=smoothed_velocity,
+                program=note.program
             ))
 
         removed_count = len(notes) - len(result)
@@ -498,8 +504,9 @@ class MidiGenerator:
                     next_note = sorted_notes[j]
                     gap = next_note.start_time - merged_end
 
-                    if gap <= gap_threshold:
+                    if gap <= gap_threshold and next_note.start_time - current.start_time <= 0.5:
                         # 合并：扩展结束时间，平均力度
+                        # 限制 onset 距离 <=0.5s，防止误合并独立的重新起奏
                         merged_end = max(merged_end, next_note.end_time)
                         merged_velocity += next_note.velocity
                         velocity_count += 1
@@ -513,7 +520,8 @@ class MidiGenerator:
                     pitch=pitch,
                     start_time=current.start_time,
                     end_time=merged_end,
-                    velocity=merged_velocity // velocity_count
+                    velocity=merged_velocity // velocity_count,
+                    program=current.program
                 ))
 
                 i = j
@@ -589,7 +597,8 @@ class MidiGenerator:
                         pitch=main_pitch,
                         start_time=note.start_time,
                         end_time=note.end_time,
-                        velocity=note.velocity
+                        velocity=note.velocity,
+                        program=note.program
                     ))
             else:
                 result.append(current)
@@ -638,7 +647,8 @@ class MidiGenerator:
                     pitch=note.pitch,
                     start_time=note.start_time,
                     end_time=note.end_time,
-                    velocity=target_mean
+                    velocity=target_mean,
+                    program=note.program
                 ))
             return result
 
@@ -656,7 +666,8 @@ class MidiGenerator:
                 pitch=note.pitch,
                 start_time=note.start_time,
                 end_time=note.end_time,
-                velocity=new_velocity
+                velocity=new_velocity,
+                program=note.program
             ))
 
         logger.debug(f"力度归一化: {current_mean:.0f}±{current_std:.0f} -> {target_mean}±{target_std}")
@@ -695,6 +706,9 @@ class MidiGenerator:
 
         # 1. 颤音平滑
         processed = self._smooth_vibrato(processed)
+
+        # 1.5 颤音平滑后去除可能产生的同音高重叠音符
+        processed = self._remove_duplicate_notes(processed)
 
         # 2. 音符合并
         processed = self._merge_close_notes(processed)
@@ -974,6 +988,7 @@ class MidiGenerator:
         meta_track.name = "Conductor"
 
         # 设置速度
+        tempo = max(1.0, min(300.0, tempo))
         tempo_value = mido.bpm2tempo(tempo)
         meta_track.append(MetaMessage('set_tempo', tempo=tempo_value, time=0))
 
@@ -1082,7 +1097,7 @@ class MidiGenerator:
             })
 
         # 按 tick 排序事件
-        events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
+        events.sort(key=lambda e: (e['tick'], e['type'] != 'note_off'))
 
         # 添加带增量时间的事件
         current_tick = 0
@@ -1217,153 +1232,6 @@ class MidiGenerator:
         soft_count = len(soft_pedals)
         logger.info(f"已添加踏板轨道: {sustain_count} 个延音踏板, {soft_count} 个柔音踏板")
 
-    def generate_from_precise_instruments(
-        self,
-        program_notes: Dict[int, List[NoteEvent]],
-        tempo: float,
-        output_path: str
-    ) -> str:
-        """
-        从精确 GM 程序号分组的音符生成 MIDI
-
-        每个 GM 程序号 (0-127) 对应一个独立轨道，实现精确的乐器识别。
-
-        参数:
-            program_notes: GM程序号到音符列表的字典
-            tempo: BPM
-            output_path: 输出 MIDI 文件路径
-
-        返回:
-            输出 MIDI 文件路径
-        """
-        from src.models.gm_instruments import get_instrument_name
-
-        logger.info(f"正在生成精确乐器 MIDI: {output_path}")
-        logger.info(f"包含 {len(program_notes)} 种精确乐器")
-
-        # 创建 MIDI 文件
-        midi = MidiFile(type=1, ticks_per_beat=self.ticks_per_beat)
-
-        # 创建主轨道（速度和时间签名）
-        main_track = MidiTrack()
-        midi.tracks.append(main_track)
-
-        # 添加速度
-        tempo_microseconds = int(60_000_000 / tempo)
-        main_track.append(MetaMessage('set_tempo', tempo=tempo_microseconds, time=0))
-
-        # 添加时间签名
-        main_track.append(MetaMessage(
-            'time_signature',
-            numerator=4, denominator=4,
-            clocks_per_click=24, notated_32nd_notes_per_beat=8,
-            time=0
-        ))
-
-        main_track.append(MetaMessage('end_of_track', time=0))
-
-        # 为每个 GM 程序号创建轨道
-        channel = 0
-        for program, notes in sorted(program_notes.items()):
-            if not notes:
-                continue
-
-            # 鼓组使用通道 9
-            is_drums = (program >= 112 and program <= 119) or (program == 47)  # 打击乐器家族或定音鼓
-            if is_drums:
-                midi_channel = 9
-            else:
-                midi_channel = channel
-                channel += 1
-                if channel == 9:
-                    channel = 10  # 跳过鼓通道
-                if channel > 15:
-                    logger.warning(f"MIDI 通道已用尽，跳过程序 {program}")
-                    continue
-
-            # 获取乐器名称
-            inst_name = get_instrument_name(program, "zh_CN")
-            track_name = f"{program:03d}_{inst_name}"
-
-            # 创建轨道
-            track = MidiTrack()
-            midi.tracks.append(track)
-
-            # 轨道名称（使用 ASCII）
-            ascii_name = f"GM{program:03d}"
-            track.append(MetaMessage('track_name', name=ascii_name, time=0))
-
-            # 音色变更（鼓组除外）
-            if not is_drums:
-                track.append(Message(
-                    'program_change',
-                    channel=midi_channel,
-                    program=program,
-                    time=0
-                ))
-
-            # 按开始时间排序音符
-            sorted_notes = sorted(notes, key=lambda n: n.start_time)
-
-            # 创建音符开/关事件
-            events = []
-            for note in sorted_notes:
-                start_tick = self._time_to_ticks(note.start_time, tempo)
-                end_tick = self._time_to_ticks(note.end_time, tempo)
-
-                events.append({
-                    'type': 'note_on',
-                    'tick': start_tick,
-                    'note': note.pitch,
-                    'velocity': note.velocity,
-                    'channel': midi_channel
-                })
-                events.append({
-                    'type': 'note_off',
-                    'tick': end_tick,
-                    'note': note.pitch,
-                    'velocity': 0,
-                    'channel': midi_channel
-                })
-
-            # 按 tick 排序
-            events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
-
-            # 写入事件
-            current_tick = 0
-            for event in events:
-                delta = max(0, event['tick'] - current_tick)
-
-                if event['type'] == 'note_on':
-                    track.append(Message(
-                        'note_on',
-                        note=event['note'],
-                        velocity=event['velocity'],
-                        channel=event['channel'],
-                        time=delta
-                    ))
-                else:
-                    track.append(Message(
-                        'note_off',
-                        note=event['note'],
-                        velocity=0,
-                        channel=event['channel'],
-                        time=delta
-                    ))
-
-                current_tick = event['tick']
-
-            track.append(MetaMessage('end_of_track', time=0))
-
-            logger.info(f"轨道 GM{program:03d} ({inst_name}): {len(notes)} 个音符，通道 {midi_channel}")
-
-        # 保存文件
-        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-        midi.save(output_path)
-
-        logger.info(f"精确乐器 MIDI 已保存: {output_path}")
-        return output_path
-
     def generate_from_precise_instruments_v2(
         self,
         instrument_notes: Dict[int, List[NoteEvent]],
@@ -1409,7 +1277,8 @@ class MidiGenerator:
         midi.tracks.append(main_track)
 
         # 添加速度
-        tempo_microseconds = int(60_000_000 / tempo)
+        tempo = max(1.0, min(300.0, tempo))
+        tempo_microseconds = mido.bpm2tempo(tempo)
         main_track.append(MetaMessage('set_tempo', tempo=tempo_microseconds, time=0))
 
         # 添加时间签名
@@ -1427,22 +1296,9 @@ class MidiGenerator:
         # 所以最多 15 个乐器通道
         MAX_INSTRUMENT_CHANNELS = 15
 
-        # 分离人声轨道（YourMT3 使用 program 100/101 表示人声）
-        # 这些不是标准 GM 程序号，需要特殊处理
-        SINGING_PROGRAMS = {100, 101}  # FX 5 (brightness) 和 FX 6 (goblins) 被 YourMT3 用于人声
-
-        singing_notes = {}
-        normal_instruments = {}
-
-        for program, notes in instrument_notes.items():
-            if program in SINGING_PROGRAMS:
-                singing_notes[program] = notes
-            else:
-                normal_instruments[program] = notes
-
         # 按音符数量排序乐器（优先分配给音符多的）
         sorted_instruments = sorted(
-            normal_instruments.items(),
+            instrument_notes.items(),
             key=lambda x: len(x[1]),
             reverse=True
         )
@@ -1514,54 +1370,6 @@ class MidiGenerator:
             track.append(MetaMessage('end_of_track', time=0))
 
             logger.info(f"轨道 {track_name} ({inst_name}): {len(processed_notes)} 个音符，通道 {midi_channel}")
-
-        # 处理人声轨道
-        if singing_notes:
-            total_singing_notes = sum(len(n) for n in singing_notes.values())
-            logger.info(f"检测到人声轨道: {len(singing_notes)} 个程序, {total_singing_notes} 个音符")
-
-            # 合并所有人声到一个轨道
-            all_singing_notes = []
-            for notes in singing_notes.values():
-                all_singing_notes.extend(notes)
-            all_singing_notes.sort(key=lambda n: n.start_time)
-
-            if all_singing_notes:
-                # 为人声分配通道
-                if channel_index == 9:
-                    channel_index = 10
-                if channel_index < 16:
-                    midi_channel = channel_index
-                    channel_index += 1
-
-                    # 后处理
-                    if quality == "best":
-                        processed_notes = self.post_process_minimal(all_singing_notes, tempo)
-                    else:
-                        processed_notes = self.post_process_by_quality(all_singing_notes, tempo, quality)
-
-                    final_total += len(processed_notes)
-
-                    # 创建人声轨道
-                    singing_track = MidiTrack()
-                    midi.tracks.append(singing_track)
-
-                    singing_track.append(MetaMessage('track_name', name="Vocals", time=0))
-
-                    # 人声使用钢琴音色（GM 0）
-                    singing_track.append(Message(
-                        'program_change',
-                        channel=midi_channel,
-                        program=0,  # Acoustic Grand Piano
-                        time=0
-                    ))
-
-                    self._write_notes_to_track(singing_track, processed_notes, midi_channel, tempo)
-                    singing_track.append(MetaMessage('end_of_track', time=0))
-
-                    logger.info(f"人声轨道: {len(processed_notes)} 个音符，通道 {midi_channel}，音色 Acoustic Grand Piano")
-                else:
-                    logger.warning(f"无法分配人声通道，跳过 {len(all_singing_notes)} 个音符")
 
         # 处理鼓轨道
         if drum_notes:
@@ -1680,7 +1488,7 @@ class MidiGenerator:
                 for _, notes in extra:
                     extra_notes.extend(notes)
 
-                if extra_notes:
+                if extra_notes and result:
                     extra_notes.sort(key=lambda n: n.start_time)
                     # 添加到最后一个轨道或创建新轨道
                     last_program, last_notes = result[-1]
@@ -1734,8 +1542,8 @@ class MidiGenerator:
                 'channel': channel
             })
 
-        # 按 tick 排序，同 tick 内 note_off(False=0) 先于 note_on(True=1)
-        events.sort(key=lambda e: (e['tick'], e['type'] == 'note_on'))
+        # 按 tick 排序，同 tick 内 note_off 先于 note_on（避免音符重叠）
+        events.sort(key=lambda e: (e['tick'], e['type'] != 'note_off'))
 
         # 写入事件
         current_tick = 0

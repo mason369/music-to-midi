@@ -1,10 +1,13 @@
 """
 音乐转MIDI应用的数据模型
 """
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, fields as dataclass_fields
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class TrackType(Enum):
@@ -207,7 +210,7 @@ class BeatInfo:
     bpm: float                                # 每分钟节拍数
     beat_times: List[float] = field(default_factory=list)  # 所有节拍时间
     downbeats: Optional[List[float]] = None  # 重拍时间
-    time_signature: tuple = (4, 4)           # 拍号（分子/分母）
+    time_signature: Tuple[int, int] = (4, 4)           # 拍号（分子/分母）
 
 
 @dataclass
@@ -218,13 +221,25 @@ class TrackConfig:
     name: str                       # 显示名称
     enabled: bool = True            # 是否启用
     midi_channel: int = 0           # MIDI通道 (0-15)
-    program: int = 0                # General MIDI 音色编号
+    program: Optional[int] = None   # General MIDI 音色编号，None 表示自动选择
     source: str = "original"        # 分离轨道来源 (original, vocals, accompaniment, guitar, other)
 
     def __post_init__(self):
-        # 自动设置默认音色编号
-        if self.program == 0 and self.instrument != InstrumentType.PIANO:
+        # 自动设置默认音色编号（仅当未显式指定时）
+        if self.program is None:
             self.program = self.instrument.to_program_number()
+        # 验证 MIDI 通道范围
+        if not (0 <= self.midi_channel <= 15):
+            logger.warning(
+                f"MIDI 通道 {self.midi_channel} 超出范围 0-15，重置为 0"
+            )
+            self.midi_channel = 0
+        # 验证程序号范围
+        if self.program is not None and not (0 <= self.program <= 127):
+            logger.warning(
+                f"GM 程序号 {self.program} 超出范围 0-127，重置为 0"
+            )
+            self.program = 0
         # 鼓轨道固定使用通道9（GM标准）
         if self.instrument == InstrumentType.DRUMS:
             self.midi_channel = 9
@@ -281,7 +296,7 @@ class TrackLayout:
                 program=0,  # Acoustic Grand Piano
                 source=t["source"]
             ))
-        return cls(mode=ProcessingMode.PIANO, tracks=tracks)
+        return cls(mode=ProcessingMode.SMART, tracks=tracks)
 
     @classmethod
     def from_detected_instruments(
@@ -342,13 +357,18 @@ class TrackLayout:
         mode = ProcessingMode(mode_str)
         tracks = []
         for t in data.get("tracks", []):
+            try:
+                instrument = InstrumentType(t["instrument"])
+            except (ValueError, KeyError):
+                logger.warning(f"未知乐器类型 '{t.get('instrument')}', 回退为 OTHER")
+                instrument = InstrumentType.OTHER
             tracks.append(TrackConfig(
                 id=t["id"],
-                instrument=InstrumentType(t["instrument"]),
+                instrument=instrument,
                 name=t["name"],
                 enabled=t.get("enabled", True),
                 midi_channel=t.get("midi_channel", 0),
-                program=t.get("program", 0),
+                program=t.get("program"),
                 source=t.get("source", "original"),
             ))
         return cls(mode=mode, tracks=tracks)
@@ -390,6 +410,7 @@ class ProcessingResult:
     tracks: List[Track] = field(default_factory=list)
     beat_info: Optional[BeatInfo] = None
     processing_time: float = 0.0             # 总处理时间（秒）
+    total_notes: int = 0                     # 转写的总音符数
     vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
     accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
     separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径 {"vocals": ..., "no_vocals": ...}
@@ -417,9 +438,6 @@ class Config:
     # MIDI设置
     ticks_per_beat: int = 480
     default_velocity: int = 80
-    onset_threshold: float = 0.5
-    frame_threshold: float = 0.3
-    min_note_length: int = 58  # 毫秒
 
     # MIDI后处理设置
     quantize_notes: bool = True       # 音符量化
@@ -445,9 +463,6 @@ class Config:
             "preserve_all_notes": self.preserve_all_notes,
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
-            "onset_threshold": self.onset_threshold,
-            "frame_threshold": self.frame_threshold,
-            "min_note_length": self.min_note_length,
             "quantize_notes": self.quantize_notes,
             "quantize_grid": self.quantize_grid,
             "remove_duplicates": self.remove_duplicates,
@@ -460,7 +475,8 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
-        return cls(**{k: v for k, v in data.items() if hasattr(cls, k)})
+        valid_fields = {f.name for f in dataclass_fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in valid_fields})
 
 
 @dataclass

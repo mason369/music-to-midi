@@ -51,7 +51,9 @@ def save_audio(
     import soundfile as sf
 
     # 确保目录存在
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
 
     logger.info(f"正在保存音频: {path}")
     sf.write(path, audio, sr)

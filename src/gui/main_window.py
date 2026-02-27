@@ -5,6 +5,7 @@ import os
 import sys
 import platform
 import logging
+import time as _time
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -12,14 +13,13 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QCheckBox, QLineEdit,
     QGroupBox, QFileDialog, QMessageBox, QComboBox,
     QFrame, QSplitter, QGraphicsDropShadowEffect,
-    QDialog, QTextEdit, QApplication
+    QDialog, QTextEdit, QApplication, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
 from src.models.data_models import (
     Config, ProcessingProgress, ProcessingResult, ProcessingStage,
-    TrackLayout
 )
 from src.gui.widgets.dropzone import DropZoneWidget
 from src.gui.widgets.track_panel import TrackPanel
@@ -88,6 +88,8 @@ class MainWindow(QMainWindow):
         self.config = config or Config()
         self.worker = None
         self.current_file = None
+        self._last_memory_update = 0.0  # 内存标签节流时间戳
+        self._stopping = False  # 防止停止后信号竞争
 
         self._setup_ui()
         self._setup_menu()
@@ -171,7 +173,7 @@ class MainWindow(QMainWindow):
         title_label.setFont(get_ui_font(13, bold=True))
         title_label.setStyleSheet("color: #e0e0e0;")
 
-        subtitle_label = QLabel(t("app.subtitle") if hasattr(t, "__call__") else "将音乐转换为MIDI文件")
+        subtitle_label = QLabel(t("app.subtitle"))
         subtitle_label.setFont(get_ui_font(8))
         subtitle_label.setStyleSheet("color: #8892a0;")
 
@@ -496,8 +498,7 @@ class MainWindow(QMainWindow):
 
         # 语言选择器放在右侧
         spacer = QWidget()
-        spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding,
-                            spacer.sizePolicy().verticalPolicy().Preferred)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
 
         self.lang_combo = QComboBox()
@@ -557,10 +558,13 @@ class MainWindow(QMainWindow):
                     self.detected.emit("CPU", "")
 
         self._gpu_detector = _GpuDetector()
-        self._gpu_detector.detected.connect(
-            lambda dev, mem: (self.device_label.setText(dev), self.memory_label.setText(mem))
-        )
+        self._gpu_detector.detected.connect(self._on_gpu_detected)
         self._gpu_detector.start()
+
+    def _on_gpu_detected(self, dev: str, mem: str):
+        """处理 GPU 检测结果"""
+        self.device_label.setText(dev)
+        self.memory_label.setText(mem)
 
     def _connect_signals(self):
         """连接信号与槽"""
@@ -609,6 +613,13 @@ class MainWindow(QMainWindow):
         if not self.current_file:
             return
 
+        # 检查旧 worker 是否仍在运行
+        if self.worker and self.worker.isRunning():
+            logger.warning("上一个工作线程仍在运行，忽略重复启动")
+            return
+
+        self._stopping = False
+
         # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
@@ -635,7 +646,6 @@ class MainWindow(QMainWindow):
             output_dir_with_music_name,
             self.config,
             self,
-            track_layout=self.track_panel.get_track_layout()
         )
 
         self.worker.progress_updated.connect(self._on_progress)
@@ -656,8 +666,18 @@ class MainWindow(QMainWindow):
     def _stop_processing(self):
         """停止处理"""
         if self.worker:
+            self._stopping = True
+            # 断开信号连接，防止 worker 后续信号导致重复状态变更
+            try:
+                self.worker.progress_updated.disconnect(self._on_progress)
+                self.worker.processing_finished.disconnect(self._on_finished)
+                self.worker.error_occurred.disconnect(self._on_error)
+            except (TypeError, RuntimeError):
+                pass
             self.worker.cancel()
-            self.worker.wait()
+            # 使用短超时避免阻塞 GUI，线程结束后资源由 GC 回收
+            if not self.worker.wait(500):
+                logger.warning("工作线程未在超时内停止，等待后台结束")
 
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -666,11 +686,19 @@ class MainWindow(QMainWindow):
 
     def _on_progress(self, progress: ProcessingProgress):
         """处理进度更新"""
+        if self._stopping:
+            return
         self.progress_widget.update_progress(progress)
-        self._update_memory_label()
+        # 节流内存标签更新（最多每 2 秒一次），避免阻塞 GUI 线程
+        now = _time.monotonic()
+        if now - self._last_memory_update >= 2.0:
+            self._last_memory_update = now
+            self._update_memory_label()
 
     def _on_finished(self, result: ProcessingResult):
         """处理完成"""
+        if self._stopping:
+            return
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.track_panel.mode_combo.setEnabled(True)
@@ -724,7 +752,7 @@ class MainWindow(QMainWindow):
             <p style="color: #b0b8c8; line-height: 1.6;">
             <b>MIDI文件:</b> {result.midi_path}<br>
             <b>轨道数:</b> {len(result.tracks)}<br>
-            <b>音符数:</b> {sum(len(track.notes) for track in result.tracks)}<br>
+            <b>音符数:</b> {result.total_notes}<br>
             <b>处理时间:</b> {result.processing_time:.1f}秒
             </p>
             """
@@ -855,6 +883,8 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, error_msg: str):
         """处理错误"""
+        if self._stopping:
+            return
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.track_panel.mode_combo.setEnabled(True)
@@ -898,7 +928,8 @@ class MainWindow(QMainWindow):
         btn_layout.setSpacing(12)
 
         # 复制按钮
-        copy_btn = QPushButton(t("dialogs.error.copy") if "dialogs.error.copy" in t("dialogs.error.copy") else "复制错误信息")
+        copy_text = t("dialogs.error.copy")
+        copy_btn = QPushButton(copy_text if copy_text != "dialogs.error.copy" else "复制错误信息")
         copy_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 16px;
@@ -915,7 +946,8 @@ class MainWindow(QMainWindow):
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(error_msg))
 
         # 确定按钮
-        ok_btn = QPushButton(t("dialogs.error.ok") if "dialogs.error.ok" in t("dialogs.error.ok") else "确定")
+        ok_text = t("dialogs.error.ok")
+        ok_btn = QPushButton(ok_text if ok_text != "dialogs.error.ok" else "确定")
         ok_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 20px;
@@ -1008,3 +1040,12 @@ class MainWindow(QMainWindow):
         self.progress_widget.update_translations()
 
         logger.info(f"语言已更新为: {get_translator().get_language()}")
+
+    def closeEvent(self, event):
+        """窗口关闭时清理后台线程"""
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            self.worker.wait(2000)
+        if hasattr(self, '_gpu_detector') and self._gpu_detector.isRunning():
+            self._gpu_detector.wait(1000)
+        super().closeEvent(event)

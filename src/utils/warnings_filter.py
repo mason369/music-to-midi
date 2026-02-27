@@ -207,8 +207,8 @@ class FilteredStderr:
         # 检查是否应该抑制
         for pattern in self.skip_patterns:
             if pattern in message:
-                return  # 抑制此消息
-        self.original.write(message)
+                return len(message)  # 抑制此消息，但返回字符数
+        return self.original.write(message)
 
     def flush(self):
         self.original.flush()

@@ -2,10 +2,9 @@
 处理工作线程 - 后台执行处理任务
 """
 import logging
-from typing import Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.models.data_models import Config, ProcessingProgress, ProcessingResult, TrackLayout
+from src.models.data_models import Config, ProcessingProgress, ProcessingResult
 from src.core.pipeline import MusicToMidiPipeline
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,6 @@ class ProcessingWorker(QThread):
         output_dir: str,
         config: Config,
         parent=None,
-        track_layout: Optional[TrackLayout] = None
     ):
         """
         初始化工作线程
@@ -39,14 +37,12 @@ class ProcessingWorker(QThread):
             output_dir: 输出目录
             config: 应用配置
             parent: 父QObject
-            track_layout: 可选的轨道布局
         """
         super().__init__(parent)
 
         self.audio_path = audio_path
         self.output_dir = output_dir
         self.config = config
-        self.track_layout = track_layout
         self.pipeline = MusicToMidiPipeline(config)
 
     def run(self):
@@ -58,7 +54,6 @@ class ProcessingWorker(QThread):
                 self.audio_path,
                 self.output_dir,
                 self._on_progress,
-                self.track_layout
             )
 
             self.processing_finished.emit(result)
@@ -71,6 +66,19 @@ class ProcessingWorker(QThread):
         except Exception as e:
             logger.error(f"工作线程错误: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
+
+        finally:
+            # 确保 GPU 资源被清理
+            try:
+                if self.pipeline and self.pipeline.yourmt3_transcriber:
+                    self.pipeline.yourmt3_transcriber.unload_model()
+            except Exception as e:
+                logger.warning(f"工作线程清理模型失败: {e}")
+            try:
+                from src.utils.gpu_utils import clear_gpu_memory
+                clear_gpu_memory()
+            except Exception as e:
+                logger.warning(f"工作线程清理GPU内存失败: {e}")
 
     def _on_progress(self, progress: ProcessingProgress):
         """处理来自流水线的进度更新"""

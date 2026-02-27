@@ -26,7 +26,7 @@
   "main": {
     "dropzone": {
       "title": "拖拽音频文件到此处，或点击选择",
-      "subtitle": "支持 MP3, WAV, FLAC, OGG",
+      "subtitle": "支持 MP3, WAV, FLAC, OGG, M4A",
       "selected": "已选文件"
     },
     "mode": {

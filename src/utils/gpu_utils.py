@@ -35,6 +35,10 @@ def _fix_torch_dll_path():
     解决方案：在 import torch 之前，用 8.3 短路径预加载所有 torch DLL，
     这样 PyTorch 再次加载时发现 DLL 已在内存中，不会重复加载。
     """
+    if getattr(_fix_torch_dll_path, '_done', False):
+        return
+    _fix_torch_dll_path._done = True
+
     if platform.system() != "Windows":
         return
     try:
@@ -94,15 +98,26 @@ def _fix_torch_dll_path():
         pass
 
 
+_torch_module = None  # 缓存 torch 模块引用
+_torch_checked = False  # 是否已尝试加载过 torch
+
+
 def _get_torch():
-    """获取 torch 模块，失败返回 None"""
+    """获取 torch 模块，失败返回 None（结果会被缓存）"""
+    global _torch_module, _torch_checked
+    if _torch_checked:
+        return _torch_module
     try:
         _fix_torch_dll_path()
         import torch
+        _torch_module = torch
+        _torch_checked = True
         return torch
     except ImportError:
+        _torch_checked = True
         return None
     except OSError as e:
+        _torch_checked = True
         import re
         # 判断是否是路径特殊字符导致的问题
         err_str = str(e)
@@ -406,16 +421,6 @@ def clear_gpu_memory() -> None:
         logger.warning(f"清除GPU显存失败: {e}")
 
 
-def normalize_device_for_whisperx(device: str) -> str:
-    """
-    将设备字符串规范化为 WhisperX 兼容格式。
-    WhisperX 不支持 'cuda:0' 形式，需简化为 'cuda'。
-    """
-    if device.startswith("cuda:"):
-        return "cuda"
-    return device
-
-
 def get_accelerator_label() -> str:
     """获取加速器的友好标签字符串，用于UI显示"""
     accel = get_accelerator_type()
@@ -476,27 +481,6 @@ def diagnose_gpu() -> dict:
         logger.debug(f"TensorFlow 诊断失败: {e}")
 
     return result
-
-
-def configure_tensorflow_gpu() -> bool:
-    """配置 TensorFlow GPU 内存增长模式"""
-    try:
-        import os
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-        import tensorflow as tf
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            logger.info(f"TensorFlow GPU 已配置: {len(gpus)} 个设备")
-            return True
-        return False
-    except ImportError:
-        logger.debug("TensorFlow 未安装")
-        return False
-    except Exception as e:
-        logger.warning(f"TensorFlow GPU 配置异常: {e}")
-        return False
 
 
 def print_gpu_diagnosis() -> None:
@@ -600,7 +584,6 @@ def get_system_performance_profile() -> dict:
         # psutil 未安装时使用保守估计
         ram_gb = 8.0
         physical_cores = os.cpu_count() or 1
-    cpu_cores = os.cpu_count() or 1
 
     has_gpu = is_gpu_available()
     gpu_vram_gb = None

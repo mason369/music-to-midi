@@ -180,7 +180,7 @@ class BeatDetector:
             logger.warning(f"方法4失败: {e}")
 
         if not all_tempos:
-            logger.warning("所有方法都失败，使用默认 120 BPM")
+            logger.warning("所有BPM检测方法均失败，使用默认 120 BPM（结果可能不准确）")
             return 120.0, [120.0]
 
         # 生成倍频候选（2x 和 0.5x）
@@ -219,6 +219,9 @@ class BeatDetector:
             修正后的 BPM
         """
         min_bpm, max_bpm = valid_range
+
+        if tempo <= 0:
+            return (min_bpm + max_bpm) / 2
 
         while tempo < min_bpm:
             tempo *= 2
@@ -261,7 +264,7 @@ class BeatDetector:
         current_cluster: List[float] = [sorted_candidates[0]]
 
         for tempo in sorted_candidates[1:]:
-            if tempo - current_cluster[-1] <= cluster_threshold:
+            if tempo - current_cluster[0] <= cluster_threshold:
                 current_cluster.append(tempo)
             else:
                 clusters.append(current_cluster)
@@ -319,8 +322,6 @@ class BeatDetector:
 
             if len(beat_frames) < 4:
                 return None
-
-            beat_strengths = onset_env[beat_frames]
 
             # 查找强拍（潜在下拍）
             # 假设 4/4 拍号
