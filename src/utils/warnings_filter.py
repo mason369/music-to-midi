@@ -235,11 +235,13 @@ def setup_chinese_environment():
     调用此函数来：
     1. 抑制第三方库的英文警告
     2. 修补输出以显示中文
+    3. 替换默认警告显示函数
     """
     suppress_third_party_warnings()
     patch_print_output()
     patch_logging_output()
     patch_stderr_output()
+    _patch_warning_handler()
 
 
 # 自定义警告处理器
@@ -264,5 +266,6 @@ def _custom_warning_handler(message, category, filename, lineno, file=None, line
     _original_print(f"警告: {msg_str}", file=sys.stderr)
 
 
-# 替换默认警告显示函数
-warnings.showwarning = _custom_warning_handler
+def _patch_warning_handler():
+    """替换默认警告显示函数（仅在 setup_chinese_environment 中调用）"""
+    warnings.showwarning = _custom_warning_handler
