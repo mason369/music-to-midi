@@ -30,6 +30,10 @@ def load_audio(
 
     logger.info(f"正在加载音频: {path}")
     y, loaded_sr = librosa.load(path, sr=sr, mono=mono)
+
+    if len(y) == 0:
+        raise ValueError(f"音频文件为空或无法解码: {path}")
+
     logger.info(f"已加载音频: {len(y)/loaded_sr:.2f}秒 采样率{loaded_sr}Hz")
 
     return y, loaded_sr

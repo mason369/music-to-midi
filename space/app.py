@@ -26,8 +26,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("music-to-midi-web")
 
-# 将关键模块的日志同时写入文件，供前端实时展示
-_file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+# ── 健壮的日志文件 Handler（每次写入重新打开文件，不依赖持久化 stream）──
+# 原因：标准 FileHandler 的 stream 会被 spaces/Gradio 关闭（stream=None），
+# 导致 logging 框架的写入全部丢失。此 Handler 每次 emit 都 open→write→close，
+# 虽然性能略低，但完全不受 stream 生命周期影响。
+class _RobustFileHandler(logging.Handler):
+    def __init__(self, filename, encoding="utf-8"):
+        super().__init__()
+        self.filename = filename
+        self.encoding = encoding
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            with open(self.filename, "a", encoding=self.encoding) as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+
+
+_file_handler = _RobustFileHandler(LOG_FILE)
 _file_handler.setFormatter(logging.Formatter(
     "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
 ))
@@ -37,15 +55,10 @@ for _name in ("music-to-midi-web", "src.core", "src.utils"):
 
 
 def clear_logs():
-    """清空日志文件（通过 handler 的流正确重置位置，避免 null bytes）"""
+    """清空日志文件"""
     try:
-        _file_handler.acquire()
-        try:
-            _file_handler.stream.seek(0)
-            _file_handler.stream.truncate(0)
-            _file_handler.stream.flush()
-        finally:
-            _file_handler.release()
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("")
     except Exception:
         pass
 
@@ -53,20 +66,17 @@ def clear_logs():
 def read_logs():
     """读取日志文件的最新内容（供前端轮询）"""
     try:
-        # 先刷新 handler 缓冲区，确保最新日志已写入磁盘
-        try:
-            _file_handler.flush()
-        except Exception:
-            pass
+        file_size = os.path.getsize(LOG_FILE) if os.path.exists(LOG_FILE) else 0
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-        # 移除可能残留的 null bytes
         content = content.replace("\x00", "")
         lines = content.strip().split("\n")
-        # 保留最后 50 行
-        return "\n".join(lines[-50:]) if lines and lines[0] else ""
-    except Exception:
+
+        if lines and lines[0]:
+            return "\n".join(lines[-50:])
         return ""
+    except Exception as e:
+        return f"[read_logs error] {e}"
 
 
 # ── 确保 YourMT3 源码可用 ──
@@ -186,20 +196,39 @@ def get_device_label():
 # ── 核心转换函数 ──
 def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
     """实际执行转换的内部函数"""
+    import threading
     from src.core.pipeline import MusicToMidiPipeline
     from src.utils.gpu_utils import clear_gpu_memory
 
     if audio_path is None:
         raise gr.Error("请先上传音频文件")
 
+    # 诊断：直接写入日志文件，绕过 logging 框架
+    def _write_log(msg):
+        """直接写入日志文件（不依赖 logging handler）"""
+        try:
+            import datetime
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(f"{ts} [INFO] {msg}\n")
+                f.flush()
+        except Exception:
+            pass
+
+    _write_log(f"[diag] pid={os.getpid()} thread={threading.current_thread().name}")
+    _write_log(f"[diag] LOG_FILE={LOG_FILE} exists={os.path.exists(LOG_FILE)}")
+
     # 清空旧日志，开始新的处理
     clear_logs()
-    logger.info("=" * 40)
-    logger.info("开始音频转 MIDI 处理")
-    logger.info(f"音频文件: {Path(audio_path).name}")
-    logger.info(f"处理模式: {mode}")
-    logger.info(f"转写质量: {quality}")
-    logger.info("=" * 40)
+    _write_log("=" * 40)
+    _write_log("开始音频转 MIDI 处理")
+    _write_log(f"音频文件: {Path(audio_path).name}")
+    _write_log(f"处理模式: {mode}")
+    _write_log(f"转写质量: {quality}")
+    _write_log("=" * 40)
+
+    # 同时用 logging 框架写入（对比测试）
+    logger.info("[logging framework] 开始处理")
 
     # 确保模型权重可用
     ensure_model_weights()
@@ -399,34 +428,36 @@ CUSTOM_CSS = """
 """
 
 # ── JavaScript: 独立日志轮询（通过 head 参数注入 <script> 标签）──
-# 使用 head 而非 js 参数：head 通过 document.createElement("SCRIPT") 注入，
-# 执行更可靠；js 参数被 AsyncFunction 包装，有 ASI 等边界问题。
-# 关键：必须用原生 setter + dispatchEvent('input') 触发 Svelte 的 bind:value 更新，
-# 否则直接设置 ta.value 会被 Svelte 下次重渲染覆盖。
 LOG_POLL_HEAD = """<script>
 (function() {
+    var pollCount = 0;
     var _pollTimer = setInterval(function() {
-        try {
-            var ta = document.querySelector('.log-box textarea');
-            if (!ta) return;
-            fetch('./api/read_logs', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({data: []})
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(json) {
-                var logText = (json.data && json.data[0]) ? json.data[0] : '';
-                if (!logText) return;
-                var setter = Object.getOwnPropertyDescriptor(
-                    HTMLTextAreaElement.prototype, 'value'
-                ).set;
+        pollCount++;
+        var ta = document.querySelector('.log-box textarea');
+        if (!ta) return;
+        var setter = Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype, 'value'
+        ).set;
+        fetch('./api/read_logs', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({data: []})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(json) {
+            var logText = (json.data && json.data[0]) ? json.data[0] : '';
+            if (logText) {
                 setter.call(ta, logText);
-                ta.dispatchEvent(new Event('input', {bubbles: true}));
-                ta.scrollTop = ta.scrollHeight;
-            })
-            .catch(function() {});
-        } catch(e) {}
+            } else {
+                setter.call(ta, '[poll #' + pollCount + '] waiting for logs... (' + new Date().toLocaleTimeString() + ')');
+            }
+            ta.dispatchEvent(new Event('input', {bubbles: true}));
+            ta.scrollTop = ta.scrollHeight;
+        })
+        .catch(function(err) {
+            setter.call(ta, '[poll error] ' + err.message);
+            ta.dispatchEvent(new Event('input', {bubbles: true}));
+        });
     }, 2000);
 })();
 </script>"""
@@ -554,10 +585,14 @@ with gr.Blocks(
     )
 
     # ── 日志 API 端点（供 JavaScript 轮询调用）──
-    # queue=False 允许 JS 直接 POST 调用，不受转换任务队列阻塞
-    demo.load(
+    # 用隐藏按钮注册 api_name="read_logs"，JS 通过 POST ./api/read_logs 调用
+    # queue=False 确保不被转换任务阻塞
+    _log_poll_btn = gr.Button(visible=False)
+    _log_poll_btn.click(
         fn=read_logs,
+        inputs=[],
         outputs=[log_output],
+        api_name="read_logs",
         queue=False,
     )
 

@@ -221,7 +221,7 @@ class ProgressWidget(QGroupBox):
     def update_progress(self, progress: ProcessingProgress):
         """更新进度显示"""
         # 更新进度条
-        self.progress_bar.setValue(int(progress.overall_progress * 100))
+        self.progress_bar.setValue(max(0, min(100, int(progress.overall_progress * 100))))
 
         # 更新当前标签
         self.current_label.setText(f"{t('main.progress.current')}: {progress.message}")

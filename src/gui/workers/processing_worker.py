@@ -79,6 +79,7 @@ class ProcessingWorker(QThread):
                 clear_gpu_memory()
             except Exception as e:
                 logger.warning(f"工作线程清理GPU内存失败: {e}")
+            self.pipeline = None
 
     def _on_progress(self, progress: ProcessingProgress):
         """处理来自流水线的进度更新"""

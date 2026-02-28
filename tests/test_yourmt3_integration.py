@@ -130,7 +130,7 @@ class TestYourMT3Integration:
 
         # 测试取消标志
         transcriber.cancel()
-        assert transcriber._cancelled == True
+        assert transcriber._cancelled is True
 
         # 测试检查取消
         with pytest.raises(InterruptedError):
@@ -138,7 +138,7 @@ class TestYourMT3Integration:
 
         # 重置
         transcriber.reset_cancel()
-        assert transcriber._cancelled == False
+        assert transcriber._cancelled is False
 
         # 测试回调
         callback_called = [False]

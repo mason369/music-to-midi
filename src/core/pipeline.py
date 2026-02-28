@@ -6,6 +6,7 @@
 2. VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写
 """
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional, Callable
@@ -91,7 +92,7 @@ class MusicToMidiPipeline:
         output_dir = str(output_dir)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        stem = Path(audio_path).stem
+        stem = Path(Path(audio_path).name).stem
         midi_path = str(Path(output_dir) / f"{stem}.mid")
 
         logger.info(f"开始处理 (智能模式): {audio_path}")
@@ -209,7 +210,7 @@ class MusicToMidiPipeline:
         output_dir = str(output_dir)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        stem = Path(audio_path).stem
+        stem = Path(Path(audio_path).name).stem
 
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
 
@@ -217,7 +218,7 @@ class MusicToMidiPipeline:
         logger.info("正在检查依赖: BS-RoFormer, YourMT3+...")
         if not VocalSeparator.is_available():
             raise RuntimeError(
-                "人声分离不可用。请安装: pip install audio-separator>=0.36.0"
+                "人声分离不可用。请安装: pip install audio-separator>=0.40.0"
             )
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
@@ -271,6 +272,13 @@ class MusicToMidiPipeline:
 
         vocals_path = separated["vocals"]
         accompaniment_path = separated["no_vocals"]
+
+        if not os.path.exists(vocals_path) or not os.path.exists(accompaniment_path):
+            raise RuntimeError(
+                f"分离文件不存在: vocals={os.path.exists(vocals_path)}, "
+                f"accompaniment={os.path.exists(accompaniment_path)}"
+            )
+
         logger.info(f"人声文件: {vocals_path}")
         logger.info(f"伴奏文件: {accompaniment_path}")
 
@@ -353,7 +361,17 @@ class MusicToMidiPipeline:
         if 0 in vocal_instrument_notes:
             vocal_instrument_notes = {0: vocal_instrument_notes[0]}
         else:
-            vocal_instrument_notes = {}
+            # 模型未识别出人声旋律（GM 0），尝试使用音符最多的乐器作为人声
+            if vocal_instrument_notes:
+                best_program = max(vocal_instrument_notes, key=lambda k: len(vocal_instrument_notes[k]))
+                logger.warning(
+                    f"人声转写未产生 GM 000 钢琴音符，回退使用 GM {best_program:03d} "
+                    f"({len(vocal_instrument_notes[best_program])} 个音符) 作为人声旋律"
+                )
+                vocal_instrument_notes = {0: vocal_instrument_notes[best_program]}
+            else:
+                logger.warning("人声转写未产生任何音符，人声 MIDI 将为空")
+                vocal_instrument_notes = {}
         vocal_drum_notes = {}
 
         kept = sum(len(n) for n in vocal_instrument_notes.values())

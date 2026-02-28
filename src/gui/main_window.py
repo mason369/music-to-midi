@@ -189,7 +189,7 @@ class MainWindow(QMainWindow):
 
     def _add_shadow(self, widget: QWidget):
         """为组件添加阴影效果"""
-        shadow = QGraphicsDropShadowEffect()
+        shadow = QGraphicsDropShadowEffect(widget)
         shadow.setBlurRadius(15)
         shadow.setXOffset(0)
         shadow.setYOffset(2)

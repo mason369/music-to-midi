@@ -4,6 +4,7 @@ GPU检测和管理工具 - 支持 CUDA (NVIDIA)、ROCm (AMD)、MPS (Apple)、Int
 import logging
 import os
 import platform
+import threading
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -94,12 +95,13 @@ def _fix_torch_dll_path():
                 kernel32.LoadLibraryW(dll)
             except Exception:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("torch DLL 预加载失败（非关键）: %s", e)
 
 
 _torch_module = None  # 缓存 torch 模块引用
 _torch_checked = False  # 是否已尝试加载过 torch
+_torch_lock = threading.Lock()
 
 
 def _get_torch():
@@ -107,38 +109,41 @@ def _get_torch():
     global _torch_module, _torch_checked
     if _torch_checked:
         return _torch_module
-    try:
-        _fix_torch_dll_path()
-        import torch
-        _torch_module = torch
-        _torch_checked = True
-        return torch
-    except ImportError:
-        _torch_checked = True
-        return None
-    except OSError as e:
-        _torch_checked = True
-        import re
-        # 判断是否是路径特殊字符导致的问题
-        err_str = str(e)
-        # 从错误信息中提取 DLL 路径
-        path_match = re.search(r'Error loading "([^"]+)"', err_str)
-        dll_path = path_match.group(1) if path_match else ""
-        has_special = bool(re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', dll_path))
+    with _torch_lock:
+        if _torch_checked:
+            return _torch_module
+        try:
+            _fix_torch_dll_path()
+            import torch
+            _torch_module = torch
+            _torch_checked = True
+            return torch
+        except ImportError:
+            _torch_checked = True
+            return None
+        except OSError as e:
+            _torch_checked = True
+            import re
+            # 判断是否是路径特殊字符导致的问题
+            err_str = str(e)
+            # 从错误信息中提取 DLL 路径
+            path_match = re.search(r'Error loading "([^"]+)"', err_str)
+            dll_path = path_match.group(1) if path_match else ""
+            has_special = bool(re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', dll_path))
 
-        if has_special:
-            logger.warning(f"torch 加载失败（路径含特殊字符）: {e}")
-            logger.warning("建议将项目移动到纯英文且无空格的路径，如 C:\\MusicToMidi")
-        else:
-            logger.warning(f"torch DLL 加载失败: {e}")
-            logger.warning(
-                "可能原因：\n"
-                "  1. 未安装 Visual C++ Redistributable 2022: "
-                "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
-                "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
-            )
-        return None
+            if has_special:
+                logger.warning(f"torch 加载失败（路径含特殊字符）: {e}")
+                logger.warning("建议将项目移动到纯英文且无空格的路径，如 C:\\MusicToMidi")
+            else:
+                logger.warning(f"torch DLL 加载失败: {e}")
+                logger.warning(
+                    "可能原因：\n"
+                    "  1. 未安装 Visual C++ Redistributable 2022: "
+                    "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                    "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
+                    "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
+                )
+            return None
 
 
 def get_accelerator_type() -> str:
