@@ -398,27 +398,38 @@ CUSTOM_CSS = """
 }
 """
 
-# ── JavaScript: 独立日志轮询（不依赖 Gradio 事件队列）──
-# 注意：字符串不能以换行符开头，否则 Gradio 的
-# new Function('return ' + js)() 会因 ASI 导致 return undefined
-LOG_POLL_JS = """() => {
-    setInterval(async () => {
+# ── JavaScript: 独立日志轮询（通过 head 参数注入 <script> 标签）──
+# 使用 head 而非 js 参数：head 通过 document.createElement("SCRIPT") 注入，
+# 执行更可靠；js 参数被 AsyncFunction 包装，有 ASI 等边界问题。
+# 关键：必须用原生 setter + dispatchEvent('input') 触发 Svelte 的 bind:value 更新，
+# 否则直接设置 ta.value 会被 Svelte 下次重渲染覆盖。
+LOG_POLL_HEAD = """<script>
+(function() {
+    var _pollTimer = setInterval(function() {
         try {
-            const resp = await fetch('./api/read_logs', {
+            var ta = document.querySelector('.log-box textarea');
+            if (!ta) return;
+            fetch('./api/read_logs', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({data: []})
-            });
-            const json = await resp.json();
-            const logText = (json.data && json.data[0]) ? json.data[0] : '';
-            const ta = document.querySelector('.log-box textarea');
-            if (ta && logText) {
-                ta.value = logText;
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(json) {
+                var logText = (json.data && json.data[0]) ? json.data[0] : '';
+                if (!logText) return;
+                var setter = Object.getOwnPropertyDescriptor(
+                    HTMLTextAreaElement.prototype, 'value'
+                ).set;
+                setter.call(ta, logText);
+                ta.dispatchEvent(new Event('input', {bubbles: true}));
                 ta.scrollTop = ta.scrollHeight;
-            }
+            })
+            .catch(function() {});
         } catch(e) {}
     }, 2000);
-}"""
+})();
+</script>"""
 
 
 # ── 构建 Gradio 界面 ──
@@ -427,7 +438,7 @@ DEVICE_LABEL = get_device_label()
 with gr.Blocks(
     title="Music to MIDI",
     css=CUSTOM_CSS,
-    js=LOG_POLL_JS,
+    head=LOG_POLL_HEAD,
     theme=gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
         neutral_hue=gr.themes.colors.slate,
