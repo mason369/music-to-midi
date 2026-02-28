@@ -275,6 +275,12 @@ def _convert_impl(audio_path, mode, quality, progress=gr.Progress()):
     if result.accompaniment_midi_path and Path(result.accompaniment_midi_path).exists():
         if result.accompaniment_midi_path != result.midi_path:
             output_files.append(result.accompaniment_midi_path)
+    # 分离后的音频文件（人声 + 伴奏 WAV）
+    if result.separated_audio:
+        for audio_key in ("vocals", "no_vocals"):
+            audio_file = result.separated_audio.get(audio_key)
+            if audio_file and Path(audio_file).exists():
+                output_files.append(audio_file)
 
     # 构建状态文本
     device_label = get_device_label()
