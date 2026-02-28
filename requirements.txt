@@ -1,48 +1,49 @@
 # Music to MIDI - Python 依赖
 # 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / PANNs / ByteDance 钢琴模型）
 
-# PyTorch 核心（兼容 YourMT3+ 和 pytorch-lightning）
-torch>=2.3.0,<2.10.0
-torchaudio>=2.3.0,<2.10.0
+# PyTorch 核心（三件套版本必须匹配，torch 2.4.x 仅兼容 numpy 1.x）
+torch>=2.4.0,<2.5
+torchaudio>=2.4.0,<2.5
 
-# NumPy（numba 0.64 支持 <2.5，librosa/pytorch-lightning 均兼容）
-numpy>=2.0.0
-numba>=0.60.0
+# NumPy（torch 2.4.0 用 numpy 1.x 编译，不兼容 numpy 2.x）
+numpy>=1.26.0,<2
+numba>=0.60.0,<1
 
 # YourMT3+ 依赖
-pytorch-lightning>=2.2.1
-einops>=0.7.0
+pytorch-lightning>=2.2.1,<3
+einops>=0.7.0,<1
 transformers==4.45.1
-mir-eval>=0.7
-deprecated>=1.2.0
-smart-open>=6.0.0
-nest-asyncio>=1.5.0
-wandb>=0.15.0
-scipy>=1.0.0
-scikit-learn>=1.0.0
-torchmetrics>=0.11.0
+mir-eval>=0.7,<1
+deprecated>=1.2.0,<2
+smart-open>=6.0.0,<8
+nest-asyncio>=1.5.0,<2
+wandb>=0.15.0,<1
+scipy>=1.10.0,<2
+scikit-learn>=1.3.0,<2
+torchmetrics>=0.11.0,<2
 
 # 模型下载
-huggingface_hub>=0.20.0
+huggingface_hub>=0.20.0,<2
 
 # MIDI 处理
-mido>=1.3.0
-python-rtmidi>=1.5.0
+mido>=1.3.0,<2
+python-rtmidi>=1.5.0,<2
 
 # 音频分析（节拍/BPM 检测）
-librosa>=0.10.0
-soundfile>=0.12.0
+librosa>=0.10.0,<1
+soundfile>=0.12.0,<1
 
 # GUI
-PyQt6>=6.6.0
-PyQt6-Qt6>=6.6.0
-PyQt6-sip>=13.6.0
+PyQt6>=6.6.0,<7
+PyQt6-Qt6>=6.6.0,<7
+PyQt6-sip>=13.6.0,<14
 
 # 人声分离（audio-separator + BS-RoFormer）
-audio-separator>=0.36.0
-onnxruntime>=1.16.0
+# 0.31+ 要求 numpy>=2，与 torch 2.4.x（编译于 numpy 1.x）不兼容
+audio-separator>=0.26.0,<0.31
+onnxruntime>=1.16.0,<2
 
 # 工具
-tqdm>=4.66.0
-pyyaml>=6.0.0
-psutil>=5.9.0
+tqdm>=4.66.0,<5
+pyyaml>=6.0.0,<7
+psutil>=5.9.0,<8

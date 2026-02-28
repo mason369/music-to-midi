@@ -82,7 +82,7 @@ class VocalSeparator:
         self._cancelled = False
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        stem = Path(audio_path).stem
+        stem = Path(Path(audio_path).name).stem
 
         if progress_callback:
             progress_callback(0.0, "正在加载 BS-RoFormer 模型...")
@@ -164,6 +164,7 @@ class VocalSeparator:
                     except Exception as e:
                         logger.warning(f"进度更新失败: {e}")
 
+            ticker = None
             if progress_callback:
                 ticker = threading.Thread(
                     target=_progress_ticker, daemon=True
@@ -174,6 +175,8 @@ class VocalSeparator:
                 output_files = separator.separate(audio_path)
             finally:
                 _done.set()
+                if ticker is not None:
+                    ticker.join(timeout=2)
 
             sep_elapsed = time.time() - sep_start
             speed_ratio = (
@@ -219,12 +222,12 @@ class VocalSeparator:
                 ):
                     if os.path.exists(fpath_str):
                         vocals_found = True
-                        if fpath_str != norm_vocals:
+                        if os.path.abspath(fpath_str).lower() != os.path.abspath(norm_vocals).lower():
                             os.replace(fpath_str, vocals_path)
                 elif "instrumental" in fname_lower:
                     if os.path.exists(fpath_str):
                         instrumental_found = True
-                        if fpath_str != norm_accomp:
+                        if os.path.abspath(fpath_str).lower() != os.path.abspath(norm_accomp).lower():
                             os.replace(fpath_str, accompaniment_path)
 
             if not vocals_found or not instrumental_found:
@@ -239,11 +242,10 @@ class VocalSeparator:
                     fpath_str = os.path.normpath(str(fpath))
                     if not os.path.exists(fpath_str):
                         continue
-                    norm_vocals = os.path.normpath(vocals_path)
-                    norm_accomp = os.path.normpath(
-                        accompaniment_path
-                    )
-                    if fpath_str in (norm_vocals, norm_accomp):
+                    if os.path.abspath(fpath_str).lower() in (
+                        os.path.abspath(vocals_path).lower(),
+                        os.path.abspath(accompaniment_path).lower(),
+                    ):
                         continue
                     if (
                         not instrumental_found
@@ -281,8 +283,8 @@ class VocalSeparator:
             try:
                 if separator is not None:
                     del separator
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("释放 separator 失败: %s", e)
             clear_gpu_memory()
 
         if progress_callback:

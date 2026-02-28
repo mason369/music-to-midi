@@ -380,9 +380,32 @@ $torchDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Direct
 if ($torchDistInfo -and $torchDistInfo.Name -match '^torch-([\d.]+)') {
     $torchVer = $Matches[1]
     $tvParts = $torchVer.Split('.')
-    if ([int]$tvParts[0] -ge 2 -and ([int]$tvParts[0] -gt 2 -or [int]$tvParts[1] -ge 1)) {
+    if ([int]$tvParts[0] -ge 2 -and ([int]$tvParts[0] -gt 2 -or [int]$tvParts[1] -ge 4)) {
         Write-Ok "PyTorch $torchVer 已安装（dist-info 验证，跳过重新安装）"
         $TORCH_INSTALLED = $true
+        # 检查 torchvision 是否缺失，缺失则从 PyTorch 官方源补装（版本必须匹配 torch）
+        $tvisionDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Directory `
+            -Filter "torchvision-*.dist-info" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $tvisionDistInfo) {
+            # torch 2.x.y → torchvision 0.(x+15).y（PyTorch 官方版本映射）
+            $tvMinor = [int]$tvParts[1] + 15
+            Write-Info "torchvision 未安装，正在从 PyTorch 官方源补装 (0.$tvMinor.*)..."
+            $TV_INDEX = "https://download.pytorch.org/whl/cpu"
+            try {
+                $nvOut = & nvidia-smi 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $nvS = $nvOut -join " "
+                    $cm = [regex]::Match($nvS, 'CUDA Version:\s*([\d.]+)')
+                    if ($cm.Success) {
+                        $cmaj = [int]($cm.Groups[1].Value -split '\.')[0]
+                        if ($cmaj -ge 12) { $TV_INDEX = "https://download.pytorch.org/whl/cu121" }
+                        elseif ($cmaj -ge 11) { $TV_INDEX = "https://download.pytorch.org/whl/cu118" }
+                    }
+                }
+            } catch {}
+            $tvNextMinor = $tvMinor + 1
+            & "$PIP" install "torchvision>=0.$tvMinor.0,<0.$tvNextMinor.0" --index-url "$TV_INDEX"
+        }
     }
 }
 if (-not $TORCH_INSTALLED) {
@@ -425,7 +448,7 @@ if (-not $TORCH_INSTALLED) {
     }
 
     Write-Info "正在安装 PyTorch ($TORCH_LABEL)..."
-    & "$PIP" install "torch>=2.1.0,<2.10.0" "torchaudio>=2.1.0,<2.10.0" --index-url "$TORCH_INDEX"
+    & "$PIP" install "torch==2.4.0" "torchaudio==2.4.0" "torchvision==0.19.0" --index-url "$TORCH_INDEX"
     if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 安装失败" }
     Write-Ok "PyTorch ($TORCH_LABEL) 安装成功"
 }

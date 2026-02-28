@@ -243,12 +243,12 @@ class YourMT3Transcriber:
         self._cancel_check_callback = None
 
     def _inference_with_oom_retry(self, model, bsz, audio_segments, progress_callback=None):
-        """执行推理，VRAM 不足时自动减半 batch size 重试"""
+        """执行推理，逐批处理并输出实时进度，VRAM 不足时自动减半 batch size 重试"""
         import torch
+        import time as _time
         from src.utils.gpu_utils import clear_gpu_memory
 
         use_autocast = self.device.startswith("cuda")
-        # bf16 匹配训练精度（bf16-mixed），精度更高；不支持时 fallback 到 fp16
         autocast_dtype = torch.float16
         if use_autocast:
             try:
@@ -257,26 +257,75 @@ class YourMT3Transcriber:
             except (RuntimeError, AttributeError):
                 pass
 
+        n_segments = audio_segments.shape[0]
+
         while bsz >= 1:
+            n_batches = (n_segments + bsz - 1) // bsz
+            logger.info(
+                f"YourMT3 推理: bsz={bsz}, segments={n_segments}, "
+                f"batches={n_batches}, device={self.device}, autocast={autocast_dtype}"
+            )
+
+            if progress_callback:
+                progress_callback(0.5, f"正在进行神经网络推理（共 {n_batches} 批）...")
+
+            pred_token_array_file = []
+            _infer_start = _time.time()
+
             try:
-                logger.info(f"YourMT3 推理: bsz={bsz}, segments={audio_segments.shape[0]}, device={self.device}, autocast={autocast_dtype}")
-                import time as _time
-                _infer_start = _time.time()
                 with torch.no_grad():
-                    if use_autocast:
-                        with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                            pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
-                    else:
-                        pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+                    for batch_idx, i in enumerate(range(0, n_segments, bsz)):
+                        self._check_cancelled()
+
+                        end = min(i + bsz, n_segments)
+                        x = audio_segments[i:end]
+
+                        if use_autocast:
+                            with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+                                preds = model.inference(x, None).detach().cpu().numpy()
+                        else:
+                            preds = model.inference(x, None).detach().cpu().numpy()
+
+                        pred_token_array_file.append(preds)
+
+                        # 每批完成后输出实时进度
+                        elapsed = _time.time() - _infer_start
+                        done = batch_idx + 1
+                        speed = done / elapsed  # batches/s
+                        remaining = (n_batches - done) / speed if speed > 0 else 0
+                        pct = done / n_batches * 100
+
+                        logger.info(
+                            f"[推理进度] 批次 {done}/{n_batches} | "
+                            f"{elapsed:.1f}s 已用 | 剩余 ~{remaining:.0f}s | {pct:.0f}%"
+                        )
+
+                        if progress_callback:
+                            # 推理阶段映射到 0.5~0.8
+                            cb_progress = 0.5 + (pct / 100) * 0.3
+                            progress_callback(
+                                cb_progress,
+                                f"神经网络推理 {done}/{n_batches} | "
+                                f"剩余 ~{remaining:.0f}s"
+                            )
+
                 _infer_elapsed = _time.time() - _infer_start
-                logger.info(f"YourMT3 推理完成: 耗时={_infer_elapsed:.1f}s, 输出 tokens shape={pred_token_arr.shape if hasattr(pred_token_arr, 'shape') else len(pred_token_arr)}")
-                return pred_token_arr
+                speed = n_segments / _infer_elapsed
+                logger.info(
+                    f"YourMT3 推理完成: 耗时={_infer_elapsed:.1f}s, "
+                    f"速度={speed:.1f} segments/s ({1/speed:.2f}s/segment)"
+                )
+                return pred_token_array_file
+
+            except InterruptedError:
+                raise
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and bsz > 1:
                     old_bsz = bsz
                     bsz = max(1, bsz // 2)
                     logger.warning(f"VRAM 不足 (bsz={old_bsz})，自动回退到 bsz={bsz}")
                     clear_gpu_memory()
+                    pred_token_array_file.clear()
                     if progress_callback:
                         progress_callback(0.5, f"显存不足，降低批处理到 {bsz} 重试...")
                 else:
@@ -339,7 +388,7 @@ class YourMT3Transcriber:
                         if os.path.exists(amt_src_path):
                             sys.path.insert(0, amt_src_path)
                             try:
-                                from model.ymt3 import YourMT3
+                                from model.ymt3 import YourMT3  # noqa: F811
                                 logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
                                 has_code = True
                                 break
@@ -407,278 +456,280 @@ class YourMT3Transcriber:
             model_name: 模型名称（只支持 MoE 版本）
             progress_callback: 进度回调
         """
-        # 检查是否已加载（同时验证设备，避免设备切换后使用旧缓存）
+        # 双重检查锁定：整个加载过程在锁内执行，防止并发加载
         with YourMT3Transcriber._model_lock:
+            # 检查是否已加载（同时验证设备，避免设备切换后使用旧缓存）
             if (YourMT3Transcriber._model is not None and
                     YourMT3Transcriber._model_name == model_name and
                     YourMT3Transcriber._device == self.device):
                 logger.debug("模型已加载，跳过重新加载")
                 return
 
-        # 解析友好模型名称
-        from src.utils.yourmt3_downloader import YOURMT3_MODELS
-        model_info = YOURMT3_MODELS.get(model_name, {})
-        friendly_name = model_info.get("name", model_name)
-        features = ", ".join(model_info.get("features", []))
-
-        if progress_callback:
-            progress_callback(0.1, f"正在加载 {friendly_name}...")
-
-        logger.info(f"加载模型: {friendly_name}")
-        if features:
-            logger.info(f"模型特性: {features}")
-
-        try:
-            # 1. 添加 YourMT3 路径到 sys.path
-            import sys
-            logger.info("正在查找 YourMT3 代码库路径...")
-            yourmt3_paths = [
-                "YourMT3",
-                os.path.join(os.getcwd(), "YourMT3"),
-                os.path.join(os.path.dirname(__file__), "../../YourMT3"),
-                os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
-            ]
-
-            amt_src_path = None
-            for base_path in yourmt3_paths:
-                if os.path.exists(base_path):
-                    potential_path = os.path.join(base_path, "amt/src")
-                    if os.path.exists(potential_path):
-                        amt_src_path = potential_path
-                        break
-
-            if not amt_src_path:
-                raise FileNotFoundError(
-                    "未找到 YourMT3 代码库\n"
-                    "请确保 YourMT3/ 目录存在于项目根目录"
-                )
-
-            if amt_src_path not in sys.path:
-                sys.path.insert(0, amt_src_path)
-                logger.info(f"添加路径到 sys.path: {amt_src_path}")
-
-            # 2. 导入依赖
-            logger.info("正在导入 YourMT3 依赖模块...")
-            import torch
-            from utils.task_manager import TaskManager
-            from model.ymt3 import YourMT3
-            from config.config import shared_cfg as default_shared_cfg
-            from config.config import audio_cfg as default_audio_cfg
-            from config.config import model_cfg as default_model_cfg
-            logger.info("YourMT3 依赖模块导入完成")
+            # 解析友好模型名称
+            from src.utils.yourmt3_downloader import YOURMT3_MODELS
+            model_info = YOURMT3_MODELS.get(model_name, {})
+            friendly_name = model_info.get("name", model_name)
+            features = ", ".join(model_info.get("features", []))
 
             if progress_callback:
-                progress_callback(0.2, "正在获取模型路径...")
+                progress_callback(0.1, f"正在加载 {friendly_name}...")
 
-            # 3. 获取模型 checkpoint 路径
-            from src.utils.yourmt3_downloader import get_model_path
+            logger.info(f"加载模型: {friendly_name}")
+            if features:
+                logger.info(f"模型特性: {features}")
 
-            model_path = get_model_path(model_name)
-            if not model_path or not model_path.exists():
-                raise FileNotFoundError(
-                    f"YourMT3 MoE 模型未找到: {model_name}\n"
-                    f"请先运行: python download_sota_models.py"
-                )
-
-            logger.info(f"使用 checkpoint: {model_path}")
-
-            if progress_callback:
-                progress_callback(0.3, "正在构建配置...")
-
-            # 4. 构建配置参数（参考 model_helper.py）
-            import argparse
-
-            # 从 checkpoint 路径提取 exp_id 并使用 @ 扩展指定checkpoint文件
-            # 例如: "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2@model.ckpt"
-            checkpoint_dir = model_path.parent  # checkpoints/
-            exp_dir = checkpoint_dir.parent      # mc13_256.../
-            exp_id = exp_dir.name                # mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2
-            checkpoint_file = model_path.name    # model.ckpt 或 last.ckpt
-
-            # 使用 @ 语法指定checkpoint文件
-            exp_id_with_checkpoint = f"{exp_id}@{checkpoint_file}"
-
-            # 需要创建一个符号链接或临时目录结构
-            # 因为 initialize_trainer 期望的路径是 amt/logs/ymt3/{exp_id}/checkpoints/{checkpoint}
-            # 但实际路径是 ~/.cache/music_ai_models/yourmt3_all/logs/2024/{exp_id}/checkpoints/{checkpoint}
-
-            # 方案：在 YourMT3 目录下创建符号链接
-            import tempfile
-            yourmt3_logs_dir = os.path.join(amt_src_path, "../logs/ymt3")
-            os.makedirs(yourmt3_logs_dir, exist_ok=True)
-
-            # 创建到实际checkpoint目录的符号链接
-            symlink_path = os.path.join(yourmt3_logs_dir, exp_id)
-            if os.path.islink(symlink_path):
-                os.unlink(symlink_path)
-            elif os.path.exists(symlink_path):
-                # 如果是真实目录，不要覆盖
-                pass
-            else:
-                import sys as _sys
-                if _sys.platform == "win32":
-                    # Windows 普通用户无 symlink 权限；模型通过绝对路径直接加载，无需符号链接
-                    logger.debug("Windows 环境跳过符号链接创建，使用绝对路径加载模型")
-                else:
-                    try:
-                        os.symlink(str(exp_dir), symlink_path)
-                        logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
-                    except OSError as e:
-                        logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
-
-            args = argparse.Namespace(
-                exp_id=exp_id_with_checkpoint,
-                project='ymt3',
-                audio_codec=None,
-                hop_length=None,
-                n_mels=None,
-                input_frames=None,
-                sca_use_query_residual=None,
-                encoder_type='perceiver-tf',
-                decoder_type='multi-t5',
-                pre_encoder_type='default',
-                pre_decoder_type='default',
-                conv_out_channels=None,
-                task_cond_encoder=True,
-                task_cond_decoder=True,
-                d_feat=None,
-                pretrained=False,
-                base_name="google/t5-v1_1-small",
-                encoder_position_encoding_type='rope',
-                decoder_position_encoding_type='default',
-                tie_word_embedding=None,
-                event_length=None,
-                d_latent=None,
-                num_latents=26,
-                perceiver_tf_d_model=None,
-                num_perceiver_tf_blocks=3,
-                num_perceiver_tf_local_transformers_per_block=2,
-                num_perceiver_tf_temporal_transformers_per_block=2,
-                attention_to_channel=True,
-                layer_norm_type='rms_norm',
-                ff_layer_type='moe',
-                ff_widening_factor=4,
-                moe_num_experts=8,
-                moe_topk=2,
-                hidden_act='silu',
-                rotary_type=None,
-                rope_apply_to_keys=None,
-                rope_partial_pe=True,
-                decoder_ff_layer_type=None,
-                decoder_ff_widening_factor=None,
-                task='mt3_full_plus',
-                eval_program_vocab=None,
-                eval_drum_vocab=None,
-                eval_subtask_key='default',
-                onset_tolerance=0.05,
-                test_octave_shift=False,
-                write_model_output=False,
-                precision="bf16-mixed" if self.device.startswith(("cuda", "xpu")) else "32-true",
-                strategy='auto',
-                num_nodes=1,
-                num_gpus='auto',
-                wandb_mode="disabled",
-                debug_mode=False,
-                test_pitch_shift=None,
-                epochs=None
-            )
-
-            if progress_callback:
-                progress_callback(0.5, "正在从 checkpoint 加载配置...")
-
-            # 5. 从 checkpoint 加载超参数（最可靠的方法）
-            logger.info(f"正在加载 checkpoint: {model_path} ...")
-            checkpoint = None
             try:
-                try:
-                    checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
-                except Exception as e:
-                    raise RuntimeError(f"Checkpoint 文件加载失败（可能已损坏）: {e}") from e
+                # 1. 添加 YourMT3 路径到 sys.path
+                import sys
+                logger.info("正在查找 YourMT3 代码库路径...")
+                yourmt3_paths = [
+                    "YourMT3",
+                    os.path.join(os.getcwd(), "YourMT3"),
+                    os.path.join(os.path.dirname(__file__), "../../YourMT3"),
+                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
+                ]
 
-                if 'hyper_parameters' not in checkpoint:
-                    raise RuntimeError("Checkpoint 格式无效: 缺少 'hyper_parameters' 键")
-                hparams = checkpoint['hyper_parameters']
-                logger.info("Checkpoint 加载完成，正在提取配置...")
+                amt_src_path = None
+                for base_path in yourmt3_paths:
+                    if os.path.exists(base_path):
+                        potential_path = os.path.join(base_path, "amt/src")
+                        if os.path.exists(potential_path):
+                            amt_src_path = potential_path
+                            break
 
-                # 提取配置
-                audio_cfg = hparams['audio_cfg']
-                model_cfg = hparams['model_cfg']
-                shared_cfg = hparams['shared_cfg']
+                if not amt_src_path:
+                    raise FileNotFoundError(
+                        "未找到 YourMT3 代码库\n"
+                        "请确保 YourMT3/ 目录存在于项目根目录"
+                    )
 
-                # task_manager 是一个对象，提取其 task_name
-                task_manager_obj = hparams.get('task_manager')
-                if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
-                    task_name = task_manager_obj.task_name
-                else:
-                    task_name = 'mt3_full_plus'  # 默认任务
+                if amt_src_path not in sys.path:
+                    sys.path.insert(0, amt_src_path)
+                    logger.info(f"添加路径到 sys.path: {amt_src_path}")
 
-                logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+                # 2. 导入依赖
+                logger.info("正在导入 YourMT3 依赖模块...")
+                import torch
+                from utils.task_manager import TaskManager
+                from model.ymt3 import YourMT3
+                from config.config import shared_cfg as default_shared_cfg
+                from config.config import audio_cfg as default_audio_cfg
+                from config.config import model_cfg as default_model_cfg
+                logger.info("YourMT3 依赖模块导入完成")
 
                 if progress_callback:
-                    progress_callback(0.6, "正在创建任务管理器...")
+                    progress_callback(0.2, "正在获取模型路径...")
 
-                # 6. 创建任务管理器
-                max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
-                if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
-                    max_shift_steps = 127  # 默认值
+                # 3. 获取模型 checkpoint 路径
+                from src.utils.yourmt3_downloader import get_model_path
+
+                model_path = get_model_path(model_name)
+                if not model_path or not model_path.exists():
+                    raise FileNotFoundError(
+                        f"YourMT3 MoE 模型未找到: {model_name}\n"
+                        f"请先运行: python download_sota_models.py"
+                    )
+
+                logger.info(f"使用 checkpoint: {model_path}")
+
+                if progress_callback:
+                    progress_callback(0.3, "正在构建配置...")
+
+                # 4. 构建配置参数（参考 model_helper.py）
+                import argparse
+
+                # 从 checkpoint 路径提取 exp_id 并使用 @ 扩展指定checkpoint文件
+                # 例如: "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2@model.ckpt"
+                checkpoint_dir = model_path.parent  # checkpoints/
+                exp_dir = checkpoint_dir.parent      # mc13_256.../
+                exp_id = exp_dir.name                # mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2
+                checkpoint_file = model_path.name    # model.ckpt 或 last.ckpt
+
+                # 使用 @ 语法指定checkpoint文件
+                exp_id_with_checkpoint = f"{exp_id}@{checkpoint_file}"
+
+                # 需要创建一个符号链接或临时目录结构
+                # 因为 initialize_trainer 期望的路径是 amt/logs/ymt3/{exp_id}/checkpoints/{checkpoint}
+                # 但实际路径是 ~/.cache/music_ai_models/yourmt3_all/logs/2024/{exp_id}/checkpoints/{checkpoint}
+
+                # 方案：在 YourMT3 目录下创建符号链接
+                import tempfile
+                yourmt3_logs_dir = os.path.join(amt_src_path, "../logs/ymt3")
+                os.makedirs(yourmt3_logs_dir, exist_ok=True)
+
+                # 创建到实际checkpoint目录的符号链接
+                symlink_path = os.path.join(yourmt3_logs_dir, exp_id)
+                if os.path.islink(symlink_path):
+                    os.unlink(symlink_path)
+                elif os.path.exists(symlink_path):
+                    # 如果是真实目录，不要覆盖
+                    pass
                 else:
-                    max_shift_steps = int(max_shift_steps_value)
+                    import sys as _sys
+                    if _sys.platform == "win32":
+                        # Windows 普通用户无 symlink 权限；模型通过绝对路径直接加载，无需符号链接
+                        logger.debug("Windows 环境跳过符号链接创建，使用绝对路径加载模型")
+                    else:
+                        try:
+                            os.symlink(str(exp_dir), symlink_path)
+                            logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
+                        except OSError as e:
+                            logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
 
-                tm = TaskManager(
-                    task_name=task_name,
-                    max_shift_steps=max_shift_steps,
-                    debug_mode=args.debug_mode
+                args = argparse.Namespace(
+                    exp_id=exp_id_with_checkpoint,
+                    project='ymt3',
+                    audio_codec=None,
+                    hop_length=None,
+                    n_mels=None,
+                    input_frames=None,
+                    sca_use_query_residual=None,
+                    encoder_type='perceiver-tf',
+                    decoder_type='multi-t5',
+                    pre_encoder_type='default',
+                    pre_decoder_type='default',
+                    conv_out_channels=None,
+                    task_cond_encoder=True,
+                    task_cond_decoder=True,
+                    d_feat=None,
+                    pretrained=False,
+                    base_name="google/t5-v1_1-small",
+                    encoder_position_encoding_type='rope',
+                    decoder_position_encoding_type='default',
+                    tie_word_embedding=None,
+                    event_length=None,
+                    d_latent=None,
+                    num_latents=26,
+                    perceiver_tf_d_model=None,
+                    num_perceiver_tf_blocks=3,
+                    num_perceiver_tf_local_transformers_per_block=2,
+                    num_perceiver_tf_temporal_transformers_per_block=2,
+                    attention_to_channel=True,
+                    layer_norm_type='rms_norm',
+                    ff_layer_type='moe',
+                    ff_widening_factor=4,
+                    moe_num_experts=8,
+                    moe_topk=2,
+                    hidden_act='silu',
+                    rotary_type=None,
+                    rope_apply_to_keys=None,
+                    rope_partial_pe=True,
+                    decoder_ff_layer_type=None,
+                    decoder_ff_widening_factor=None,
+                    task='mt3_full_plus',
+                    eval_program_vocab=None,
+                    eval_drum_vocab=None,
+                    eval_subtask_key='default',
+                    onset_tolerance=0.05,
+                    test_octave_shift=False,
+                    write_model_output=False,
+                    precision="bf16-mixed" if self.device.startswith(("cuda", "xpu")) else "32-true",
+                    strategy='auto',
+                    num_nodes=1,
+                    num_gpus='auto',
+                    wandb_mode="disabled",
+                    debug_mode=False,
+                    test_pitch_shift=None,
+                    epochs=None
                 )
-                logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
 
                 if progress_callback:
-                    progress_callback(0.7, "正在创建模型实例...")
+                    progress_callback(0.5, "正在从 checkpoint 加载配置...")
 
-                # 7. 创建 YourMT3 MoE 模型实例
-                logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
-                model = YourMT3(
-                    audio_cfg=audio_cfg,
-                    model_cfg=model_cfg,
-                    shared_cfg=shared_cfg,
-                    optimizer=None,
-                    task_manager=tm,
-                    eval_subtask_key=args.eval_subtask_key,
-                    write_output_dir=None
-                ).to(self.device)
-                logger.info("模型实例创建完成")
+                # 5. 从 checkpoint 加载超参数（最可靠的方法）
+                logger.info(f"正在加载 checkpoint: {model_path} ...")
+                checkpoint = None
+                try:
+                    try:
+                        checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
+                    except Exception as e:
+                        raise RuntimeError(f"Checkpoint 文件加载失败（可能已损坏）: {e}") from e
 
-                if progress_callback:
-                    progress_callback(0.8, "正在加载 checkpoint 权重...")
+                    if 'hyper_parameters' not in checkpoint:
+                        raise RuntimeError("Checkpoint 格式无效: 缺少 'hyper_parameters' 键")
+                    hparams = checkpoint['hyper_parameters']
+                    logger.info("Checkpoint 加载完成，正在提取配置...")
 
-                # 8. 加载权重（checkpoint已经在步骤5加载）
-                logger.info("正在加载 checkpoint 权重到模型...")
-                state_dict = checkpoint['state_dict']
-                # 移除 pitch shift 相关权重（不需要）
-                new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
-                model.load_state_dict(new_state_dict, strict=False)
-                model.eval()
-                logger.info(f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
-            finally:
-                del checkpoint  # 确保异常时也释放 checkpoint 内存
+                    # 提取配置
+                    audio_cfg = hparams['audio_cfg']
+                    model_cfg = hparams['model_cfg']
+                    shared_cfg = hparams['shared_cfg']
 
-            # 9. 缓存模型和配置
-            with YourMT3Transcriber._model_lock:
+                    # task_manager 是一个对象，提取其 task_name
+                    task_manager_obj = hparams.get('task_manager')
+                    if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
+                        task_name = task_manager_obj.task_name
+                    else:
+                        task_name = 'mt3_full_plus'  # 默认任务
+
+                    logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+
+                    if progress_callback:
+                        progress_callback(0.6, "正在创建任务管理器...")
+
+                    # 6. 创建任务管理器
+                    max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
+                    if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
+                        max_shift_steps = 127  # 默认值
+                    else:
+                        max_shift_steps = int(max_shift_steps_value)
+
+                    tm = TaskManager(
+                        task_name=task_name,
+                        max_shift_steps=max_shift_steps,
+                        debug_mode=args.debug_mode
+                    )
+                    logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
+
+                    if progress_callback:
+                        progress_callback(0.7, "正在创建模型实例...")
+
+                    # 7. 创建 YourMT3 MoE 模型实例
+                    logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
+                    model = YourMT3(
+                        audio_cfg=audio_cfg,
+                        model_cfg=model_cfg,
+                        shared_cfg=shared_cfg,
+                        optimizer=None,
+                        task_manager=tm,
+                        eval_subtask_key=args.eval_subtask_key,
+                        write_output_dir=None
+                    ).to(self.device)
+                    logger.info("模型实例创建完成")
+
+                    if progress_callback:
+                        progress_callback(0.8, "正在加载 checkpoint 权重...")
+
+                    # 8. 加载权重（checkpoint已经在步骤5加载）
+                    logger.info("正在加载 checkpoint 权重到模型...")
+                    state_dict = checkpoint['state_dict']
+                    # 移除 pitch shift 相关权重（不需要）
+                    new_state_dict = {k: v for k, v in state_dict.items() if 'pitchshift' not in k}
+                    model.load_state_dict(new_state_dict, strict=False)
+                    model.eval()
+                    logger.info(f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+                finally:
+                    del checkpoint  # 确保异常时也释放 checkpoint 内存
+                    import gc
+                    gc.collect()
+
+                # 9. 缓存模型和配置（已在 _model_lock 内，无需再次加锁）
                 YourMT3Transcriber._model = model
                 YourMT3Transcriber._model_name = model_name
                 YourMT3Transcriber._device = self.device
                 YourMT3Transcriber._audio_cfg = audio_cfg
                 YourMT3Transcriber._task_manager = tm
 
-            if progress_callback:
-                progress_callback(1.0, "模型加载完成")
+                if progress_callback:
+                    progress_callback(1.0, "模型加载完成")
 
-            logger.info(f"模型加载完成: {friendly_name}, 设备: {self.device}")
+                logger.info(f"模型加载完成: {friendly_name}, 设备: {self.device}")
 
-        except Exception as e:
-            logger.error(f"加载模型 {friendly_name} 失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            raise
+            except Exception as e:
+                logger.error(f"加载模型 {friendly_name} 失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                raise
 
     def transcribe_full_mix(
         self,
@@ -794,13 +845,9 @@ class YourMT3Transcriber:
 
             self._check_cancelled()
 
-            if progress_callback:
-                progress_callback(0.5, "正在进行神经网络推理...")
-
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
-            logger.info(f"预计推理时间: ~{n_segments * 0.15:.0f}秒")
 
             # 推理（使用官方的 inference_file 方法）
             pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
@@ -1216,9 +1263,6 @@ class YourMT3Transcriber:
 
             self._check_cancelled()
 
-            if progress_callback:
-                progress_callback(0.5, "正在进行神经网络推理...")
-
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
 
             pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
@@ -1370,8 +1414,8 @@ class YourMT3Transcriber:
                     import torch
                     from src.utils.gpu_utils import clear_gpu_memory
                     clear_gpu_memory()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("GPU 缓存清理失败: %s", e)
 
                 logger.info("YourMT3+ 模型已卸载")
 
@@ -1478,9 +1522,6 @@ class YourMT3Transcriber:
             logger.info(f"音频分段数: {n_segments}, 重叠率: {1 - slice_hop/input_frames:.0%}")
 
             self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.5, "正在进行神经网络推理...")
 
             bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
             logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")

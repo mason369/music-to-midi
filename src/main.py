@@ -64,8 +64,10 @@ if _plat.system() == "Windows":
                         _k32.LoadLibraryW(_dll)
                     except Exception:
                         pass
-    except Exception:
-        pass
+    except Exception as e:
+        # DLL 预加载失败不阻塞启动，但记录诊断信息
+        import logging as _log
+        _log.getLogger(__name__).debug("Windows torch DLL 预加载失败: %s", e)
 del _plat
 
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
@@ -87,8 +89,9 @@ try:
     # 强制使用 soundfile 后端（已在 requirements.txt 中包含）
     import torchaudio
     torchaudio.set_audio_backend("soundfile")
-except Exception:
-    pass
+except Exception as e:
+    import logging as _log
+    _log.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
 
 # 抑制 Python 警告
 warnings.filterwarnings('ignore', category=UserWarning)

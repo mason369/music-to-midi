@@ -177,8 +177,12 @@ def suppress_output():
         sys.stderr = io.StringIO()
         yield
     finally:
+        captured_out = sys.stdout
+        captured_err = sys.stderr
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+        captured_out.close()
+        captured_err.close()
 
 
 class FilteredStderr:
