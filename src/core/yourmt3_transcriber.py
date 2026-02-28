@@ -731,6 +731,105 @@ class YourMT3Transcriber:
                 logger.error(traceback.format_exc())
                 raise
 
+    def _prepare_and_infer(
+        self,
+        audio_path: str,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+        load_progress_weight: float = 0.3,
+    ) -> tuple:
+        """
+        公共推理流程：加载模型 → 获取快照 → 加载音频 → 重采样 → 分段 → 推理
+
+        参数:
+            audio_path: 音频文件路径
+            progress_callback: 进度回调
+            load_progress_weight: 模型加载阶段占总进度的比例
+
+        返回:
+            (pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold)
+        """
+        # 加载模型
+        self._load_model(
+            progress_callback=(
+                lambda p, m: progress_callback(p * load_progress_weight, m)
+                if progress_callback else None
+            )
+        )
+
+        self._check_cancelled()
+
+        # 获取模型快照
+        with YourMT3Transcriber._model_lock:
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+            task_manager = YourMT3Transcriber._task_manager
+
+        if model is None or audio_cfg is None or task_manager is None:
+            raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
+
+        # 加载音频
+        import torch
+        import torchaudio
+
+        waveform, sr = _load_audio(audio_path)
+        logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}")
+
+        # 转为单声道
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+            logger.info("已转为单声道")
+
+        # 重采样到模型要求的采样率
+        target_sr = audio_cfg['sample_rate']
+        if sr != target_sr:
+            logger.info(f"正在重采样: {sr} -> {target_sr}")
+            resampler = torchaudio.transforms.Resample(sr, target_sr)
+            waveform = resampler(waveform)
+            logger.info("重采样完成")
+
+        self._check_cancelled()
+
+        # 分段处理
+        from utils.audio import slice_padded_array
+
+        audio_np = waveform.numpy()
+        input_frames = audio_cfg['input_frames']
+
+        # 根据质量配置选择重叠策略
+        quality = getattr(self.config, 'transcription_quality', 'best')
+        ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
+
+        if quality == "best" or ultra_quality:
+            slice_hop = input_frames * 3 // 4  # 25% 重叠
+            onset_threshold = 0.010  # 10ms
+            logger.info("使用极致质量模式：25% 重叠 + 10ms 去重阈值")
+        elif quality == "balanced":
+            slice_hop = input_frames // 2  # 50% 重叠
+            onset_threshold = 0.025  # 25ms
+            logger.info("使用平衡模式：50% 重叠 + 25ms 去重阈值")
+        else:
+            slice_hop = input_frames  # 无重叠
+            onset_threshold = 0.050  # 50ms
+            logger.info("使用快速模式：无重叠 + 50ms 去重阈值")
+
+        audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
+        audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
+        n_segments = audio_segments.shape[0]
+        overlap_pct = 1 - slice_hop / input_frames
+        logger.info(f"音频分段数: {n_segments}, 每段帧数: {input_frames}, 重叠: {overlap_pct:.0%}")
+
+        self._check_cancelled()
+
+        # 推理
+        bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
+        logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
+
+        pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
+
+        self._check_cancelled()
+
+        return pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold
+
     def transcribe_full_mix(
         self,
         audio_path: str,
@@ -756,7 +855,6 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, "正在准备 YourMT3+ 转写...")
 
-        # 如果 YourMT3+ 不可用，直接抛出错误（无降级处理）
         if not self.is_available():
             raise RuntimeError(
                 "YourMT3+ 不可用。\n"
@@ -765,94 +863,8 @@ class YourMT3Transcriber:
             )
 
         try:
-            # 加载模型
-            self._load_model(
-                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
-            )
-
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.3, "正在转写音频...")
-
-            # 执行转写（参考 model_helper.py）
-            # 在锁内读取类变量快照，避免与其他线程的 _load_model 竞争
-            with YourMT3Transcriber._model_lock:
-                model = YourMT3Transcriber._model
-                audio_cfg = YourMT3Transcriber._audio_cfg
-                task_manager = YourMT3Transcriber._task_manager
-
-            if model is None or audio_cfg is None or task_manager is None:
-                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
-
-            # 加载音频
-            import torch
-            import torchaudio
-
-            waveform, sr = _load_audio(audio_path)
-            logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}")
-
-            # 转为单声道
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-                logger.info("已转为单声道")
-
-            # 重采样到模型要求的采样率
-            target_sr = audio_cfg['sample_rate']
-            if sr != target_sr:
-                logger.info(f"正在重采样: {sr} -> {target_sr}")
-                resampler = torchaudio.transforms.Resample(sr, target_sr)
-                waveform = resampler(waveform)
-                logger.info("重采样完成")
-
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.4, "正在分段处理音频...")
-
-            # 分段处理（使用官方的 slice_padded_array）
-            from utils.audio import slice_padded_array
-
-            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
-            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
-            input_frames = audio_cfg['input_frames']
-
-            # 极致质量模式：使用 25% 重叠以减少重复，同时保持边界精度
-            # 50% 重叠会产生 2x 重复，25% 重叠更易处理
-            quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
-
-            if quality == "best" or ultra_quality:
-                slice_hop = input_frames * 3 // 4  # 25% 重叠
-                onset_threshold = 0.010  # 10ms 极致精度去重
-                logger.info("使用极致质量模式：25% 重叠 + 10ms 去重阈值")
-            elif quality == "balanced":
-                slice_hop = input_frames // 2  # 50% 重叠
-                onset_threshold = 0.025  # 25ms 去重
-                logger.info("使用平衡模式：50% 重叠 + 25ms 去重阈值")
-            else:
-                slice_hop = input_frames  # 无重叠
-                onset_threshold = 0.050  # 50ms 去重
-                logger.info("使用快速模式：无重叠 + 50ms 去重阈值")
-
-            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
-
-            # 转为 tensor
-            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
-            n_segments = audio_segments.shape[0]
-            overlap_pct = 1 - slice_hop / input_frames
-            logger.info(f"音频分段数: {n_segments}, 每段帧数: {input_frames}, 重叠: {overlap_pct:.0%}")
-
-            self._check_cancelled()
-
-            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
-
-            logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
-
-            # 推理（使用官方的 inference_file 方法）
-            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
-
-            self._check_cancelled()
+            pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
+                self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
                 progress_callback(0.8, "正在处理转写结果...")
@@ -860,11 +872,11 @@ class YourMT3Transcriber:
             # 解析输出并按乐器类型分类
             result = self._parse_yourmt3_output_from_tokens(
                 pred_token_arr,
-                audio_segments.shape[0],
+                n_segments,
                 audio_cfg,
                 task_manager,
                 slice_hop=slice_hop,
-                onset_threshold=onset_threshold  # 传入去重阈值
+                onset_threshold=onset_threshold
             )
 
             if progress_callback:
@@ -904,68 +916,8 @@ class YourMT3Transcriber:
             raise RuntimeError("YourMT3+ 不可用，无法转写")
 
         try:
-            # 加载模型
-            self._load_model(
-                progress_callback=lambda p, m: progress_callback(p * 0.2, m) if progress_callback else None
-            )
-
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.2, "正在转写...")
-
-            # 使用与 transcribe_full_mix 相同的推理流程
-            import torch
-            import torchaudio
-            from utils.audio import slice_padded_array
-
-            with YourMT3Transcriber._model_lock:
-                model = YourMT3Transcriber._model
-                audio_cfg = YourMT3Transcriber._audio_cfg
-                task_manager = YourMT3Transcriber._task_manager
-
-            if model is None or audio_cfg is None or task_manager is None:
-                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
-
-            waveform, sr = _load_audio(audio_path)
-
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-
-            target_sr = audio_cfg['sample_rate']
-            if sr != target_sr:
-                resampler = torchaudio.transforms.Resample(sr, target_sr)
-                waveform = resampler(waveform)
-
-            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
-            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
-            input_frames = audio_cfg['input_frames']
-
-            # 根据质量配置选择重叠策略
-            quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
-
-            if quality == "best" or ultra_quality:
-                slice_hop = input_frames * 3 // 4  # 25% 重叠
-                onset_threshold = 0.010  # 10ms
-            else:
-                slice_hop = input_frames // 2  # 50% 重叠
-                onset_threshold = 0.025  # 25ms
-
-            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
-            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
-            n_segments = audio_segments.shape[0]
-
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.5, "正在推理...")
-
-            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
-
-            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
-
-            self._check_cancelled()
+            pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
+                self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.2)
 
             if progress_callback:
                 progress_callback(0.8, "正在处理结果...")
@@ -973,7 +925,7 @@ class YourMT3Transcriber:
             # 解析输出
             all_notes = self._parse_yourmt3_output_from_tokens(
                 pred_token_arr,
-                audio_segments.shape[0],
+                n_segments,
                 audio_cfg,
                 task_manager,
                 slice_hop=slice_hop,
@@ -1178,6 +1130,169 @@ class YourMT3Transcriber:
 
         return result
 
+    def _decode_channels_to_notes(
+        self,
+        pred_token_arr: list,
+        n_segments: int,
+        audio_cfg: dict,
+        task_manager,
+        slice_hop: int,
+        onset_threshold: float,
+    ) -> list:
+        """
+        公共通道解码流程：多通道 token → 合并音符 → 智能去重
+
+        参数:
+            pred_token_arr: 推理输出的 token 数组
+            n_segments: 音频分段数
+            audio_cfg: 音频配置
+            task_manager: YourMT3 任务管理器
+            slice_hop: 分段步长
+            onset_threshold: 去重阈值
+
+        返回:
+            去重后的 mixed_notes 列表（YourMT3 Note 对象）
+        """
+        from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+        from utils.note2event import mix_notes
+
+        start_secs_file = [
+            slice_hop * i / audio_cfg['sample_rate']
+            for i in range(n_segments)
+        ]
+
+        num_channels = task_manager.num_decoding_channels
+        pred_notes_in_file = []
+
+        # 检查实际通道数
+        if pred_token_arr and len(pred_token_arr) > 0:
+            first_arr = pred_token_arr[0]
+            actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
+            if actual_channels != num_channels:
+                logger.warning(
+                    f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值"
+                )
+                num_channels = actual_channels
+
+        for ch in range(num_channels):
+            logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
+            pred_token_arr_ch = []
+            for arr in pred_token_arr:
+                if arr.ndim == 3:
+                    pred_token_arr_ch.append(arr[:, ch, :])
+                elif arr.ndim == 2:
+                    if ch == 0:
+                        pred_token_arr_ch.append(arr)
+                    else:
+                        continue
+                else:
+                    continue
+
+            if not pred_token_arr_ch:
+                continue
+
+            zipped_note_events_and_tie, _, _ = task_manager.detokenize_list_batches(
+                pred_token_arr_ch, start_secs_file, return_events=True
+            )
+            pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
+            pred_notes_in_file.append(pred_notes_ch)
+
+        mixed_notes = mix_notes(pred_notes_in_file)
+        logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
+
+        # 智能去重
+        logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
+        mixed_notes = self._deduplicate_overlapping_notes_smart(
+            mixed_notes,
+            onset_threshold=onset_threshold,
+            preserve_longer=True
+        )
+
+        return mixed_notes
+
+    def _notes_to_gm_groups(
+        self,
+        mixed_notes: list,
+        separate_drums: bool = False,
+    ) -> Union[Dict[int, List[NoteEvent]], Tuple[Dict[int, List[NoteEvent]], Dict[int, List[NoteEvent]]]]:
+        """
+        将 YourMT3 Note 对象按 GM 程序号分组为 NoteEvent
+
+        参数:
+            mixed_notes: YourMT3 Note 对象列表
+            separate_drums: 是否将鼓单独分组
+
+        返回:
+            separate_drums=False: Dict[program, List[NoteEvent]]
+            separate_drums=True: (instrument_notes, drum_notes)
+        """
+        instrument_notes: Dict[int, List[NoteEvent]] = {}
+        drum_notes: Dict[int, List[NoteEvent]] = {}
+
+        for note in mixed_notes:
+            try:
+                if hasattr(note, 'pitch'):
+                    is_drum = note.is_drum
+                    program = note.program
+                    onset = note.onset
+                    offset = note.offset
+                    pitch = note.pitch
+                    velocity = note.velocity
+                elif hasattr(note, '__len__') and len(note) >= 6:
+                    is_drum, program, onset, offset, pitch, velocity = note[:6]
+                else:
+                    continue
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+            pitch = int(pitch)
+            program = int(program)
+            if pitch < 0 or pitch > 127:
+                continue
+            if program < 0 or program > 127:
+                program = 0
+
+            # 跳过无效音符（零时长或负时长）
+            if float(onset) >= float(offset):
+                continue
+
+            # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
+            if program in (100, 101):
+                program = 0
+
+            # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
+            if velocity <= 1:
+                velocity = self.config.default_velocity
+            else:
+                velocity = int(np.clip(velocity, 1, 127))
+
+            note_event = NoteEvent(
+                pitch=pitch,
+                start_time=float(onset),
+                end_time=float(offset),
+                velocity=velocity,
+                program=program
+            )
+
+            if separate_drums and is_drum:
+                if pitch not in drum_notes:
+                    drum_notes[pitch] = []
+                drum_notes[pitch].append(note_event)
+            else:
+                if program not in instrument_notes:
+                    instrument_notes[program] = []
+                instrument_notes[program].append(note_event)
+
+        # 排序
+        for notes in instrument_notes.values():
+            notes.sort(key=lambda n: n.start_time)
+        if separate_drums:
+            for notes in drum_notes.values():
+                notes.sort(key=lambda n: n.start_time)
+            return instrument_notes, drum_notes
+
+        return instrument_notes
+
     def transcribe_full_mix_precise(
         self,
         audio_path: str,
@@ -1203,184 +1318,24 @@ class YourMT3Transcriber:
             progress_callback(0.0, "正在准备精确转写...")
 
         if not self.is_available():
-            logger.warning("YourMT3+ 不可用，无法进行精确转写")
-            return {}
-
-        try:
-            self._load_model(
-                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
+            raise RuntimeError(
+                "YourMT3+ 不可用。\n"
+                "请先安装代码库：bash install.sh\n"
+                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
             )
 
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.3, "正在转写音频...")
-
-            import torch
-            import torchaudio
-            from utils.audio import slice_padded_array
-            from utils.event2note import merge_zipped_note_events_and_ties_to_notes
-            from utils.note2event import mix_notes
-            from collections import Counter
-
-            with YourMT3Transcriber._model_lock:
-                model = YourMT3Transcriber._model
-                audio_cfg = YourMT3Transcriber._audio_cfg
-                task_manager = YourMT3Transcriber._task_manager
-
-            if model is None or audio_cfg is None or task_manager is None:
-                raise RuntimeError("YourMT3+ 模型未正确加载，请重试")
-
-            waveform, sr = _load_audio(audio_path)
-
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-
-            target_sr = audio_cfg['sample_rate']
-            if sr != target_sr:
-                resampler = torchaudio.transforms.Resample(sr, target_sr)
-                waveform = resampler(waveform)
-
-            # 注意: slice_padded_array 期望 2D 输入 (channels, samples)
-            audio_np = waveform.numpy()  # 保持 (1, samples) 形状
-            input_frames = audio_cfg['input_frames']
-
-            # 极致质量模式配置
-            quality = getattr(self.config, 'transcription_quality', 'best')
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
-
-            if quality == "best" or ultra_quality:
-                slice_hop = input_frames * 3 // 4  # 25% 重叠
-                onset_threshold = 0.010  # 10ms
-                logger.info("精确转写使用极致质量模式")
-            else:
-                slice_hop = input_frames // 2  # 50% 重叠
-                onset_threshold = 0.025  # 25ms
-
-            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
-            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
-            n_segments = audio_segments.shape[0]
-
-            self._check_cancelled()
-
-            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
-
-            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
-
-            self._check_cancelled()
+        try:
+            pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
+                self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
                 progress_callback(0.8, "正在解析精确乐器...")
 
-            # 按 GM 程序号分组
-            result: Dict[int, List[NoteEvent]] = {}
-
-            n_items = audio_segments.shape[0]
-            # 使用重叠步长计算起始时间
-            start_secs_file = [
-                slice_hop * i / audio_cfg['sample_rate']
-                for i in range(n_items)
-            ]
-
-            num_channels = task_manager.num_decoding_channels
-            pred_notes_in_file = []
-
-            # 检查实际通道数
-            if pred_token_arr and len(pred_token_arr) > 0:
-                first_arr = pred_token_arr[0]
-                actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
-                if actual_channels != num_channels:
-                    logger.warning(f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值")
-                    num_channels = actual_channels
-
-            for ch in range(num_channels):
-                logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
-                # 提取该通道的 token，处理不同维度
-                pred_token_arr_ch = []
-                for arr in pred_token_arr:
-                    if arr.ndim == 3:
-                        pred_token_arr_ch.append(arr[:, ch, :])
-                    elif arr.ndim == 2:
-                        if ch == 0:
-                            pred_token_arr_ch.append(arr)
-                        else:
-                            continue
-                    else:
-                        continue
-
-                if not pred_token_arr_ch:
-                    continue
-
-                zipped_note_events_and_tie, _, _ = task_manager.detokenize_list_batches(
-                    pred_token_arr_ch, start_secs_file, return_events=True
-                )
-                pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
-                pred_notes_in_file.append(pred_notes_ch)
-
-            mixed_notes = mix_notes(pred_notes_in_file)
-
-            # 使用智能去重
-            mixed_notes = self._deduplicate_overlapping_notes_smart(
-                mixed_notes,
-                onset_threshold=onset_threshold,
-                preserve_longer=True
+            mixed_notes = self._decode_channels_to_notes(
+                pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold
             )
 
-            for note in mixed_notes:
-                # Note 是 dataclass: is_drum, program, onset, offset, pitch, velocity
-                try:
-                    if hasattr(note, 'pitch'):
-                        is_drum = note.is_drum
-                        program = note.program
-                        onset = note.onset
-                        offset = note.offset
-                        pitch = note.pitch
-                        velocity = note.velocity
-                    elif hasattr(note, '__len__') and len(note) >= 6:
-                        is_drum, program, onset, offset, pitch, velocity = note[:6]
-                    else:
-                        continue
-                except (AttributeError, TypeError, ValueError):
-                    continue
-
-                pitch = int(pitch)
-                program = int(program)
-                if pitch < 0 or pitch > 127:
-                    continue
-                if program < 0 or program > 127:
-                    program = 0
-
-                # 跳过无效音符（零时长或负时长）
-                if float(onset) >= float(offset):
-                    continue
-
-                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
-                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
-                if program in (100, 101):
-                    program = 0
-
-                # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
-                # 需要将其设置为合理的默认力度值
-                if velocity <= 1:
-                    velocity = self.config.default_velocity
-                else:
-                    velocity = int(np.clip(velocity, 1, 127))
-
-                note_event = NoteEvent(
-                    pitch=pitch,
-                    start_time=float(onset),
-                    end_time=float(offset),
-                    velocity=velocity,
-                    program=program
-                )
-
-                if program not in result:
-                    result[program] = []
-                result[program].append(note_event)
-
-            # 排序
-            for notes in result.values():
-                notes.sort(key=lambda n: n.start_time)
+            result = self._notes_to_gm_groups(mixed_notes, separate_drums=False)
 
             if progress_callback:
                 total_notes = sum(len(notes) for notes in result.values())
@@ -1394,8 +1349,8 @@ class YourMT3Transcriber:
             return result
 
         except Exception as e:
-            logger.error(f"精确转写失败: {e}")
-            return {}
+            logger.error(f"精确转写失败: {e}", exc_info=True)
+            raise RuntimeError(f"精确转写失败: {e}") from e
 
     def unload_model(self) -> None:
         """卸载模型以释放 GPU 内存"""
@@ -1451,211 +1406,28 @@ class YourMT3Transcriber:
             progress_callback(0.0, "正在准备极致精度转写...")
 
         if not self.is_available():
-            logger.warning("YourMT3+ 不可用，无法进行精确转写")
-            return {}, {}
-
-        try:
-            self._load_model(
-                progress_callback=lambda p, m: progress_callback(p * 0.3, m) if progress_callback else None
+            raise RuntimeError(
+                "YourMT3+ 不可用。\n"
+                "请先安装代码库：bash install.sh\n"
+                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
             )
 
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.3, "正在转写音频...")
-
-            import torch
-            import torchaudio
-            from utils.audio import slice_padded_array
-            from utils.event2note import merge_zipped_note_events_and_ties_to_notes
-            from utils.note2event import mix_notes
-            from collections import Counter
-
-            with YourMT3Transcriber._model_lock:
-                model = YourMT3Transcriber._model
-                audio_cfg = YourMT3Transcriber._audio_cfg
-                task_manager = YourMT3Transcriber._task_manager
-
-            waveform, sr = _load_audio(audio_path)
-            logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}, 时长={waveform.shape[-1]/sr:.1f}秒")
-
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-                logger.info("已转为单声道")
-
-            target_sr = audio_cfg['sample_rate']
-            if sr != target_sr:
-                logger.info(f"正在重采样: {sr} -> {target_sr}")
-                resampler = torchaudio.transforms.Resample(sr, target_sr)
-                waveform = resampler(waveform)
-                logger.info("重采样完成")
-
-            audio_np = waveform.numpy()
-            input_frames = audio_cfg['input_frames']
-
-            # 检查是否启用极致质量模式（覆盖 quality 参数）
-            ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
-            if ultra_quality:
-                quality = "best"  # 强制使用最佳质量
-
-            # 根据质量模式选择分段策略
-            if quality == "fast":
-                # 无重叠，最快速度
-                slice_hop = input_frames
-                onset_threshold = 0.050  # 50ms 去重阈值
-                logger.info("使用快速模式：无重叠分段")
-            elif quality == "balanced":
-                # 50% 重叠
-                slice_hop = input_frames // 2
-                onset_threshold = 0.025  # 25ms 去重阈值
-                logger.info("使用平衡模式：50% 重叠分段")
-            else:  # best
-                # 25% 重叠 + 极致精细去重
-                slice_hop = input_frames * 3 // 4  # 25% 重叠（减少重复）
-                onset_threshold = 0.010  # 10ms 去重阈值（极致精细）
-                logger.info("使用极致质量模式：25% 重叠 + 10ms 精细去重")
-
-            audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
-            audio_segments = torch.from_numpy(audio_segments.astype('float32')).to(self.device).unsqueeze(1)
-            n_segments = audio_segments.shape[0]
-
-            logger.info(f"音频分段数: {n_segments}, 重叠率: {1 - slice_hop/input_frames:.0%}")
-
-            self._check_cancelled()
-
-            bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
-            logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
-
-            pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)
-
-            self._check_cancelled()
+        try:
+            pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
+                self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
                 progress_callback(0.8, "正在解析精确乐器...")
 
-            # 解析结果
             logger.info("正在解析 token 输出为音符事件...")
-            instrument_notes: Dict[int, List[NoteEvent]] = {}
-            drum_notes: Dict[int, List[NoteEvent]] = {}
 
-            n_items = audio_segments.shape[0]
-            start_secs_file = [
-                slice_hop * i / audio_cfg['sample_rate']
-                for i in range(n_items)
-            ]
-
-            num_channels = task_manager.num_decoding_channels
-            pred_notes_in_file = []
-
-            # 检查实际通道数
-            if pred_token_arr and len(pred_token_arr) > 0:
-                first_arr = pred_token_arr[0]
-                actual_channels = first_arr.shape[1] if first_arr.ndim >= 2 else 1
-                if actual_channels != num_channels:
-                    logger.warning(f"实际通道数 ({actual_channels}) 与期望通道数 ({num_channels}) 不匹配，使用实际值")
-                    num_channels = actual_channels
-
-            for ch in range(num_channels):
-                logger.info(f"正在解码通道 {ch+1}/{num_channels}...")
-                pred_token_arr_ch = []
-                for arr in pred_token_arr:
-                    if arr.ndim == 3:
-                        pred_token_arr_ch.append(arr[:, ch, :])
-                    elif arr.ndim == 2:
-                        if ch == 0:
-                            pred_token_arr_ch.append(arr)
-                        else:
-                            continue
-                    else:
-                        continue
-
-                if not pred_token_arr_ch:
-                    continue
-
-                zipped_note_events_and_tie, _, _ = task_manager.detokenize_list_batches(
-                    pred_token_arr_ch, start_secs_file, return_events=True
-                )
-                pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(zipped_note_events_and_tie)
-                pred_notes_in_file.append(pred_notes_ch)
-
-            mixed_notes = mix_notes(pred_notes_in_file)
-            logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
-
-            # 使用智能去重（根据质量模式）
-            logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
-            mixed_notes = self._deduplicate_overlapping_notes_smart(
-                mixed_notes,
-                onset_threshold=onset_threshold,
-                preserve_longer=True  # 保留更长的音符
+            mixed_notes = self._decode_channels_to_notes(
+                pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold
             )
 
-            # 统计原始音符数
             total_raw_notes = len(mixed_notes)
 
-            # 按精确 GM 程序号分组
-            for note in mixed_notes:
-                try:
-                    if hasattr(note, 'pitch'):
-                        is_drum = note.is_drum
-                        program = note.program
-                        onset = note.onset
-                        offset = note.offset
-                        pitch = note.pitch
-                        velocity = note.velocity
-                    elif hasattr(note, '__len__') and len(note) >= 6:
-                        is_drum, program, onset, offset, pitch, velocity = note[:6]
-                    else:
-                        continue
-                except (AttributeError, TypeError, ValueError):
-                    continue
-
-                pitch = int(pitch)
-                program = int(program)
-                if pitch < 0 or pitch > 127:
-                    continue
-                if program < 0 or program > 127:
-                    program = 0
-
-                # 跳过无效音符（零时长或负时长）
-                if float(onset) >= float(offset):
-                    continue
-
-                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
-                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
-                if program in (100, 101):
-                    program = 0
-
-                # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
-                # 需要将其设置为合理的默认力度值
-                if velocity <= 1:
-                    velocity = self.config.default_velocity
-                else:
-                    velocity = int(np.clip(velocity, 1, 127))
-
-                note_event = NoteEvent(
-                    pitch=pitch,
-                    start_time=float(onset),
-                    end_time=float(offset),
-                    velocity=velocity,
-                    program=program
-                )
-
-                if is_drum:
-                    # 鼓按音高分组
-                    if pitch not in drum_notes:
-                        drum_notes[pitch] = []
-                    drum_notes[pitch].append(note_event)
-                else:
-                    # 乐器按程序号分组
-                    if program not in instrument_notes:
-                        instrument_notes[program] = []
-                    instrument_notes[program].append(note_event)
-
-            # 排序
-            for notes in instrument_notes.values():
-                notes.sort(key=lambda n: n.start_time)
-            for notes in drum_notes.values():
-                notes.sort(key=lambda n: n.start_time)
+            instrument_notes, drum_notes = self._notes_to_gm_groups(mixed_notes, separate_drums=True)
 
             # 过滤误识别乐器：音符数过少的乐器轨道很可能是模型幻觉
             total_instrument_notes = sum(len(notes) for notes in instrument_notes.values())

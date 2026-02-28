@@ -213,6 +213,9 @@ class VocalSeparator:
 
             for fpath in output_files:
                 fpath_str = os.path.normpath(str(fpath))
+                # audio-separator 可能返回纯文件名，需拼接 output_dir
+                if not os.path.isabs(fpath_str):
+                    fpath_str = os.path.join(output_dir, fpath_str)
                 fname_lower = os.path.basename(fpath_str).lower()
                 norm_vocals = os.path.normpath(vocals_path)
                 norm_accomp = os.path.normpath(accompaniment_path)
@@ -240,6 +243,8 @@ class VocalSeparator:
                 # 回退：尝试按顺序分配未匹配的文件
                 for fpath in output_files:
                     fpath_str = os.path.normpath(str(fpath))
+                    if not os.path.isabs(fpath_str):
+                        fpath_str = os.path.join(output_dir, fpath_str)
                     if not os.path.exists(fpath_str):
                         continue
                     if os.path.abspath(fpath_str).lower() in (
