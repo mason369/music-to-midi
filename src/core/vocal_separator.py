@@ -10,7 +10,7 @@ from typing import Optional, Callable, Dict
 
 logger = logging.getLogger(__name__)
 
-# BS-RoFormer 模型文件名（SDR 12.9755）
+# 默认 BS-RoFormer 模型文件名（检查点名含训练分数标签）
 _ROFORMER_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 
 
@@ -208,43 +208,67 @@ class VocalSeparator:
                 output_dir, f"{stem}_accompaniment.wav"
             )
 
+            # 解析 output_files 返回值为完整路径
+            resolved_files = []
+            for fpath in output_files:
+                fpath_str = os.path.normpath(str(fpath))
+                if not os.path.isabs(fpath_str):
+                    fpath_str = os.path.join(output_dir, fpath_str)
+                resolved_files.append(fpath_str)
+
+            # 如果 output_files 中的路径不存在，回退扫描 output_dir
+            # （应对 Windows 路径编码/特殊字符导致的不一致）
+            any_exists = any(os.path.exists(f) for f in resolved_files)
+            if not any_exists:
+                logger.warning(
+                    "output_files 中的路径均不存在，回退扫描 output_dir"
+                )
+                resolved_files = []
+                try:
+                    for fname in os.listdir(output_dir):
+                        if fname.lower().endswith(".wav"):
+                            resolved_files.append(
+                                os.path.join(output_dir, fname)
+                            )
+                except OSError as e:
+                    logger.error(f"扫描 output_dir 失败: {e}")
+                logger.info(
+                    f"output_dir 中发现的 WAV 文件: {resolved_files}"
+                )
+
             vocals_found = False
             instrumental_found = False
 
-            for fpath in output_files:
-                fpath_str = os.path.normpath(str(fpath))
-                # audio-separator 可能返回纯文件名，需拼接 output_dir
-                if not os.path.isabs(fpath_str):
-                    fpath_str = os.path.join(output_dir, fpath_str)
+            for fpath_str in resolved_files:
+                if not os.path.exists(fpath_str):
+                    logger.debug(f"文件不存在，跳过: {fpath_str}")
+                    continue
                 fname_lower = os.path.basename(fpath_str).lower()
-                norm_vocals = os.path.normpath(vocals_path)
-                norm_accomp = os.path.normpath(accompaniment_path)
                 if (
                     "vocal" in fname_lower
                     and "instrumental" not in fname_lower
+                    and not vocals_found
                 ):
-                    if os.path.exists(fpath_str):
-                        vocals_found = True
-                        if os.path.abspath(fpath_str).lower() != os.path.abspath(norm_vocals).lower():
-                            os.replace(fpath_str, vocals_path)
-                elif "instrumental" in fname_lower:
-                    if os.path.exists(fpath_str):
-                        instrumental_found = True
-                        if os.path.abspath(fpath_str).lower() != os.path.abspath(norm_accomp).lower():
-                            os.replace(fpath_str, accompaniment_path)
+                    vocals_found = True
+                    if os.path.abspath(fpath_str).lower() != os.path.abspath(vocals_path).lower():
+                        os.replace(fpath_str, vocals_path)
+                elif (
+                    "instrumental" in fname_lower
+                    and not instrumental_found
+                ):
+                    instrumental_found = True
+                    if os.path.abspath(fpath_str).lower() != os.path.abspath(accompaniment_path).lower():
+                        os.replace(fpath_str, accompaniment_path)
 
             if not vocals_found or not instrumental_found:
                 logger.warning(
                     f"audio-separator 输出文件匹配异常: "
-                    f"{output_files}, "
+                    f"resolved={resolved_files}, "
                     f"vocals_found={vocals_found}, "
                     f"instrumental_found={instrumental_found}"
                 )
-                # 回退：尝试按顺序分配未匹配的文件
-                for fpath in output_files:
-                    fpath_str = os.path.normpath(str(fpath))
-                    if not os.path.isabs(fpath_str):
-                        fpath_str = os.path.join(output_dir, fpath_str)
+                # 回退：将未匹配的文件按顺序分配
+                for fpath_str in resolved_files:
                     if not os.path.exists(fpath_str):
                         continue
                     if os.path.abspath(fpath_str).lower() in (
