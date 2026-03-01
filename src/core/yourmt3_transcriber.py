@@ -248,14 +248,7 @@ class YourMT3Transcriber:
         import time as _time
         from src.utils.gpu_utils import clear_gpu_memory
 
-        use_autocast = self.device.startswith("cuda")
-        autocast_dtype = torch.float16
-        if use_autocast:
-            try:
-                if torch.cuda.is_bf16_supported():
-                    autocast_dtype = torch.bfloat16
-            except (RuntimeError, AttributeError):
-                pass
+        # Keep official full precision during inference.
 
         n_segments = audio_segments.shape[0]
 
@@ -263,7 +256,7 @@ class YourMT3Transcriber:
             n_batches = (n_segments + bsz - 1) // bsz
             logger.info(
                 f"YourMT3 推理: bsz={bsz}, segments={n_segments}, "
-                f"batches={n_batches}, device={self.device}, autocast={autocast_dtype}"
+                f"batches={n_batches}, device={self.device}, precision=float32"
             )
 
             if progress_callback:
@@ -280,11 +273,7 @@ class YourMT3Transcriber:
                         end = min(i + bsz, n_segments)
                         x = audio_segments[i:end]
 
-                        if use_autocast:
-                            with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                                preds = model.inference(x, None).detach().cpu().numpy()
-                        else:
-                            preds = model.inference(x, None).detach().cpu().numpy()
+                        preds = model.inference(x, None).detach().cpu().numpy()
 
                         pred_token_array_file.append(preds)
 
@@ -623,7 +612,7 @@ class YourMT3Transcriber:
                     onset_tolerance=0.05,
                     test_octave_shift=False,
                     write_model_output=False,
-                    precision="bf16-mixed" if self.device.startswith(("cuda", "xpu")) else "32-true",
+                    precision="32-true",
                     strategy='auto',
                     num_nodes=1,
                     num_gpus='auto',
