@@ -16,7 +16,8 @@ Convert audio files to multi-track MIDI with automatic 128 GM instrument recogni
 
 ## Features
 
-- **Multi-Instrument Transcription**: Uses YourMT3+ MoE (2025 AMT Challenge SOTA) for direct multi-instrument recognition from mixed audio
+- **Multi-Instrument Transcription**: Uses a high-performance YourMT3+ MoE model for direct multi-instrument recognition from mixed audio
+- **Vocal Separation Mode**: BS-RoFormer separates vocals/accompaniment and transcribes each to an independent MIDI file (default checkpoint: `model_bs_roformer_ep_317_sdr_12.9755.ckpt`)
 - **128 GM Instruments**: Outputs standard General MIDI multi-track MIDI, accurately distinguishing drums, bass, guitar, piano, etc.
 - **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
 - **GPU Acceleration**: Auto-detects and uses CUDA (NVIDIA) / ROCm (AMD) / CPU
@@ -376,26 +377,113 @@ Design highlights:
 
 ---
 
-### Vocal Separation: VocalSeparator
+### Vocal Separation Model: BS-RoFormer
 
-`src/core/vocal_separator.py` (~200 lines) wraps the BS-RoFormer model via audio-separator library.
+This project uses **BS-RoFormer** (Band-Split Rotary Transformer) for vocal/accompaniment separation, wrapped via the [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) library.
+
+| Item | Details |
+|------|---------|
+| Full Name | Band-Split RoFormer |
+| Paper | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
+| Checkpoint | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (epoch 317) |
+| Trainer | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
+| License | MIT |
+| Metric note | Checkpoint filename includes `sdr_12.9755` (training-time score tag, not a universal benchmark score) |
+| Public comparison (vocal SDR) | Multisong: BS-RoFormer 10.87 / MelBand-RoFormer(Kim) 10.98 / HTDemucs_ft 8.38 |
+| Model Size | ~500 MB |
+| First Use | Auto-downloaded from HuggingFace to `~/.music-to-midi/models/audio-separator/` |
+
+#### Architecture Overview
+
+BS-RoFormer's core idea is to split the spectrogram into frequency bands for independent modeling, enhanced with Rotary Position Embedding (RoPE) for temporal modeling:
+
+```
+Audio waveform (44.1kHz stereo)
+    ↓
+STFT → Complex spectrogram (F × T)
+    ↓
+Band-Split Module
+    Split frequency axis into K sub-bands by predefined boundaries
+    Each band independently mapped to D-dim embedding via MLP
+    → (K, T, D)
+    ↓
+N × Band-Split RoFormer Blocks
+    ├── Band-level Self-Attention (inter-band interaction)
+    │   K bands as tokens, captures cross-band harmonic relationships
+    │   RoPE encodes temporal position
+    ├── Temporal Self-Attention (temporal modeling)
+    │   T time frames as tokens, captures temporal dependencies
+    │   RoPE encodes temporal position
+    └── Feed-Forward Network
+    ↓
+Band-Merge Module
+    Map K band embeddings back to frequency dimension
+    → Complex mask (F × T)
+    ↓
+Mask × Original spectrogram → iSTFT
+    ↓
+Separated waveform (vocals / instrumental)
+```
+
+#### Why BS-RoFormer (Replacing Demucs)
+
+The project originally used Meta's Demucs (htdemucs) for vocal separation, replaced entirely with BS-RoFormer in commit `d6309de`:
+
+| Dimension | Demucs (htdemucs) | BS-RoFormer |
+|-----------|-------------------|-------------|
+| Public comparison (Multisong vocal SDR) | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317) |
+| Architecture | Hybrid U-Net + Transformer | Pure Transformer (band-split) |
+| Integration | Manual model management | audio-separator 3-step API |
+| Dependencies | Heavy (demucs' own deps) | Lightweight (audio-separator + onnxruntime) |
+| Packaging | Poor PyInstaller compat | Good |
+
+Separation quality directly affects downstream YourMT3+ transcription quality. This document now annotates source + dataset + metric together to avoid cross-benchmark misinterpretation.
+
+#### Processing Flow
+
+`src/core/vocal_separator.py` (~200 lines):
 
 ```
 Audio file
     ↓
-BS-RoFormer model (SDR 12.97)
+Separator(output_dir, model_file_dir, output_format="WAV")
+    ↓
+separator.load_model("model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+    ↓
+separator.separate(audio_path)
     ↓
 2 stems:
-    ├── vocals.wav
-    └── instrumental.wav (→ renamed to accompaniment.wav)
+    ├── {stem}_(Vocals).wav   → renamed to {stem}_vocals.wav
+    └── {stem}_(Instrumental).wav → renamed to {stem}_accompaniment.wav
     ↓
-Output: {"vocals": path, "no_vocals": path}
+Output: {"vocals": vocals_path, "no_vocals": accompaniment_path}
 ```
 
-Key parameters:
-- Model: `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (auto-downloaded on first use)
-- Model cache: `~/.music-to-midi/models/audio-separator/`
-- Background progress thread: updates every 3 seconds (audio-separator doesn't provide fine-grained callbacks)
+Key design decisions:
+- **Auto GPU detection**: audio-separator's Separator class detects GPU devices internally, does not accept external device parameter
+- **Blocking call**: `separator.separate()` is a blocking call; cancellation can only be checked before/after the call, not during
+- **Background progress thread**: estimates progress every 3 seconds based on elapsed time (audio-separator provides no fine-grained callbacks)
+- **Speed estimation**: GPU ~3x real-time, CPU ~0.15x real-time
+
+#### Frontier Vocal Separation Models (Verified on 2026-03-01)
+
+| Model/Direction | Source | Type | Status | Notes |
+|-----------------|--------|------|--------|-------|
+| BS-RoFormer ep317 (current) | Current project default checkpoint | Local drop-in (audio-separator) | ✅ In use | Multisong vocal SDR 10.87 (`model_bs_roformer_ep_317_sdr_12.9755.ckpt`) |
+| SCNet XL IHF | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 11.11 (`model_scnet_xl_2ep_..._musdb18hq.ckpt`), stronger practical local replacement |
+| MelBand-RoFormer (Kim) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 10.98 (`Kim_Vocal_2.onnx`) |
+| Ensemble (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | Frontier leaderboard (service/ensemble) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.93 (ver 2025.06), among the highest public entries |
+| BS Roformer (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | Frontier leaderboard (service/single model) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.89 (ver 2025.07) |
+| BS Roformer SW (vocals,instrum, 6 stem) | [MVSEP Quality Checker](https://mvsep.ru/quality_checker/synth_mutlitrack/create_table) | Frontier leaderboard (service/multi-stem) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.30; multi-stem oriented, not equal to this project's 2-stem local replacement path |
+| Mel-RoFormer (ISMIR 2024) | [arXiv:2409.04702](https://arxiv.org/abs/2409.04702) / [ar5iv Table 2](https://ar5iv.org/html/2409.04702v1) | Paper-stage (research model) | 📄 Published paper | MUSDB18-HQ (Table 2, Scenario ⓑ, with extra data): Vocals SDR 13.29; same table reports BS-RoFormer 12.82 |
+| Mamba2 Meets Silence (v2, 2025) | [arXiv:2508.14556](https://arxiv.org/abs/2508.14556) | Paper-stage (research model) | 📄 Paper | Abstract reports cSDR 11.03 dB (claimed as best reported), focused on sparse-vocal robustness |
+| Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | Paper-stage (efficiency direction) | 📄 Paper + open code | Under fine-tuning, recovers ~92% of original model SDR with ~44.5x FLOPs reduction (primarily efficiency gain) |
+
+> **Conclusion (by protocol):**  
+> - For **practical local open replacement**, SCNet XL IHF is currently the stronger option than the default ep317 in documented Multisong SDR.  
+> - For **MVSEP leaderboard**, Ensemble (11.93) and BS Roformer (11.89) are higher.  
+> - For **paper-specific MUSDB18-HQ setting (Table 2, Scenario ⓑ)**, Mel-RoFormer reports 13.29.  
+> **Protocol note:** Do not directly compare numbers across different datasets/protocols (Multisong, MUSDB, MVSEP, cSDR/uSDR).
 
 ---
 
@@ -964,7 +1052,7 @@ LM Head → Token predictions
 
 | Blocker | Status | Details |
 |---------|--------|---------|
-| Model weights | ❌ Missing | Repository checkpoint directory is empty, LFS files not uploaded, no external download links |
+| Model weights | ⚠️ Needs verification | Repository includes a `checkpoints/` path; completeness, usability, and reproducibility still require manual validation |
 | License | ❌ None | No LICENSE file, legally all rights reserved by default |
 | Documentation | ❌ None | No README, no usage instructions |
 | Performance comparison | ❓ Unknown | Competition baseline was MT3, not YourMT3+; no direct comparison data |
@@ -979,10 +1067,11 @@ The MusicFM encoder itself is available (MIT license), but an encoder alone cann
 
 | Model / Direction | Source | Type | Status | Notes |
 |-------------------|--------|------|--------|-------|
-| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | Open Source | Whisper-based piano transcription, new piano SOTA in 2025 |
-| Streaming AMT | arXiv 2025 | Multi-instrument | Paper | Conv encoder + AR decoder, real-time streaming, near offline SOTA |
-| 2025 AMT Challenge | NeurIPS 2025 | Multi-instrument | Paper | 8 teams, 2 beat MT3 baseline, synthesized classical music |
-| CVC Framework | ISMIR 2025 | Evaluation | Paper | Cross-Version Consistency, annotation-free evaluation for orchestral scenarios |
+| YPTF.MoE+Multi (PS) (current) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Multi-instrument | ✅ In use | Slakh2100: Multi F1 0.7484 (same-protocol baseline used in this README) |
+| AI4Musician 2025 winner (ai4m-miros) | [AI4Musicians 2025](https://ai4musicians.org/transcription/2025transcription.html) / [amt-os/ai4m-miros](https://github.com/amt-os/ai4m-miros) | Multi-instrument | 🔬 Paper/repo stage | Winning approach published with code; publicly reproducible, same-protocol comparison vs YourMT3+ remains limited |
+| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open source | Seq-to-seq piano AMT implementation with released checkpoints |
+| MusicFM encoder + AMT decoder | [MusicFM paper](https://arxiv.org/abs/2311.03318) / [MusicFM HF](https://huggingface.co/minzwon/MusicFM) | Multi-instrument (research direction) | 📄 Paper/components available | Strong pretrained encoder; full AMT still needs Adapter + Decoder + fine-tuning |
+| CountEM (weakly-supervised AMT) | [arXiv:2511.14250](https://arxiv.org/abs/2511.14250) | AMT training method | 📄 Paper | Uses note histogram supervision to reduce aligned-label requirements |
 
 | Model | Source | Type | Notes |
 |-------|--------|------|-------|
@@ -990,7 +1079,7 @@ The MusicFM encoder itself is available (MIT license), but an encoder alone cann
 | [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | Multi-task | Piano/drums/vocal/chord transcription |
 | [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | General | Lightweight mono/polyphonic, fast inference, lower accuracy than MT3 family |
 
-> **Trend Summary**: As of 2025, multi-instrument AMT is still dominated by MT3/YourMT3+ Transformer architectures. Pretrained music foundation models (MusicFM) represent the most promising encoder upgrade path, but a fully open-source fine-tuned AMT checkpoint has not yet appeared. Piano transcription is the most mature area (Aria-AMT5). Multi-instrument and guitar tablature transcription remain active research frontiers.
+> **Trend Summary**: As of early 2026, multi-instrument AMT continues along two paths: MT3/YourMT3+ style task-specialized models and pretrained-encoder-enhanced systems. Piano AMT has stronger open-source maturity than full multi-instrument SOTA pipelines.
 
 ## Development
 
@@ -1097,7 +1186,10 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 
 ## Acknowledgments
 
-- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 2025 AMT Challenge SOTA multi-instrument transcription
+- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - Core multi-instrument transcription model
+- [BS-RoFormer](https://arxiv.org/abs/2309.02612) - Vocal separation architecture paper
+- [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) - Source separation inference framework
+- [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) - BS-RoFormer pretrained weights
 - [mido](https://github.com/mido/mido) - MIDI file handling
 - [librosa](https://librosa.org/) - Audio analysis
 

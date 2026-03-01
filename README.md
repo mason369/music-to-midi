@@ -16,7 +16,8 @@
 
 ## 功能特点
 
-- **多乐器转写**：使用 YourMT3+ MoE（2025 AMT Challenge 顶级模型）直接识别混音中的多种乐器
+- **多乐器转写**：使用 YourMT3+ MoE 高性能模型直接识别混音中的多种乐器
+- **人声分离模式**：BS-RoFormer 分离人声与伴奏，分别转写为独立 MIDI 文件（默认 checkpoint：`model_bs_roformer_ep_317_sdr_12.9755.ckpt`）
 - **128 种 GM 乐器**：输出标准 General MIDI 多轨道 MIDI，精确区分鼓、贝斯、吉他、钢琴等
 - **MIDI 后处理**：音符量化、力度平滑、去重、复音限制等优化
 - **GPU 加速**：自动检测并使用 CUDA（NVIDIA）/ ROCm（AMD）/ CPU
@@ -168,8 +169,15 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 ```
 音频输入 → MusicToMidiPipeline
               ↓
-          YourMT3+ MoE（YPTF.MoE+Multi PS）
-          直接对完整混音进行多乐器转写
+          ┌─ SMART 模式（默认）──────────────────────────┐
+          │  YourMT3+ MoE 直接对完整混音进行多乐器转写    │
+          └──────────────────────────────────────────────┘
+              ↓
+          ┌─ VOCAL_SPLIT 模式 ──────────────────────────┐
+          │  BS-RoFormer 分离人声与伴奏                   │
+          │      ↓                                      │
+          │  YourMT3+ 分别转写 → 两个独立 MIDI 文件       │
+          └──────────────────────────────────────────────┘
               ↓
           MIDI 后处理（量化 / 去重 / 复音限制）
               ↓
@@ -215,16 +223,65 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 | YPTF+Multi (noPS) | ❌ | ❌ | 2.0 GB | 标准 Perceiver，无增强 |
 | YourMT3+ 传统版 | ❌ | ❌ | 2.0 GB | 旧版兼容 |
 
+### 人声分离模型：BS-RoFormer
+
+VOCAL_SPLIT 模式使用 **BS-RoFormer**（Band-Split Rotary Transformer）进行人声/伴奏分离。
+
+| 项目 | 详情 |
+|------|------|
+| 模型全称 | Band-Split RoFormer |
+| 论文 | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
+| 检查点 | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (epoch 317) |
+| 训练者 | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
+| 许可证 | MIT |
+| 指标说明 | checkpoint 文件名包含 `sdr_12.9755`（训练过程分数标签，不是统一评测口径） |
+| 公开对比（人声 SDR） | Multisong: BS-RoFormer 10.87 / MelBand-RoFormer(Kim) 10.98 / HTDemucs_ft 8.38 |
+| 模型大小 | ~500 MB |
+| 调用方式 | 通过 [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 库封装 |
+| 首次使用 | 自动从 HuggingFace 下载到 `~/.music-to-midi/models/audio-separator/` |
+
+核心思想：将频谱按频段（band）拆分后独立建模，用 RoPE 增强时序建模，通过 Band-level 和 Temporal Self-Attention 交替捕获跨频段谐波关系和时序依赖。
+
+#### 为什么选择 BS-RoFormer（替代 Demucs）
+
+| 维度 | Demucs (htdemucs) | BS-RoFormer |
+|------|-------------------|-------------|
+| 公开对比（Multisong 人声 SDR） | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317) |
+| 架构 | 混合 U-Net + Transformer | 纯 Transformer (频段拆分) |
+| 集成方式 | 需手动管理模型加载 | audio-separator 三步调用 |
+| 依赖链 | 较重 | 轻量（audio-separator + onnxruntime） |
+
+#### 前沿人声分离模型（2026-03-01 核实）
+
+| 模型/方向 | 来源 | 类型 | 状态 | 说明 |
+|-----------|------|------|------|------|
+| BS-RoFormer ep317（当前） | 当前项目默认 checkpoint | 本地直替（audio-separator） | ✅ 使用中 | Multisong 人声 SDR 10.87（`model_bs_roformer_ep_317_sdr_12.9755.ckpt`） |
+| SCNet XL IHF | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | ✅ 可替换 | Multisong 人声 SDR 11.11（`model_scnet_xl_2ep_..._musdb18hq.ckpt`），本地开源可落地中更强候选 |
+| MelBand-RoFormer (Kim) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | ✅ 可替换 | Multisong 人声 SDR 10.98（`Kim_Vocal_2.onnx`），可用但非同口径最强 |
+| Ensemble (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | 榜单前沿（服务/集成） | 🌐 可用（非本地直替） | MVSEP vocals SDR 11.93（ver 2025.06），当前公开榜单最高之一 |
+| BS Roformer (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | 榜单前沿（服务/单模型） | 🌐 可用（非本地直替） | MVSEP vocals SDR 11.89（ver 2025.07） |
+| BS Roformer SW (vocals,instrum,6 stem) | [MVSEP Quality Checker](https://mvsep.ru/quality_checker/synth_mutlitrack/create_table) | 榜单前沿（服务/多stem） | 🌐 可用（非本地直替） | MVSEP vocals SDR 11.30；偏多 stem 场景，不等同本项目 2-stem 本地替换 |
+| Mel-RoFormer (ISMIR 2024) | [arXiv:2409.04702](https://arxiv.org/abs/2409.04702) / [ar5iv 表2](https://ar5iv.org/html/2409.04702v1) | 论文阶段（研究模型） | 📄 论文已发表 | MUSDB18-HQ（表2, 场景ⓑ, 含额外数据）Vocals SDR 13.29；同文中 BS-RoFormer 为 12.82 |
+| Mamba2 Meets Silence (v2, 2025) | [arXiv:2508.14556](https://arxiv.org/abs/2508.14556) | 论文阶段（研究模型） | 📄 论文 | 摘要报告 cSDR 11.03 dB（作者称 best reported），强调稀疏人声段鲁棒性 |
+| Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | 论文阶段（效率优化方向） | 📄 论文 + 开源代码 | 在微调设定下恢复原模型约 92% SDR，同时 FLOPs 降低约 44.5x（偏效率收益） |
+
+> **结论（按口径）**：  
+> - 若只看 **本地开源可直接替换**：SCNet XL IHF（11.11）当前更稳妥。  
+> - 若看 **MVSEP 榜单**：Ensemble（11.93）和 BS Roformer（11.89）更高。  
+> - 若看 **论文特定协议（MUSDB18-HQ 表2 场景ⓑ）**：Mel-RoFormer 报告 13.29。  
+> **口径提醒**：不同榜单/数据集/评测协议（Multisong、MUSDB、MVSEP、cSDR/uSDR）不可直接横比。
+
 #### 未来可关注的转写模型
 
 以下为 2025 年后出现的新兴模型和研究方向：
 
 | 模型/方向 | 来源 | 类型 | 状态 | 说明 |
 |-----------|------|------|------|------|
-| [Aria-AMT5](https://github.com/EleutherAI/aria-amt) | EleutherAI | 钢琴 | ✅ 已开源 | 基于 Whisper 架构的钢琴转写，2025 年用于生成 100 万+ MIDI 数据集，钢琴领域新 SOTA |
-| Streaming AMT | arXiv 2025 | 多乐器 | 📄 论文阶段 | 卷积编码器 + 自回归 Transformer 解码器，支持实时流式转写，性能接近离线 SOTA |
-| 2025 AMT Challenge 冠军方案 | ISMIR 2025 | 多乐器 | 📄 论文阶段 | 8 支队伍参赛，2 支超越 MT3 基线，聚焦合成古典音乐转写 |
-| CVC 评估框架 | ISMIR 2025 | 评估方法 | 📄 论文阶段 | 跨版本一致性（Cross-Version Consistency），无需标注的评估方法，适用于管弦乐场景 |
+| YPTF.MoE+Multi (PS)（当前） | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | 多乐器 | ✅ 使用中 | Slakh2100: Multi F1 0.7484（文档同口径基准） |
+| 2025 AMT Challenge 冠军方案（ai4m-miros） | [AI4Musicians 2025](https://ai4musicians.org/transcription/2025transcription.html) / [amt-os/ai4m-miros](https://github.com/amt-os/ai4m-miros) | 多乐器 | 🔬 论文/仓库阶段 | 冠军方案公开仓库，基于预训练编码器；与 YourMT3+ 的公开同口径对比数据仍有限 |
+| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | EleutherAI | 钢琴 | ✅ 开源可用 | seq-to-seq 钢琴转写实现，提供可下载权重 |
+| MusicFM 编码器 + 转写解码器 | [MusicFM 论文](https://arxiv.org/abs/2311.03318) / [MusicFM HF](https://huggingface.co/minzwon/MusicFM) | 多乐器（研究方向） | 📄 论文/组件可用 | 编码器可用，但完整多乐器 AMT 仍需 Adapter+Decoder+再训练 |
+| CountEM（弱监督 AMT） | [arXiv:2511.14250](https://arxiv.org/abs/2511.14250) | AMT 训练方法 | 📄 论文阶段 | 以音符直方图监督替代对齐监督，降低标注依赖 |
 
 #### 同领域已有模型对比
 
@@ -234,7 +291,7 @@ echo $WAYLAND_DISPLAY  # 应显示 wayland-0（WSLg 环境）
 | [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | 多任务 | 支持钢琴/鼓/人声/和弦转写，2025 年无重大更新 |
 | [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | 通用 | 轻量级单音/复音转写，适合快速推理，精度低于 MT3 系列 |
 
-> **趋势总结**：2025 年多乐器 AMT 仍以 MT3/YourMT3+ 系 Transformer 架构为主导。钢琴转写最为成熟（Aria-AMT5），多乐器和吉他指法转写仍是活跃研究方向。实时流式转写和大规模无标注评估是新兴热点。
+> **趋势总结**：截至 2026 年初，多乐器 AMT 仍以 MT3/YourMT3+ 系架构和预训练编码器增强路线并行发展；钢琴场景开源成熟度更高，多乐器冠军方案的可复现交付仍在完善中。
 
 ## 开发
 
@@ -319,6 +376,9 @@ MIT License - 详见 [LICENSE](./LICENSE) 文件。
 
 ## 致谢
 
-- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - SOTA 多乐器转写
+- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - 多乐器转写核心模型
+- [BS-RoFormer](https://arxiv.org/abs/2309.02612) - 人声分离模型架构论文
+- [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) - 音源分离推理框架
+- [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) - BS-RoFormer 预训练权重
 - [mido](https://github.com/mido/mido) - MIDI 文件处理
 - [librosa](https://librosa.org/) - 音频分析
