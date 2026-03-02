@@ -34,7 +34,7 @@ short_description: 将音乐智能转换为多轨道 MIDI 文件
 ## 技术栈
 
 - **转写引擎**: [YourMT3+](https://github.com/mimbres/YourMT3) MoE (Mixture of Experts)
-- **人声分离**: [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) BS-RoFormer（默认 checkpoint: `model_bs_roformer_ep_317_sdr_12.9755.ckpt`）
+- **人声分离**: [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) BS-RoFormer（默认 checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`）
 - **节拍检测**: librosa
 - **Web 框架**: Gradio
 
