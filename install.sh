@@ -340,11 +340,14 @@ declare -A DEP_CHECKS=(
 
 for name in "${!DEP_CHECKS[@]}"; do
     mod="${DEP_CHECKS[$name]}"
-    info "  正在验证 $name..."
-    if "$PYTHON" -c "import $mod" 2>/dev/null; then
-        success "  $name OK"
+    info "  validating $name..."
+    dep_output=$("$PYTHON" -c "import importlib; m=importlib.import_module('$mod'); print(getattr(m, '__version__', 'unknown'))" 2>&1)
+    dep_code=$?
+    if [ $dep_code -eq 0 ]; then
+        success "  $name OK (version: $dep_output)"
     else
-        warn "  $name 导入失败（可选依赖，基础功能不受影响）"
+        echo "$dep_output"
+        warn "  $name import failed (full error shown above)"
     fi
 done
 
@@ -363,6 +366,13 @@ info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_m
 "$PYTHON" "${REPO_DIR}/download_sota_models.py" && \
     success "SOTA 模型权重下载完成" || \
     warn "模型下载失败，可稍后手动运行: venv/bin/python download_sota_models.py"
+
+info "Downloading BS-RoFormer ep368 vocal model (~600MB)..."
+info "Press Ctrl+C to skip, run later: venv/bin/python download_vocal_model.py"
+
+"$PYTHON" "${REPO_DIR}/download_vocal_model.py" && \
+    success "BS-RoFormer model download completed" || \
+    warn "BS-RoFormer download failed, run later: venv/bin/python download_vocal_model.py"
 
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
@@ -399,8 +409,11 @@ if [ ! -f "$VENV_PYTHON" ]; then
     warn "虚拟环境不存在"; NEED_INSTALL=true
 fi
 
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido" 2>/dev/null; then
-    warn "核心 Python 包缺失"; NEED_INSTALL=true
+if ! $NEED_INSTALL; then
+    info "Checking core Python packages..."
+    if ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido; print('core imports OK')"; then
+        warn "core Python packages missing (full error shown above)"; NEED_INSTALL=true
+    fi
 fi
 
 if ! $NEED_INSTALL && [ ! -d "${REPO_DIR}/YourMT3/amt/src" ]; then
@@ -409,10 +422,22 @@ fi
 
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
-from src.utils.yourmt3_downloader import is_model_available
-exit(0 if is_model_available() else 1)
-" 2>/dev/null; then
-    warn "YourMT3+ 模型权重不存在"; NEED_INSTALL=true
+from src.utils.yourmt3_downloader import get_model_path
+model_path = get_model_path()
+print('YourMT3+ model:', model_path if model_path else 'missing')
+exit(0 if model_path else 1)
+"; then
+    warn "YourMT3+ model weights missing"; NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
+target = resolve_vocal_model_path()
+print('BS-RoFormer model:', target)
+exit(0 if is_vocal_model_available() else 1)
+"; then
+    warn "BS-RoFormer model weights missing"; NEED_INSTALL=true
 fi
 
 # ───────────────────────── 按需安装 ─────────────────────────
@@ -456,9 +481,11 @@ echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YPTF.MoE+Multi (PS) 模型权重"
+echo -e "  ${GREEN}✔${NC} BS-RoFormer ep368 人声模型"
 echo ""
 echo -e "  ${BOLD}若模型下载失败，可手动补下：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
 echo ""
 if $IS_WSL; then
     echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"

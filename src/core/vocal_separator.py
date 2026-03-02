@@ -11,7 +11,7 @@ from typing import Optional, Callable, Dict
 logger = logging.getLogger(__name__)
 
 # 默认 BS-RoFormer 模型文件名（检查点名含训练分数标签）
-_ROFORMER_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+_ROFORMER_MODEL = "model_bs_roformer_ep_368_sdr_12.9628.ckpt"
 
 
 class VocalSeparator:
