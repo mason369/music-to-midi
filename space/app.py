@@ -8,6 +8,9 @@ import tempfile
 import logging
 from pathlib import Path
 
+# ── 增加递归限制（Python 3.12 循环导入问题）──
+sys.setrecursionlimit(3000)
+
 # ── 环境变量（必须在 import torch 前设置）──
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["ABSL_MIN_LOG_LEVEL"] = "3"
@@ -19,22 +22,29 @@ sys.path.insert(0, APP_DIR)
 
 # ── 修复 torchvision 循环导入问题（必须在任何其他导入前）──
 # Python 3.12 + torch 2.10 环境下，torchvision._meta_registrations 会在初始化时
-# 访问 torchvision.extension，导致 AttributeError。由于项目不直接使用 torchvision，
-# 我们通过 monkey-patch 禁用 torchvision 的元注册功能来避免循环导入
+# 访问 torchvision.extension，导致 AttributeError。解决方案：
+# 1. 增加递归限制到 3000（默认 1000）
+# 2. 预先注入假的 torchvision 模块，完全阻止真实 torchvision 加载
+# 3. 项目不依赖 torchvision，此方案不影响核心功能
 import warnings
+import types
+
 warnings.filterwarnings("ignore", message=".*partially initialized module.*torchvision.*")
+warnings.filterwarnings("ignore", message=".*torchvision.*")
 
 try:
+    # 预先创建完整的假 torchvision 模块树，阻止真实模块加载
+    fake_torchvision = types.ModuleType("torchvision")
+    fake_torchvision.extension = types.ModuleType("extension")
+    fake_torchvision.extension._has_ops = lambda: False
+    fake_torchvision._meta_registrations = types.ModuleType("_meta_registrations")
+    fake_torchvision._meta_registrations.register_meta = lambda *a, **k: lambda fn: fn
+    sys.modules["torchvision"] = fake_torchvision
+    sys.modules["torchvision.extension"] = fake_torchvision.extension
+    sys.modules["torchvision._meta_registrations"] = fake_torchvision._meta_registrations
+
+    # 现在可以安全导入 torch
     import torch  # noqa: F401
-
-    # Monkey-patch: 禁用 torchvision 的元注册（项目不需要此功能）
-    import sys
-    import types
-
-    # 创建一个假的 torchvision._meta_registrations 模块，阻止其加载
-    fake_meta = types.ModuleType("torchvision._meta_registrations")
-    fake_meta.register_meta = lambda *args, **kwargs: lambda fn: fn
-    sys.modules["torchvision._meta_registrations"] = fake_meta
 
 except Exception as e:
     # 导入失败不影响后续流程，但记录日志
