@@ -24,53 +24,72 @@ sys.path.insert(0, APP_DIR)
 # Python 3.12 + torch 2.10 环境下，torchvision._meta_registrations 会在初始化时
 # 访问 torchvision.extension，导致 AttributeError。解决方案：
 # 1. 增加递归限制到 3000（默认 1000）
-# 2. 使用 import hook 拦截所有 torchvision 导入，返回假模块
-# 3. 项目不依赖 torchvision，此方案不影响核心功能
+# 2. 预先构建 torchvision.extension 模块，避免循环导入
+# 3. 然后允许真实 torchvision 正常加载
 import warnings
-import types
-import importlib.abc
-import importlib.machinery
+import sys
 
+sys.setrecursionlimit(3000)
 warnings.filterwarnings("ignore", message=".*partially initialized module.*torchvision.*")
 warnings.filterwarnings("ignore", message=".*torchvision.*")
 
-# 创建假的 torchvision 模块
-_fake_torchvision = types.ModuleType("torchvision")
-_fake_torchvision.extension = types.ModuleType("extension")
-_fake_torchvision.extension._has_ops = lambda: False
-_fake_torchvision._meta_registrations = types.ModuleType("_meta_registrations")
-_fake_torchvision._meta_registrations.register_meta = lambda *a, **k: lambda fn: fn
-
-# 自定义 import hook，拦截所有 torchvision 导入
-class TorchvisionBlocker(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    def find_spec(self, fullname, path, target=None):
-        if fullname.startswith("torchvision"):
-            return importlib.machinery.ModuleSpec(fullname, self)
-        return None
-
-    def create_module(self, spec):
-        if spec.name == "torchvision":
-            return _fake_torchvision
-        elif spec.name == "torchvision.extension":
-            return _fake_torchvision.extension
-        elif spec.name == "torchvision._meta_registrations":
-            return _fake_torchvision._meta_registrations
-        # 其他 torchvision 子模块返回空模块
-        return types.ModuleType(spec.name)
-
-    def exec_module(self, module):
-        pass  # 不执行任何初始化代码
-
-# 注册 import hook（必须在导入任何其他库之前）
-sys.meta_path.insert(0, TorchvisionBlocker())
-
 try:
-    # 现在可以安全导入 torch
+    # 策略：预先构建 torchvision.extension 占位符，然后导入真实 torchvision
+    import types
+
+    # 创建 torchvision.extension 占位符
+    fake_extension = types.ModuleType("torchvision.extension")
+    fake_extension._has_ops = lambda: False
+    sys.modules["torchvision.extension"] = fake_extension
+
+    # 现在可以安全导入 torch（torchvision 依赖 torch）
     import torch  # noqa: F401
 
+    # 尝试导入真实 torchvision
+    import torchvision  # noqa: F401
+
+    logging.getLogger(__name__).info(f"torchvision {torchvision.__version__} loaded successfully")
+
 except Exception as e:
-    # 导入失败不影响后续流程，但记录日志
-    logging.getLogger(__name__).warning(f"torch/torchvision setup warning (non-critical): {e}")
+    # 如果还是失败，完全禁用 torchvision
+    logging.getLogger(__name__).warning(f"torchvision load failed ({e}), using fallback blocker")
+
+    import importlib.abc
+    import importlib.machinery
+
+    # 创建完整的假 torchvision 模块（包含常用 API）
+    _fake_tv = types.ModuleType("torchvision")
+    _fake_tv.__version__ = "0.0.0+fake"
+    _fake_tv.extension = types.ModuleType("extension")
+    _fake_tv.extension._has_ops = lambda: False
+    _fake_tv._meta_registrations = types.ModuleType("_meta_registrations")
+    _fake_tv._meta_registrations.register_meta = lambda *a, **k: lambda fn: fn
+
+    # 添加 transforms 占位符（YourMT3 可能需要）
+    _fake_tv.transforms = types.ModuleType("transforms")
+
+    class TorchvisionBlocker(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, fullname, path, target=None):
+            if fullname.startswith("torchvision"):
+                return importlib.machinery.ModuleSpec(fullname, self)
+            return None
+
+        def create_module(self, spec):
+            if spec.name == "torchvision":
+                return _fake_tv
+            elif spec.name == "torchvision.extension":
+                return _fake_tv.extension
+            elif spec.name == "torchvision.transforms":
+                return _fake_tv.transforms
+            elif spec.name == "torchvision._meta_registrations":
+                return _fake_tv._meta_registrations
+            return types.ModuleType(spec.name)
+
+        def exec_module(self, module):
+            pass
+
+    sys.meta_path.insert(0, TorchvisionBlocker())
+    logging.getLogger(__name__).info("torchvision blocker installed")
 
 # ── 实时日志文件（供前端轮询读取）──
 LOG_FILE = "/tmp/midi_process.log"
