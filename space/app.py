@@ -17,6 +17,29 @@ os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, APP_DIR)
 
+# ── 修复 torchvision 循环导入问题（必须在任何其他导入前）──
+# Python 3.12 + torch 2.10 环境下，torchvision._meta_registrations 会在初始化时
+# 访问 torchvision.extension，导致 AttributeError。由于项目不直接使用 torchvision，
+# 我们通过 monkey-patch 禁用 torchvision 的元注册功能来避免循环导入
+import warnings
+warnings.filterwarnings("ignore", message=".*partially initialized module.*torchvision.*")
+
+try:
+    import torch  # noqa: F401
+
+    # Monkey-patch: 禁用 torchvision 的元注册（项目不需要此功能）
+    import sys
+    import types
+
+    # 创建一个假的 torchvision._meta_registrations 模块，阻止其加载
+    fake_meta = types.ModuleType("torchvision._meta_registrations")
+    fake_meta.register_meta = lambda *args, **kwargs: lambda fn: fn
+    sys.modules["torchvision._meta_registrations"] = fake_meta
+
+except Exception as e:
+    # 导入失败不影响后续流程，但记录日志
+    logging.getLogger(__name__).warning(f"torch/torchvision setup warning (non-critical): {e}")
+
 # ── 实时日志文件（供前端轮询读取）──
 LOG_FILE = "/tmp/midi_process.log"
 
@@ -104,13 +127,6 @@ def ensure_yourmt3_code():
     if os.path.exists(amt_src) and amt_src not in sys.path:
         sys.path.insert(0, amt_src)
         logger.info(f"Added YourMT3 path: {amt_src}")
-
-    # 修复 Python 3.12 + torch 2.10 环境下的 torchvision 循环导入问题
-    # 必须在导入 model.ymt3 之前显式导入 torchvision
-    try:
-        import torchvision  # noqa: F401
-    except Exception:
-        pass  # torchvision 导入失败不影响核心功能
 
     # 验证导入可用
     try:
