@@ -17,7 +17,10 @@ Convert audio files to multi-track MIDI with automatic 128 GM instrument recogni
 ## Features
 
 - **Multi-Instrument Transcription**: Uses a high-performance YourMT3+ MoE model for direct multi-instrument recognition from mixed audio
-- **Vocal Separation Mode**: BS-RoFormer separates vocals/accompaniment and transcribes each to an independent MIDI file (default checkpoint: `model_bs_roformer_ep_317_sdr_12.9755.ckpt`)
+- **Vocal Separation Mode**: BS-RoFormer separates vocals/accompaniment and transcribes both to independent MIDIs (optional extra merged MIDI; default checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`)
+- **Six-Stem Separation Mode**: BS-RoFormer SW separates `bass/drums/guitar/piano/vocals/other`, supports a “selected stems only” switch, and outputs stem MIDIs + 1 merged MIDI
+- **Lead/Harmony Proxy (Experimental)**: In six-stem mode, `vocals` can be further split into lead + harmony proxy stems (public male/female checkpoint)
+- **Piano-Dedicated Mode**: Aria-AMT transcribes piano-focused input directly to a dedicated piano MIDI
 - **128 GM Instruments**: Outputs standard General MIDI multi-track MIDI, accurately distinguishing drums, bass, guitar, piano, etc.
 - **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
 - **GPU Acceleration**: Auto-detects and uses CUDA (NVIDIA) / ROCm (AMD) / CPU
@@ -125,6 +128,13 @@ pip install -r requirements.txt
 # 5. Download YourMT3+ models
 python download_sota_models.py
 
+# 5.1 Download source-separation models
+python download_vocal_model.py
+python download_multistem_model.py
+
+# 5.2 Download Aria-AMT piano checkpoint
+python download_aria_amt_model.py
+
 # 6. Run the application
 python -m src.main
 ```
@@ -193,9 +203,12 @@ Download the latest release from the [Releases](https://github.com/mason369/musi
 ## Usage
 
 1. **Open Audio File**: Drag and drop an audio file (MP3, WAV, FLAC, OGG) or click to browse
-2. **Configure Output**: Choose output directory and options (MIDI, lyrics, separated tracks)
-3. **Start Processing**: Click "Start" to begin conversion
-4. **Get Results**: Find MIDI file, LRC lyrics, and separated audio tracks in output directory
+2. **Choose Mode**: SMART / VOCAL_SPLIT / SIX_STEM_SPLIT / PIANO_ARIA_AMT
+3. **Optional (VOCAL_SPLIT)**: Enable merged MIDI output (vocal + accompaniment)
+4. **Optional (SIX_STEM_SPLIT)**: Enable selected-stems-only and pick targets
+5. **Optional (SIX_STEM_SPLIT)**: Enable lead/harmony proxy split for `vocals`
+6. **Start Processing**: Click "Start" to begin conversion
+7. **Get Results**: Find MIDI files and separated audio tracks in output directory
 
 ## Supported Formats
 
@@ -245,9 +258,12 @@ src/
 ├── core/                            # Core processing engine
 │   ├── pipeline.py                  # Main processing pipeline (MusicToMidiPipeline)
 │   ├── yourmt3_transcriber.py       # YourMT3+ transcriber wrapper
+│   ├── aria_amt_transcriber.py      # Aria-AMT piano transcriber wrapper
 │   ├── beat_detector.py             # Beat/BPM detection
 │   ├── midi_generator.py            # MIDI generation & post-processing
-│   └── vocal_separator.py           # BS-RoFormer vocal separation
+│   ├── vocal_separator.py           # BS-RoFormer vocal separation
+│   ├── multi_stem_separator.py      # BS-RoFormer SW six-stem separation
+│   └── vocal_harmony_separator.py   # Lead/harmony proxy splitter (experimental)
 ├── gui/                             # PyQt6 graphical interface
 │   ├── main_window.py               # Main window (MainWindow)
 │   ├── widgets/
@@ -300,7 +316,7 @@ main()
 
 `src/core/pipeline.py` (~400 lines) is the core orchestrator coordinating all processing stages.
 
-Two processing modes are supported:
+Four processing modes are supported:
 
 #### Mode 1: SMART (Default)
 
@@ -332,9 +348,44 @@ YourMT3Transcriber.transcribe_precise(accompaniment)  [35-60%]
     ↓
 YourMT3Transcriber.transcribe_precise(vocals)      [60-85%]
     ↓
-MidiGenerator × 2 (accompaniment MIDI + vocal MIDI)  [85-95%]
+MidiGenerator × 2 (accompaniment MIDI + vocal MIDI)  [85-92%]
     ↓
-Two MIDI files                                     [95-100%]
+Optional merge → +1 merged MIDI                   [92-95%]
+    ↓
+Two MIDIs (default) or + merged MIDI              [95-100%]
+```
+
+#### Mode 3: SIX_STEM_SPLIT
+
+```
+Audio file
+    ↓
+BeatDetector.detect() → BPM                       [0-5%]
+    ↓
+SixStemSeparator.separate()                        [5-30%]
+    → bass.wav / drums.wav / guitar.wav / piano.wav / vocals.wav / other.wav
+    ↓
+Optional switch: split vocals into lead/harmony proxy (experimental)
+    ↓
+Optional switch: transcribe selected stems only
+    ↓
+YourMT3Transcriber.transcribe_precise() × N        [30-75%]
+    ↓
+MidiGenerator × N                                  [75-93%]
+    ↓
+Merge selected MIDIs into one combined MIDI        [93-100%]
+```
+
+#### Mode 4: PIANO_ARIA_AMT
+
+```
+Audio file (piano-focused)
+    ↓
+BeatDetector.detect() → BPM                        [0-10%]
+    ↓
+AriaAmtTranscriber.transcribe()                    [10-85%]
+    ↓
+Dedicated piano MIDI output                        [85-100%]
 ```
 
 Key design decisions:
@@ -385,13 +436,16 @@ This project uses **BS-RoFormer** (Band-Split Rotary Transformer) for vocal/acco
 |------|---------|
 | Full Name | Band-Split RoFormer |
 | Paper | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
-| Checkpoint | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (epoch 317) |
+| Checkpoint | `model_bs_roformer_ep_368_sdr_12.9628.ckpt` (epoch 368) |
 | Trainer | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
 | License | MIT |
-| Metric note | Checkpoint filename includes `sdr_12.9755` (training-time score tag, not a universal benchmark score) |
+| Metric note | Checkpoint filename includes `sdr_12.9628` (training-time score tag, not a universal benchmark score) |
 | Public comparison (vocal SDR) | Multisong: BS-RoFormer 10.87 / MelBand-RoFormer(Kim) 10.98 / HTDemucs_ft 8.38 |
 | Model Size | ~500 MB |
 | First Use | Auto-downloaded from HuggingFace to `~/.music-to-midi/models/audio-separator/` |
+| Output options | Default: 2 MIDI files (accompaniment + vocal); optional extra merged MIDI |
+
+For six-stem separation, the project uses **BS-RoFormer SW** as the primary backend (with `htdemucs_6s` fallback) and downloads assets via `download_multistem_model.py`. The desktop UI includes switches for selected-stems-only and optional lead/harmony proxy split on vocals. For vocal split, the UI provides an optional merged-MIDI toggle. For piano-dedicated transcription, the project uses Aria-AMT with downloadable local checkpoint (`piano-medium-double-1.0.safetensors`).
 
 #### Architecture Overview
 
@@ -431,7 +485,7 @@ The project originally used Meta's Demucs (htdemucs) for vocal separation, repla
 
 | Dimension | Demucs (htdemucs) | BS-RoFormer |
 |-----------|-------------------|-------------|
-| Public comparison (Multisong vocal SDR) | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317) |
+| Public comparison (Multisong vocal SDR) | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317, reference protocol) |
 | Architecture | Hybrid U-Net + Transformer | Pure Transformer (band-split) |
 | Integration | Manual model management | audio-separator 3-step API |
 | Dependencies | Heavy (demucs' own deps) | Lightweight (audio-separator + onnxruntime) |
@@ -448,7 +502,7 @@ Audio file
     ↓
 Separator(output_dir, model_file_dir, output_format="WAV")
     ↓
-separator.load_model("model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+separator.load_model("model_bs_roformer_ep_368_sdr_12.9628.ckpt")
     ↓
 separator.separate(audio_path)
     ↓
@@ -469,7 +523,7 @@ Key design decisions:
 
 | Model/Direction | Source | Type | Status | Notes |
 |-----------------|--------|------|--------|-------|
-| BS-RoFormer ep317 (current) | Current project default checkpoint | Local drop-in (audio-separator) | ✅ In use | Multisong vocal SDR 10.87 (`model_bs_roformer_ep_317_sdr_12.9755.ckpt`) |
+| BS-RoFormer ep368 (current) | Current project default checkpoint | Local drop-in (audio-separator) | ✅ In use | Current default checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`; audio-separator median score ~12.10 (vocals) / 16.31 (instrumental) |
 | SCNet XL IHF | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 11.11 (`model_scnet_xl_2ep_..._musdb18hq.ckpt`), stronger practical local replacement |
 | MelBand-RoFormer (Kim) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 10.98 (`Kim_Vocal_2.onnx`) |
 | Ensemble (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | Frontier leaderboard (service/ensemble) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.93 (ver 2025.06), among the highest public entries |
@@ -480,10 +534,30 @@ Key design decisions:
 | Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | Paper-stage (efficiency direction) | 📄 Paper + open code | Under fine-tuning, recovers ~92% of original model SDR with ~44.5x FLOPs reduction (primarily efficiency gain) |
 
 > **Conclusion (by protocol):**  
-> - For **practical local open replacement**, SCNet XL IHF is currently the stronger option than the default ep317 in documented Multisong SDR.  
+> - For **practical local open replacement**, compare only under the same benchmark protocol; this project currently uses ep368 as default.  
 > - For **MVSEP leaderboard**, Ensemble (11.93) and BS Roformer (11.89) are higher.  
 > - For **paper-specific MUSDB18-HQ setting (Table 2, Scenario ⓑ)**, Mel-RoFormer reports 13.29.  
 > **Protocol note:** Do not directly compare numbers across different datasets/protocols (Multisong, MUSDB, MVSEP, cSDR/uSDR).
+
+#### Six-Stem & Fine-Grained Instrument Separation Frontier (Verified on 2026-03-03)
+
+> Note: This table focuses on **6-stem / fine-grained separation** and clearly marks local-download models vs service/API-only models.
+
+| Model/Direction | Source | Type | Status | Notes |
+|-----------------|--------|------|--------|-------|
+| BS Roformer SW (current six-stem primary backend) | [MVSEP Algorithms #77](https://mvsep.com/algorithms/77) / [HF: jarredou/BS-ROFO-SW-Fixed](https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/blob/main/BS-Rofo-SW-Fixed.ckpt) / [openmirlab config](https://raw.githubusercontent.com/openmirlab/bs-roformer-infer/main/src/bs_roformer/configs/config_bs_roformer_sw.yaml) | Local downloadable (6-stem) | ✅ In use | MVSEP page reports **vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71**; integrated as primary backend for `SIX_STEM_SPLIT` |
+| HTDemucs4 (6 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local downloadable (6-stem baseline) | ✅ Available (fallback) | Same-table Multisong examples: bass 11.22 / drums 10.22 / vocals 8.05 |
+| DrumSep mdx23c (jarredou, 5 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | Local downloadable (drum sub-stems) | ✅ Available | Public drum-substem metrics: kick 16.66 / snare 11.53 / toms 12.33 / hh 4.04 / cymbals 6.36 |
+| DrumSep mdx23c (aufr33+jarredou, 6 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | Local downloadable (drum sub-stems) | ✅ Available (experimental) | Public drum-substem metrics: kick 14.54 / snare 9.79 / toms 10.63 / hh 3.19 / ride+crash 6.08 |
+| MVSep Bass/Drums/Piano/Guitar specialist tracks | [Bass #37](https://mvsep.com/algorithms/37) / [Drums #43](https://mvsep.com/algorithms/43) / [Piano #14](https://mvsep.com/algorithms/14) / [Guitar #17](https://mvsep.com/algorithms/17) | Service/leaderboard specialist pipelines | 🌐 Service available (not local drop-in) | Pages show strong BS Roformer SW single-model values (Bass 14.62, Drums 14.11, Piano 7.83, Guitar 9.05); higher scores usually come from ensembles |
+| Ensemble All-In (vocals,bass,drums,piano,guitar,lead/back,other) | [MVSEP Algorithms #47](https://mvsep.com/algorithms/47) | Service ensemble | 🌐 Service available (not open checkpoint) | Broadest stem coverage in one workflow, but no full public checkpoint mapping was found |
+| Lead/Back vocals frontier track | [MVSEP Karaoke #76](https://mvsep.com/algorithms/76) / [QC #8211](https://mvsep.com/quality_checker/entry/8211) / [QC #7845](https://mvsep.com/quality_checker/entry/7845) | Service + partial open checkpoints | 🔬 Mixed (open + service) | Public downloadable options are mostly karaoke or male/female proxy routes; stronger lead/back combinations are mostly service-side or fused pipelines |
+
+> **Practical local-open recommendation:**  
+> - Primary 6-stem chain: `BS Roformer SW`.  
+> - Drum refinement: add `DrumSep mdx23c` on top of separated `drums`.  
+> - Lead/back vocals: add karaoke/chorus routing on top of separated `vocals` and label it as proxy/non-unified-benchmark.  
+> - Always mark service/API models as non-public-checkpoint (not local drop-in).
 
 ---
 
@@ -611,7 +685,7 @@ ProcessingWorker(QThread)
 #### Enum Types
 
 ```python
-ProcessingMode        # SMART | VOCAL_SPLIT | PIANO(deprecated→SMART)
+ProcessingMode        # SMART | VOCAL_SPLIT | SIX_STEM_SPLIT | PIANO(deprecated→SMART)
 TranscriptionQuality  # FAST | BALANCED | BEST
 ProcessingStage       # PREPROCESSING | SEPARATION | TRANSCRIPTION |
                       # VOCAL_TRANSCRIPTION | SYNTHESIS | COMPLETE
@@ -655,6 +729,8 @@ class ProcessingResult:
     vocal_midi_path: Optional[str]              # Vocal MIDI (VOCAL_SPLIT only)
     accompaniment_midi_path: Optional[str]      # Accompaniment MIDI (VOCAL_SPLIT only)
     separated_audio: Optional[Dict[str, str]]   # Separated audio paths
+    stem_midi_paths: Optional[Dict[str, str]]   # Stem MIDI paths (SIX_STEM_SPLIT only)
+    merged_midi_path: Optional[str]             # Merged MIDI path (SIX_STEM_SPLIT or optional VOCAL_SPLIT)
 
 @dataclass
 class Config:
@@ -666,6 +742,10 @@ class Config:
     gpu_device: int = 0                 # GPU device index
     # Processing
     processing_mode: str = "smart"      # Processing mode
+    #   values: smart / vocal_split / six_stem_split / piano_aria_amt
+    vocal_split_merge_midi: bool        # Optional merged MIDI for VOCAL_SPLIT
+    six_stem_targets: List[str]         # Optional selected stems for SIX_STEM_SPLIT (empty=all)
+    six_stem_split_vocal_harmony: bool  # Optional vocals->lead+harmony proxy split in SIX_STEM_SPLIT
     transcription_quality: str = "best" # Transcription quality
     # MIDI post-processing
     quantize_notes: bool = True         # Note quantization

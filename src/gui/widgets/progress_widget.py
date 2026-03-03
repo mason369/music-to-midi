@@ -194,6 +194,13 @@ class ProgressWidget(QGroupBox):
                 ProcessingStage.VOCAL_TRANSCRIPTION,
                 ProcessingStage.SYNTHESIS
             ]
+        elif mode == "six_stem_split":
+            stages = [
+                ProcessingStage.PREPROCESSING,
+                ProcessingStage.SEPARATION,
+                ProcessingStage.TRANSCRIPTION,
+                ProcessingStage.SYNTHESIS
+            ]
         else:
             stages = [
                 ProcessingStage.PREPROCESSING,
