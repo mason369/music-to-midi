@@ -58,12 +58,12 @@ class AriaAmtTranscriber:
         if not self.is_available():
             raise RuntimeError(
                 "Aria-AMT 未安装。请执行: "
-                "venv\\Scripts\\python.exe -m pip install git+https://github.com/EleutherAI/aria-amt.git"
+                "python -m pip install git+https://github.com/EleutherAI/aria-amt.git"
             )
         if not self.is_model_available():
             raise RuntimeError(
                 "Aria-AMT 模型权重缺失。请执行: "
-                "venv\\Scripts\\python.exe download_aria_amt_model.py"
+                "python download_aria_amt_model.py"
             )
 
         temp_dir = out_path.parent / ".aria_amt_tmp"

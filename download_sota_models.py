@@ -65,8 +65,8 @@ def find_ckpt_path_in_repo(exp_id: str) -> tuple[str | None, str | None]:
 
 
 def download_ultimate_moe():
-    base_dir = os.path.expanduser("~/.cache/music_ai_models/yourmt3_all")
-    os.makedirs(base_dir, exist_ok=True)
+    base_dir = Path.home() / ".cache" / "music_ai_models" / "yourmt3_all"
+    base_dir.mkdir(parents=True, exist_ok=True)
 
     print("正在下载 YPTF.MoE+Multi (PS) - YourMT3+ 最高性能模型...")
     print(f"架构：8 专家 MoE, Top-2 路由, 13 通道 Perceiver Transformer")

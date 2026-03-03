@@ -389,12 +389,12 @@ class MusicToMidiPipeline:
         if not self.aria_amt_transcriber.is_available():
             raise RuntimeError(
                 "Aria-AMT 不可用，请先安装：\n"
-                "  venv\\Scripts\\python.exe -m pip install git+https://github.com/EleutherAI/aria-amt.git"
+                "  python -m pip install git+https://github.com/EleutherAI/aria-amt.git"
             )
         if not self.aria_amt_transcriber.is_model_available():
             raise RuntimeError(
                 "Aria-AMT 模型权重缺失，请先下载：\n"
-                "  venv\\Scripts\\python.exe download_aria_amt_model.py"
+                "  python download_aria_amt_model.py"
             )
 
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析钢琴音频...")
