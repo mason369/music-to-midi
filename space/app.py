@@ -105,6 +105,13 @@ def ensure_yourmt3_code():
         sys.path.insert(0, amt_src)
         logger.info(f"Added YourMT3 path: {amt_src}")
 
+    # 修复 Python 3.12 + torch 2.10 环境下的 torchvision 循环导入问题
+    # 必须在导入 model.ymt3 之前显式导入 torchvision
+    try:
+        import torchvision  # noqa: F401
+    except Exception:
+        pass  # torchvision 导入失败不影响核心功能
+
     # 验证导入可用
     try:
         from model.ymt3 import YourMT3  # noqa: F401
