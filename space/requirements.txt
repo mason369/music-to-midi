@@ -1,9 +1,10 @@
 # Music to MIDI - Hugging Face Space 依赖
 # 注意：不包含 PyQt6（桌面 GUI），使用 Gradio 替代
 
-# PyTorch 核心
+# PyTorch 核心（版本必须匹配，避免 ABI 不兼容）
 torch>=2.3.0,<2.10.0
 torchaudio>=2.3.0,<2.10.0
+torchvision>=2.3.0,<2.10.0
 
 # NumPy（audio-separator>=0.36.0 要求 numpy>=2，numba 0.64 支持 <2.5）
 numpy>=2.0.0
