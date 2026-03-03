@@ -31,7 +31,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
     def test_torch_audio_versions_are_synchronized(self):
         source_text = self._load_notebook_source_text()
         package_block_match = re.search(
-            r"packages = \[\n(?P<block>.*?)\n\]\nrun_cmd",
+            r"packages = \[\n(?P<block>.*?)\n\]",
             source_text,
             flags=re.S,
         )
@@ -47,6 +47,37 @@ class TestColabNotebookDependencies(unittest.TestCase):
             source_text,
         )
         self.assertNotIn('"torchaudio"', package_block)
+
+    def test_pip_install_uses_shell_safe_quoting(self):
+        source_text = self._load_notebook_source_text()
+        self.assertIn("import shlex", source_text)
+        self.assertIn(
+            "quoted_packages = \" \".join(shlex.quote(pkg) for pkg in packages)",
+            source_text,
+        )
+        self.assertIn(
+            "run_cmd(\"python -m pip install \" + quoted_packages)",
+            source_text,
+        )
+
+    def test_post_install_torch_torchaudio_resync_and_check(self):
+        source_text = self._load_notebook_source_text()
+        self.assertIn(
+            "Re-syncing torch/torchaudio after dependency installation",
+            source_text,
+        )
+        self.assertIn(
+            "--force-reinstall --no-deps",
+            source_text,
+        )
+        self.assertIn(
+            "Verifying torch/torchaudio ABI compatibility",
+            source_text,
+        )
+        self.assertIn(
+            "import torchaudio",
+            source_text,
+        )
 
 
 if __name__ == "__main__":
