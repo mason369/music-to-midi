@@ -17,7 +17,10 @@
 ## 功能特点
 
 - **多乐器转写**：使用 YourMT3+ MoE 高性能模型直接识别混音中的多种乐器
-- **人声分离模式**：BS-RoFormer 分离人声与伴奏，分别转写为独立 MIDI 文件（默认 checkpoint：`model_bs_roformer_ep_317_sdr_12.9755.ckpt`）
+- **人声分离模式**：BS-RoFormer 分离人声与伴奏，默认输出两个独立 MIDI（可选额外输出 1 个合并 MIDI，默认 checkpoint：`model_bs_roformer_ep_368_sdr_12.9628.ckpt`）
+- **六声部分离模式**：BS-RoFormer SW 分离 `bass/drums/guitar/piano/vocals/other`，支持“仅转写选中 stem”，输出 N 个 stem MIDI + 1 个合并 MIDI
+- **主唱/和声（实验近似）**：六声部分离模式可将 `vocals` 再拆为主唱 + 和声代理 stem（公开 male/female 模型）
+- **钢琴专用模式**：Aria-AMT 钢琴专用转写，输入钢琴曲直接输出钢琴 MIDI
 - **128 种 GM 乐器**：输出标准 General MIDI 多轨道 MIDI，精确区分鼓、贝斯、吉他、钢琴等
 - **MIDI 后处理**：音符量化、力度平滑、去重、复音限制等优化
 - **GPU 加速**：自动检测并使用 CUDA（NVIDIA）/ ROCm（AMD）/ CPU
@@ -92,6 +95,9 @@ pip install -r requirements.txt
 
 # 5. 下载模型权重
 python download_sota_models.py
+python download_vocal_model.py
+python download_multistem_model.py
+python download_aria_amt_model.py
 
 # 6. 运行
 python -m src.main
@@ -121,9 +127,12 @@ python -m src.main
 ## 使用方法
 
 1. **打开音频文件**：拖放音频文件（MP3、WAV、FLAC、OGG 等）或点击浏览选择
-2. **配置输出**：选择输出目录
-3. **开始处理**：点击"开始"按钮
-4. **获取结果**：在输出目录中找到 MIDI 文件
+2. **选择处理模式**：SMART / VOCAL_SPLIT / SIX_STEM_SPLIT / PIANO_ARIA_AMT
+3. **可选（VOCAL_SPLIT）**：勾选“输出 1 个人声+伴奏合并 MIDI”
+4. **可选（SIX_STEM_SPLIT）**：勾选“仅转写选中的 stem”并选择目标 stem
+5. **可选（SIX_STEM_SPLIT）**：勾选“将 vocals 进一步分离为主唱 + 和声（实验近似）”
+6. **开始处理**：点击"开始"按钮
+7. **获取结果**：在输出目录中找到 MIDI 与分离音频文件
 
 ## 支持的格式
 
@@ -169,9 +178,12 @@ src/
 ├── core/                            # 核心处理引擎
 │   ├── pipeline.py                  # 主处理流水线 (MusicToMidiPipeline)
 │   ├── yourmt3_transcriber.py       # YourMT3+ 转写器封装
+│   ├── aria_amt_transcriber.py      # Aria-AMT 钢琴转写封装
 │   ├── beat_detector.py             # 节拍/BPM 检测
 │   ├── midi_generator.py            # MIDI 生成与后处理
-│   └── vocal_separator.py           # BS-RoFormer 人声分离
+│   ├── vocal_separator.py           # BS-RoFormer 人声分离
+│   ├── multi_stem_separator.py      # BS-RoFormer SW 六声部分离
+│   └── vocal_harmony_separator.py   # 主唱/和声（实验近似）分离
 ├── gui/                             # PyQt6 图形界面
 │   ├── main_window.py               # 主窗口 (MainWindow)
 │   ├── widgets/
@@ -224,7 +236,7 @@ main()
 
 `src/core/pipeline.py` (~400 行) 是核心调度器，协调所有处理阶段。
 
-支持两种处理模式：
+支持四种处理模式：
 
 #### 模式一：SMART（默认）
 
@@ -256,9 +268,44 @@ YourMT3Transcriber.transcribe_precise(伴奏)     [35-60%]
     ↓
 YourMT3Transcriber.transcribe_precise(人声)     [60-85%]
     ↓
-MidiGenerator × 2 (伴奏 MIDI + 人声 MIDI)       [85-95%]
+MidiGenerator × 2 (伴奏 MIDI + 人声 MIDI)       [85-92%]
     ↓
-两个 MIDI 文件                                   [95-100%]
+可选合并：生成 1 个 merged MIDI                  [92-95%]
+    ↓
+默认两个 MIDI（或 +1 合并 MIDI）                 [95-100%]
+```
+
+#### 模式三：SIX_STEM_SPLIT（六声部分离）
+
+```
+音频文件
+    ↓
+BeatDetector.detect() → BPM                    [0-5%]
+    ↓
+SixStemSeparator.separate()                     [5-30%]
+    → bass.wav / drums.wav / guitar.wav / piano.wav / vocals.wav / other.wav
+    ↓
+可选开关：vocals 继续拆分为主唱/和声（实验近似）
+    ↓
+可选开关：仅转写选中的 stem
+    ↓
+YourMT3Transcriber.transcribe_precise() × N     [30-75%]
+    ↓
+MidiGenerator × N                               [75-93%]
+    ↓
+合并所选 stem MIDI 生成 1 个 merged MIDI         [93-100%]
+```
+
+#### 模式四：PIANO_ARIA_AMT（钢琴专用）
+
+```
+音频文件（钢琴为主）
+    ↓
+BeatDetector.detect() → BPM                    [0-10%]
+    ↓
+AriaAmtTranscriber.transcribe()                [10-85%]
+    ↓
+钢琴 MIDI 单文件输出                             [85-100%]
 ```
 
 关键设计：
@@ -309,13 +356,14 @@ BeatInfo(bpm, beat_times, downbeats, time_signature)
 |------|------|
 | 全称 | Band-Split RoFormer |
 | 论文 | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
-| Checkpoint | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (epoch 317) |
+| Checkpoint | `model_bs_roformer_ep_368_sdr_12.9628.ckpt` (epoch 368) |
 | 训练者 | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
 | 许可证 | MIT |
-| 指标说明 | checkpoint 文件名包含 `sdr_12.9755`（训练过程分数标签，不是统一评测口径） |
+| 指标说明 | checkpoint 文件名包含 `sdr_12.9628`（训练过程分数标签，不是统一评测口径） |
 | 公开对比（人声 SDR） | Multisong: BS-RoFormer 10.87 / MelBand-RoFormer(Kim) 10.98 / HTDemucs_ft 8.38 |
 | 模型大小 | ~500 MB |
 | 首次使用 | 自动从 HuggingFace 下载到 `~/.music-to-midi/models/audio-separator/` |
+| 输出选项 | 默认 2 个 MIDI（伴奏 + 人声）；可勾选额外输出 1 个合并 MIDI |
 
 #### 架构概览
 
@@ -355,7 +403,7 @@ Band-Merge 模块
 
 | 维度 | Demucs (htdemucs) | BS-RoFormer |
 |------|-------------------|-------------|
-| 公开对比（Multisong 人声 SDR） | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317) |
+| 公开对比（Multisong 人声 SDR） | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep317，公开参考口径) |
 | 架构 | 混合 U-Net + Transformer | 纯 Transformer (频段拆分) |
 | 集成方式 | 需手动管理模型加载 | audio-separator 三步调用 |
 | 依赖链 | 较重（demucs 自带依赖） | 轻量（audio-separator + onnxruntime） |
@@ -372,7 +420,7 @@ Band-Merge 模块
     ↓
 Separator(output_dir, model_file_dir, output_format="WAV")
     ↓
-separator.load_model("model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+separator.load_model("model_bs_roformer_ep_368_sdr_12.9628.ckpt")
     ↓
 separator.separate(audio_path)
     ↓
@@ -393,7 +441,7 @@ separator.separate(audio_path)
 
 | 模型/方向 | 来源 | 类型 | 状态 | 说明 |
 |-----------|------|------|------|------|
-| BS-RoFormer ep317（当前） | 当前项目默认 checkpoint | 本地直替（audio-separator） | ✅ 使用中 | Multisong 人声 SDR 10.87（`model_bs_roformer_ep_317_sdr_12.9755.ckpt`） |
+| BS-RoFormer ep368（当前） | 当前项目默认 checkpoint | 本地直替（audio-separator） | ✅ 使用中 | 默认模型：`model_bs_roformer_ep_368_sdr_12.9628.ckpt`；Multisong 公开常见参考值多来自 ep317 口径 |
 | SCNet XL IHF | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | ✅ 可替换 | Multisong 人声 SDR 11.11（`model_scnet_xl_2ep_..._musdb18hq.ckpt`），本地开源可落地中更强候选 |
 | MelBand-RoFormer (Kim) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | ✅ 可替换 | Multisong 人声 SDR 10.98（`Kim_Vocal_2.onnx`） |
 | Ensemble (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | 榜单前沿（服务/集成） | 🌐 可用（非本地直替） | MVSEP vocals SDR 11.93（ver 2025.06），当前公开榜单最高之一 |
@@ -404,10 +452,30 @@ separator.separate(audio_path)
 | Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | 论文阶段（效率优化方向） | 📄 论文 + 开源代码 | 在微调设定下恢复原模型约 92% SDR，同时 FLOPs 降低约 44.5x（偏效率收益） |
 
 > **结论（按口径）**：  
-> - 若只看 **本地开源可直接替换**：SCNet XL IHF（11.11）目前比默认 ep317 更稳妥。  
+> - 若只看 **本地开源可直接替换**：SCNet XL IHF（11.11）在公开 Multisong 口径下通常高于 ep317 参考值；与当前默认 ep368 需按同口径复测。  
 > - 若看 **MVSEP 榜单**：Ensemble（11.93）和 BS Roformer（11.89）更高。  
 > - 若看 **论文特定协议（MUSDB18-HQ 表2 场景ⓑ）**：Mel-RoFormer 报告 13.29。  
 > **口径提醒**：不同榜单/数据集/评测协议（Multisong、MUSDB、MVSEP、cSDR/uSDR）不可直接横比。
+
+#### 六声部与细粒度乐器分离：前沿模型（2026-03-03 核实）
+
+> 注：此处聚焦 **6-stem / 乐器细分**，并严格区分“本地可下载”与“在线服务/API”。
+
+| 模型/方向 | 来源 | 类型 | 状态 | 说明 |
+|-----------|------|------|------|------|
+| BS Roformer SW（当前六声部主后端） | [MVSEP Algorithms #77](https://mvsep.com/algorithms/77) / [HF: jarredou/BS-ROFO-SW-Fixed](https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/blob/main/BS-Rofo-SW-Fixed.ckpt) / [openmirlab config](https://raw.githubusercontent.com/openmirlab/bs-roformer-infer/main/src/bs_roformer/configs/config_bs_roformer_sw.yaml) | 本地可下载（6-stem） | ✅ 使用中 | MVSEP 页面给出：**vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71**；本项目已接入为 `SIX_STEM_SPLIT` 主后端 |
+| HTDemucs4 (6 stems) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地可下载（6-stem 基线） | ✅ 可替换（回退） | Multisong（同表）示例：bass 11.22 / drums 10.22 / vocals 8.05 |
+| DrumSep mdx23c（jarredou，5 stems） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | 本地可下载（鼓细分） | ✅ 可用 | 鼓细分公开指标：kick 16.66 / snare 11.53 / toms 12.33 / hh 4.04 / cymbals 6.36 |
+| DrumSep mdx23c（aufr33+jarredou，6 stems） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | 本地可下载（鼓细分） | ✅ 可用（实验） | 鼓细分公开指标：kick 14.54 / snare 9.79 / toms 10.63 / hh 3.19 / ride+crash 6.08 |
+| MVSep Bass/Drums/Piano/Guitar 专项路线 | [Bass #37](https://mvsep.com/algorithms/37) / [Drums #43](https://mvsep.com/algorithms/43) / [Piano #14](https://mvsep.com/algorithms/14) / [Guitar #17](https://mvsep.com/algorithms/17) | 在线服务/榜单（专项） | 🌐 服务可用（非本地直替） | 页面显示 BS Roformer SW 专项单模型值较高（如 Bass 14.62、Drums 14.11、Piano 7.83、Guitar 9.05），更高值通常来自融合 |
+| Ensemble All-In（vocals,bass,drums,piano,guitar,lead/back,other） | [MVSEP Algorithms #47](https://mvsep.com/algorithms/47) | 在线融合 | 🌐 服务可用（非开源） | 覆盖面最广，但当前未见完整公开 checkpoint 对应 |
+| 主唱/和声（lead/back）前沿路线 | [MVSEP Karaoke #76](https://mvsep.com/algorithms/76) / [QC #8211](https://mvsep.com/quality_checker/entry/8211) / [QC #7845](https://mvsep.com/quality_checker/entry/7845) | 在线+部分开源 | 🔬 混合（开源 + 服务） | 公开可下载常见为 karaoke 或 male/female 路线；更高 lead/back 组合多在服务侧或融合流程中 |
+
+> **落地建议（本地开源优先）**：  
+> - 6-stem 主链路：`BS Roformer SW`。  
+> - 细分鼓：在 `drums` 后接 `DrumSep mdx23c`。  
+> - 主唱/和声：在 `vocals` 后接 karaoke/chorus 路线，并注明“近似 lead/back、非统一 benchmark”。  
+> - API/服务模型需单独标注“非公开权重、不可本地直替”。
 
 ---
 
@@ -522,7 +590,7 @@ ProcessingWorker(QThread)
 | 组件 | 文件 | 功能 |
 |------|------|------|
 | `DropZoneWidget` | `widgets/dropzone.py` (~200 行) | 拖放 + 浏览双通道文件输入，支持 MP3/WAV/FLAC/OGG/M4A/AAC/WMA |
-| `TrackPanel` | `widgets/track_panel.py` (~120 行) | 处理模式选择（智能/人声分离），发射 `mode_changed` 信号 |
+| `TrackPanel` | `widgets/track_panel.py` (~120 行) | 处理模式选择（智能/人声分离/六声部），支持人声合并 MIDI 开关与六声部目标选择 |
 | `ProgressWidget` | `widgets/progress_widget.py` (~280 行) | 阶段流程指示器 + 进度条，根据模式动态重建阶段 |
 | `StageIndicator` | `widgets/progress_widget.py` | 单个阶段的状态指示（pending/current/done），带颜色和图标变化 |
 
@@ -535,7 +603,7 @@ ProcessingWorker(QThread)
 #### 枚举类型
 
 ```python
-ProcessingMode        # SMART | VOCAL_SPLIT | PIANO(已弃用→SMART)
+ProcessingMode        # SMART | VOCAL_SPLIT | SIX_STEM_SPLIT | PIANO(已弃用→SMART)
 TranscriptionQuality  # FAST | BALANCED | BEST
 ProcessingStage       # PREPROCESSING | SEPARATION | TRANSCRIPTION |
                       # VOCAL_TRANSCRIPTION | SYNTHESIS | COMPLETE
@@ -579,6 +647,8 @@ class ProcessingResult:
     vocal_midi_path: Optional[str]              # 人声 MIDI (仅 VOCAL_SPLIT)
     accompaniment_midi_path: Optional[str]      # 伴奏 MIDI (仅 VOCAL_SPLIT)
     separated_audio: Optional[Dict[str, str]]   # 分离音频路径
+    stem_midi_paths: Optional[Dict[str, str]]   # stem MIDI 路径 (仅 SIX_STEM_SPLIT)
+    merged_midi_path: Optional[str]             # 合并 MIDI 路径 (SIX_STEM_SPLIT 或可选 VOCAL_SPLIT)
 
 @dataclass
 class Config:
@@ -590,6 +660,10 @@ class Config:
     gpu_device: int = 0                 # GPU 设备索引
     # 处理
     processing_mode: str = "smart"      # 处理模式
+    #   可选值: smart / vocal_split / six_stem_split / piano_aria_amt
+    vocal_split_merge_midi: bool        # VOCAL_SPLIT 是否额外输出合并 MIDI
+    six_stem_targets: List[str]         # SIX_STEM_SPLIT 指定转写 stem（空=全部）
+    six_stem_split_vocal_harmony: bool  # SIX_STEM_SPLIT 下 vocals 是否额外拆主唱/和声（实验近似）
     transcription_quality: str = "best" # 转写质量
     # MIDI 后处理
     quantize_notes: bool = True         # 音符量化

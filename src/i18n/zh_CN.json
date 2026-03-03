@@ -34,11 +34,22 @@
       "smart": "YourMT3+ MoE 多乐器转写",
       "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离",
       "vocal_split": "人声分离 + 分别转写",
-      "vocal_split_tooltip": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写，输出两个独立 MIDI 文件",
+      "vocal_split_tooltip": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写；默认输出两个独立 MIDI，可选额外输出 1 个合并 MIDI",
       "smart_desc": "🎵  YourMT3+ MoE  —  多乐器智能转写",
       "smart_hint": "直接对完整音频进行转写，精确识别 128 种 GM 乐器。\n轨道数量由模型自动决定，无需手动配置。",
       "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  人声分离 + 分别转写",
-      "vocal_split_hint": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写，\n输出两个独立 MIDI 文件。"
+      "vocal_split_hint": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写。\n默认输出两个独立 MIDI，可勾选“输出 1 个人声+伴奏合并 MIDI”。",
+      "vocal_split_merge_midi": "输出 1 个人声+伴奏合并 MIDI（人声分离模式）",
+      "six_stem_split": "六声部分离 + 分别转写",
+      "six_stem_split_tooltip": "先用 BS Roformer SW 分离 bass/drums/guitar/piano/vocals/other，再分别用 YourMT3+ 转写；默认输出 6 个 MIDI，可切换为仅转写选中 stem",
+      "six_stem_split_desc": "🎚️  BS Roformer SW + YourMT3+  —  六声部分离 + 分别转写",
+      "six_stem_split_hint": "默认转写 six stems 并输出 6 个 MIDI（另含 1 个合并 MIDI）；可勾选“仅转写选中的 stem”后按需输出。",
+      "six_stem_only_selected": "仅转写选中的 stem（六声部模式）",
+      "piano_aria_amt": "钢琴专用转写 (Aria-AMT)",
+      "piano_aria_amt_tooltip": "使用 Aria-AMT 钢琴专用模型进行高精度钢琴 MIDI 转写。",
+      "piano_aria_amt_desc": "Aria-AMT 钢琴专用转写",
+      "piano_aria_amt_hint": "适合独奏钢琴/钢琴曲输入，输出单个钢琴 MIDI。",
+      "six_stem_vocal_harmony": "将 vocals 进一步分离为主唱 + 和声（实验近似）"
     },
     "tracks": {
       "title": "轨道设置",
@@ -174,7 +185,12 @@
       "openFile": "打开MIDI文件",
       "ok": "确定",
       "accompaniment_midi": "伴奏MIDI",
-      "vocal_midi": "人声MIDI"
+      "vocal_midi": "人声MIDI",
+      "merged_midi": "合并MIDI",
+      "stem_midis": "分轨MIDI",
+      "stem_midi_count": "分轨MIDI数量",
+      "stem_audio_count": "分轨音频数量",
+      "openMergedFile": "打开合并MIDI"
     }
   },
   "quality": {

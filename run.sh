@@ -63,6 +63,37 @@ exit(0 if is_vocal_model_available() else 1)
     NEED_INSTALL=true
 fi
 
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_multistem_model import is_multistem_model_available, resolve_multistem_model_paths
+model_path, config_path = resolve_multistem_model_paths()
+print('BS-RoFormer SW model:', model_path)
+print('BS-RoFormer SW config:', config_path)
+exit(0 if is_multistem_model_available() else 1)
+"; then
+    warn "BS-RoFormer SW six-stem assets missing"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import importlib.util
+ok = importlib.util.find_spec('amt.run') is not None
+print('Aria-AMT package:', 'ok' if ok else 'missing')
+exit(0 if ok else 1)
+"; then
+    warn "Aria-AMT package missing (optional; piano-only mode disabled)"
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_aria_amt_model import is_aria_model_available, resolve_aria_model_path
+model_path = resolve_aria_model_path()
+print('Aria-AMT model:', model_path)
+exit(0 if is_aria_model_available() else 1)
+"; then
+    warn "Aria-AMT model missing (optional; piano-only mode disabled)"
+fi
+
 if $NEED_INSTALL; then
     info "Dependencies are incomplete, running installer..."
     bash "${REPO_DIR}/install.sh"

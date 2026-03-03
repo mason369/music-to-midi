@@ -624,6 +624,9 @@ class MainWindow(QMainWindow):
         self.config.output_dir = self.output_dir_edit.text()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
         self.config.processing_mode = self.track_panel.get_processing_mode()
+        self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
+        self.config.six_stem_targets = self.track_panel.get_selected_six_stem_targets()
+        self.config.six_stem_split_vocal_harmony = self.track_panel.get_six_stem_vocal_harmony()
 
         # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem
@@ -738,12 +741,41 @@ class MainWindow(QMainWindow):
         layout.addLayout(header_layout)
 
         # 结果信息
-        if result.vocal_midi_path:
-            # 人声分离模式：显示两个 MIDI 文件
+        is_six_stem = bool(result.stem_midi_paths)
+        is_vocal_split = bool(result.vocal_midi_path and result.accompaniment_midi_path)
+        has_vocal_merged = bool(
+            is_vocal_split
+            and result.merged_midi_path
+            and result.merged_midi_path != result.accompaniment_midi_path
+        )
+        if is_vocal_split:
+            # 人声分离模式：显示伴奏/人声 MIDI，可选显示合并 MIDI
+            merged_line = ""
+            if has_vocal_merged:
+                merged_line = (
+                    f"<b>{t('dialogs.complete.merged_midi')}:</b> "
+                    f"{result.merged_midi_path}<br>"
+                )
             info_text = f"""
             <p style="color: #b0b8c8; line-height: 1.6;">
             <b>{t('dialogs.complete.accompaniment_midi')}:</b> {result.accompaniment_midi_path}<br>
             <b>{t('dialogs.complete.vocal_midi')}:</b> {result.vocal_midi_path}<br>
+            {merged_line}
+            <b>处理时间:</b> {result.processing_time:.1f}秒
+            </p>
+            """
+        elif is_six_stem:
+            stem_midi_lines = "<br>".join(
+                f"&nbsp;&nbsp;• {stem}: {Path(path).name}"
+                for stem, path in sorted(result.stem_midi_paths.items())
+            )
+            stem_audio_count = len(result.separated_audio or {})
+            info_text = f"""
+            <p style="color: #b0b8c8; line-height: 1.6;">
+            <b>{t('dialogs.complete.merged_midi')}:</b> {result.midi_path}<br>
+            <b>{t('dialogs.complete.stem_midi_count')}:</b> {len(result.stem_midi_paths)}<br>
+            <b>{t('dialogs.complete.stem_audio_count')}:</b> {stem_audio_count}<br>
+            <b>{t('dialogs.complete.stem_midis')}:</b><br>{stem_midi_lines}<br>
             <b>处理时间:</b> {result.processing_time:.1f}秒
             </p>
             """
@@ -807,8 +839,8 @@ class MainWindow(QMainWindow):
             }
         """
 
-        if result.vocal_midi_path:
-            # 人声分离模式：两个打开按钮
+        if is_vocal_split:
+            # 人声分离模式：两个打开按钮 + 可选合并 MIDI 按钮
             open_acc_btn = QPushButton("🎵  " + t("dialogs.complete.accompaniment_midi"))
             open_acc_btn.setStyleSheet(midi_btn_style)
             open_acc_btn.clicked.connect(lambda: self._open_midi_file(result.accompaniment_midi_path))
@@ -820,6 +852,21 @@ class MainWindow(QMainWindow):
             btn_layout.addWidget(open_folder_btn)
             btn_layout.addWidget(open_acc_btn)
             btn_layout.addWidget(open_vocal_btn)
+            if has_vocal_merged:
+                open_merged_btn = QPushButton("🎼  " + t("dialogs.complete.merged_midi"))
+                open_merged_btn.setStyleSheet(midi_btn_style)
+                open_merged_btn.clicked.connect(
+                    lambda: self._open_midi_file(result.merged_midi_path)
+                )
+                btn_layout.addWidget(open_merged_btn)
+        elif is_six_stem:
+            # 六声部分离模式：打开合并 MIDI（其余 stem 通过文件夹查看）
+            open_merged_btn = QPushButton("🎼  " + t("dialogs.complete.openMergedFile"))
+            open_merged_btn.setStyleSheet(midi_btn_style)
+            open_merged_btn.clicked.connect(lambda: self._open_midi_file(result.midi_path))
+
+            btn_layout.addWidget(open_folder_btn)
+            btn_layout.addWidget(open_merged_btn)
         else:
             # 智能模式：单个打开按钮
             open_file_btn = QPushButton("🎵  " + t("dialogs.complete.openFile"))

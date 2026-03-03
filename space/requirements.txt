@@ -36,6 +36,9 @@ soundfile>=0.12.0
 audio-separator>=0.36.0
 onnxruntime>=1.16.0
 
+# 钢琴专用转写（Aria-AMT）
+aria-amt @ git+https://github.com/EleutherAI/aria-amt.git
+
 # Web UI（锁定版本避免 API schema bug）
 gradio==4.44.1
 

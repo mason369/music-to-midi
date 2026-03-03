@@ -156,6 +156,8 @@ class ProcessingMode(Enum):
     """处理模式枚举"""
     SMART = "smart"         # YourMT3+ MoE 多乐器转写
     VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
+    SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
+    PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
@@ -414,6 +416,8 @@ class ProcessingResult:
     vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
     accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
     separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径 {"vocals": ..., "no_vocals": ...}
+    stem_midi_paths: Optional[Dict[str, str]] = None  # 多 stem 模式下每个 stem 的 MIDI 路径
+    merged_midi_path: Optional[str] = None  # 合并 MIDI 路径（六声部模式或人声分离可选合并）
 
 
 @dataclass
@@ -427,8 +431,14 @@ class Config:
     use_gpu: bool = True
     gpu_device: int = 0
 
-    # 处理模式（固定为 smart，即 YourMT3+ MoE）
+    # 处理模式（smart / vocal_split / six_stem_split / piano_aria_amt）
     processing_mode: str = "smart"
+    # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
+    vocal_split_merge_midi: bool = False
+    # six_stem_split 模式：仅转写指定 stem（为空表示转写全部 six stems）
+    six_stem_targets: List[str] = field(default_factory=list)
+    # six_stem_split 模式：是否将 vocals 进一步分离为主唱/和声（实验近似）
+    six_stem_split_vocal_harmony: bool = False
 
     # 转写引擎设置（仅 YourMT3+）
     transcription_quality: str = "best"      # "fast", "balanced", "best"
@@ -458,6 +468,9 @@ class Config:
             "use_gpu": self.use_gpu,
             "gpu_device": self.gpu_device,
             "processing_mode": self.processing_mode,
+            "vocal_split_merge_midi": self.vocal_split_merge_midi,
+            "six_stem_targets": self.six_stem_targets,
+            "six_stem_split_vocal_harmony": self.six_stem_split_vocal_harmony,
             "transcription_quality": self.transcription_quality,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,

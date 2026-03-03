@@ -325,6 +325,11 @@ info "安装 tflite-runtime（可选，Linux 专用 TensorFlow Lite 后端）...
 "$PIP" install -r requirements.txt
 success "Python 依赖安装完成"
 
+info "安装 Aria-AMT（钢琴专用转写，可选）..."
+"$PIP" install git+https://github.com/EleutherAI/aria-amt.git && \
+    success "Aria-AMT 安装完成" || \
+    warn "Aria-AMT 安装失败（可选，钢琴专用模式将不可用）"
+
 # ───────────────────────── 验证核心依赖 ─────────────────────────
 info "验证核心依赖..."
 DEPS_OK=true
@@ -373,6 +378,20 @@ info "Press Ctrl+C to skip, run later: venv/bin/python download_vocal_model.py"
 "$PYTHON" "${REPO_DIR}/download_vocal_model.py" && \
     success "BS-RoFormer model download completed" || \
     warn "BS-RoFormer download failed, run later: venv/bin/python download_vocal_model.py"
+
+info "Downloading BS-RoFormer SW six-stem model assets (~500MB)..."
+info "Press Ctrl+C to skip, run later: venv/bin/python download_multistem_model.py"
+
+"$PYTHON" "${REPO_DIR}/download_multistem_model.py" && \
+    success "BS-RoFormer SW six-stem assets download completed" || \
+    warn "BS-RoFormer SW asset download failed, run later: venv/bin/python download_multistem_model.py"
+
+info "Downloading Aria-AMT piano checkpoint (~426MB)..."
+info "Press Ctrl+C to skip, run later: venv/bin/python download_aria_amt_model.py"
+
+"$PYTHON" "${REPO_DIR}/download_aria_amt_model.py" && \
+    success "Aria-AMT piano checkpoint download completed" || \
+    warn "Aria-AMT checkpoint download failed, run later: venv/bin/python download_aria_amt_model.py"
 
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
@@ -440,6 +459,36 @@ exit(0 if is_vocal_model_available() else 1)
     warn "BS-RoFormer model weights missing"; NEED_INSTALL=true
 fi
 
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_multistem_model import is_multistem_model_available, resolve_multistem_model_paths
+model_path, config_path = resolve_multistem_model_paths()
+print('BS-RoFormer SW model:', model_path)
+print('BS-RoFormer SW config:', config_path)
+exit(0 if is_multistem_model_available() else 1)
+"; then
+    warn "BS-RoFormer SW six-stem assets missing"; NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import importlib.util
+ok = importlib.util.find_spec('amt.run') is not None
+print('Aria-AMT package:', 'ok' if ok else 'missing')
+exit(0 if ok else 1)
+"; then
+    warn "Aria-AMT package missing (optional; piano-only mode disabled)"
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_aria_amt_model import is_aria_model_available, resolve_aria_model_path
+model_path = resolve_aria_model_path()
+print('Aria-AMT model:', model_path)
+exit(0 if is_aria_model_available() else 1)
+"; then
+    warn "Aria-AMT model missing (optional; piano-only mode disabled)"
+fi
+
 # ───────────────────────── 按需安装 ─────────────────────────
 if $NEED_INSTALL; then
     info "依赖不完整，正在运行安装脚本..."
@@ -482,10 +531,14 @@ echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YPTF.MoE+Multi (PS) 模型权重"
 echo -e "  ${GREEN}✔${NC} BS-RoFormer ep368 人声模型"
+echo -e "  ${GREEN}✔${NC} BS-RoFormer SW 六声部分离模型资源"
+echo -e "  ${GREEN}✔${NC} Aria-AMT 钢琴专用模型"
 echo ""
 echo -e "  ${BOLD}若模型下载失败，可手动补下：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_multistem_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_aria_amt_model.py${NC}"
 echo ""
 if $IS_WSL; then
     echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"

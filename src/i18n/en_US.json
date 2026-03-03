@@ -34,11 +34,22 @@
       "smart": "YourMT3+ MoE Multi-Instrument",
       "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed",
       "vocal_split": "Vocal Split + Separate Transcription",
-      "vocal_split_tooltip": "Separate vocals and accompaniment with BS-RoFormer, transcribe both with YourMT3+ independently, outputs two independent MIDI files",
+      "vocal_split_tooltip": "Separate vocals and accompaniment with BS-RoFormer, then transcribe both with YourMT3+; outputs two MIDI files by default, with optional merged MIDI",
       "smart_desc": "🎵  YourMT3+ MoE  —  Multi-Instrument Transcription",
       "smart_hint": "Transcribe full audio directly, recognizes 128 GM instruments.\nTrack count is determined automatically by the model.",
       "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  Vocal Split + Separate Transcription",
-      "vocal_split_hint": "Separate vocals and accompaniment with BS-RoFormer, transcribe both\nwith YourMT3+ independently, outputs two MIDI files."
+      "vocal_split_hint": "Separate vocals and accompaniment with BS-RoFormer, then transcribe both\nwith YourMT3+ independently. Outputs two MIDI files by default; optionally add one merged MIDI.",
+      "vocal_split_merge_midi": "Output 1 merged MIDI (vocal split mode)",
+      "six_stem_split": "Six-Stem Split + Separate Transcription",
+      "six_stem_split_tooltip": "Split bass/drums/guitar/piano/vocals/other with BS Roformer SW, then transcribe each with YourMT3+; defaults to 6 stem MIDIs and supports selected-stems-only mode",
+      "six_stem_split_desc": "🎚️  BS Roformer SW + YourMT3+  —  Six-Stem Split + Separate Transcription",
+      "six_stem_split_hint": "By default all six stems are transcribed (plus 1 merged MIDI). You can enable selected-stems-only mode to transcribe a subset.",
+      "six_stem_only_selected": "Transcribe selected stems only (six-stem mode)",
+      "piano_aria_amt": "Piano Dedicated (Aria-AMT)",
+      "piano_aria_amt_tooltip": "Use Aria-AMT piano-specialized model for high-precision piano transcription.",
+      "piano_aria_amt_desc": "Aria-AMT piano-only transcription",
+      "piano_aria_amt_hint": "Best for solo-piano input; outputs one dedicated piano MIDI.",
+      "six_stem_vocal_harmony": "Split vocals into lead + harmony (experimental proxy)"
     },
     "tracks": {
       "title": "Track Settings",
@@ -174,7 +185,12 @@
       "openFile": "Open MIDI File",
       "ok": "OK",
       "accompaniment_midi": "Accompaniment MIDI",
-      "vocal_midi": "Vocal MIDI"
+      "vocal_midi": "Vocal MIDI",
+      "merged_midi": "Merged MIDI",
+      "stem_midis": "Stem MIDI Files",
+      "stem_midi_count": "Stem MIDI Count",
+      "stem_audio_count": "Stem Audio Count",
+      "openMergedFile": "Open Merged MIDI"
     }
   },
   "quality": {

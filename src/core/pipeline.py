@@ -1,20 +1,23 @@
 """
-主处理流水线 - 支持 YourMT3+ MoE 多乐器转写 和 人声分离+分别转写
+主处理流水线。
 
 处理模式：
 1. SMART: YourMT3+ 直接对完整混音进行极致精度转写
-2. VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写
+2. VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写（可选合并 MIDI）
+3. SIX_STEM_SPLIT: BS-RoFormer SW 分离六个 stem，分别转写并合并 MIDI
+4. PIANO_ARIA_AMT: Aria-AMT 钢琴专用转写
 """
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, List
 
 from src.models.data_models import (
     Config, ProcessingResult, ProcessingProgress,
     ProcessingStage, Track, TrackType, ProcessingMode
 )
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.core.beat_detector import BeatDetector
 from src.core.midi_generator import MidiGenerator
@@ -29,12 +32,15 @@ class MusicToMidiPipeline:
 
     处理模式：
         SMART: 使用 YourMT3+ MoE 直接对完整混音进行多乐器转写。
-        VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写后输出两个 MIDI 文件。
+        VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写。
+                     可选额外输出一个“人声+伴奏合并 MIDI”。
+        SIX_STEM_SPLIT: BS-RoFormer SW 分离六个 stem，可选仅转写选中 stem。
     """
 
     def __init__(self, config: Config):
         self.config = config
         self.yourmt3_transcriber = YourMT3Transcriber(config)
+        self.aria_amt_transcriber = AriaAmtTranscriber()
         self.beat_detector = BeatDetector(config)
         self.midi_generator = MidiGenerator(config)
 
@@ -81,8 +87,356 @@ class MusicToMidiPipeline:
         mode = self.config.processing_mode
         if mode == "vocal_split":
             return self._process_vocal_split(audio_path, output_dir)
+        if mode == "six_stem_split":
+            return self._process_six_stem_split(audio_path, output_dir)
+        if mode == "piano_aria_amt":
+            return self._process_piano_aria_amt(audio_path, output_dir)
         else:
             return self._process_smart(audio_path, output_dir)
+
+    @staticmethod
+    def _has_note_messages(track) -> bool:
+        return any(
+            not message.is_meta and message.type in {"note_on", "note_off"}
+            for message in track
+        )
+
+    def _merge_stem_midis(
+        self,
+        stem_midi_paths: Dict[str, str],
+        output_path: str,
+        tempo: float,
+    ) -> str:
+        from mido import MidiFile, MidiTrack, MetaMessage, bpm2tempo
+
+        merged = MidiFile(ticks_per_beat=self.config.ticks_per_beat)
+
+        meta_track = MidiTrack()
+        merged.tracks.append(meta_track)
+        meta_track.append(MetaMessage("set_tempo", tempo=bpm2tempo(tempo), time=0))
+        meta_track.append(
+            MetaMessage(
+                "time_signature",
+                numerator=4,
+                denominator=4,
+                clocks_per_click=24,
+                notated_32nd_notes_per_beat=8,
+                time=0,
+            )
+        )
+        meta_track.append(MetaMessage("end_of_track", time=0))
+
+        for stem_name, midi_path in stem_midi_paths.items():
+            src = MidiFile(midi_path)
+            for src_track in src.tracks:
+                if not self._has_note_messages(src_track):
+                    continue
+                dst_track = MidiTrack()
+                has_track_name = False
+                for message in src_track:
+                    if message.is_meta and message.type == "track_name":
+                        has_track_name = True
+                    dst_track.append(message.copy(time=message.time))
+                if not has_track_name:
+                    dst_track.insert(0, MetaMessage("track_name", name=stem_name, time=0))
+                merged.tracks.append(dst_track)
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        merged.save(output_path)
+        return output_path
+
+    @staticmethod
+    def _count_midi_notes(midi_path: str) -> int:
+        try:
+            from mido import MidiFile
+
+            midi = MidiFile(midi_path)
+            return sum(
+                1
+                for track in midi.tracks
+                for message in track
+                if (not message.is_meta and message.type == "note_on" and message.velocity > 0)
+            )
+        except Exception:
+            return 0
+
+    def _apply_vocal_harmony_split(
+        self,
+        separated: Dict[str, str],
+        selected_stems: List[str],
+        output_dir: str,
+    ) -> tuple[Dict[str, str], List[str]]:
+        if not getattr(self.config, "six_stem_split_vocal_harmony", False):
+            return separated, selected_stems
+
+        if "vocals" not in separated or "vocals" not in selected_stems:
+            return separated, selected_stems
+
+        from src.core.vocal_harmony_separator import VocalHarmonySeparator
+
+        if not VocalHarmonySeparator.is_available():
+            logger.warning("主唱/和声分离不可用，回退为 vocals 单 stem 转写")
+            return separated, selected_stems
+
+        self._report(ProcessingStage.SEPARATION, 0.85, 0.27, "正在分离主唱与和声...")
+        harmony_separator = VocalHarmonySeparator()
+        try:
+            vocal_split = harmony_separator.separate(
+                audio_path=separated["vocals"],
+                output_dir=output_dir,
+            )
+        except Exception as exc:
+            logger.warning("主唱/和声分离失败，回退为 vocals 单 stem: %s", exc)
+            return separated, selected_stems
+
+        merged_separated = dict(separated)
+        merged_separated.update(vocal_split)
+
+        expanded_stems: List[str] = []
+        for stem in selected_stems:
+            if stem == "vocals":
+                expanded_stems.extend(["lead_vocals", "harmony_vocals"])
+            else:
+                expanded_stems.append(stem)
+
+        return merged_separated, expanded_stems
+
+    def _process_six_stem_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        from src.core.multi_stem_separator import SixStemSeparator, STEM_KEYS
+
+        start_time = time.time()
+
+        audio_path = str(audio_path)
+        output_dir = str(output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        input_stem = Path(audio_path).stem
+
+        logger.info(f"开始处理(六声部分离模式): {audio_path}")
+
+        if not SixStemSeparator.is_available():
+            raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator")
+        if not YourMT3Transcriber.is_available():
+            raise RuntimeError(
+                "YourMT3+ 不可用。\n\n"
+                "请先下载模型权重：\n"
+                "  python download_sota_models.py"
+            )
+
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
+        self._check_cancelled()
+
+        beat_info = None
+        try:
+            beat_info = self.beat_detector.detect(audio_path)
+            tempo = beat_info.bpm if beat_info else 120.0
+        except Exception as exc:
+            logger.warning(f"节拍检测失败，使用默认 120 BPM: {exc}")
+            tempo = 120.0
+
+        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
+        self._check_cancelled()
+
+        self._report(ProcessingStage.SEPARATION, 0.0, 0.05, "正在进行六声部分离...")
+        separator = SixStemSeparator()
+
+        def _sep_cb(p: float, msg: str) -> None:
+            overall = 0.05 + p * 0.25
+            self._report(ProcessingStage.SEPARATION, p, overall, msg)
+
+        separated = separator.separate(
+            audio_path=audio_path,
+            output_dir=output_dir,
+            progress_callback=_sep_cb,
+        )
+
+        missing_stems = [stem for stem in STEM_KEYS if stem not in separated]
+        if missing_stems:
+            raise RuntimeError(f"六声部分离输出不完整，缺少: {missing_stems}")
+
+        self._report(ProcessingStage.SEPARATION, 1.0, 0.30, "六声部分离完成")
+        self._check_cancelled()
+
+        requested_stems = [
+            str(stem).lower()
+            for stem in (getattr(self.config, "six_stem_targets", []) or [])
+        ]
+        selected_stems = []
+        for stem in STEM_KEYS:
+            if not requested_stems or stem in requested_stems:
+                selected_stems.append(stem)
+        if not selected_stems:
+            selected_stems = list(STEM_KEYS)
+
+        separated, selected_stems = self._apply_vocal_harmony_split(
+            separated=separated,
+            selected_stems=selected_stems,
+            output_dir=output_dir,
+        )
+        self._check_cancelled()
+
+        quality = self.config.transcription_quality
+        stem_midi_paths: Dict[str, str] = {}
+        total_notes = 0
+
+        total_selected = len(selected_stems)
+
+        for stem_index, stem_name in enumerate(selected_stems):
+            self._check_cancelled()
+            stem_audio_path = separated[stem_name]
+
+            stage_offset = 0.30 + (stem_index * (0.45 / total_selected))
+
+            self._report(
+                ProcessingStage.TRANSCRIPTION,
+                stem_index / total_selected,
+                stage_offset,
+                f"正在转写 {stem_name}...",
+            )
+
+            def _stem_cb(p: float, msg: str, stem=stem_name, idx=stem_index) -> None:
+                overall = 0.30 + ((idx + p) * (0.45 / total_selected))
+                self._report(
+                    ProcessingStage.TRANSCRIPTION,
+                    (idx + p) / total_selected,
+                    overall,
+                    f"[{stem}] {msg}",
+                )
+
+            try:
+                instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
+                    audio_path=stem_audio_path,
+                    quality=quality,
+                    progress_callback=_stem_cb,
+                )
+            finally:
+                try:
+                    self.yourmt3_transcriber.unload_model()
+                except Exception as exc:
+                    logger.warning(f"YourMT3+ 卸载失败: {exc}")
+                try:
+                    clear_gpu_memory()
+                except Exception as exc:
+                    logger.warning(f"GPU 清理失败: {exc}")
+
+            stem_note_count = sum(len(v) for v in instrument_notes.values()) + sum(
+                len(v) for v in drum_notes.values()
+            )
+            total_notes += stem_note_count
+
+            stem_midi_path = str(Path(output_dir) / f"{input_stem}_{stem_name}.mid")
+            self._report(
+                ProcessingStage.SYNTHESIS,
+                stem_index / total_selected,
+                0.75 + (stem_index * (0.15 / total_selected)),
+                f"正在生成 {stem_name} MIDI...",
+            )
+            stem_midi_path = self.midi_generator.generate_from_precise_instruments_v2(
+                instrument_notes=instrument_notes,
+                drum_notes=drum_notes,
+                tempo=tempo,
+                output_path=stem_midi_path,
+                quality=quality,
+            )
+            stem_midi_paths[stem_name] = stem_midi_path
+
+        self._check_cancelled()
+        merged_suffix = (
+            "all_stems_merged"
+            if not requested_stems and not getattr(self.config, "six_stem_split_vocal_harmony", False)
+            else "selected_stems_merged"
+        )
+        merged_midi_path = str(Path(output_dir) / f"{input_stem}_{merged_suffix}.mid")
+        self._report(ProcessingStage.SYNTHESIS, 0.95, 0.93, "正在合并 stem MIDI...")
+        merged_midi_path = self._merge_stem_midis(stem_midi_paths, merged_midi_path, tempo)
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.97, "六声部 MIDI 生成完成")
+
+        processing_time = time.time() - start_time
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            f"处理完成，耗时 {processing_time:.1f} 秒",
+        )
+
+        logger.info(
+            f"六声部分离处理完成: merged={merged_midi_path}, stems={len(stem_midi_paths)}"
+        )
+
+        return ProcessingResult(
+            midi_path=merged_midi_path,
+            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
+            beat_info=beat_info,
+            processing_time=processing_time,
+            total_notes=total_notes,
+            separated_audio=separated,
+            stem_midi_paths=stem_midi_paths,
+            merged_midi_path=merged_midi_path,
+        )
+
+    def _process_piano_aria_amt(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Aria-AMT 钢琴专用模式。"""
+        start_time = time.time()
+
+        audio_path = str(audio_path)
+        output_dir = str(output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        stem = Path(Path(audio_path).name).stem
+        midi_path = str(Path(output_dir) / f"{stem}_piano_aria.mid")
+
+        logger.info("开始处理 (Aria-AMT 钢琴模式): %s", audio_path)
+
+        if not self.aria_amt_transcriber.is_available():
+            raise RuntimeError(
+                "Aria-AMT 不可用，请先安装：\n"
+                "  venv\\Scripts\\python.exe -m pip install git+https://github.com/EleutherAI/aria-amt.git"
+            )
+        if not self.aria_amt_transcriber.is_model_available():
+            raise RuntimeError(
+                "Aria-AMT 模型权重缺失，请先下载：\n"
+                "  venv\\Scripts\\python.exe download_aria_amt_model.py"
+            )
+
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析钢琴音频...")
+        self._check_cancelled()
+
+        beat_info = None
+        try:
+            beat_info = self.beat_detector.detect(audio_path)
+            tempo = beat_info.bpm if beat_info else 120.0
+        except Exception as exc:
+            logger.warning("节拍检测失败，使用默认 120 BPM: %s", exc)
+            tempo = 120.0
+
+        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.10, f"BPM: {tempo:.1f}")
+        self._check_cancelled()
+
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.10, "正在运行 Aria-AMT...")
+
+        def _aria_cb(progress: float, msg: str) -> None:
+            overall = 0.10 + progress * 0.75
+            self._report(ProcessingStage.TRANSCRIPTION, progress, overall, msg)
+
+        midi_path = self.aria_amt_transcriber.transcribe(
+            audio_path=audio_path,
+            output_path=midi_path,
+            progress_callback=_aria_cb,
+        )
+
+        self._check_cancelled()
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "钢琴 MIDI 文件已生成")
+
+        processing_time = time.time() - start_time
+        note_count = self._count_midi_notes(midi_path)
+        self._report(ProcessingStage.COMPLETE, 1.0, 1.0, f"处理完成，耗时 {processing_time:.1f} 秒")
+
+        return ProcessingResult(
+            midi_path=midi_path,
+            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
+            beat_info=beat_info,
+            processing_time=processing_time,
+            total_notes=note_count,
+        )
 
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
         """YourMT3+ 智能模式：直接对完整混音进行多乐器转写"""
@@ -421,18 +775,37 @@ class MusicToMidiPipeline:
             logger.error(f"MIDI 生成失败: {e}", exc_info=True)
             raise RuntimeError(f"MIDI 生成失败: {e}") from e
 
-        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成")
+        merged_midi_path = None
+        if getattr(self.config, "vocal_split_merge_midi", False):
+            self._check_cancelled()
+            self._report(ProcessingStage.SYNTHESIS, 0.85, 0.92, "正在合并伴奏+人声 MIDI...")
+            merged_midi_path = str(Path(output_dir) / f"{stem}_vocal_accompaniment_merged.mid")
+            merged_midi_path = self._merge_stem_midis(
+                {
+                    "accompaniment": accompaniment_midi_path,
+                    "vocal": vocal_midi_path,
+                },
+                merged_midi_path,
+                tempo,
+            )
+            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成（含合并）")
+        else:
+            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成")
+
+        final_midi_path = merged_midi_path or accompaniment_midi_path
 
         # ── 完成 ──
         processing_time = time.time() - start_time
         self._report(ProcessingStage.COMPLETE, 1.0, 1.0,
                      f"处理完成，耗时 {processing_time:.1f} 秒")
 
-        logger.info(f"处理完成: 伴奏={accompaniment_midi_path}, 人声={vocal_midi_path} "
-                    f"(耗时 {processing_time:.1f}s)")
+        logger.info(
+            f"处理完成: 伴奏={accompaniment_midi_path}, 人声={vocal_midi_path}, "
+            f"合并={merged_midi_path or '未启用'} (耗时 {processing_time:.1f}s)"
+        )
 
         return ProcessingResult(
-            midi_path=accompaniment_midi_path,
+            midi_path=final_midi_path,
             tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
             beat_info=beat_info,
             processing_time=processing_time,
@@ -440,4 +813,5 @@ class MusicToMidiPipeline:
             vocal_midi_path=vocal_midi_path,
             accompaniment_midi_path=accompaniment_midi_path,
             separated_audio=separated,
+            merged_midi_path=merged_midi_path,
         )

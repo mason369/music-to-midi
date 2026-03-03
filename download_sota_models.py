@@ -94,7 +94,6 @@ def download_ultimate_moe():
             local_dir=base_dir,
             allow_patterns=allow_patterns,
             ignore_patterns=["*.msgpack", "*.h5", "*.safetensors", "__pycache__/**"],
-            local_dir_use_symlinks=False,
         )
 
         # 验证：递归查找已下载的 .ckpt 文件（不依赖固定路径）
