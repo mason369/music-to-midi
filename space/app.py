@@ -24,25 +24,47 @@ sys.path.insert(0, APP_DIR)
 # Python 3.12 + torch 2.10 环境下，torchvision._meta_registrations 会在初始化时
 # 访问 torchvision.extension，导致 AttributeError。解决方案：
 # 1. 增加递归限制到 3000（默认 1000）
-# 2. 预先注入假的 torchvision 模块，完全阻止真实 torchvision 加载
+# 2. 使用 import hook 拦截所有 torchvision 导入，返回假模块
 # 3. 项目不依赖 torchvision，此方案不影响核心功能
 import warnings
 import types
+import importlib.abc
+import importlib.machinery
 
 warnings.filterwarnings("ignore", message=".*partially initialized module.*torchvision.*")
 warnings.filterwarnings("ignore", message=".*torchvision.*")
 
-try:
-    # 预先创建完整的假 torchvision 模块树，阻止真实模块加载
-    fake_torchvision = types.ModuleType("torchvision")
-    fake_torchvision.extension = types.ModuleType("extension")
-    fake_torchvision.extension._has_ops = lambda: False
-    fake_torchvision._meta_registrations = types.ModuleType("_meta_registrations")
-    fake_torchvision._meta_registrations.register_meta = lambda *a, **k: lambda fn: fn
-    sys.modules["torchvision"] = fake_torchvision
-    sys.modules["torchvision.extension"] = fake_torchvision.extension
-    sys.modules["torchvision._meta_registrations"] = fake_torchvision._meta_registrations
+# 创建假的 torchvision 模块
+_fake_torchvision = types.ModuleType("torchvision")
+_fake_torchvision.extension = types.ModuleType("extension")
+_fake_torchvision.extension._has_ops = lambda: False
+_fake_torchvision._meta_registrations = types.ModuleType("_meta_registrations")
+_fake_torchvision._meta_registrations.register_meta = lambda *a, **k: lambda fn: fn
 
+# 自定义 import hook，拦截所有 torchvision 导入
+class TorchvisionBlocker(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.startswith("torchvision"):
+            return importlib.machinery.ModuleSpec(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        if spec.name == "torchvision":
+            return _fake_torchvision
+        elif spec.name == "torchvision.extension":
+            return _fake_torchvision.extension
+        elif spec.name == "torchvision._meta_registrations":
+            return _fake_torchvision._meta_registrations
+        # 其他 torchvision 子模块返回空模块
+        return types.ModuleType(spec.name)
+
+    def exec_module(self, module):
+        pass  # 不执行任何初始化代码
+
+# 注册 import hook（必须在导入任何其他库之前）
+sys.meta_path.insert(0, TorchvisionBlocker())
+
+try:
     # 现在可以安全导入 torch
     import torch  # noqa: F401
 
