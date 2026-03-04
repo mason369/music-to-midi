@@ -1,12 +1,12 @@
 # Music to MIDI - Python 依赖
 # 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / PANNs / ByteDance 钢琴模型）
 
-# PyTorch 核心（三件套版本必须匹配，torch 2.4.x 仅兼容 numpy 1.x）
-torch>=2.4.0,<2.5
-torchaudio>=2.4.0,<2.5
+# PyTorch 核心（三件套版本必须匹配）
+torch>=2.4.0
+torchaudio>=2.4.0
 
-# NumPy（torch 2.4.0 用 numpy 1.x 编译，不兼容 numpy 2.x）
-numpy>=1.26.0,<2
+# NumPy
+numpy>=1.26.0
 numba>=0.60.0,<1
 
 # YourMT3+ 依赖
@@ -38,9 +38,9 @@ PyQt6>=6.6.0,<7
 PyQt6-Qt6>=6.6.0,<7
 PyQt6-sip>=13.6.0,<14
 
-# 人声分离（audio-separator + BS-RoFormer）
-# 0.31+ 要求 numpy>=2，与 torch 2.4.x（编译于 numpy 1.x）不兼容
-audio-separator>=0.26.0,<0.31
+# 人声分离 / 六声部分离（audio-separator + BS-RoFormer / BS-RoFormer SW）
+# >=0.38.0 起支持 BS-RoFormer SW 六声部分离
+audio-separator>=0.38.0
 onnxruntime>=1.16.0,<2
 
 # 工具

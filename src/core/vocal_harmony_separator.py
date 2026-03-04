@@ -32,6 +32,19 @@ class VocalHarmonySeparator:
             return False
 
     @staticmethod
+    def is_model_available() -> bool:
+        """检查 chorus 模型文件是否已下载到缓存目录。"""
+        cache_dir = Path.home() / ".music-to-midi" / "models" / "audio-separator"
+        model_path = cache_dir / CHORUS_MODEL
+        if model_path.exists() and model_path.stat().st_size > 0:
+            return True
+        # 递归搜索
+        for path in cache_dir.rglob(CHORUS_MODEL):
+            if path.is_file() and path.stat().st_size > 0:
+                return True
+        return False
+
+    @staticmethod
     def _score_rms(path: Path) -> float:
         try:
             import soundfile as sf

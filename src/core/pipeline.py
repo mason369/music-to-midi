@@ -9,6 +9,7 @@
 """
 import logging
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Callable, Dict, List
@@ -70,6 +71,52 @@ class MusicToMidiPipeline:
         if self._cancelled:
             raise InterruptedError("用户取消了处理")
 
+    @staticmethod
+    def _ensure_wav(audio_path: str, output_dir: str) -> str:
+        """非 WAV 格式自动转换为 WAV（44100Hz, PCM 16-bit），WAV 直接返回。"""
+        audio_path = str(audio_path)
+        if Path(audio_path).suffix.lower() == ".wav":
+            return audio_path
+
+        stem = Path(audio_path).stem
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        wav_path = str(Path(output_dir) / f"{stem}_converted.wav")
+
+        # 优先使用 FFmpeg
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-i", audio_path,
+                "-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
+                wav_path,
+            ]
+            subprocess.run(
+                cmd, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=300,
+            )
+            if Path(wav_path).exists() and Path(wav_path).stat().st_size > 0:
+                logger.info("已将 %s 转换为 WAV（FFmpeg）", Path(audio_path).name)
+                return wav_path
+        except (FileNotFoundError, subprocess.SubprocessError) as exc:
+            logger.warning("FFmpeg 转换失败，尝试 librosa fallback: %s", exc)
+
+        # Fallback: librosa + soundfile
+        try:
+            import librosa
+            import soundfile as sf
+
+            audio, sr = librosa.load(audio_path, sr=44100, mono=False)
+            if audio.ndim == 1:
+                audio = audio.reshape(1, -1)
+            sf.write(wav_path, audio.T, sr, subtype="PCM_16")
+            logger.info("已将 %s 转换为 WAV（librosa）", Path(audio_path).name)
+            return wav_path
+        except Exception as exc:
+            raise RuntimeError(
+                f"无法将 {Path(audio_path).name} 转换为 WAV: {exc}\n"
+                "请安装 FFmpeg 或确保 librosa/soundfile 可用。"
+            ) from exc
+
     def process(
         self,
         audio_path: str,
@@ -83,6 +130,9 @@ class MusicToMidiPipeline:
         """
         self._cancelled = False
         self._progress_callback = progress_callback
+
+        # 非 WAV 格式自动转换为 WAV
+        audio_path = self._ensure_wav(audio_path, output_dir)
 
         mode = self.config.processing_mode
         if mode == "vocal_split":
@@ -176,6 +226,14 @@ class MusicToMidiPipeline:
 
         if not VocalHarmonySeparator.is_available():
             logger.warning("主唱/和声分离不可用，回退为 vocals 单 stem 转写")
+            self._report(ProcessingStage.SEPARATION, 0.90, 0.28,
+                         "⚠ 主唱/和声分离库不可用，回退为 vocals 单 stem 转写")
+            return separated, selected_stems
+
+        if not VocalHarmonySeparator.is_model_available():
+            logger.warning("主唱/和声分离模型未下载，回退为 vocals 单 stem 转写")
+            self._report(ProcessingStage.SEPARATION, 0.90, 0.28,
+                         "⚠ 主唱/和声分离模型未下载，请运行 python download_vocal_harmony_model.py")
             return separated, selected_stems
 
         self._report(ProcessingStage.SEPARATION, 0.85, 0.27, "正在分离主唱与和声...")
@@ -187,6 +245,8 @@ class MusicToMidiPipeline:
             )
         except Exception as exc:
             logger.warning("主唱/和声分离失败，回退为 vocals 单 stem: %s", exc)
+            self._report(ProcessingStage.SEPARATION, 0.90, 0.28,
+                         f"⚠ 主唱/和声分离失败（{exc}），回退为 vocals 单 stem 转写")
             return separated, selected_stems
 
         merged_separated = dict(separated)
@@ -214,7 +274,7 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理(六声部分离模式): {audio_path}")
 
         if not SixStemSeparator.is_available():
-            raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator")
+            raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator>=0.38.0")
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
                 "YourMT3+ 不可用。\n\n"
@@ -572,7 +632,7 @@ class MusicToMidiPipeline:
         logger.info("正在检查依赖: BS-RoFormer, YourMT3+...")
         if not VocalSeparator.is_available():
             raise RuntimeError(
-                "人声分离不可用。请安装: pip install audio-separator>=0.40.0"
+                "人声分离不可用。请安装: pip install audio-separator>=0.38.0"
             )
         if not YourMT3Transcriber.is_available():
             raise RuntimeError(
