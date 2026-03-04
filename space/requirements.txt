@@ -6,7 +6,7 @@ torch>=2.3.0,<2.10.0
 torchaudio>=2.3.0,<2.10.0
 torchvision>=2.3.0,<2.10.0
 
-# NumPy（audio-separator>=0.36.0 要求 numpy>=2，numba 0.64 支持 <2.5）
+# NumPy（audio-separator>=0.38.0 要求 numpy>=2，numba 0.64 支持 <2.5）
 numpy>=2.0.0
 numba>=0.60.0
 
@@ -34,7 +34,7 @@ librosa>=0.10.0
 soundfile>=0.12.0
 
 # 人声分离
-audio-separator>=0.36.0
+audio-separator>=0.38.0
 onnxruntime>=1.16.0
 
 # 钢琴专用转写（Aria-AMT）

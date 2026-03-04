@@ -236,6 +236,10 @@ class TestPipelineSixStemMode(unittest.TestCase):
                 def is_available():
                     return True
 
+                @staticmethod
+                def is_model_available():
+                    return True
+
                 def separate(self, audio_path, output_dir, progress_callback=None):
                     if progress_callback:
                         progress_callback(1.0, "ok")

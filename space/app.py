@@ -632,7 +632,7 @@ with gr.Blocks(
                 elem_classes="upload-zone",
             )
             gr.Markdown(
-                "<small style='color:#6a7a8a'>支持 MP3, WAV, FLAC, OGG, M4A</small>"
+                "<small style='color:#6a7a8a'>支持 MP3, WAV, FLAC, OGG, M4A（自动转换为 WAV 处理）</small>"
             )
 
             gr.Markdown("**轨道设置**", elem_classes="section-title")

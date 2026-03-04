@@ -4,7 +4,6 @@ from pathlib import Path
 
 from src.core.multi_stem_separator import (
     BS_ROFORMER_SW_MODEL,
-    HTDEMUCS_6S_MODEL,
     STEM_KEYS,
     SixStemSeparator,
 )
@@ -55,48 +54,30 @@ class TestSixStemSeparator(unittest.TestCase):
 
             self.assertEqual(FakeSeparator.loaded_models[0], BS_ROFORMER_SW_MODEL)
 
-    def test_fallback_to_htdemucs_when_primary_load_fails(self):
+    def test_raises_when_bs_roformer_sw_load_fails(self):
+        """BS-RoFormer SW 加载失败必须直接报错，不静默回退。"""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             audio_path = tmp_path / 'song.wav'
             audio_path.write_bytes(b'audio')
             out_dir = tmp_path / 'out'
 
-            class FakeSeparator:
-                loaded_models = []
-
+            class FailingSeparator:
                 def __init__(self, output_dir, model_file_dir, output_format):
-                    self.output_dir = Path(output_dir)
+                    pass
 
                 def load_model(self, model_name):
-                    self.__class__.loaded_models.append(model_name)
-                    if model_name == BS_ROFORMER_SW_MODEL:
-                        raise ValueError('model not found')
+                    raise ValueError('Unknown Roformer model type')
 
                 def separate(self, _audio_path):
-                    files = [
-                        self.output_dir / 'song_vocals.wav',
-                        self.output_dir / 'song_drums.wav',
-                        self.output_dir / 'song_bass.wav',
-                        self.output_dir / 'song_guitar.wav',
-                        self.output_dir / 'song_piano.wav',
-                        self.output_dir / 'song_other.wav',
-                    ]
-                    for path in files:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_bytes(b'wav')
-                    return [str(path) for path in files]
+                    raise AssertionError('should not reach separate()')
 
             sep = SixStemSeparator(
-                separator_cls=FakeSeparator,
+                separator_cls=FailingSeparator,
                 ensure_assets_fn=lambda *_args, **_kwargs: None,
-                allow_fallback=True,
             )
-            result = sep.separate(str(audio_path), str(out_dir))
-
-            self.assertEqual(set(result.keys()), set(STEM_KEYS))
-            self.assertEqual(FakeSeparator.loaded_models[0], BS_ROFORMER_SW_MODEL)
-            self.assertIn(HTDEMUCS_6S_MODEL, FakeSeparator.loaded_models)
+            with self.assertRaises(ValueError):
+                sep.separate(str(audio_path), str(out_dir))
 
     def test_raise_when_stems_are_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,7 +106,6 @@ class TestSixStemSeparator(unittest.TestCase):
             sep = SixStemSeparator(
                 separator_cls=BrokenSeparator,
                 ensure_assets_fn=lambda *_args, **_kwargs: None,
-                allow_fallback=False,
             )
             with self.assertRaises(RuntimeError):
                 sep.separate(str(audio_path), str(out_dir))
