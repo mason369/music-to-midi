@@ -7,9 +7,12 @@ YourMT3+ 模型下载工具
 import logging
 import os
 import ssl
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Optional, Callable
+
+from src.utils.runtime_paths import get_runtime_data_dir, get_yourmt3_download_root, get_yourmt3_search_roots
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +128,11 @@ DEFAULT_MODEL = "yptf_moe_multi_ps"
 
 def get_model_cache_dir() -> Path:
     """获取模型缓存目录"""
-    # 使用用户目录下的隐藏文件夹
-    cache_dir = Path.home() / ".cache" / "yourmt3"
+    # 该目录用于保存下载元信息与 huggingface 临时缓存，而非最终 checkpoint 主目录
+    if getattr(sys, "frozen", False):
+        cache_dir = get_runtime_data_dir() / "hf_cache" / "yourmt3"
+    else:
+        cache_dir = Path.home() / ".cache" / "yourmt3"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
@@ -145,18 +151,17 @@ def resolve_model_checkpoint_path(checkpoint_name: str) -> Optional[Path]:
     else:
         dir_name = normalized_name.replace("@model.ckpt", "")
 
-    cache_root = Path.home() / ".cache/music_ai_models/yourmt3_all"
-    if not cache_root.exists():
-        return None
+    search_roots = get_yourmt3_search_roots()
+    for cache_root in search_roots:
+        if not cache_root.exists():
+            continue
+        for filename in ("model.ckpt", "last.ckpt"):
+            for path in cache_root.rglob(filename):
+                if dir_name in str(path):
+                    logger.debug(f"找到模型 checkpoint: {path}")
+                    return path
 
-    # 递归搜索：找到路径中包含 dir_name 的 checkpoint 文件
-    for filename in ("model.ckpt", "last.ckpt"):
-        for path in cache_root.rglob(filename):
-            if dir_name in str(path):
-                logger.debug(f"找到模型 checkpoint: {path}")
-                return path
-
-    logger.debug(f"未找到模型文件 '{checkpoint_name}' (搜索根目录: {cache_root})")
+    logger.debug(f"未找到模型文件 '{checkpoint_name}' (搜索根目录: {search_roots})")
     return None
 
 
@@ -344,10 +349,7 @@ def download_model(
                             raise e
 
                     # 复制到 cache 目录，保留仓库原始相对路径结构
-                    target_dir = (
-                        Path.home() / ".cache/music_ai_models/yourmt3_all" /
-                        Path(actual_filename).parent
-                    )
+                    target_dir = get_yourmt3_download_root() / Path(actual_filename).parent
                     target_dir.mkdir(parents=True, exist_ok=True)
                     target_path = target_dir / "model.ckpt"
                     shutil.copy2(checkpoint_path, target_path)

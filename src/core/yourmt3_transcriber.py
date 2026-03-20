@@ -38,11 +38,47 @@ import numpy as np
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
 from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path, get_optimal_thread_count
+from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
 
 # 在任何 import torch 之前修复 Windows 特殊路径 DLL 加载问题
 _fix_torch_dll_path()
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_yourmt3_base_paths() -> list[str]:
+    candidates = [
+        "YourMT3",
+        os.path.join(os.getcwd(), "YourMT3"),
+        "external/YourMT3",
+        os.path.join(os.getcwd(), "external/YourMT3"),
+        os.path.join(os.path.dirname(__file__), "../../YourMT3"),
+        os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
+        str(get_resource_path("YourMT3")),
+        str(get_resource_path("external/YourMT3")),
+    ]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        norm = os.path.normpath(candidate)
+        if norm not in seen:
+            unique.append(norm)
+            seen.add(norm)
+    return unique
+
+
+def _get_yourmt3_amt_src_path() -> Optional[str]:
+    direct = get_yourmt3_source_dir()
+    if direct is not None and direct.exists():
+        return str(direct)
+
+    for base_path in _iter_yourmt3_base_paths():
+        if os.path.exists(base_path):
+            potential_path = os.path.join(base_path, "amt/src")
+            if os.path.exists(potential_path):
+                return potential_path
+    return None
 
 
 def _import_torch():
@@ -360,31 +396,16 @@ class YourMT3Transcriber:
             # 方式3：检查本地克隆的仓库（最常用的方式）
             if not has_code:
                 import sys
-                import os
-                yourmt3_paths = [
-                    "YourMT3",  # 项目根路径
-                    os.path.join(os.getcwd(), "YourMT3"),
-                    "external/YourMT3",
-                    os.path.join(os.getcwd(), "external/YourMT3"),
-                    os.path.join(os.path.dirname(__file__), "../../YourMT3"),
-                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
-                ]
-
-                for path in yourmt3_paths:
-                    if os.path.exists(path):
-                        # 添加 amt/src 子目录到路径
-                        amt_src_path = os.path.join(path, "amt/src")
-                        if os.path.exists(amt_src_path):
-                            sys.path.insert(0, amt_src_path)
-                            try:
-                                from model.ymt3 import YourMT3  # noqa: F811
-                                logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
-                                has_code = True
-                                break
-                            except ImportError as ie:
-                                logger.debug(f"从 {amt_src_path} 导入失败: {ie}")
-                                sys.path.remove(amt_src_path)
-                                continue
+                amt_src_path = _get_yourmt3_amt_src_path()
+                if amt_src_path:
+                    sys.path.insert(0, amt_src_path)
+                    try:
+                        from model.ymt3 import YourMT3  # noqa: F811
+                        logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
+                        has_code = True
+                    except ImportError as ie:
+                        logger.debug(f"从 {amt_src_path} 导入失败: {ie}")
+                        sys.path.remove(amt_src_path)
 
             if not has_code:
                 logger.warning("YourMT3+ 不可用：未找到代码")
@@ -471,25 +492,12 @@ class YourMT3Transcriber:
                 # 1. 添加 YourMT3 路径到 sys.path
                 import sys
                 logger.info("正在查找 YourMT3 代码库路径...")
-                yourmt3_paths = [
-                    "YourMT3",
-                    os.path.join(os.getcwd(), "YourMT3"),
-                    os.path.join(os.path.dirname(__file__), "../../YourMT3"),
-                    os.path.join(os.path.dirname(__file__), "../../external/YourMT3"),
-                ]
-
-                amt_src_path = None
-                for base_path in yourmt3_paths:
-                    if os.path.exists(base_path):
-                        potential_path = os.path.join(base_path, "amt/src")
-                        if os.path.exists(potential_path):
-                            amt_src_path = potential_path
-                            break
+                amt_src_path = _get_yourmt3_amt_src_path()
 
                 if not amt_src_path:
                     raise FileNotFoundError(
                         "未找到 YourMT3 代码库\n"
-                        "请确保 YourMT3/ 目录存在于项目根目录"
+                        "请确保 YourMT3/ 目录已随程序一起分发"
                     )
 
                 if amt_src_path not in sys.path:
@@ -1068,10 +1076,9 @@ class YourMT3Transcriber:
                 if program < 0 or program > 127:
                     program = 0
 
-                # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
-                # 设计决策：人声旋律用钢琴音色表达，更适合 MIDI 回放
-                if program in (100, 101):
-                    program = 0
+                # 保留 YourMT3 人声程序号 (100/101)，不再强制映射为钢琴
+                # 下游 pipeline 需要区分人声与钢琴以正确路由到 stem
+                # MIDI 生成器会在写入时将 100/101 映射为 GM 52 (Choir Aahs)
 
                 # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
                 # 需要将其设置为合理的默认力度值
@@ -1245,9 +1252,9 @@ class YourMT3Transcriber:
             if float(onset) >= float(offset):
                 continue
 
-            # YourMT3 人声程序号 (100/101) 固定映射为钢琴 (GM 0)
-            if program in (100, 101):
-                program = 0
+            # 保留 YourMT3 人声程序号 (100/101)，不再强制映射为钢琴
+            # 下游 pipeline 需要区分人声与钢琴以正确路由到 stem
+            # MIDI 生成器会在写入时将 100/101 映射为 GM 0 (钢琴音色)
 
             # YourMT3 在 ignore_velocity=True 时只返回 0 或 1
             if velocity <= 1:

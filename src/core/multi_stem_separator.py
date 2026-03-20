@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional
 
 from download_multistem_model import (
-    DEFAULT_CACHE_DIR,
     ROFORMER_SW_MODEL,
     download_multistem_model,
 )
+from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,11 @@ class SixStemSeparator:
         *,
         separator_cls=None,
         ensure_assets_fn: Optional[Callable[..., object]] = None,
-        cache_dir: Path = DEFAULT_CACHE_DIR,
+        cache_dir: Optional[Path] = None,
     ):
         self.separator_cls = separator_cls
         self.ensure_assets_fn = ensure_assets_fn or download_multistem_model
-        self.cache_dir = Path(cache_dir)
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else get_audio_separator_model_dir()
 
     @staticmethod
     def is_available() -> bool:

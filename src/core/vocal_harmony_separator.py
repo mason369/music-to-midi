@@ -9,6 +9,8 @@ from typing import Callable, Dict, Optional
 
 import numpy as np
 
+from src.utils.runtime_paths import get_audio_separator_model_dir
+
 logger = logging.getLogger(__name__)
 
 CHORUS_MODEL = "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt"
@@ -19,8 +21,7 @@ class VocalHarmonySeparator:
 
     @staticmethod
     def _get_model_cache_dir() -> str:
-        cache_dir = Path.home() / ".music-to-midi" / "models" / "audio-separator"
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = get_audio_separator_model_dir()
         return str(cache_dir)
 
     @staticmethod
@@ -34,7 +35,7 @@ class VocalHarmonySeparator:
     @staticmethod
     def is_model_available() -> bool:
         """检查 chorus 模型文件是否已下载到缓存目录。"""
-        cache_dir = Path.home() / ".music-to-midi" / "models" / "audio-separator"
+        cache_dir = get_audio_separator_model_dir()
         model_path = cache_dir / CHORUS_MODEL
         if model_path.exists() and model_path.stat().st_size > 0:
             return True

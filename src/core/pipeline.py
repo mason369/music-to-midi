@@ -23,6 +23,7 @@ from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.core.beat_detector import BeatDetector
 from src.core.midi_generator import MidiGenerator
 from src.utils.gpu_utils import clear_gpu_memory
+from src.utils.runtime_paths import get_ffmpeg_executable
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,9 @@ class MusicToMidiPipeline:
 
         # 优先使用 FFmpeg
         try:
+            ffmpeg_exe = get_ffmpeg_executable()
             cmd = [
-                "ffmpeg", "-y", "-i", audio_path,
+                ffmpeg_exe, "-y", "-i", audio_path,
                 "-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
                 wav_path,
             ]
@@ -262,7 +264,14 @@ class MusicToMidiPipeline:
         return merged_separated, expanded_stems
 
     def _process_six_stem_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """
+        六声部分离模式（修正架构）：
+        1. BS-RoFormer SW 分离六个 stem（仅用于 WAV 输出）
+        2. YourMT3+ 对 **完整混音** 做一次推理（模型设计如此）
+        3. 按 GM 乐器族将转写结果拆分到对应 stem MIDI
+        """
         from src.core.multi_stem_separator import SixStemSeparator, STEM_KEYS
+        from src.models.gm_instruments import get_instrument_family, GMFamily
 
         start_time = time.time()
 
@@ -282,6 +291,7 @@ class MusicToMidiPipeline:
                 "  python download_sota_models.py"
             )
 
+        # ── 阶段0：节拍检测 ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
         self._check_cancelled()
 
@@ -296,6 +306,7 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
+        # ── 阶段1：六声部音源分离（WAV 输出用） ──
         self._report(ProcessingStage.SEPARATION, 0.0, 0.05, "正在进行六声部分离...")
         separator = SixStemSeparator()
 
@@ -316,6 +327,85 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.SEPARATION, 1.0, 0.30, "六声部分离完成")
         self._check_cancelled()
 
+        # ── 阶段2：YourMT3+ 对完整混音做一次转写 ──
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.30, "正在加载 YourMT3+ 模型...")
+        logger.info("使用 YourMT3+ 对完整混音进行一次性多乐器转写")
+
+        quality = self.config.transcription_quality
+
+        def _transcribe_cb(p: float, msg: str) -> None:
+            overall = 0.30 + p * 0.45
+            self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
+
+        try:
+            instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
+                audio_path=audio_path,
+                quality=quality,
+                progress_callback=_transcribe_cb,
+            )
+        except InterruptedError:
+            raise
+        except Exception as e:
+            logger.error(f"YourMT3+ 转写失败: {e}", exc_info=True)
+            raise RuntimeError(f"YourMT3+ 转写失败: {e}") from e
+        finally:
+            try:
+                self.yourmt3_transcriber.unload_model()
+            except Exception:
+                pass
+            try:
+                clear_gpu_memory()
+            except Exception:
+                pass
+
+        total_notes = sum(len(n) for n in instrument_notes.values()) + \
+                      sum(len(n) for n in drum_notes.values())
+        logger.info(
+            f"全混音转写完成: {len(instrument_notes)} 种乐器, "
+            f"{len(drum_notes)} 种鼓音色, 共 {total_notes} 个音符"
+        )
+        self._report(
+            ProcessingStage.TRANSCRIPTION, 1.0, 0.75,
+            f"转写完成：{len(instrument_notes)} 种乐器，{total_notes} 个音符",
+        )
+        self._check_cancelled()
+
+        # ── 阶段3：按 GM 乐器族拆分到 stem ──
+        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.75, "正在按乐器族拆分 MIDI...")
+
+        # GM 乐器族 → stem 名称映射
+        _FAMILY_TO_STEM: Dict[GMFamily, str] = {
+            GMFamily.PIANO: "piano",
+            GMFamily.CHROMATIC: "other",
+            GMFamily.ORGAN: "other",
+            GMFamily.GUITAR: "guitar",
+            GMFamily.BASS: "bass",
+            GMFamily.STRINGS: "other",
+            GMFamily.ENSEMBLE: "vocals",   # 含人声合唱
+            GMFamily.BRASS: "other",
+            GMFamily.REED: "other",
+            GMFamily.PIPE: "other",
+            GMFamily.SYNTH_LEAD: "other",
+            GMFamily.SYNTH_PAD: "other",
+            GMFamily.SYNTH_EFFECTS: "other",
+            GMFamily.ETHNIC: "other",
+            GMFamily.PERCUSSIVE: "other",
+            GMFamily.SOUND_EFFECTS: "other",
+        }
+
+        # 按 stem 分桶
+        stem_instrument: Dict[str, Dict[int, List]] = {s: {} for s in STEM_KEYS}
+        stem_drums: Dict[str, Dict[int, List]] = {s: {} for s in STEM_KEYS}
+
+        for program, notes in instrument_notes.items():
+            family = get_instrument_family(program)
+            stem = _FAMILY_TO_STEM.get(family, "other") if family else "other"
+            stem_instrument[stem][program] = notes
+
+        # 鼓音符全部归入 drums stem
+        stem_drums["drums"] = drum_notes
+
+        # 确定要输出的 stem
         requested_stems = [
             str(stem).lower()
             for stem in (getattr(self.config, "six_stem_targets", []) or [])
@@ -327,6 +417,7 @@ class MusicToMidiPipeline:
         if not selected_stems:
             selected_stems = list(STEM_KEYS)
 
+        # 人声和声分离（如果启用）
         separated, selected_stems = self._apply_vocal_harmony_split(
             separated=separated,
             selected_stems=selected_stems,
@@ -334,65 +425,47 @@ class MusicToMidiPipeline:
         )
         self._check_cancelled()
 
-        quality = self.config.transcription_quality
-        stem_midi_paths: Dict[str, str] = {}
-        total_notes = 0
+        # 如果 vocal harmony split 将 "vocals" 拆成了 "lead_vocals"/"harmony_vocals"，
+        # 需要把 stem_instrument["vocals"] 的 MIDI 音符复制到新 stem 名下
+        # （YourMT3+ 无法区分主唱与和声，两者共享同一份 MIDI）
+        for expanded_key in ("lead_vocals", "harmony_vocals"):
+            if expanded_key in selected_stems and expanded_key not in stem_instrument:
+                stem_instrument[expanded_key] = dict(stem_instrument.get("vocals", {}))
+                stem_drums[expanded_key] = dict(stem_drums.get("vocals", {}))
 
+        # ── 阶段4：为每个 stem 生成 MIDI ──
+        stem_midi_paths: Dict[str, str] = {}
         total_selected = len(selected_stems)
 
         for stem_index, stem_name in enumerate(selected_stems):
             self._check_cancelled()
-            stem_audio_path = separated[stem_name]
 
-            stage_offset = 0.30 + (stem_index * (0.45 / total_selected))
+            s_instr = stem_instrument.get(stem_name, {})
+            s_drum = stem_drums.get(stem_name, {})
+            stem_note_count = sum(len(v) for v in s_instr.values()) + \
+                              sum(len(v) for v in s_drum.values())
 
-            self._report(
-                ProcessingStage.TRANSCRIPTION,
-                stem_index / total_selected,
-                stage_offset,
-                f"正在转写 {stem_name}...",
-            )
-
-            def _stem_cb(p: float, msg: str, stem=stem_name, idx=stem_index) -> None:
-                overall = 0.30 + ((idx + p) * (0.45 / total_selected))
-                self._report(
-                    ProcessingStage.TRANSCRIPTION,
-                    (idx + p) / total_selected,
-                    overall,
-                    f"[{stem}] {msg}",
-                )
-
-            try:
-                instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
-                    audio_path=stem_audio_path,
-                    quality=quality,
-                    progress_callback=_stem_cb,
-                )
-            finally:
-                try:
-                    self.yourmt3_transcriber.unload_model()
-                except Exception as exc:
-                    logger.warning(f"YourMT3+ 卸载失败: {exc}")
-                try:
-                    clear_gpu_memory()
-                except Exception as exc:
-                    logger.warning(f"GPU 清理失败: {exc}")
-
-            stem_note_count = sum(len(v) for v in instrument_notes.values()) + sum(
-                len(v) for v in drum_notes.values()
-            )
-            total_notes += stem_note_count
+            if stem_note_count == 0:
+                logger.info(f"[{stem_name}] 无音符，跳过 MIDI 生成")
+                continue
 
             stem_midi_path = str(Path(output_dir) / f"{input_stem}_{stem_name}.mid")
+            progress = 0.75 + (stem_index / total_selected) * 0.18
             self._report(
                 ProcessingStage.SYNTHESIS,
                 stem_index / total_selected,
-                0.75 + (stem_index * (0.15 / total_selected)),
-                f"正在生成 {stem_name} MIDI...",
+                progress,
+                f"正在生成 {stem_name} MIDI ({stem_note_count} 个音符)...",
             )
+
+            logger.info(
+                f"[{stem_name}] 乐器: {len(s_instr)} 种, "
+                f"鼓: {len(s_drum)} 种, 共 {stem_note_count} 个音符"
+            )
+
             stem_midi_path = self.midi_generator.generate_from_precise_instruments_v2(
-                instrument_notes=instrument_notes,
-                drum_notes=drum_notes,
+                instrument_notes=s_instr,
+                drum_notes=s_drum,
                 tempo=tempo,
                 output_path=stem_midi_path,
                 quality=quality,
@@ -767,19 +840,27 @@ class MusicToMidiPipeline:
             except Exception as e:
                 logger.warning(f"GPU内存清理失败: {e}")
 
-        # 人声 MIDI 只保留人声旋律（GM 0 钢琴），丢弃模型幻觉出的其他乐器和鼓
+        # 人声 MIDI 只保留人声旋律，丢弃模型幻觉出的其他乐器和鼓
+        # YourMT3 人声程序号: 100 (主旋律), 101 (和声); 也可能输出 GM 0 (钢琴)
         raw_inst_count = len(vocal_instrument_notes)
         raw_note_count = sum(len(n) for n in vocal_instrument_notes.values())
         raw_drum_count = sum(len(n) for n in vocal_drum_notes.values())
 
-        if 0 in vocal_instrument_notes:
-            vocal_instrument_notes = {0: vocal_instrument_notes[0]}
+        # 优先使用 YourMT3 人声程序号 100/101，其次回退到 GM 0
+        vocal_programs = [p for p in (100, 101, 0) if p in vocal_instrument_notes]
+        if vocal_programs:
+            # 合并所有匹配的人声音符，统一为 program 0（钢琴音色）
+            merged_vocal_notes = []
+            for vp in vocal_programs:
+                merged_vocal_notes.extend(vocal_instrument_notes[vp])
+            merged_vocal_notes.sort(key=lambda n: n.start_time)
+            vocal_instrument_notes = {0: merged_vocal_notes}
         else:
-            # 模型未识别出人声旋律（GM 0），尝试使用音符最多的乐器作为人声
+            # 模型未识别出人声旋律，尝试使用音符最多的乐器作为人声
             if vocal_instrument_notes:
                 best_program = max(vocal_instrument_notes, key=lambda k: len(vocal_instrument_notes[k]))
                 logger.warning(
-                    f"人声转写未产生 GM 000 钢琴音符，回退使用 GM {best_program:03d} "
+                    f"人声转写未产生人声/钢琴音符，回退使用 GM {best_program:03d} "
                     f"({len(vocal_instrument_notes[best_program])} 个音符) 作为人声旋律"
                 )
                 vocal_instrument_notes = {0: vocal_instrument_notes[best_program]}
@@ -790,7 +871,7 @@ class MusicToMidiPipeline:
 
         kept = sum(len(n) for n in vocal_instrument_notes.values())
         logger.info(
-            f"人声过滤: 保留 GM 000 钢琴 {kept} 个音符, "
+            f"人声过滤: 保留人声 {kept} 个音符, "
             f"丢弃 {raw_inst_count - len(vocal_instrument_notes)} 种乐器 "
             f"({raw_note_count - kept} 个音符) + {raw_drum_count} 个鼓音符"
         )

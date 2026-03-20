@@ -5,6 +5,7 @@ YourMT3 模型路径解析单元测试
 """
 import unittest
 from pathlib import Path
+from unittest import mock
 from src.utils.yourmt3_downloader import (
     get_model_path,
     resolve_model_checkpoint_path,
@@ -98,6 +99,31 @@ class TestYourMT3PathResolution(unittest.TestCase):
         """测试解析不存在的模型返回 None"""
         path = resolve_model_checkpoint_path("nonexistent_model_xyz")
         self.assertIsNone(path)
+
+    def test_resolve_model_from_custom_search_root(self):
+        """测试便携包模式下可从自定义搜索根目录解析模型"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = (
+                root
+                / "logs"
+                / "2024"
+                / "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2"
+                / "checkpoints"
+                / "model.ckpt"
+            )
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_bytes(b"ok")
+
+            with mock.patch(
+                "src.utils.yourmt3_downloader.get_yourmt3_search_roots",
+                return_value=[root],
+            ):
+                path = resolve_model_checkpoint_path("YPTF.MoE+Multi (PS)")
+
+            self.assertEqual(path, checkpoint)
 
 
 if __name__ == "__main__":

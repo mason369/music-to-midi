@@ -346,7 +346,12 @@ if (-not (Test-Path $VENV_DIR) -or -not (Test-Path $PYTHON)) {
     if ((Test-Path $VENV_DIR) -and -not (Test-Path $PYTHON)) {
         Write-Warn "虚拟环境目录存在但缺少 python.exe，正在重新创建..."
     }
-    & @PYTHON_CMD -m venv "$VENV_DIR"
+    if ($PYTHON_CMD.Count -eq 1) {
+        & $PYTHON_CMD[0] -m venv "$VENV_DIR"
+    } else {
+        # e.g. py -3.11 → & py -3.11 -m venv ...
+        & $PYTHON_CMD[0] $PYTHON_CMD[1] -m venv "$VENV_DIR"
+    }
     if ($LASTEXITCODE -ne 0) { Write-Err "创建虚拟环境失败" }
     Write-Ok "虚拟环境创建成功: $VENV_DIR"
 } else {

@@ -399,6 +399,16 @@ mypy src/
 flake8 src/ --max-line-length=100
 ```
 
+## Windows 便携版打包
+
+如需给终端用户分发“解压即用”的 `exe` 目录版，可在已准备好模型的构建机上执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_portable.ps1
+```
+
+详细说明见 [docs/portable-build.md](docs/portable-build.md)。
+
 ## 常见问题
 
 **Q: 中文/图标显示为方块（字体渲染问题）**

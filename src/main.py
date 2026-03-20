@@ -7,10 +7,15 @@ import logging
 import warnings
 from pathlib import Path
 
+from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
+
 # 在导入其他模块之前抑制第三方库的警告
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 所有日志
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 警告
 os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
+
+# 预先注入 bundled ffmpeg/bin 到 PATH，供 librosa/audioread/subprocess 使用
+bootstrap_runtime_environment()
 
 # 动态设置 OpenMP/MKL 线程数（必须在 import torch 之前，否则无效）
 # 使用全部物理核心，最大化 CPU 利用率
@@ -111,14 +116,38 @@ from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment
 
 
+def _is_4k_display() -> bool:
+    """检测主显示器是否为 4K（>= 3840x2160）。
+
+    在 QApplication 创建之前调用，使用平台原生 API 获取物理分辨率。
+    """
+    import platform
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            # 设置 DPI 感知以获取真实物理分辨率（而非缩放后的逻辑分辨率）
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+            w = ctypes.windll.user32.GetSystemMetrics(0)  # SM_CXSCREEN
+            h = ctypes.windll.user32.GetSystemMetrics(1)  # SM_CYSCREEN
+            return w >= 3840 and h >= 2160
+    except Exception:
+        pass
+    return False
+
+
 def main():
     """主入口函数"""
     # 设置中文环境（抑制警告 + 修补输出）
     setup_chinese_environment()
 
     # 设置日志
-    log_dir = Path.home() / ".music-to-midi" / "logs"
-    logger = setup_logger(log_dir=str(log_dir), level=logging.DEBUG)
+    logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
 
     # 设置所有 src.* 模块的日志级别为 DEBUG，这样子模块也会输出详细日志
     src_logger = logging.getLogger("src")
@@ -140,10 +169,18 @@ def main():
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config
 
-        # 高DPI缩放：使用 Floor 策略避免界面过大导致文字被遮挡
-        QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.Floor
-        )
+        # 高DPI缩放策略：
+        #   4K 屏幕使用 PassThrough 保留精确缩放比例，避免 Floor 将 1.5x 截断为 1x 导致界面过小
+        #   非 4K 屏幕使用 Floor 避免界面过大导致文字被遮挡
+        if _is_4k_display():
+            logger.info("检测到 4K 显示器，使用 PassThrough DPI 策略")
+            QApplication.setHighDpiScaleFactorRoundingPolicy(
+                Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+            )
+        else:
+            QApplication.setHighDpiScaleFactorRoundingPolicy(
+                Qt.HighDpiScaleFactorRoundingPolicy.Floor
+            )
 
         # 创建应用程序
         app = QApplication(sys.argv)

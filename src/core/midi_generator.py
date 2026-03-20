@@ -1376,11 +1376,13 @@ class MidiGenerator:
 
             track.append(MetaMessage('track_name', name=track_name, time=0))
 
-            # 音色变更
+            # 音色变更 — YourMT3 人声程序号 100/101 不是标准 GM，
+            # 写入 MIDI 时映射为 GM 0 (钢琴) 以获得正确回放
+            midi_program = 0 if program in (100, 101) else program
             track.append(Message(
                 'program_change',
                 channel=midi_channel,
-                program=program,
+                program=midi_program,
                 time=0
             ))
 

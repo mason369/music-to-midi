@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+from src.utils.runtime_paths import get_aria_amt_dir
+
 logger = logging.getLogger(__name__)
 
 ARIA_AMT_CHECKPOINT_NAME = "piano-medium-double-1.0.safetensors"
@@ -28,7 +30,7 @@ class AriaAmtTranscriber:
 
     @staticmethod
     def default_checkpoint_path() -> Path:
-        return ARIA_AMT_CACHE_DIR / ARIA_AMT_CHECKPOINT_NAME
+        return get_aria_amt_dir() / ARIA_AMT_CHECKPOINT_NAME
 
     @staticmethod
     def is_available() -> bool:

@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict
 
+from src.utils.runtime_paths import get_audio_separator_model_dir
+
 logger = logging.getLogger(__name__)
 
 # 默认 BS-RoFormer 模型文件名（检查点名含训练分数标签）
@@ -53,10 +55,7 @@ class VocalSeparator:
     @staticmethod
     def _get_model_cache_dir() -> str:
         """返回模型缓存目录"""
-        cache_dir = (
-            Path.home() / ".music-to-midi" / "models" / "audio-separator"
-        )
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = get_audio_separator_model_dir()
         return str(cache_dir)
 
     def separate(
