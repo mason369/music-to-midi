@@ -95,11 +95,21 @@ hiddenimports = [
 if importlib.util.find_spec("torch_directml") is not None:
     hiddenimports.append("torch_directml")
 
+# 收集 PyTorch 完整包（含 CUDA 运行时 DLL）
+from PyInstaller.utils.hooks import collect_all
+
+torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
+torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
+datas += torch_datas + torchaudio_datas
+hiddenimports += torch_hiddenimports + torchaudio_hiddenimports
+
+all_binaries = torch_binaries + torchaudio_binaries
+
 # 分析主入口
 a = Analysis(
     ['src/main.py'],
     pathex=[ROOT_DIR],
-    binaries=[],
+    binaries=all_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
