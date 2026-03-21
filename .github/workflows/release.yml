@@ -84,8 +84,9 @@ jobs:
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }}
           pip install -r requirements.txt
+          # 用指定版本的 PyTorch 覆盖（CPU 或 CUDA），避免被 requirements.txt 安装的 PyPI 版覆盖
+          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
           pip install pyinstaller
 
       - name: 使用 PyInstaller 构建
