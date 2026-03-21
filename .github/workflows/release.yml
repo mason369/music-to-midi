@@ -4,11 +4,45 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要上传资源的 Release 标签（如 v1.0.0），留空则上传到最新 Release'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
 
 jobs:
-  build-linux:
-    name: 构建 Linux 版本
-    runs-on: ubuntu-22.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            variant: CPU
+            platform: Windows
+            pytorch_url: https://download.pytorch.org/whl/cpu
+            sep: ";"
+          - os: windows-latest
+            variant: GPU
+            platform: Windows
+            pytorch_url: https://download.pytorch.org/whl/cu121
+            sep: ";"
+          - os: ubuntu-22.04
+            variant: CPU
+            platform: Linux
+            pytorch_url: https://download.pytorch.org/whl/cpu
+            sep: ":"
+          - os: ubuntu-22.04
+            variant: GPU
+            platform: Linux
+            pytorch_url: https://download.pytorch.org/whl/cu121
+            sep: ":"
+
+    runs-on: ${{ matrix.os }}
+    name: 构建 ${{ matrix.platform }}-${{ matrix.variant }}
 
     steps:
       - name: 检出代码
@@ -20,7 +54,8 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      - name: 安装系统依赖
+      - name: 安装系统依赖 (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -42,133 +77,175 @@ jobs:
             fonts-ubuntu \
             fonts-dejavu-core
 
-      - name: 安装 Python 依赖
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install torch==2.4.0 torchaudio==2.4.0 \
-            --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 构建
-        run: |
-          pyinstaller MusicToMidi.spec
-
-      - name: 创建压缩包
-        run: |
-          tar -czf MusicToMidi-Linux.tar.gz -C dist MusicToMidi
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: MusicToMidi-Linux
-          path: MusicToMidi-Linux.tar.gz
-
-  build-windows:
-    name: 构建 Windows 版本
-    runs-on: windows-latest
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Python 环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: 安装 FFmpeg
+      - name: 安装 FFmpeg (Windows)
+        if: runner.os == 'Windows'
         run: choco install ffmpeg -y
 
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }}
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: 使用 PyInstaller 构建
-        run: |
-          pyinstaller MusicToMidi.spec
+        run: pyinstaller MusicToMidi.spec
 
-      - name: 创建压缩包
-        shell: pwsh
+      - name: 创建便携包
+        shell: bash
         run: |
-          Compress-Archive -Path dist\MusicToMidi -DestinationPath MusicToMidi-Windows.zip
+          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          # 重命名 dist/MusicToMidi 为带平台标识的名称
+          mv dist/MusicToMidi "dist/${NAME}"
+
+          if [ "${{ matrix.variant }}" = "GPU" ]; then
+            VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
+          如果没有 NVIDIA 显卡，程序会自动回退到 CPU 推理"
+          else
+            VARIANT_NOTE="CPU 版，无需显卡即可运行
+          如需 GPU 加速，请下载 GPU 版本"
+          fi
+
+          if [ "${{ matrix.platform }}" = "Windows" ]; then
+            EXE="MusicToMidi.exe"
+          else
+            EXE="MusicToMidi"
+            chmod +x "dist/${NAME}/${EXE}"
+          fi
+
+          cat > "dist/${NAME}/使用说明.txt" << HEREDOC
+          音乐转MIDI转换器 ${{ matrix.platform }} 便携版（${{ matrix.variant }}）
+
+          使用方法：
+            运行 ${EXE} 启动
+            首次启动会自动下载 AI 模型（约 5-10 分钟）
+
+          ${VARIANT_NOTE}
+
+          支持格式：MP3, WAV, FLAC, OGG, M4A 等
+          输出格式：多轨道 MIDI（128 种 GM 乐器）
+
+          无需安装 Python，解压即用
+          HEREDOC
+
+      - name: 压缩便携包
+        shell: bash
+        run: |
+          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+
+          if [ "${{ matrix.platform }}" = "Windows" ]; then
+            # 先压缩成 zip
+            cd dist && 7z a -tzip "../${NAME}-Portable.zip" "${NAME}" && cd ..
+            # 超过 1.9GB 时改用 7z（压缩率更高）
+            FILE_SIZE=$(stat -c%s "${NAME}-Portable.zip" 2>/dev/null || wc -c < "${NAME}-Portable.zip" | tr -d ' ')
+            if [ "$FILE_SIZE" -gt 1900000000 ]; then
+              rm "${NAME}-Portable.zip"
+              cd dist && 7z a "../${NAME}-Portable.7z" "${NAME}" && cd ..
+              SEVENZ_SIZE=$(stat -c%s "${NAME}-Portable.7z" 2>/dev/null || wc -c < "${NAME}-Portable.7z" | tr -d ' ')
+              if [ "$SEVENZ_SIZE" -gt 1900000000 ]; then
+                rm "${NAME}-Portable.7z"
+                cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+              fi
+            fi
+          else
+            tar -czf "${NAME}-Portable.tar.gz" -C dist "${NAME}"
+            FILE_SIZE=$(stat -c%s "${NAME}-Portable.tar.gz" 2>/dev/null || stat -f%z "${NAME}-Portable.tar.gz")
+            if [ "$FILE_SIZE" -gt 1900000000 ]; then
+              split -b 1900M "${NAME}-Portable.tar.gz" "${NAME}-Portable.tar.gz.part"
+              rm "${NAME}-Portable.tar.gz"
+            fi
+          fi
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MusicToMidi-Windows
-          path: MusicToMidi-Windows.zip
+          name: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}
+          path: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-Portable*
 
   release:
-    name: 创建 GitHub Release
-    needs: [build-linux, build-windows]
+    name: 上传到 GitHub Release
+    needs: [build]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 下载 Linux 构建产物
+      - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
-          name: MusicToMidi-Linux
-          path: ./artifacts/
-
-      - name: 下载 Windows 构建产物
-        uses: actions/download-artifact@v4
-        with:
-          name: MusicToMidi-Windows
-          path: ./artifacts/
+          merge-multiple: true
 
       - name: 列出构建产物
-        run: ls -la ./artifacts/
+        run: ls -lh MusicToMidi-*
 
-      - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./artifacts/MusicToMidi-Linux.tar.gz
-            ./artifacts/MusicToMidi-Windows.zip
-          body: |
-            ## 音乐转MIDI转换器 ${{ github.ref_name }}
-
-            ### 下载
-            - **Windows**: MusicToMidi-Windows.zip
-            - **Linux**: MusicToMidi-Linux.tar.gz
-
-            ### 系统要求
-            - Windows 10/11 (x64) 或 Ubuntu 20.04+ / Debian 11+
-            - 推荐 NVIDIA GPU + CUDA 加速处理
-
-            ### Windows 快速开始
-            ```
-            1. 解压 MusicToMidi-Windows.zip
-            2. 双击 run.bat 启动（首次自动安装依赖）
-            ```
-
-            ### Linux 快速开始
-            ```bash
-            git clone https://github.com/mason369/music-to-midi.git
-            cd music-to-midi
-            bash install.sh
-            ./run.sh
-            ```
-
-            ### 平台支持
-            - ✅ Windows 10/11 (x64) - 完整支持
-            - ✅ Linux (Ubuntu/Debian) - 完整支持
-            - ✅ WSL2 (Windows Subsystem for Linux) - 完整支持
-            - 🚧 macOS - 计划中
-
-            ### 更新日志
-            查看 [README](https://github.com/mason369/music-to-midi/blob/master/README.md) 了解详情。
-          draft: false
-          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
+      - name: 确定目标标签
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            LATEST=$(gh release list --repo ${{ github.repository }} --limit 1 --json tagName -q '.[0].tagName')
+            echo "tag=${LATEST}" >> $GITHUB_OUTPUT
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 Release（如不存在）
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if ! gh release view "${TAG}" --repo ${{ github.repository }} &>/dev/null; then
+            gh release create "${TAG}" \
+              --repo ${{ github.repository }} \
+              --title "${TAG}" \
+              --notes "## 音乐转MIDI转换器 ${TAG}
+
+          ### 便携版下载
+
+          | 文件 | 平台 | 推理方式 | 说明 |
+          |------|------|----------|------|
+          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Windows-CPU-Portable.zip\` | Windows | CPU | 无显卡使用 |
+          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Linux-CPU-Portable.tar.gz\` | Linux | CPU | 无显卡使用 |
+
+          ### 使用方法
+          1. 下载对应平台和推理方式的压缩包
+          2. 解压到任意目录
+          3. 运行 \`MusicToMidi\`（Windows 为 \`.exe\`）
+          4. 首次启动会自动下载 AI 模型（约 5-10 分钟）
+
+          ### 说明
+          - 无需安装 Python，解压即用
+          - GPU 版内含 CUDA 12.1 运行时，无需单独安装 CUDA
+          - GPU 版在没有 NVIDIA 显卡时会自动回退到 CPU
+          - 支持 128 种 GM 乐器精确识别
+          - 4 种处理模式：智能转写 / 人声分离 / 六声部分离 / 钢琴专用
+
+          ### 系统要求
+          - **Windows**：Windows 10/11 (x64)
+          - **Linux**：Ubuntu 20.04+ / Debian 11+ (x64)
+          - **GPU 版**：NVIDIA 显卡（GTX 10xx 及以上）
+          - **内存**：建议 8GB+"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传资源到 Release
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "上传资源到 Release: ${TAG}"
+          FILES=$(find . -maxdepth 1 -name "MusicToMidi-*-Portable*" -type f | sort)
+          echo "找到以下文件："
+          echo "$FILES" | while read f; do
+            SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
+            echo "  $f ($(( SIZE / 1048576 )) MB)"
+          done
+          echo "$FILES" | while read f; do
+            echo "上传: $f"
+            gh release upload "${TAG}" "$f" \
+              --repo ${{ github.repository }} \
+              --clobber
+          done
+          echo "全部上传完成"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
