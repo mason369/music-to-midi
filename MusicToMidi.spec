@@ -112,6 +112,8 @@ a = Analysis(
         'PIL',
         'cv2',
         'tensorflow',
+        # onnx.reference 在 CUDA + Windows 下导入崩溃（DLL 冲突），运行时不需要
+        'onnx.reference',
     ],
     noarchive=False,
     optimize=0,
