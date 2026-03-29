@@ -89,25 +89,27 @@ jobs:
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           # 注意：必须在 torch 降级前下载，因为 audio-separator 依赖当前 torch 版本
-          echo "=== 下载 YourMT3+ MoE 转写模型 ==="
+          echo "=== Download YourMT3+ MoE model ==="
           python download_sota_models.py
 
-          echo "=== 下载 BS-RoFormer ep368 人声分离模型 ==="
+          echo "=== Download BS-RoFormer ep368 vocal model ==="
           python download_vocal_model.py
 
-          echo "=== 下载 BS-RoFormer SW 六声部分离模型 ==="
+          echo "=== Download BS-RoFormer SW multi-stem model ==="
           python download_multistem_model.py
 
-          echo "=== 下载 Chorus BS-RoFormer 和声分离模型 ==="
+          echo "=== Download Chorus BS-RoFormer model ==="
           python download_vocal_harmony_model.py
 
-          echo "=== 模型下载完成，验证文件 ==="
+          echo "=== Verify downloaded models ==="
           echo "YourMT3+:"
-          find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \; 2>/dev/null || echo "  (未找到)"
+          find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \; 2>/dev/null || echo "  (not found)"
           echo "Audio-Separator:"
-          ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt 2>/dev/null || echo "  (未找到)"
+          ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt 2>/dev/null || echo "  (not found)"
 
       - name: 覆盖 PyTorch 版本（CPU 或 CUDA）
         run: |
