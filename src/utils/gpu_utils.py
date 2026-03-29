@@ -4,6 +4,7 @@ GPU检测和管理工具 - 支持 CUDA (NVIDIA)、ROCm (AMD)、MPS (Apple)、Int
 import logging
 import os
 import platform
+import sys
 import threading
 from typing import List, Optional, Tuple
 
@@ -136,13 +137,22 @@ def _get_torch():
                 logger.warning("建议将项目移动到纯英文且无空格的路径，如 C:\\MusicToMidi")
             else:
                 logger.warning(f"torch DLL 加载失败: {e}")
-                logger.warning(
-                    "可能原因：\n"
-                    "  1. 未安装 Visual C++ Redistributable 2022: "
-                    "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                    "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
-                    "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
-                )
+                is_frozen = getattr(sys, 'frozen', False)
+                if is_frozen:
+                    logger.warning(
+                        "可能原因：\n"
+                        "  1. 未安装 Visual C++ Redistributable 2022: "
+                        "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                        "  2. 没有 NVIDIA 显卡或未安装驱动，将自动回退到 CPU 推理"
+                    )
+                else:
+                    logger.warning(
+                        "可能原因：\n"
+                        "  1. 未安装 Visual C++ Redistributable 2022: "
+                        "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+                        "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
+                        "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
+                    )
             return None
 
 
