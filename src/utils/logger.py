@@ -90,11 +90,12 @@ def setup_logger(
     logger.handlers.clear()
 
     # 控制台处理器（带颜色）
-    if console:
+    # PyInstaller --windowed 模式下 sys.stdout/sys.stderr 为 None，跳过控制台输出
+    if console and sys.stdout is not None:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         # 仅在 TTY 终端启用颜色；重定向到文件时回退到纯文本
-        if sys.stdout.isatty():
+        if getattr(sys.stdout, 'isatty', lambda: False)():
             console_handler.setFormatter(ColoredFormatter())
         else:
             console_handler.setFormatter(PlainFormatter(
