@@ -85,13 +85,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          # 用指定版本的 PyTorch 覆盖（CPU 或 CUDA），避免被 requirements.txt 安装的 PyPI 版覆盖
-          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
           pip install pyinstaller
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
         run: |
+          # 注意：必须在 torch 降级前下载，因为 audio-separator 依赖当前 torch 版本
           echo "=== 下载 YourMT3+ MoE 转写模型 ==="
           python download_sota_models.py
 
@@ -109,6 +108,10 @@ jobs:
           find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \; 2>/dev/null || echo "  (未找到)"
           echo "Audio-Separator:"
           ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt 2>/dev/null || echo "  (未找到)"
+
+      - name: 覆盖 PyTorch 版本（CPU 或 CUDA）
+        run: |
+          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
 
       - name: 使用 PyInstaller 构建
         run: pyinstaller MusicToMidi.spec
