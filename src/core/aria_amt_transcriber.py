@@ -111,4 +111,3 @@ class AriaAmtTranscriber:
 
         logger.info("Aria-AMT output: %s", out_path)
         return str(out_path)
-
