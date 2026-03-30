@@ -109,12 +109,14 @@ from PyInstaller.utils.hooks import collect_all
 
 torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
+torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
 utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
 datas += (
     torch_datas
     + torchaudio_datas
+    + torchvision_datas
     + lightning_datas
     + fabric_datas
     + utilities_datas
@@ -122,6 +124,7 @@ datas += (
 hiddenimports += (
     torch_hiddenimports
     + torchaudio_hiddenimports
+    + torchvision_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
     + utilities_hiddenimports
@@ -130,6 +133,7 @@ hiddenimports += (
 all_binaries = (
     torch_binaries
     + torchaudio_binaries
+    + torchvision_binaries
     + lightning_binaries
     + fabric_binaries
     + utilities_binaries

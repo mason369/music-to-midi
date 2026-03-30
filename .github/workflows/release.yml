@@ -117,7 +117,7 @@ jobs:
 
       - name: 覆盖 PyTorch 版本（CPU 或 CUDA）
         run: |
-          pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
+          pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
 
       - name: 修复 Torch OpenMP 运行时 (Windows)
         if: runner.os == 'Windows'
