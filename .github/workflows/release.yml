@@ -115,6 +115,12 @@ jobs:
         run: |
           pip install torch==2.4.0 torchaudio==2.4.0 --index-url ${{ matrix.pytorch_url }} --force-reinstall --no-deps
 
+      - name: 修复 Torch OpenMP 运行时 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install zstandard
+          python tools/repair_torch_openmp.py
+
       - name: 使用 PyInstaller 构建
         run: pyinstaller MusicToMidi.spec
 

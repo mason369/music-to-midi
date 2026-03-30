@@ -70,6 +70,18 @@ function Copy-Tree {
 $Python = Resolve-Python -Requested $PythonExe
 Write-Host "使用 Python: $Python"
 
+$TorchRuntimeRepair = Join-Path $Root "tools\repair_torch_openmp.py"
+if (Test-Path $TorchRuntimeRepair) {
+    & $Python -m pip install zstandard | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "安装 zstandard 失败，无法修复 torch OpenMP 运行时"
+    }
+    & $Python $TorchRuntimeRepair
+    if ($LASTEXITCODE -ne 0) {
+        throw "修复 torch OpenMP 运行时失败"
+    }
+}
+
 $BuildAssetRoot = Join-Path $Root "build\portable_assets"
 
 if ($Clean) {

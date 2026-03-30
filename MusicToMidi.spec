@@ -52,6 +52,12 @@ ffmpeg_dir = _resolve_existing_dir(
     os.path.join(ROOT_DIR, "tools", "ffmpeg"),
     os.path.join(ROOT_DIR, "ffmpeg"),
 )
+torch_lib_dir = None
+torch_spec = importlib.util.find_spec("torch")
+if torch_spec and torch_spec.origin:
+    torch_lib_dir = _resolve_existing_dir(
+        os.path.join(os.path.dirname(torch_spec.origin), "lib"),
+    )
 
 datas = [
     # 翻译文件
@@ -104,6 +110,10 @@ datas += torch_datas + torchaudio_datas
 hiddenimports += torch_hiddenimports + torchaudio_hiddenimports
 
 all_binaries = torch_binaries + torchaudio_binaries
+if torch_lib_dir:
+    libomp_dll = os.path.join(torch_lib_dir, "libomp140.x86_64.dll")
+    if os.path.exists(libomp_dll):
+        all_binaries.append((libomp_dll, "torch/lib"))
 
 # 分析主入口
 a = Analysis(

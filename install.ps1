@@ -461,47 +461,15 @@ if (-not $TORCH_INSTALLED) {
 # --- 第 7.5 步：确保 libomp140.x86_64.dll 存在（fbgemm.dll 依赖）---
 $torchLib = Join-Path $VENV_DIR "Lib\site-packages\torch\lib"
 $libompDll = Join-Path $torchLib "libomp140.x86_64.dll"
+$torchRuntimeRepair = Join-Path $REPO_DIR "tools\repair_torch_openmp.py"
 
 if ((Test-Path $torchLib) -and -not (Test-Path $libompDll)) {
     Write-Info "正在修复 libomp140.x86_64.dll 缺失问题（fbgemm.dll 依赖 LLVM OpenMP 运行时）..."
     try {
         & "$PIP" install zstandard
-        & "$PYTHON" -c @"
-import zipfile, tarfile, io, os, sys
-try:
-    import zstandard
-except ImportError:
-    print('ERROR: zstandard not available'); sys.exit(1)
-tmp = os.environ['TEMP']
-conda_url = 'https://api.anaconda.org/download/conda-forge/llvm-openmp/19.1.7/win-64/llvm-openmp-19.1.7-h30eaf37_1.conda'
-conda_path = os.path.join(tmp, 'llvm-openmp.conda')
-# Download
-import urllib.request
-urllib.request.urlretrieve(conda_url, conda_path)
-# Extract tar.zst from conda zip
-extract_dir = os.path.join(tmp, 'llvm_omp_extract')
-os.makedirs(extract_dir, exist_ok=True)
-with zipfile.ZipFile(conda_path) as z:
-    zst_names = [n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')]
-    if not zst_names: print('ERROR: no pkg tar.zst in conda'); sys.exit(1)
-    z.extract(zst_names[0], extract_dir)
-# Decompress zst -> tar -> extract libomp.dll
-zst_path = os.path.join(extract_dir, zst_names[0])
-dctx = zstandard.ZstdDecompressor()
-with open(zst_path, 'rb') as f:
-    tar_data = dctx.decompress(f.read(), max_output_size=50*1024*1024)
-torch_lib = sys.argv[1]
-with tarfile.open(fileobj=io.BytesIO(tar_data)) as tf:
-    member = tf.getmember('Library/bin/libomp.dll')
-    data = tf.extractfile(member).read()
-    dest = os.path.join(torch_lib, 'libomp140.x86_64.dll')
-    with open(dest, 'wb') as out: out.write(data)
-    print(f'OK: wrote {len(data)} bytes to {dest}')
-# Cleanup
-import shutil
-os.remove(conda_path)
-shutil.rmtree(extract_dir, ignore_errors=True)
-"@ "$torchLib"
+        if ($LASTEXITCODE -ne 0) { throw "zstandard 安装失败" }
+
+        & "$PYTHON" $torchRuntimeRepair --torch-lib-dir "$torchLib"
         if ($LASTEXITCODE -eq 0) {
             Write-Ok "libomp140.x86_64.dll 已修复"
         } else {
