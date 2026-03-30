@@ -161,7 +161,7 @@ jobs:
 
       - name: 使用 build_portable.ps1 构建 (Windows)
         if: runner.os == 'Windows'
-        run: powershell -ExecutionPolicy Bypass -File .\build_portable.ps1
+        run: pwsh -ExecutionPolicy Bypass -File .\build_portable.ps1
 
       - name: 使用 PyInstaller 构建 (Linux)
         if: runner.os == 'Linux'

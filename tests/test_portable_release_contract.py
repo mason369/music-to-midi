@@ -40,7 +40,7 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_workflow_uses_portable_build_script_on_windows(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("powershell -ExecutionPolicy Bypass -File .\\build_portable.ps1", workflow)
+        self.assertIn("pwsh -ExecutionPolicy Bypass -File .\\build_portable.ps1", workflow)
 
     def test_release_workflow_stages_linux_bundle_assets_before_pyinstaller(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
