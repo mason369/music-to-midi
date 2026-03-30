@@ -248,6 +248,7 @@ class YourMT3Transcriber:
     _model_lock = threading.Lock()
     _audio_cfg = None
     _task_manager = None
+    _last_unavailable_reason = None
 
     def __init__(self, config: Config):
         """
@@ -358,8 +359,26 @@ class YourMT3Transcriber:
         raise RuntimeError("YourMT3 推理失败：即使 bsz=1 也无法完成")
 
     @classmethod
+    def _mark_unavailable(cls, reason: str, *, info: Optional[str] = None) -> bool:
+        cls._last_unavailable_reason = reason
+        logger.warning(reason)
+        if info:
+            logger.info(info)
+        return False
+
+    @classmethod
+    def get_unavailable_reason(cls) -> str:
+        return cls._last_unavailable_reason or (
+            "YourMT3+ 不可用。\n\n"
+            "请先下载模型权重：\n"
+            "  python download_sota_models.py\n\n"
+            "详见 README.md 中的安装说明。"
+        )
+
+    @classmethod
     def is_available(cls) -> bool:
         """严格检查 YourMT3+ 是否真正可用（所有依赖+模型）"""
+        cls._last_unavailable_reason = None
         try:
             # 第一步：检查 PyTorch
             torch = _import_torch()
@@ -370,9 +389,11 @@ class YourMT3Transcriber:
                 import pytorch_lightning
                 logger.debug("✓ pytorch-lightning 已安装")
             except ImportError:
-                logger.warning("YourMT3+ 不可用：缺少 pytorch-lightning")
-                logger.info("安装方法: pip install pytorch-lightning")
-                return False
+                return cls._mark_unavailable(
+                    "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
+                    "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
+                    "如果你使用打包版，请重新安装或使用修复后的安装包。"
+                )
 
             # 第三步：尝试导入 YourMT3 核心模块
             has_code = False
@@ -408,18 +429,24 @@ class YourMT3Transcriber:
                         sys.path.remove(amt_src_path)
 
             if not has_code:
-                logger.warning("YourMT3+ 不可用：未找到代码")
-                logger.info("请确保 YourMT3/ 目录存在于项目根目录，并运行 python download_sota_models.py 下载模型")
-                return False
+                return cls._mark_unavailable(
+                    "YourMT3+ 不可用：未找到 YourMT3 代码目录。\n"
+                    "如果你使用打包版，请确认保留完整安装目录，不要只复制单个 exe。\n"
+                    "如果你使用源码环境，请确保 YourMT3/ 目录存在于项目根目录。",
+                    info="如需源码环境模型，请运行 python download_sota_models.py",
+                )
 
             # 第四步：检查模型权重文件
             try:
                 from src.utils.yourmt3_downloader import get_model_path, DEFAULT_MODEL
                 model_path = get_model_path(DEFAULT_MODEL)
                 if not model_path or not model_path.exists():
-                    logger.warning("YourMT3+ 不可用：模型权重不存在")
-                    logger.info("下载方法: python download_sota_models.py")
-                    return False
+                    return cls._mark_unavailable(
+                        "YourMT3+ 不可用：未找到模型权重。\n\n"
+                        "请先下载模型权重：\n"
+                        "  python download_sota_models.py\n\n"
+                        "详见 README.md 中的安装说明。"
+                    )
                 logger.debug(f"✓ 找到 YourMT3+ 模型: {model_path}")
             except ImportError:
                 logger.debug("⚠ yourmt3_downloader 模块不可用，跳过模型检查")
@@ -427,12 +454,12 @@ class YourMT3Transcriber:
                 pass
 
             # 所有检查通过
+            cls._last_unavailable_reason = None
             logger.info("✓ YourMT3+ 完全可用")
             return True
 
         except ImportError as e:
-            logger.warning(f"YourMT3+ 不可用：{e}")
-            return False
+            return cls._mark_unavailable(f"YourMT3+ 不可用：{e}")
 
     def set_cancel_check(self, callback) -> None:
         """设置取消检查回调"""
@@ -853,11 +880,7 @@ class YourMT3Transcriber:
             progress_callback(0.0, "正在准备 YourMT3+ 转写...")
 
         if not self.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n"
-                "请先安装代码库：bash install.sh\n"
-                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
-            )
+            raise RuntimeError(self.get_unavailable_reason())
 
         try:
             pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
@@ -1314,11 +1337,7 @@ class YourMT3Transcriber:
             progress_callback(0.0, "正在准备精确转写...")
 
         if not self.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n"
-                "请先安装代码库：bash install.sh\n"
-                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
-            )
+            raise RuntimeError(self.get_unavailable_reason())
 
         try:
             pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \
@@ -1402,11 +1421,7 @@ class YourMT3Transcriber:
             progress_callback(0.0, "正在准备极致精度转写...")
 
         if not self.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n"
-                "请先安装代码库：bash install.sh\n"
-                "（install.sh 会自动完成 YourMT3 代码克隆和模型下载）"
-            )
+            raise RuntimeError(self.get_unavailable_reason())
 
         try:
             pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold = \

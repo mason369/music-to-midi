@@ -85,7 +85,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pytest
+
+      - name: 运行便携发布回归测试
+        run: |
+          pytest -q tests/test_portable_release_contract.py tests/test_yourmt3_availability_messages.py
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
@@ -121,7 +125,46 @@ jobs:
           python -m pip install zstandard
           python tools/repair_torch_openmp.py
 
-      - name: 使用 PyInstaller 构建
+      - name: 准备 Linux 便携打包资源
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          BUILD_ASSET_ROOT="$GITHUB_WORKSPACE/build/portable_assets"
+          mkdir -p "$BUILD_ASSET_ROOT"
+
+          if [ -d "$HOME/.music-to-midi/models/audio-separator" ]; then
+            cp -a "$HOME/.music-to-midi/models/audio-separator" "$BUILD_ASSET_ROOT/audio-separator"
+          fi
+
+          if [ -d "$HOME/.cache/music_ai_models/yourmt3_all" ]; then
+            cp -a "$HOME/.cache/music_ai_models/yourmt3_all" "$BUILD_ASSET_ROOT/yourmt3_all"
+          fi
+
+          if [ -d "$HOME/.cache/music_ai_models/aria_amt" ]; then
+            cp -a "$HOME/.cache/music_ai_models/aria_amt" "$BUILD_ASSET_ROOT/aria_amt"
+          fi
+
+          if command -v ffmpeg >/dev/null 2>&1; then
+            mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
+            cp "$(command -v ffmpeg)" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffmpeg"
+          fi
+
+          if command -v ffprobe >/dev/null 2>&1; then
+            mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
+            cp "$(command -v ffprobe)" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"
+          fi
+
+          echo "MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR=$BUILD_ASSET_ROOT/audio-separator" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR=$BUILD_ASSET_ROOT/yourmt3_all" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_ARIA_DIR=$BUILD_ASSET_ROOT/aria_amt" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
+
+      - name: 使用 build_portable.ps1 构建 (Windows)
+        if: runner.os == 'Windows'
+        run: powershell -ExecutionPolicy Bypass -File .\build_portable.ps1
+
+      - name: 使用 PyInstaller 构建 (Linux)
+        if: runner.os == 'Linux'
         run: pyinstaller MusicToMidi.spec
 
       - name: 创建便携包

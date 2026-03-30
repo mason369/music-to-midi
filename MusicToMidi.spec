@@ -97,6 +97,9 @@ hiddenimports = [
     'scipy',
     # 其他
     'mido',
+    'pytorch_lightning',
+    'lightning_fabric',
+    'lightning_utilities',
 ]
 if importlib.util.find_spec("torch_directml") is not None:
     hiddenimports.append("torch_directml")
@@ -106,10 +109,31 @@ from PyInstaller.utils.hooks import collect_all
 
 torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
-datas += torch_datas + torchaudio_datas
-hiddenimports += torch_hiddenimports + torchaudio_hiddenimports
+lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
+fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
+utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
+datas += (
+    torch_datas
+    + torchaudio_datas
+    + lightning_datas
+    + fabric_datas
+    + utilities_datas
+)
+hiddenimports += (
+    torch_hiddenimports
+    + torchaudio_hiddenimports
+    + lightning_hiddenimports
+    + fabric_hiddenimports
+    + utilities_hiddenimports
+)
 
-all_binaries = torch_binaries + torchaudio_binaries
+all_binaries = (
+    torch_binaries
+    + torchaudio_binaries
+    + lightning_binaries
+    + fabric_binaries
+    + utilities_binaries
+)
 if torch_lib_dir:
     libomp_dll = os.path.join(torch_lib_dir, "libomp140.x86_64.dll")
     if os.path.exists(libomp_dll):

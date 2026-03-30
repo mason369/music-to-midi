@@ -73,6 +73,22 @@ class MusicToMidiPipeline:
             raise InterruptedError("用户取消了处理")
 
     @staticmethod
+    def _require_yourmt3_available() -> None:
+        if YourMT3Transcriber.is_available():
+            return
+
+        reason_getter = getattr(YourMT3Transcriber, "get_unavailable_reason", None)
+        if callable(reason_getter):
+            raise RuntimeError(reason_getter())
+
+        raise RuntimeError(
+            "YourMT3+ 不可用。\n\n"
+            "请先下载模型权重：\n"
+            "  python download_sota_models.py\n\n"
+            "详见 README.md 中的安装说明。"
+        )
+
+    @staticmethod
     def _ensure_wav(audio_path: str, output_dir: str) -> str:
         """非 WAV 格式自动转换为 WAV（44100Hz, PCM 16-bit），WAV 直接返回。"""
         audio_path = str(audio_path)
@@ -284,12 +300,7 @@ class MusicToMidiPipeline:
 
         if not SixStemSeparator.is_available():
             raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator>=0.38.0")
-        if not YourMT3Transcriber.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n\n"
-                "请先下载模型权重：\n"
-                "  python download_sota_models.py"
-            )
+        self._require_yourmt3_available()
 
         # ── 阶段0：节拍检测 ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
@@ -586,13 +597,7 @@ class MusicToMidiPipeline:
 
         # ── 检查 YourMT3+ 是否可用 ──
         logger.info("正在检查 YourMT3+ 可用性...")
-        if not YourMT3Transcriber.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n\n"
-                "请先下载模型权重：\n"
-                "  python download_sota_models.py\n\n"
-                "详见 README.md 中的安装说明。"
-            )
+        self._require_yourmt3_available()
         logger.info("YourMT3+ 可用性检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 ──
@@ -707,13 +712,7 @@ class MusicToMidiPipeline:
             raise RuntimeError(
                 "人声分离不可用。请安装: pip install audio-separator>=0.38.0"
             )
-        if not YourMT3Transcriber.is_available():
-            raise RuntimeError(
-                "YourMT3+ 不可用。\n\n"
-                "请先下载模型权重：\n"
-                "  python download_sota_models.py\n\n"
-                "详见 README.md 中的安装说明。"
-            )
+        self._require_yourmt3_available()
         logger.info("所有依赖检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 (0-5%) ──
