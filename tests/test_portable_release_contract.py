@@ -24,6 +24,12 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("repair_torch_openmp.py", script)
 
+    def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("upload_asset_with_retry", workflow)
+        self.assertIn("timeout 30m gh release upload", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

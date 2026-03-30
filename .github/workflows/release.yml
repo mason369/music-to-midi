@@ -265,17 +265,38 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           echo "上传资源到 Release: ${TAG}"
-          FILES=$(find . -maxdepth 1 -name "MusicToMidi-*-Portable*" -type f | sort)
+          mapfile -t FILES < <(find . -maxdepth 1 -name "MusicToMidi-*-Portable*" -type f | sort)
+          upload_asset_with_retry() {
+            local tag="$1"
+            local file="$2"
+            local attempt
+            local exit_code
+
+            for attempt in 1 2 3; do
+              echo "上传(${attempt}/3): ${file}"
+              if timeout 30m gh release upload "${tag}" "${file}" \
+                --repo ${{ github.repository }} \
+                --clobber; then
+                return 0
+              fi
+
+              exit_code=$?
+              echo "上传失败(退出码=${exit_code}): ${file}"
+              if [ "${attempt}" -lt 3 ]; then
+                sleep $(( attempt * 20 ))
+              fi
+            done
+
+            echo "上传最终失败: ${file}"
+            return 1
+          }
           echo "找到以下文件："
-          echo "$FILES" | while read f; do
+          for f in "${FILES[@]}"; do
             SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
             echo "  $f ($(( SIZE / 1048576 )) MB)"
           done
-          echo "$FILES" | while read f; do
-            echo "上传: $f"
-            gh release upload "${TAG}" "$f" \
-              --repo ${{ github.repository }} \
-              --clobber
+          for f in "${FILES[@]}"; do
+            upload_asset_with_retry "${TAG}" "$f"
           done
           echo "全部上传完成"
         env:
