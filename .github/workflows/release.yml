@@ -96,6 +96,10 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: |
+          # Windows: 确保 choco 安装的 FFmpeg 在 PATH 中（bash shell 可能未继承）
+          if [ -d "/c/ProgramData/chocolatey/bin" ]; then
+            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+          fi
           # 注意：必须在 torch 降级前下载，因为 audio-separator 依赖当前 torch 版本
           echo "=== Download YourMT3+ MoE model ==="
           python download_sota_models.py
