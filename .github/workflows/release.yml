@@ -213,17 +213,25 @@ jobs:
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
 
           if [ "${{ matrix.platform }}" = "Windows" ]; then
-            # 先压缩成 zip
-            cd dist && 7z a -tzip "../${NAME}-Portable.zip" "${NAME}" && cd ..
-            # 超过 1.9GB 时改用 7z（压缩率更高）
-            FILE_SIZE=$(stat -c%s "${NAME}-Portable.zip" 2>/dev/null || wc -c < "${NAME}-Portable.zip" | tr -d ' ')
-            if [ "$FILE_SIZE" -gt 1900000000 ]; then
-              rm "${NAME}-Portable.zip"
-              cd dist && 7z a "../${NAME}-Portable.7z" "${NAME}" && cd ..
-              SEVENZ_SIZE=$(stat -c%s "${NAME}-Portable.7z" 2>/dev/null || wc -c < "${NAME}-Portable.7z" | tr -d ' ')
-              if [ "$SEVENZ_SIZE" -gt 1900000000 ]; then
-                rm "${NAME}-Portable.7z"
-                cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+            # 先检查未压缩目录大小，避免对大包做无意义的多轮压缩
+            DIR_SIZE=$(du -sb "dist/${NAME}" | cut -f1)
+            echo "未压缩目录大小: $(( DIR_SIZE / 1048576 )) MB"
+            if [ "$DIR_SIZE" -gt 3000000000 ]; then
+              # >3GB 目录直接用分卷 7z（跳过 zip 和单文件 7z）
+              echo "目录较大，直接使用分卷 7z 压缩..."
+              cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+            else
+              # 小包先试 zip
+              cd dist && 7z a -tzip "../${NAME}-Portable.zip" "${NAME}" && cd ..
+              FILE_SIZE=$(stat -c%s "${NAME}-Portable.zip" 2>/dev/null || wc -c < "${NAME}-Portable.zip" | tr -d ' ')
+              if [ "$FILE_SIZE" -gt 1900000000 ]; then
+                rm "${NAME}-Portable.zip"
+                cd dist && 7z a "../${NAME}-Portable.7z" "${NAME}" && cd ..
+                SEVENZ_SIZE=$(stat -c%s "${NAME}-Portable.7z" 2>/dev/null || wc -c < "${NAME}-Portable.7z" | tr -d ' ')
+                if [ "$SEVENZ_SIZE" -gt 1900000000 ]; then
+                  rm "${NAME}-Portable.7z"
+                  cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+                fi
               fi
             fi
           else
