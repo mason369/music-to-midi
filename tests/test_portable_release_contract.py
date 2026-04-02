@@ -97,9 +97,16 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Pillow==12.0.0", workflow)
         self.assertIn("pytorch-lightning==2.6.1", workflow)
         self.assertIn("torchmetrics==1.8.2", workflow)
-        self.assertIn("onnxruntime==1.24.2", workflow)
+        self.assertIn("onnxruntime==1.23.2", workflow)
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
         self.assertIn("six==1.17.0", workflow)
+
+    def test_release_workflow_filters_pinned_runtime_packages_from_requirements_build(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn('"pytorch-lightning"', workflow)
+        self.assertIn('"torchmetrics"', workflow)
+        self.assertIn('"onnxruntime"', workflow)
 
     def test_build_portable_collects_miros_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
