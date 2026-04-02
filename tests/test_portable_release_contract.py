@@ -108,6 +108,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('"torchmetrics"', workflow)
         self.assertIn('"onnxruntime"', workflow)
 
+    def test_release_notes_describe_split_archives_generically(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
+        self.assertIn("同名前缀的全部分卷", workflow)
+
     def test_build_portable_collects_miros_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
 

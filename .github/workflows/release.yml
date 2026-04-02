@@ -398,14 +398,15 @@ jobs:
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
           | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Windows-CPU-Portable.zip\` | Windows | CPU | 无显卡使用 |
+          | \`MusicToMidi-Windows-CPU-Portable.*\` | Windows | CPU | 无显卡使用 |
           | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Linux-CPU-Portable.tar.gz\` | Linux | CPU | 无显卡使用 |
+          | \`MusicToMidi-Linux-CPU-Portable.*\` | Linux | CPU | 无显卡使用 |
 
           ### 使用方法
           1. 下载对应平台和推理方式的压缩包
-          2. 解压到任意目录
-          3. 运行 \`MusicToMidi\`（Windows 为 \`.exe\`）即可使用（AI 模型已内置）
+          2. 如果是分卷压缩，请先下载同名前缀的全部分卷（如 \`.7z.001\` / \`.7z.002\` 或 \`.partaa\` / \`.partab\`）
+          3. 解压到任意目录
+          4. 运行 \`MusicToMidi\`（Windows 为 \`.exe\`）即可使用（AI 模型已内置）
 
           ### 说明
           - 无需安装 Python，解压即用
