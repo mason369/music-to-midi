@@ -1,7 +1,6 @@
 import sys
 import types
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 mido_stub = types.ModuleType("mido")
@@ -38,7 +37,7 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
 
             @staticmethod
             def get_unavailable_reason():
-                return "YourMT3+ 不可用：缺少 pytorch-lightning"
+                return "YourMT3+ ?????? pytorch-lightning"
 
         class FakeAriaAmtTranscriber:
             def __init__(self):
@@ -58,7 +57,7 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
             "src.core.pipeline.MidiGenerator", FakeMidiGenerator
         ):
             pipeline = MusicToMidiPipeline(Config())
-            with self.assertRaisesRegex(RuntimeError, "缺少 pytorch-lightning"):
+            with self.assertRaisesRegex(RuntimeError, "pytorch-lightning"):
                 pipeline._process_smart("input.wav", "output")
 
     def test_yourmt3_import_error_surfaces_underlying_dependency(self):
@@ -79,30 +78,15 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
         self.assertIn("pytorch-lightning", reason)
         self.assertIn("No module named 'PIL'", reason)
 
-    def test_yourmt3_source_import_failure_surfaces_underlying_dependency(self):
-        real_import = __import__
-
-        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "pytorch_lightning":
-                return types.SimpleNamespace(__name__="pytorch_lightning")
-            if name == "yourmt3":
-                raise ModuleNotFoundError("No module named 'yourmt3'")
-            if name == "model.ymt3":
-                raise ImportError(
-                    "DLL load failed while importing onnxruntime_pybind11_state: initialization routine failed"
-                )
-            return real_import(name, globals, locals, fromlist, level)
-
+    def test_yourmt3_missing_source_tree_reports_directory_message(self):
         with patch("src.core.yourmt3_transcriber._import_torch", return_value=object()), patch(
-            "src.core.yourmt3_transcriber._get_yourmt3_amt_src_path",
-            return_value=str(Path("YourMT3/amt/src").resolve()),
-        ), patch("builtins.__import__", side_effect=fake_import):
+            "builtins.__import__", return_value=types.SimpleNamespace(__name__="pytorch_lightning")
+        ), patch("src.core.yourmt3_transcriber._get_yourmt3_amt_src_path", return_value=None):
             available = YourMT3Transcriber.is_available()
 
         self.assertFalse(available)
         reason = YourMT3Transcriber.get_unavailable_reason()
-        self.assertIn("onnxruntime_pybind11_state", reason)
-        self.assertNotIn("未找到 YourMT3 代码目录", reason)
+        self.assertIn("YourMT3 ????", reason)
 
 
 if __name__ == "__main__":

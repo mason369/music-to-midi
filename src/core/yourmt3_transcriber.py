@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 import types
+import importlib
 from importlib.machinery import ModuleSpec
 from io import StringIO
 from pathlib import Path
@@ -46,6 +47,12 @@ from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
 _fix_torch_dll_path()
 
 logger = logging.getLogger(__name__)
+
+_YOURMT3_TRANSIENT_MODULE_PREFIXES = (
+    "model",
+    "utils",
+    "config",
+)
 
 
 @contextmanager
@@ -96,17 +103,48 @@ def _iter_yourmt3_base_paths() -> list[str]:
     return unique
 
 
+def _is_yourmt3_amt_src_dir(path: Union[str, Path]) -> bool:
+    root = Path(path)
+    return all(
+        (root / relative_path).exists()
+        for relative_path in (
+            Path("model/ymt3.py"),
+            Path("utils/task_manager.py"),
+            Path("config/config.py"),
+        )
+    )
+
+
 def _get_yourmt3_amt_src_path() -> Optional[str]:
     direct = get_yourmt3_source_dir()
-    if direct is not None and direct.exists():
+    if direct is not None and _is_yourmt3_amt_src_dir(direct):
         return str(direct)
 
     for base_path in _iter_yourmt3_base_paths():
         if os.path.exists(base_path):
             potential_path = os.path.join(base_path, "amt/src")
-            if os.path.exists(potential_path):
+            if _is_yourmt3_amt_src_dir(potential_path):
                 return potential_path
+
+    for entry in sys.path:
+        if not entry:
+            continue
+        if _is_yourmt3_amt_src_dir(entry):
+            return os.path.normpath(entry)
     return None
+
+
+def _clear_yourmt3_import_state() -> None:
+    """Drop cached top-level YourMT3 modules before a fresh import in frozen apps."""
+    module_names = [
+        name
+        for name in sys.modules
+        if name in _YOURMT3_TRANSIENT_MODULE_PREFIXES
+        or any(name.startswith(prefix + ".") for prefix in _YOURMT3_TRANSIENT_MODULE_PREFIXES)
+    ]
+    for name in module_names:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
 
 
 def _import_torch():
@@ -405,115 +443,66 @@ class YourMT3Transcriber:
 
     @classmethod
     def is_available(cls) -> bool:
-        """严格检查 YourMT3+ 是否真正可用（所有依赖+模型）"""
+        """???? YourMT3+ ???????????????????"""
         cls._last_unavailable_reason = None
         try:
-            # 第一步：检查 PyTorch
-            torch = _import_torch()
-            logger.debug("✓ PyTorch 已安装")
+            _import_torch()
+            logger.debug("PyTorch available")
 
-            # 第二步：检查其他必需依赖
             try:
                 with _temporary_onnxruntime_stub():
                     import pytorch_lightning
-                logger.debug("✓ pytorch-lightning 已安装")
+                logger.debug("pytorch-lightning available")
             except ImportError as e:
-                logger.debug("导入 pytorch_lightning 失败", exc_info=True)
+                logger.debug("Failed to import pytorch_lightning", exc_info=True)
                 missing_name = getattr(e, "name", "") or ""
                 is_missing_lightning = (
                     missing_name == "pytorch_lightning" or "pytorch_lightning" in str(e)
                 )
                 if is_missing_lightning:
                     return cls._mark_unavailable(
-                        "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
-                        "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
-                        "如果你使用打包版，请重新安装或使用修复后的安装包。"
+                        "YourMT3+ ?????? pytorch-lightning?\n"
+                        "??????????????pip install pytorch-lightning\n"
+                        "?????????????????????????"
                     )
                 return cls._mark_unavailable(
-                    "YourMT3+ 不可用：pytorch-lightning 导入失败，相关依赖可能未完整打包。\n"
-                    f"原始错误: {e}\n"
-                    "如果你使用源码环境，请重新安装相关依赖；"
-                    "如果你使用打包版，请使用修复后的安装包。"
+                    "YourMT3+ ????pytorch-lightning ?????????????????\n"
+                    f"????: {e}\n"
+                    "????????????????????"
+                    "????????????????????"
                 )
 
-            # 第三步：尝试导入 YourMT3 核心模块
-            has_code = False
-            code_import_error: Optional[ImportError] = None
-
-            # 方式1：直接尝试导入（路径可能已由外部预配置，如 Space 的 app.py）
-            try:
-                from model.ymt3 import YourMT3  # noqa: F811
-                logger.debug("✓ YourMT3+ 代码可用（路径已预配置）")
-                has_code = True
-            except ImportError as e:
-                code_import_error = e
-
-            # 方式2：从 yourmt3 包导入（pip 安装的包）
-            try:
-                import yourmt3
-                logger.debug("✓ YourMT3+ 代码可用（通过 yourmt3 包导入）")
-                has_code = True
-            except ImportError as e:
-                missing_name = getattr(e, "name", "") or ""
-                if missing_name != "yourmt3":
-                    code_import_error = e
-
-            # 方式3：检查本地克隆的仓库（最常用的方式）
-            if not has_code:
-                import sys
-                amt_src_path = _get_yourmt3_amt_src_path()
-                if amt_src_path:
-                    sys.path.insert(0, amt_src_path)
-                    try:
-                        from model.ymt3 import YourMT3  # noqa: F811
-                        logger.debug(f"✓ YourMT3+ 代码可用（从 {amt_src_path} 导入）")
-                        has_code = True
-                    except ImportError as ie:
-                        logger.debug(f"从 {amt_src_path} 导入失败: {ie}")
-                        code_import_error = ie
-                    finally:
-                        if amt_src_path in sys.path:
-                            sys.path.remove(amt_src_path)
-
-            if not has_code:
-                if code_import_error is not None:
-                    return cls._mark_unavailable(
-                        "YourMT3+ 不可用：YourMT3 代码导入失败，相关依赖可能未完整打包。\n"
-                        f"原始错误: {code_import_error}\n"
-                        "如果你使用源码环境，请重新安装相关依赖；"
-                        "如果你使用打包版，请使用修复后的安装包。"
-                    )
+            amt_src_path = _get_yourmt3_amt_src_path()
+            if not amt_src_path:
                 return cls._mark_unavailable(
-                    "YourMT3+ 不可用：未找到 YourMT3 代码目录。\n"
-                    "如果你使用打包版，请确认保留完整安装目录，不要只复制单个 exe。\n"
-                    "如果你使用源码环境，请确保 YourMT3/ 目录存在于项目根目录。",
-                    info="如需源码环境模型，请运行 python download_sota_models.py",
+                    "YourMT3+ ??????? YourMT3 ?????\n"
+                    "???????????????????????????? exe?\n"
+                    "???????????????????? YourMT3/ ???",
+                    info="???????????? python download_sota_models.py",
                 )
+            logger.debug("YourMT3 source tree available: %s", amt_src_path)
 
-            # 第四步：检查模型权重文件
             try:
-                from src.utils.yourmt3_downloader import get_model_path, DEFAULT_MODEL
+                from src.utils.yourmt3_downloader import DEFAULT_MODEL, get_model_path
+
                 model_path = get_model_path(DEFAULT_MODEL)
                 if not model_path or not model_path.exists():
                     return cls._mark_unavailable(
-                        "YourMT3+ 不可用：未找到模型权重。\n\n"
-                        "请先下载模型权重：\n"
+                        "YourMT3+ ????????????\n\n"
+                        "?????????\n"
                         "  python download_sota_models.py\n\n"
-                        "详见 README.md 中的安装说明。"
+                        "?? README.md ???????"
                     )
-                logger.debug(f"✓ 找到 YourMT3+ 模型: {model_path}")
+                logger.debug("Found YourMT3+ model: %s", model_path)
             except ImportError:
-                logger.debug("⚠ yourmt3_downloader 模块不可用，跳过模型检查")
-                # 如果有打包好的 yourmt3，可能包含内置模型
-                pass
+                logger.debug("yourmt3_downloader unavailable, skipping model path check")
 
-            # 所有检查通过
             cls._last_unavailable_reason = None
-            logger.info("✓ YourMT3+ 完全可用")
+            logger.info("YourMT3+ fully available")
             return True
 
         except ImportError as e:
-            return cls._mark_unavailable(f"YourMT3+ 不可用：{e}")
+            return cls._mark_unavailable(f"YourMT3+ ????{e}")
 
     def set_cancel_check(self, callback) -> None:
         """设置取消检查回调"""
@@ -587,12 +576,16 @@ class YourMT3Transcriber:
 
                 # 2. 导入依赖
                 logger.info("正在导入 YourMT3 依赖模块...")
+                _clear_yourmt3_import_state()
                 import torch
                 from utils.task_manager import TaskManager
                 from model.ymt3 import YourMT3
                 from config.config import shared_cfg as default_shared_cfg
                 from config.config import audio_cfg as default_audio_cfg
                 from config.config import model_cfg as default_model_cfg
+                logger.debug("YourMT3 import origin | model=%s", getattr(sys.modules.get("model"), "__path__", None))
+                logger.debug("YourMT3 import origin | utils=%s", getattr(sys.modules.get("utils"), "__path__", None))
+                logger.debug("YourMT3 import origin | config=%s", getattr(sys.modules.get("config"), "__path__", None))
                 logger.info("YourMT3 依赖模块导入完成")
 
                 if progress_callback:

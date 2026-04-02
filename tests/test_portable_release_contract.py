@@ -59,6 +59,11 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("upload_asset_with_retry", workflow)
         self.assertIn("timeout 30m gh release upload", workflow)
 
+    def test_release_workflow_uses_python_311_for_portable_builds(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("python-version: '3.11'", workflow)
+
     def test_release_workflow_uses_portable_build_script_on_windows(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 

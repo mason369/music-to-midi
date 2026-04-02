@@ -92,9 +92,15 @@ try:
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
     # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
-    # 强制使用 soundfile 后端（已在 requirements.txt 中包含）
+    # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
     import torchaudio
-    torchaudio.set_audio_backend("soundfile")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*set_audio_backend has been deprecated.*",
+            category=UserWarning,
+        )
+        torchaudio.set_audio_backend("soundfile")
 except Exception as e:
     import logging as _log
     _log.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
@@ -158,6 +164,21 @@ def _run_self_test(transcriber_cls=None) -> int:
             logger.error("自检失败: %s", reason)
             print(reason)
             return 1
+
+        transcriber = None
+        try:
+            from src.models.data_models import Config
+
+            transcriber = transcriber_cls(Config())
+            load_model = getattr(transcriber, "_load_model", None)
+            if callable(load_model):
+                logger.info("Self-test: loading YourMT3 model")
+                load_model()
+        finally:
+            if transcriber is not None:
+                unload_model = getattr(transcriber, "unload_model", None)
+                if callable(unload_model):
+                    unload_model()
 
         logger.info("便携包自检通过")
         print("SELF-TEST OK: YourMT3+ available")
