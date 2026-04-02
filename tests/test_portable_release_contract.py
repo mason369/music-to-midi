@@ -75,6 +75,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("requirements-build.txt", workflow)
         self.assertIn("pip install numpy==1.26.4", workflow)
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+        self.assertIn("six==1.17.0", workflow)
 
     def test_build_portable_collects_miros_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
