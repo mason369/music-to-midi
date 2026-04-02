@@ -31,11 +31,16 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("lightning_fabric", spec)
         self.assertIn("lightning_utilities", spec)
         self.assertIn("torchmetrics", spec)
+        self.assertIn("collect_all('wandb')", spec)
+        self.assertIn("collect_all('PIL')", spec)
+        self.assertIn("collect_all('onnxruntime')", spec)
+        self.assertIn("collect_all('mir_eval')", spec)
 
     def test_pyinstaller_spec_does_not_exclude_pillow(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+        excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]
 
-        self.assertNotIn("'PIL'", spec)
+        self.assertNotIn("'PIL'", excludes_section)
 
     def test_pyinstaller_spec_supports_miros_bundle_root(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
@@ -65,15 +70,34 @@ class PortableReleaseContractTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("--self-test", workflow)
-        self.assertIn("dist\\MusicToMidi\\MusicToMidi.exe --self-test", workflow)
-        self.assertIn("./dist/MusicToMidi/MusicToMidi --self-test", workflow)
+        self.assertIn('Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"', workflow)
+        self.assertIn('mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX"', workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
+
+    def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("MusicToMidi-smoke", workflow)
+        self.assertIn("Start-Sleep -Seconds 3", workflow)
+        self.assertIn("Move-Item -LiteralPath 'dist/MusicToMidi'", workflow)
+
+    def test_release_workflow_windows_smoke_test_checks_runtime_log(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe')", workflow)
+        self.assertIn("$logs = Join-Path $smokeDir 'runtime\\logs'", workflow)
+        self.assertIn("Get-ChildItem -LiteralPath $logs -File", workflow)
+        self.assertIn("便携包自检通过", workflow)
 
     def test_release_workflow_installs_audio_separator_without_resolver_conflicts(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("requirements-build.txt", workflow)
         self.assertIn("pip install numpy==1.26.4", workflow)
+        self.assertIn("Pillow==12.0.0", workflow)
+        self.assertIn("pytorch-lightning==2.6.1", workflow)
+        self.assertIn("torchmetrics==1.8.2", workflow)
+        self.assertIn("onnxruntime==1.24.2", workflow)
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
         self.assertIn("six==1.17.0", workflow)
 

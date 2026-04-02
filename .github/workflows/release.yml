@@ -101,13 +101,14 @@ jobs:
           pip install numpy==1.26.4
           pip install -r .tmp/requirements-build.txt
           pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url ${{ matrix.pytorch_url }}
+          pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.24.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
           pip install pyinstaller pytest
 
       - name: 运行便携发布回归测试
         run: |
-          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_yourmt3_availability_messages.py
+          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
@@ -191,15 +192,84 @@ jobs:
 
       - name: 烟测便携产物 (Windows)
         if: runner.os == 'Windows'
-        run: .\dist\MusicToMidi\MusicToMidi.exe --self-test
+        shell: pwsh
+        run: |
+          $smokeDir = Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"
+          $logs = Join-Path $smokeDir 'runtime\logs'
+          if (Test-Path $smokeDir) {
+            Remove-Item -LiteralPath $smokeDir -Recurse -Force
+          }
+          Copy-Item -LiteralPath '.\dist\MusicToMidi' -Destination $smokeDir -Recurse
+          if (Test-Path $logs) {
+            Remove-Item -LiteralPath $logs -Recurse -Force
+          }
+          $proc = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if (-not (Test-Path $logs)) {
+            throw "Portable self-test did not produce runtime logs. ExitCode=$($proc.ExitCode)"
+          }
+          $latestLog = Get-ChildItem -LiteralPath $logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $latestLog) {
+            throw "Portable self-test did not produce a log file. ExitCode=$($proc.ExitCode)"
+          }
+          $logText = Get-Content -LiteralPath $latestLog -Raw
+          if ($logText -notmatch '便携包自检通过') {
+            throw "Portable self-test failed. ExitCode=$($proc.ExitCode)`n$logText"
+          }
 
       - name: 烟测便携产物 (Linux)
         if: runner.os == 'Linux'
         run: |
-          chmod +x ./dist/MusicToMidi/MusicToMidi
-          ./dist/MusicToMidi/MusicToMidi --self-test
+          SMOKE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX")"
+          cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"
+          chmod +x "$SMOKE_DIR/MusicToMidi"
+          "$SMOKE_DIR/MusicToMidi" --self-test
 
-      - name: 创建便携包
+      - name: 创建便携包 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+              Move-Item -LiteralPath 'dist/MusicToMidi' -Destination "dist/$name"
+              break
+            } catch {
+              if ($attempt -eq 10) {
+                throw
+              }
+              Start-Sleep -Seconds 3
+            }
+          }
+
+          if ('${{ matrix.variant }}' -eq 'GPU') {
+            $variantNote = @"
+          GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
+          如果没有 NVIDIA 显卡，程序会自动回退到 CPU 推理
+          "@
+          } else {
+            $variantNote = @"
+          CPU 版，无需显卡即可运行
+          如需 GPU 加速，请下载 GPU 版本
+          "@
+          }
+
+          $readme = @"
+          音乐转MIDI转换器 ${{ matrix.platform }} 便携版（${{ matrix.variant }}）
+
+          使用方法：
+            运行 MusicToMidi.exe 即可启动（AI 模型已内置，无需额外下载）
+
+          $variantNote
+
+          支持格式：MP3, WAV, FLAC, OGG, M4A 等
+          输出格式：多轨道 MIDI（128 种 GM 乐器）
+
+          无需安装 Python，解压即用
+          "@
+          Set-Content -LiteralPath "dist/$name/使用说明.txt" -Value $readme -Encoding UTF8
+
+      - name: 创建便携包 (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"

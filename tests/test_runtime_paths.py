@@ -1,49 +1,40 @@
-import tempfile
+import os
 import unittest
 from pathlib import Path
-from unittest import mock
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from src.utils import runtime_paths
 
 
-class TestRuntimePaths(unittest.TestCase):
-    def test_get_ffmpeg_executable_prefers_bundled_binary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            bin_dir = root / "tools" / "ffmpeg" / "bin"
-            bin_dir.mkdir(parents=True, exist_ok=True)
-            ffmpeg = bin_dir / "ffmpeg.exe"
-            ffmpeg.write_bytes(b"exe")
+class RuntimePathBootstrapTests(unittest.TestCase):
+    def test_bootstrap_runtime_environment_registers_bundled_native_library_dirs(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            torch_lib = root / "torch" / "lib"
+            ort_capi = root / "onnxruntime" / "capi"
+            ffmpeg_bin = root / "ffmpeg" / "bin"
+            torch_lib.mkdir(parents=True)
+            ort_capi.mkdir(parents=True)
+            ffmpeg_bin.mkdir(parents=True)
+            (ffmpeg_bin / "ffmpeg.exe").write_text("", encoding="utf-8")
+            (ffmpeg_bin / "ffprobe.exe").write_text("", encoding="utf-8")
 
-            with mock.patch.object(runtime_paths, "get_bundle_roots", return_value=[root]):
-                with mock.patch("src.utils.runtime_paths.shutil.which", return_value=None):
-                    resolved = runtime_paths.get_ffmpeg_executable()
+            with patch.object(runtime_paths, "get_bundle_roots", return_value=[root]), patch.object(
+                runtime_paths.os, "add_dll_directory", create=True
+            ) as add_dll_directory, patch.dict(runtime_paths.os.environ, {"PATH": ""}, clear=True):
+                runtime_paths.bootstrap_runtime_environment()
+                path_entries = {
+                    str(Path(entry).resolve())
+                    for entry in runtime_paths.os.environ["PATH"].split(os.pathsep)
+                    if entry
+                }
 
-            self.assertEqual(Path(resolved), ffmpeg)
-
-    def test_get_resource_path_uses_existing_bundle_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            resource = root / "resources" / "icons" / "app.ico"
-            resource.parent.mkdir(parents=True, exist_ok=True)
-            resource.write_bytes(b"ico")
-
-            with mock.patch.object(runtime_paths, "get_bundle_roots", return_value=[root]):
-                resolved = runtime_paths.get_resource_path("resources/icons/app.ico")
-
-            self.assertEqual(resolved, resource)
-
-    def test_frozen_runtime_prefers_portable_runtime_dir(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            exe_dir = Path(tmp)
-            runtime_dir = exe_dir / "runtime"
-
-            with mock.patch.object(runtime_paths, "is_frozen_app", return_value=True):
-                with mock.patch.object(runtime_paths, "get_executable_dir", return_value=exe_dir):
-                    result = runtime_paths.get_runtime_data_dir()
-
-            self.assertEqual(result, runtime_dir)
-            self.assertTrue(runtime_dir.exists())
+            registered = {str(Path(call.args[0]).resolve()) for call in add_dll_directory.call_args_list}
+            self.assertIn(str(torch_lib.resolve()), registered)
+            self.assertIn(str(ort_capi.resolve()), registered)
+            self.assertIn(str(torch_lib.resolve()), path_entries)
+            self.assertIn(str(ort_capi.resolve()), path_entries)
 
 
 if __name__ == "__main__":

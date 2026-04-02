@@ -14,6 +14,8 @@ import logging
 import os
 import sys
 import threading
+import types
+from importlib.machinery import ModuleSpec
 from io import StringIO
 from pathlib import Path
 
@@ -44,6 +46,32 @@ from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
 _fix_torch_dll_path()
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _temporary_onnxruntime_stub():
+    existing = sys.modules.get("onnxruntime")
+    if existing is not None:
+        yield
+        return
+
+    stub = types.ModuleType("onnxruntime")
+    stub.__dict__.update(
+        {
+            "__version__": "0.0",
+            "__path__": [],
+            "get_available_providers": lambda: [],
+            "SessionOptions": type("SessionOptions", (), {}),
+            "InferenceSession": type("InferenceSession", (), {}),
+        }
+    )
+    stub.__spec__ = ModuleSpec("onnxruntime", loader=None, is_package=True)
+    sys.modules["onnxruntime"] = stub
+    try:
+        yield
+    finally:
+        if sys.modules.get("onnxruntime") is stub:
+            sys.modules.pop("onnxruntime", None)
 
 
 def _iter_yourmt3_base_paths() -> list[str]:
@@ -386,7 +414,8 @@ class YourMT3Transcriber:
 
             # 第二步：检查其他必需依赖
             try:
-                import pytorch_lightning
+                with _temporary_onnxruntime_stub():
+                    import pytorch_lightning
                 logger.debug("✓ pytorch-lightning 已安装")
             except ImportError as e:
                 logger.debug("导入 pytorch_lightning 失败", exc_info=True)
@@ -409,22 +438,25 @@ class YourMT3Transcriber:
 
             # 第三步：尝试导入 YourMT3 核心模块
             has_code = False
+            code_import_error: Optional[ImportError] = None
 
             # 方式1：直接尝试导入（路径可能已由外部预配置，如 Space 的 app.py）
             try:
                 from model.ymt3 import YourMT3  # noqa: F811
                 logger.debug("✓ YourMT3+ 代码可用（路径已预配置）")
                 has_code = True
-            except ImportError:
-                pass
+            except ImportError as e:
+                code_import_error = e
 
             # 方式2：从 yourmt3 包导入（pip 安装的包）
             try:
                 import yourmt3
                 logger.debug("✓ YourMT3+ 代码可用（通过 yourmt3 包导入）")
                 has_code = True
-            except ImportError:
-                pass  # 静默失败，尝试下一种方式
+            except ImportError as e:
+                missing_name = getattr(e, "name", "") or ""
+                if missing_name != "yourmt3":
+                    code_import_error = e
 
             # 方式3：检查本地克隆的仓库（最常用的方式）
             if not has_code:
@@ -438,9 +470,19 @@ class YourMT3Transcriber:
                         has_code = True
                     except ImportError as ie:
                         logger.debug(f"从 {amt_src_path} 导入失败: {ie}")
-                        sys.path.remove(amt_src_path)
+                        code_import_error = ie
+                    finally:
+                        if amt_src_path in sys.path:
+                            sys.path.remove(amt_src_path)
 
             if not has_code:
+                if code_import_error is not None:
+                    return cls._mark_unavailable(
+                        "YourMT3+ 不可用：YourMT3 代码导入失败，相关依赖可能未完整打包。\n"
+                        f"原始错误: {code_import_error}\n"
+                        "如果你使用源码环境，请重新安装相关依赖；"
+                        "如果你使用打包版，请使用修复后的安装包。"
+                    )
                 return cls._mark_unavailable(
                     "YourMT3+ 不可用：未找到 YourMT3 代码目录。\n"
                     "如果你使用打包版，请确认保留完整安装目录，不要只复制单个 exe。\n"

@@ -91,6 +91,7 @@ hiddenimports = [
     'audio_separator',
     'audio_separator.separator',
     'onnxruntime',
+    'PIL',
     'onnx2torch',
     'rotary_embedding_torch',
     'beartype',
@@ -98,12 +99,14 @@ hiddenimports = [
     'ml_collections',
     'pydub',
     'samplerate',
+    'mir_eval',
     # 数值计算
     'numpy',
     'scipy',
     # 其他
     'mido',
     'transkun',
+    'wandb',
     'pytorch_lightning',
     'lightning_fabric',
     'lightning_utilities',
@@ -118,7 +121,11 @@ from PyInstaller.utils.hooks import collect_all
 torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
 torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
+onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all('onnxruntime')
+pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
+mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
 transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
+wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
 utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
@@ -127,7 +134,11 @@ datas += (
     torch_datas
     + torchaudio_datas
     + torchvision_datas
+    + onnxruntime_datas
+    + pil_datas
+    + mir_eval_datas
     + transkun_datas
+    + wandb_datas
     + lightning_datas
     + fabric_datas
     + utilities_datas
@@ -137,7 +148,11 @@ hiddenimports += (
     torch_hiddenimports
     + torchaudio_hiddenimports
     + torchvision_hiddenimports
+    + onnxruntime_hiddenimports
+    + pil_hiddenimports
+    + mir_eval_hiddenimports
     + transkun_hiddenimports
+    + wandb_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
     + utilities_hiddenimports
@@ -148,7 +163,11 @@ all_binaries = (
     torch_binaries
     + torchaudio_binaries
     + torchvision_binaries
+    + onnxruntime_binaries
+    + pil_binaries
+    + mir_eval_binaries
     + transkun_binaries
+    + wandb_binaries
     + lightning_binaries
     + fabric_binaries
     + utilities_binaries

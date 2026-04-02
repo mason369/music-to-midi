@@ -129,6 +129,32 @@ def get_yourmt3_source_dir() -> Optional[Path]:
     return None
 
 
+def get_miros_source_dir() -> Optional[Path]:
+    candidates = [
+        "ai4m-miros",
+        "external/ai4m-miros",
+        "MIROS",
+        "external/MIROS",
+    ]
+    bundled = _find_existing_relative_path(candidates)
+    if bundled is not None:
+        return bundled
+
+    for base in (
+        Path("ai4m-miros"),
+        get_project_root() / "ai4m-miros",
+        Path("external/ai4m-miros"),
+        get_project_root() / "external/ai4m-miros",
+        Path("MIROS"),
+        get_project_root() / "MIROS",
+        Path("external/MIROS"),
+        get_project_root() / "external/MIROS",
+    ):
+        if (base / "main.py").exists() and (base / "transcribe.py").exists():
+            return base
+    return None
+
+
 def get_yourmt3_search_roots() -> List[Path]:
     roots: List[Path] = []
 
@@ -215,7 +241,98 @@ def get_ffprobe_executable() -> str:
     return found or "ffprobe"
 
 
+def get_native_library_dirs() -> List[Path]:
+    candidates: List[Path] = []
+    for root in get_bundle_roots():
+        for relative_dir in (
+            "torch/lib",
+            "onnxruntime/capi",
+        ):
+            candidate = root / relative_dir
+            if candidate.is_dir():
+                candidates.append(candidate)
+
+    unique: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        key = str(resolved)
+        if key not in seen:
+            unique.append(resolved)
+            seen.add(key)
+    return unique
+
+
+def _prepend_path_entries(entries: Iterable[Path]) -> None:
+    current_entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for entry in [str(path) for path in entries] + current_entries:
+        if entry and entry not in seen:
+            merged.append(entry)
+            seen.add(entry)
+
+    if merged:
+        os.environ["PATH"] = os.pathsep.join(merged)
+
+
+def _register_windows_dll_directories(entries: Iterable[Path]) -> None:
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if not callable(add_dll_directory):
+        return
+
+    for entry in entries:
+        try:
+            add_dll_directory(str(entry))
+        except OSError:
+            continue
+
+
+def _preload_bundled_onnxruntime_libraries(entries: Iterable[Path]) -> None:
+    capi_dirs = [
+        entry for entry in entries
+        if entry.name == "capi" and entry.parent.name == "onnxruntime"
+    ]
+    if not capi_dirs:
+        return
+
+    try:
+        import ctypes
+    except Exception:
+        return
+
+    if os.name == "nt":
+        for capi_dir in capi_dirs:
+            for lib_name in ("onnxruntime.dll", "onnxruntime_providers_shared.dll"):
+                candidate = capi_dir / lib_name
+                if not candidate.exists():
+                    continue
+                try:
+                    ctypes.WinDLL(str(candidate))
+                except OSError:
+                    continue
+        return
+
+    rtld_global = getattr(ctypes, "RTLD_GLOBAL", 0)
+    for capi_dir in capi_dirs:
+        for pattern in ("libonnxruntime.so*", "libonnxruntime_providers_shared.so*"):
+            for candidate in sorted(capi_dir.glob(pattern)):
+                if not candidate.is_file():
+                    continue
+                try:
+                    ctypes.CDLL(str(candidate), mode=rtld_global)
+                except OSError:
+                    continue
+
+
 def bootstrap_runtime_environment() -> None:
+    native_library_dirs = get_native_library_dirs()
+    if native_library_dirs:
+        _prepend_path_entries(native_library_dirs)
+        _register_windows_dll_directories(native_library_dirs)
+        _preload_bundled_onnxruntime_libraries(native_library_dirs)
+
     ffmpeg_bin = get_ffmpeg_bin_dir()
     if ffmpeg_bin is not None:
         current_path = os.environ.get("PATH", "")

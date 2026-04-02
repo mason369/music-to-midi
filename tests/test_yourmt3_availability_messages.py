@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 mido_stub = types.ModuleType("mido")
@@ -77,6 +78,31 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
         reason = YourMT3Transcriber.get_unavailable_reason()
         self.assertIn("pytorch-lightning", reason)
         self.assertIn("No module named 'PIL'", reason)
+
+    def test_yourmt3_source_import_failure_surfaces_underlying_dependency(self):
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pytorch_lightning":
+                return types.SimpleNamespace(__name__="pytorch_lightning")
+            if name == "yourmt3":
+                raise ModuleNotFoundError("No module named 'yourmt3'")
+            if name == "model.ymt3":
+                raise ImportError(
+                    "DLL load failed while importing onnxruntime_pybind11_state: initialization routine failed"
+                )
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("src.core.yourmt3_transcriber._import_torch", return_value=object()), patch(
+            "src.core.yourmt3_transcriber._get_yourmt3_amt_src_path",
+            return_value=str(Path("YourMT3/amt/src").resolve()),
+        ), patch("builtins.__import__", side_effect=fake_import):
+            available = YourMT3Transcriber.is_available()
+
+        self.assertFalse(available)
+        reason = YourMT3Transcriber.get_unavailable_reason()
+        self.assertIn("onnxruntime_pybind11_state", reason)
+        self.assertNotIn("未找到 YourMT3 代码目录", reason)
 
 
 if __name__ == "__main__":
