@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict
 
+from src.utils.audio_separator_compat import get_separator_cls
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class VocalSeparator:
     def is_available() -> bool:
         """检查 audio-separator 是否可用"""
         try:
-            from audio_separator.separator import Separator  # noqa: F401
+            get_separator_cls()
             return True
         except ImportError:
             return False
@@ -75,8 +76,8 @@ class VocalSeparator:
         返回:
             {"vocals": vocals_path, "no_vocals": accompaniment_path}
         """
-        from audio_separator.separator import Separator
         from src.utils.gpu_utils import clear_gpu_memory
+        Separator = get_separator_cls()
 
         self._cancelled = False
         Path(output_dir).mkdir(parents=True, exist_ok=True)

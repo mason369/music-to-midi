@@ -11,6 +11,7 @@ from download_multistem_model import (
     ROFORMER_SW_MODEL,
     download_multistem_model,
 )
+from src.utils.audio_separator_compat import get_separator_cls, patch_separator_package_metadata
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -34,17 +35,15 @@ class SixStemSeparator:
     @staticmethod
     def is_available() -> bool:
         try:
-            from audio_separator.separator import Separator  # noqa: F401
+            get_separator_cls()
             return True
         except Exception:
             return False
 
     def _get_separator_cls(self):
         if self.separator_cls is not None:
-            return self.separator_cls
-        from audio_separator.separator import Separator
-
-        return Separator
+            return patch_separator_package_metadata(self.separator_cls)
+        return get_separator_cls()
 
     def _attach_sw_model_registry(self, separator) -> None:
         if not hasattr(separator, "list_supported_model_files"):

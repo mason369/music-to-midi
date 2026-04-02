@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 import importlib.util
+from PyInstaller.utils.hooks import copy_metadata
 
 # 项目根目录
 ROOT_DIR = os.path.dirname(os.path.abspath(SPEC))
@@ -77,6 +78,7 @@ datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
+datas += copy_metadata('audio-separator')
 
 hiddenimports = [
     # PyQt6 相关

@@ -49,6 +49,87 @@ function Resolve-ExistingDir {
     return $null
 }
 
+function Test-WorkingExecutable {
+    param([string]$ExecutablePath)
+
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath) -or -not (Test-Path $ExecutablePath)) {
+        return $false
+    }
+
+    try {
+        $output = & $ExecutablePath -version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
+
+        $firstLine = ""
+        if ($output -is [System.Array]) {
+            if ($output.Count -gt 0) {
+                $firstLine = [string]$output[0]
+            }
+        } else {
+            $firstLine = [string]$output
+        }
+
+        return $firstLine -like "ffmpeg version*"
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-FFmpegBinDir {
+    param([string[]]$Candidates)
+
+    foreach ($candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path $candidate)) {
+            continue
+        }
+
+        $resolved = (Resolve-Path $candidate).Path
+        $item = Get-Item $resolved
+
+        if (-not $item.PSIsContainer) {
+            $fileDescription = [string]$item.VersionInfo.FileDescription
+            if ($fileDescription -like "*Chocolatey Shim*") {
+                $shimParentDir = Split-Path -Parent $resolved
+                $shimRootDir = Split-Path -Parent $shimParentDir
+                $shimTargetDir = Join-Path $shimRootDir "lib\ffmpeg\tools\ffmpeg\bin"
+                if (Test-Path (Join-Path $shimTargetDir "ffmpeg.exe")) {
+                    return $shimTargetDir
+                }
+            }
+        }
+
+        $dirsToCheck = @()
+
+        if ($item.PSIsContainer) {
+            $dirsToCheck += $resolved
+            $dirsToCheck += (Join-Path $resolved "bin")
+        } else {
+            $dirsToCheck += (Split-Path -Parent $resolved)
+        }
+
+        foreach ($dir in ($dirsToCheck | Select-Object -Unique)) {
+            if (Test-WorkingExecutable (Join-Path $dir "ffmpeg.exe")) {
+                return $dir
+            }
+        }
+
+        $parentDir = Split-Path -Parent $resolved
+        if ($parentDir) {
+            $rootDir = Split-Path -Parent $parentDir
+            if ($rootDir) {
+                $chocoDir = Join-Path $rootDir "lib\ffmpeg\tools\ffmpeg\bin"
+                if (Test-WorkingExecutable (Join-Path $chocoDir "ffmpeg.exe")) {
+                    return $chocoDir
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
 function Copy-Tree {
     param(
         [string]$Source,
@@ -111,16 +192,18 @@ $MirosSource = Resolve-ExistingDir @(
     (Join-Path $Root ".tmp\ai4m-miros")
 )
 
-$ResolvedFfmpegDir = Resolve-ExistingDir @(
+$ResolvedFfmpegDir = Resolve-FFmpegBinDir @(
     $FfmpegDir,
     $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR,
+    (Join-Path $Root "tools\ffmpeg\bin"),
     (Join-Path $Root "tools\ffmpeg"),
+    (Join-Path $Root "ffmpeg\bin"),
     (Join-Path $Root "ffmpeg")
 )
 if (-not $ResolvedFfmpegDir) {
     $ffmpegCmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
     if ($ffmpegCmd) {
-        $ResolvedFfmpegDir = Split-Path -Parent $ffmpegCmd.Source
+        $ResolvedFfmpegDir = Resolve-FFmpegBinDir @($ffmpegCmd.Source)
     }
 }
 
@@ -136,14 +219,15 @@ Copy-Tree -Source $AriaSource -Destination $AriaBundle -Label "Aria-AMT models" 
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" | Out-Null
 
 if ($ResolvedFfmpegDir) {
-    New-Item -ItemType Directory -Force -Path $FfmpegBundle | Out-Null
+    $FfmpegBundleBin = Join-Path $FfmpegBundle "bin"
+    New-Item -ItemType Directory -Force -Path $FfmpegBundleBin | Out-Null
     foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
         $sourceFile = Join-Path $ResolvedFfmpegDir $name
         if (Test-Path $sourceFile) {
-            Copy-Item -Path $sourceFile -Destination (Join-Path $FfmpegBundle $name) -Force
+            Copy-Item -Path $sourceFile -Destination (Join-Path $FfmpegBundleBin $name) -Force
         }
     }
-    Write-Host "[ok] Collected ffmpeg -> $FfmpegBundle"
+    Write-Host "[ok] Collected ffmpeg -> $FfmpegBundleBin"
 } else {
     Write-Host "[warn] ffmpeg not found; build will continue, but non-WAV inputs will rely on librosa fallback."
 }

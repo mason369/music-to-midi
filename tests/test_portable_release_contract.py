@@ -48,6 +48,11 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", spec)
         self.assertIn("ai4m-miros", spec)
 
+    def test_pyinstaller_spec_bundles_audio_separator_metadata(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("copy_metadata('audio-separator')", spec)
+
     def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -120,6 +125,12 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", script)
         self.assertIn("ai4m-miros", script)
+
+    def test_build_portable_collects_real_ffmpeg_binaries_into_bin_layout(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn('Join-Path $FfmpegBundle "bin"', script)
+        self.assertIn("lib\\ffmpeg\\tools\\ffmpeg\\bin", script)
 
     def test_build_portable_script_uses_ascii_only(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

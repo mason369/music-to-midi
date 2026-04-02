@@ -9,6 +9,7 @@ from typing import Callable, Dict, Optional
 
 import numpy as np
 
+from src.utils.audio_separator_compat import get_separator_cls
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class VocalHarmonySeparator:
     @staticmethod
     def is_available() -> bool:
         try:
-            from audio_separator.separator import Separator  # noqa: F401
+            get_separator_cls()
             return True
         except Exception:
             return False
@@ -77,7 +78,7 @@ class VocalHarmonySeparator:
         output_dir: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, str]:
-        from audio_separator.separator import Separator
+        Separator = get_separator_cls()
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
