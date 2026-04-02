@@ -32,7 +32,7 @@ function Resolve-Python {
         return $cmd.Source
     }
 
-    throw "未找到 Python，可通过 -PythonExe 指定。"
+    throw "Python executable not found. Use -PythonExe to specify it."
 }
 
 function Resolve-ExistingDir {
@@ -57,28 +57,28 @@ function Copy-Tree {
     )
 
     if (-not $Source) {
-        Write-Host "[skip] $Label 未找到"
+        Write-Host "[skip] $Label not found"
         return $false
     }
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
-    Write-Host "[ok] 已收集 $Label -> $Destination"
+    Write-Host "[ok] Collected $Label -> $Destination"
     return $true
 }
 
 $Python = Resolve-Python -Requested $PythonExe
-Write-Host "使用 Python: $Python"
+Write-Host "Using Python: $Python"
 
 $TorchRuntimeRepair = Join-Path $Root "tools\repair_torch_openmp.py"
 if (Test-Path $TorchRuntimeRepair) {
     & $Python -m pip install zstandard | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "安装 zstandard 失败，无法修复 torch OpenMP 运行时"
+        throw "Failed to install zstandard; cannot repair torch OpenMP runtime."
     }
     & $Python $TorchRuntimeRepair
     if ($LASTEXITCODE -ne 0) {
-        throw "修复 torch OpenMP 运行时失败"
+        throw "Failed to repair torch OpenMP runtime."
     }
 }
 
@@ -106,6 +106,10 @@ $AriaSource = Resolve-ExistingDir @(
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\aria_amt"),
     (Join-Path $Root "checkpoints\aria_amt")
 )
+$MirosSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR,
+    (Join-Path $Root ".tmp\ai4m-miros")
+)
 
 $ResolvedFfmpegDir = Resolve-ExistingDir @(
     $FfmpegDir,
@@ -123,11 +127,13 @@ if (-not $ResolvedFfmpegDir) {
 $AudioSeparatorBundle = Join-Path $BuildAssetRoot "audio-separator"
 $YourMt3Bundle = Join-Path $BuildAssetRoot "yourmt3_all"
 $AriaBundle = Join-Path $BuildAssetRoot "aria_amt"
+$MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
-Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator 模型" | Out-Null
-Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 模型" | Out-Null
-Copy-Tree -Source $AriaSource -Destination $AriaBundle -Label "Aria-AMT 模型" | Out-Null
+Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" | Out-Null
+Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" | Out-Null
+Copy-Tree -Source $AriaSource -Destination $AriaBundle -Label "Aria-AMT models" | Out-Null
+Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" | Out-Null
 
 if ($ResolvedFfmpegDir) {
     New-Item -ItemType Directory -Force -Path $FfmpegBundle | Out-Null
@@ -137,14 +143,15 @@ if ($ResolvedFfmpegDir) {
             Copy-Item -Path $sourceFile -Destination (Join-Path $FfmpegBundle $name) -Force
         }
     }
-    Write-Host "[ok] 已收集 ffmpeg -> $FfmpegBundle"
+    Write-Host "[ok] Collected ffmpeg -> $FfmpegBundle"
 } else {
-    Write-Host "[warn] 未找到 ffmpeg，将继续构建，但非 WAV 输入将依赖 librosa fallback。"
+    Write-Host "[warn] ffmpeg not found; build will continue, but non-WAV inputs will rely on librosa fallback."
 }
 
 $env:MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR = $AudioSeparatorBundle
 $env:MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR = $YourMt3Bundle
 $env:MUSIC_TO_MIDI_BUNDLE_ARIA_DIR = $AriaBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
 try {
@@ -153,12 +160,13 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_ARIA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
 }
 
 $DistDir = Join-Path $Root "dist\MusicToMidi"
 if (Test-Path $DistDir) {
     Write-Host ""
-    Write-Host "便携版已生成: $DistDir"
-    Write-Host "建议分发整个目录，不要只拿单个 exe。"
+    Write-Host "Portable build created: $DistDir"
+    Write-Host "Distribute the entire directory instead of a single exe."
 }

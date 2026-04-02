@@ -388,11 +388,23 @@ class YourMT3Transcriber:
             try:
                 import pytorch_lightning
                 logger.debug("✓ pytorch-lightning 已安装")
-            except ImportError:
+            except ImportError as e:
+                logger.debug("导入 pytorch_lightning 失败", exc_info=True)
+                missing_name = getattr(e, "name", "") or ""
+                is_missing_lightning = (
+                    missing_name == "pytorch_lightning" or "pytorch_lightning" in str(e)
+                )
+                if is_missing_lightning:
+                    return cls._mark_unavailable(
+                        "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
+                        "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
+                        "如果你使用打包版，请重新安装或使用修复后的安装包。"
+                    )
                 return cls._mark_unavailable(
-                    "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
-                    "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
-                    "如果你使用打包版，请重新安装或使用修复后的安装包。"
+                    "YourMT3+ 不可用：pytorch-lightning 导入失败，相关依赖可能未完整打包。\n"
+                    f"原始错误: {e}\n"
+                    "如果你使用源码环境，请重新安装相关依赖；"
+                    "如果你使用打包版，请使用修复后的安装包。"
                 )
 
             # 第三步：尝试导入 YourMT3 核心模块

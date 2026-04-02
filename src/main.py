@@ -4,6 +4,7 @@
 import sys
 import os
 import logging
+import multiprocessing
 import warnings
 from pathlib import Path
 
@@ -141,8 +142,38 @@ def _is_4k_display() -> bool:
     return False
 
 
+def _run_self_test(transcriber_cls=None) -> int:
+    """运行无界面自检，供发布烟测和终端诊断使用。"""
+    setup_chinese_environment()
+    logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
+
+    try:
+        if transcriber_cls is None:
+            from src.core.yourmt3_transcriber import YourMT3Transcriber as transcriber_cls
+
+        logger.info("开始执行便携包自检")
+        if not transcriber_cls.is_available():
+            reason_getter = getattr(transcriber_cls, "get_unavailable_reason", None)
+            reason = reason_getter() if callable(reason_getter) else "YourMT3+ 不可用"
+            logger.error("自检失败: %s", reason)
+            print(reason)
+            return 1
+
+        logger.info("便携包自检通过")
+        print("SELF-TEST OK: YourMT3+ available")
+        return 0
+    except Exception as e:
+        logger.error("自检异常: %s", e, exc_info=True)
+        print(f"SELF-TEST FAILED: {e}")
+        return 1
+
+
 def main():
     """主入口函数"""
+    multiprocessing.freeze_support()
+    if "--self-test" in sys.argv:
+        sys.exit(_run_self_test())
+
     # 设置中文环境（抑制警告 + 修补输出）
     setup_chinese_environment()
 

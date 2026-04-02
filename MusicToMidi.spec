@@ -20,7 +20,8 @@ def _collect_tree(source_dir, target_root):
     if not source_dir or not os.path.exists(source_dir):
         return items
     source_dir = os.path.abspath(source_dir)
-    for current_root, _dirs, files in os.walk(source_dir):
+    for current_root, dirs, files in os.walk(source_dir):
+        dirs[:] = [name for name in dirs if name not in {".git", "__pycache__", ".pytest_cache"}]
         rel = os.path.relpath(current_root, source_dir)
         dest = target_root if rel == "." else os.path.join(target_root, rel)
         for name in files:
@@ -47,6 +48,10 @@ aria_amt_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_ARIA_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "aria_amt"),
 )
+miros_source_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR"),
+    os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
+)
 ffmpeg_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR"),
     os.path.join(ROOT_DIR, "tools", "ffmpeg"),
@@ -70,6 +75,7 @@ datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
+datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 
 hiddenimports = [
@@ -97,9 +103,11 @@ hiddenimports = [
     'scipy',
     # 其他
     'mido',
+    'transkun',
     'pytorch_lightning',
     'lightning_fabric',
     'lightning_utilities',
+    'torchmetrics',
 ]
 if importlib.util.find_spec("torch_directml") is not None:
     hiddenimports.append("torch_directml")
@@ -110,33 +118,41 @@ from PyInstaller.utils.hooks import collect_all
 torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
 torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
+transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
 utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
+torchmetrics_datas, torchmetrics_binaries, torchmetrics_hiddenimports = collect_all('torchmetrics')
 datas += (
     torch_datas
     + torchaudio_datas
     + torchvision_datas
+    + transkun_datas
     + lightning_datas
     + fabric_datas
     + utilities_datas
+    + torchmetrics_datas
 )
 hiddenimports += (
     torch_hiddenimports
     + torchaudio_hiddenimports
     + torchvision_hiddenimports
+    + transkun_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
     + utilities_hiddenimports
+    + torchmetrics_hiddenimports
 )
 
 all_binaries = (
     torch_binaries
     + torchaudio_binaries
     + torchvision_binaries
+    + transkun_binaries
     + lightning_binaries
     + fabric_binaries
     + utilities_binaries
+    + torchmetrics_binaries
 )
 if torch_lib_dir:
     libomp_dll = os.path.join(torch_lib_dir, "libomp140.x86_64.dll")
@@ -157,7 +173,6 @@ a = Analysis(
         # 排除不需要的大型模块以减小体积
         'matplotlib',
         'tkinter',
-        'PIL',
         'cv2',
         'tensorflow',
         # onnx.reference 在 CUDA + Windows 下导入崩溃（DLL 冲突），运行时不需要

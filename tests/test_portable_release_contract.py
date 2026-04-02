@@ -30,6 +30,18 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("pytorch_lightning", spec)
         self.assertIn("lightning_fabric", spec)
         self.assertIn("lightning_utilities", spec)
+        self.assertIn("torchmetrics", spec)
+
+    def test_pyinstaller_spec_does_not_exclude_pillow(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertNotIn("'PIL'", spec)
+
+    def test_pyinstaller_spec_supports_miros_bundle_root(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", spec)
+        self.assertIn("ai4m-miros", spec)
 
     def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -48,6 +60,32 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("build/portable_assets", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR", workflow)
+
+    def test_release_workflow_smoke_tests_built_binary(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("--self-test", workflow)
+        self.assertIn("dist\\MusicToMidi\\MusicToMidi.exe --self-test", workflow)
+        self.assertIn("./dist/MusicToMidi/MusicToMidi --self-test", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
+
+    def test_release_workflow_installs_audio_separator_without_resolver_conflicts(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("requirements-build.txt", workflow)
+        self.assertIn("pip install numpy==1.26.4", workflow)
+        self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+
+    def test_build_portable_collects_miros_bundle_assets(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", script)
+        self.assertIn("ai4m-miros", script)
+
+    def test_build_portable_script_uses_ascii_only(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertEqual(script, script.encode("ascii").decode("ascii"))
 
 
 if __name__ == "__main__":
