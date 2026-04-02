@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import importlib
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -241,13 +242,10 @@ def get_ffprobe_executable() -> str:
     return found or "ffprobe"
 
 
-def get_native_library_dirs() -> List[Path]:
+def _get_existing_bundle_dirs(relative_dirs: Iterable[str]) -> List[Path]:
     candidates: List[Path] = []
     for root in get_bundle_roots():
-        for relative_dir in (
-            "torch/lib",
-            "onnxruntime/capi",
-        ):
+        for relative_dir in relative_dirs:
             candidate = root / relative_dir
             if candidate.is_dir():
                 candidates.append(candidate)
@@ -261,6 +259,14 @@ def get_native_library_dirs() -> List[Path]:
             unique.append(resolved)
             seen.add(key)
     return unique
+
+
+def get_native_library_dirs() -> List[Path]:
+    return _get_existing_bundle_dirs(("torch/lib",))
+
+
+def get_audio_separator_native_library_dirs() -> List[Path]:
+    return _get_existing_bundle_dirs(("onnxruntime/capi",))
 
 
 def _prepend_path_entries(entries: Iterable[Path]) -> None:
@@ -326,13 +332,16 @@ def _preload_bundled_onnxruntime_libraries(entries: Iterable[Path]) -> None:
                     continue
 
 
-def bootstrap_runtime_environment() -> None:
-    native_library_dirs = get_native_library_dirs()
-    if native_library_dirs:
-        _prepend_path_entries(native_library_dirs)
-        _register_windows_dll_directories(native_library_dirs)
-        _preload_bundled_onnxruntime_libraries(native_library_dirs)
+def _ensure_torch_loaded_before_onnxruntime() -> None:
+    if "torch" in sys.modules:
+        return
+    try:
+        importlib.import_module("torch")
+    except Exception:
+        return
 
+
+def _bootstrap_ffmpeg_environment() -> None:
     ffmpeg_bin = get_ffmpeg_bin_dir()
     if ffmpeg_bin is not None:
         current_path = os.environ.get("PATH", "")
@@ -347,3 +356,32 @@ def bootstrap_runtime_environment() -> None:
             os.environ.setdefault("IMAGEIO_FFMPEG_EXE", str(ffmpeg_path))
         if ffprobe_path.exists():
             os.environ.setdefault("FFPROBE_BINARY", str(ffprobe_path))
+
+
+def bootstrap_runtime_environment() -> None:
+    native_library_dirs = get_native_library_dirs()
+    if native_library_dirs:
+        _prepend_path_entries(native_library_dirs)
+        _register_windows_dll_directories(native_library_dirs)
+
+    _bootstrap_ffmpeg_environment()
+
+
+def activate_audio_separator_runtime() -> None:
+    # Load PyTorch first so Windows resolves its CUDA/cuDNN stack before
+    # onnxruntime/capi enters PATH. This avoids YourMT3 inference corruption
+    # when both runtimes coexist in the same process.
+    torch_library_dirs = get_native_library_dirs()
+    if torch_library_dirs:
+        _prepend_path_entries(torch_library_dirs)
+        _register_windows_dll_directories(torch_library_dirs)
+
+    _ensure_torch_loaded_before_onnxruntime()
+
+    onnxruntime_library_dirs = get_audio_separator_native_library_dirs()
+    if onnxruntime_library_dirs:
+        _prepend_path_entries(onnxruntime_library_dirs)
+        _register_windows_dll_directories(onnxruntime_library_dirs)
+        _preload_bundled_onnxruntime_libraries(onnxruntime_library_dirs)
+
+    _bootstrap_ffmpeg_environment()

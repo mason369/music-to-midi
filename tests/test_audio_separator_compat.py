@@ -1,7 +1,9 @@
 import unittest
+from types import ModuleType
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from src.utils.audio_separator_compat import patch_separator_package_metadata
+from src.utils.audio_separator_compat import get_separator_cls, patch_separator_package_metadata
 
 
 class _FakeSeparator:
@@ -37,6 +39,25 @@ class AudioSeparatorCompatTests(unittest.TestCase):
 
         self.assertIsNotNone(distribution)
         self.assertEqual("9.9.9", distribution.version)
+
+    def test_get_separator_cls_activates_audio_separator_runtime_before_import(self):
+        separator_module = ModuleType("audio_separator.separator")
+        separator_module.Separator = type("ImportedSeparator", (_FakeSeparator,), {})
+        package_module = ModuleType("audio_separator")
+        package_module.separator = separator_module
+
+        with patch("src.utils.audio_separator_compat.activate_audio_separator_runtime") as activate_runtime, patch.dict(
+            "sys.modules",
+            {
+                "audio_separator": package_module,
+                "audio_separator.separator": separator_module,
+            },
+            clear=False,
+        ):
+            separator_cls = get_separator_cls()
+
+        activate_runtime.assert_called_once()
+        self.assertIs(separator_cls, separator_module.Separator)
 
 
 if __name__ == "__main__":

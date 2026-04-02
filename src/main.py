@@ -6,7 +6,6 @@ import os
 import logging
 import multiprocessing
 import warnings
-from pathlib import Path
 
 from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
 
@@ -17,22 +16,6 @@ os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
 
 # 预先注入 bundled ffmpeg/bin 到 PATH，供 librosa/audioread/subprocess 使用
 bootstrap_runtime_environment()
-
-# 动态设置 OpenMP/MKL 线程数（必须在 import torch 之前，否则无效）
-# 使用全部物理核心，最大化 CPU 利用率
-try:
-    import psutil as _psutil
-    _phys = _psutil.cpu_count(logical=False) or (os.cpu_count() or 4)
-except Exception:
-    _phys = os.cpu_count() or 4
-_omp_threads = str(max(2, _phys))
-os.environ.setdefault('OMP_NUM_THREADS', _omp_threads)
-os.environ.setdefault('MKL_NUM_THREADS', _omp_threads)
-del _omp_threads, _phys
-try:
-    del _psutil
-except NameError:
-    pass
 
 # 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
 # 必须在任何 import torch 之前执行
@@ -79,18 +62,6 @@ del _plat
 # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
 try:
     import torch  # noqa: F401
-    # 使用全部物理核心，避免默认 1 线程限制
-    try:
-        import psutil as _psutil
-        _cores = _psutil.cpu_count(logical=False) or (os.cpu_count() or 4)
-        del _psutil
-    except ImportError:
-        _cores = os.cpu_count() or 4
-    torch.set_num_threads(int(os.environ.get('OMP_NUM_THREADS', str(_cores))))
-    del _cores
-    # 固定输入尺寸下启用 cuDNN 自动调优（约提升 10-30% 推理速度）
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
     # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
     # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
     import torchaudio

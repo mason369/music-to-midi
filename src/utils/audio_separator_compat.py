@@ -4,6 +4,8 @@ import logging
 from types import SimpleNamespace
 from typing import Any
 
+from src.utils.runtime_paths import activate_audio_separator_runtime
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ def patch_separator_package_metadata(separator_cls: Any) -> Any:
 
 
 def get_separator_cls():
+    activate_audio_separator_runtime()
     from audio_separator.separator import Separator
 
     return patch_separator_package_metadata(Separator)
