@@ -1160,22 +1160,40 @@ The MusicFM encoder itself is available (MIT license), but an encoder alone cann
 
 ### Frontier Models & Research Directions
 
-| Model / Direction | Source | Type | Status | Notes |
-|-------------------|--------|------|--------|-------|
-| YPTF.MoE+Multi (PS) (current) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Multi-instrument | ✅ In use | Slakh2100: Multi F1 0.7484 (same-protocol baseline used in this README) |
-| AI4Musician 2025 winner (ai4m-miros) | [AI4Musicians 2025](https://ai4musicians.org/transcription/2025transcription.html) / [amt-os/ai4m-miros](https://github.com/amt-os/ai4m-miros) | Multi-instrument | 🔬 Paper/repo stage | Winning approach published with code; publicly reproducible, same-protocol comparison vs YourMT3+ remains limited |
-| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open source | Seq-to-seq piano AMT implementation with released checkpoints |
-| [Transkun](https://github.com/Yujia-Yan/Transkun) | Yujia Yan | Piano | ✅ Open source | PyPI package ships the current public checkpoint; strong event-level piano transcription, but packaged weights do not claim full pedal extension |
-| MusicFM encoder + AMT decoder | [MusicFM paper](https://arxiv.org/abs/2311.03318) / [MusicFM HF](https://huggingface.co/minzwon/MusicFM) | Multi-instrument (research direction) | 📄 Paper/components available | Strong pretrained encoder; full AMT still needs Adapter + Decoder + fine-tuning |
-| CountEM (weakly-supervised AMT) | [arXiv:2511.14250](https://arxiv.org/abs/2511.14250) | AMT training method | 📄 Paper | Uses note histogram supervision to reduce aligned-label requirements |
+> The tables below only keep publicly verifiable information. `Slakh2100 Multi (Onset-Offset) F1`, `MAESTRO onset F1`, official challenge ranking, and subjective/downstream gains are different evaluation protocols and should not be read as one unified leaderboard.
 
-| Model | Source | Type | Notes |
-|-------|--------|------|-------|
-| [MT3](https://github.com/magenta/mt3) | Google Magenta | Multi-instrument | Transformer enc-dec, base architecture of YourMT3+, Multi F1=0.62 (Slakh) |
-| [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) | MCT Lab | Multi-task | Piano/drums/vocal/chord transcription |
-| [Basic Pitch](https://github.com/spotify/basic-pitch) | Spotify | General | Lightweight mono/polyphonic, fast inference, lower accuracy than MT3 family |
+#### Multi-instrument Models (Publicly Verifiable)
 
-> **Trend Summary**: As of early 2026, multi-instrument AMT continues along two paths: MT3/YourMT3+ style task-specialized models and pretrained-encoder-enhanced systems. Piano AMT has stronger open-source maturity than full multi-instrument SOTA pipelines.
+| Model | Source | Benchmark / Protocol | Public Result | Status | Notes |
+|-------|--------|----------------------|---------------|--------|-------|
+| YPTF.MoE+Multi (PS) (current) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**; same table reports `MT3 = 62.0` | ✅ In use | This is the most directly comparable numeric row for the current project's main backend |
+| [MT3](https://github.com/magenta/mt3) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [Magenta repo](https://github.com/magenta/mt3) | Slakh2100 `Multi (Onset-Offset) F1` | **62.0** | ✅ Open-source baseline | Token-based multi-instrument baseline that YourMT3+ extends |
+| AI4Musician 2025 winning route ([ai4m-miros](https://github.com/amt-os/ai4m-miros)) | [ICME 2025 workshop page](https://ai4musicians.org/2025icme.html) / [challenge page](https://ai4musicians.org/transcription/2025transcription.html) / [repo](https://github.com/amt-os/ai4m-miros) | Official challenge result | **Winning solution / 1st place** | 🔬 Winning route / code visible | This is a competition ranking, not a Slakh-style benchmark row; public materials describe a MusicFM-based encoder plus multi-decoder route |
+
+#### Piano-Specialized Models (Publicly Verifiable)
+
+| Model | Source | Benchmark / Protocol | Public Result | Status | Notes |
+|-------|--------|----------------------|---------------|--------|-------|
+| [Transkun V2 (paper checkpoint)](https://github.com/Yujia-Yan/Transkun) | [official repo / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 `note onset F1 / onset+offset F1 / onset+offset+velocity F1` | **0.9832 / 0.9349 / 0.9296** | ✅ Open source | Paper-reported checkpoint, not the default `pip install transkun` weight used by this project |
+| [Transkun packaged checkpoint (No Ext)](https://github.com/Yujia-Yan/Transkun) | [official repo / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 No Ext, same metric trio | **0.9833 / 0.8149 / 0.8109** | ✅ Open source, integrated | The repo explicitly says the packaged checkpoint is `without pedal extension of notes`; this is the easiest fully local install path |
+| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | [official repo](https://github.com/EleutherAI/aria-amt) | Public checkpoint release | The repo exposes `piano-medium-double-1.0.safetensors`, but does not surface a unified MAESTRO/MAPS comparison table in the same style as the rows above | ✅ Open source, integrated | Strong practical piano backend, but the README should not invent a benchmark row that the public repo does not publish |
+| [High-Resolution Piano Transcription with Pedals by Regressing Onset and Offset Times](https://arxiv.org/abs/2010.01815) | [paper](https://arxiv.org/abs/2010.01815) / [ByteDance repo](https://github.com/bytedance/piano_transcription) | MAESTRO `onset F1 / pedal onset F1` | **96.72% / 91.86%** | 📄 Paper + code | Strong pedal-aware reference system; piano-only protocol, so it should not be mixed into the multi-instrument table above |
+
+#### Paper-Stage or Protocol-Mismatched Directions
+
+| Model / Direction | Source | Public Protocol / Task | Publicly Verifiable Information | Why It Is Not Mixed Into the Tables Above |
+|-------------------|--------|------------------------|---------------------------------|-------------------------------------------|
+| [MR-MT3](https://arxiv.org/abs/2403.10024) | [paper](https://arxiv.org/abs/2403.10024) / [code](https://github.com/gudgud96/MR-MT3) | Slakh2100 with `onset F1`, `instrument leakage ratio`, and `instrument detection F1` | The abstract explicitly reports improved onset F1 and reduced instrument leakage vs MT3 | Leakage-focused MT3 branch, but not the same metric as Slakh `Multi (Onset-Offset) F1` |
+| [Jointist](https://arxiv.org/abs/2302.00286) | [paper](https://arxiv.org/abs/2302.00286) | Popular-music joint transcription + separation | The abstract reports `>1 ppt` transcription gain, `+5 SDR` source separation, `+1.8 ppt` downbeat, and `+1.4 ppt` chord/key gains | Joint transcription/separation protocol differs materially from Slakh / MAESTRO |
+| MusicFM encoder + AMT decoder | [MusicFM paper](https://arxiv.org/abs/2311.03318) / [repo](https://github.com/minzwon/musicfm) / [HF weights](https://huggingface.co/minzwon/MusicFM) | Pretrained encoder transfer | Public encoder weights exist, but a generic turnkey AMT decoder + fine-tuning pipeline is not released as a drop-in backend | Relevant to MIROS-like systems, but still a research-stack component rather than a ready backend |
+| [CountEM / Count The Notes](https://arxiv.org/abs/2511.14250) | [paper](https://arxiv.org/abs/2511.14250) / [project page](https://yoni-yaffe.github.io/count-the-notes) / [code](https://github.com/Yoni-Yaffe/count-the-notes) | Weakly supervised AMT training | Public paper, code, and models; the core idea is note-histogram supervision plus EM instead of aligned labels | Training-method direction, not a fixed production checkpoint/backend |
+| [PerceiverTF](https://arxiv.org/abs/2306.10785) | [paper](https://arxiv.org/abs/2306.10785) | Multi-track public datasets under the paper's own protocol | The abstract states it outperforms MT3 and SpecTNT on multiple public datasets | Best read as an architectural ancestor of YourMT3+, not as a row that should be forced into the same benchmark table |
+
+> **Additional Notes**:
+> - [Basic Pitch](https://github.com/spotify/basic-pitch) remains useful as a lightweight engineering baseline; Spotify's public positioning emphasizes `<20MB` and `<17K params`, but it does not publish a benchmark table directly matching the Slakh/MAESTRO protocols above.
+> - [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) is still a useful multi-task toolkit, but its latest GitHub release is still `0.5.0` (2021-12-09), and its public evaluation framing does not line up cleanly with the comparison tables above.
+
+> **Trend Summary**: As of early 2026, strong public multi-instrument AMT routes still split into two broad families: specialized token-based systems (`MT3 / YourMT3+ / MR-MT3`) and pretrained-encoder-enhanced routes (`MusicFM`-style systems). Piano AMT remains more mature in the open, but even there the gap between `packaged Transkun`, `paper checkpoints`, and `pedal-aware research systems` needs to be spelled out explicitly instead of being merged into a single overstated leaderboard.
 
 ## Development
 
