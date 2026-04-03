@@ -16,11 +16,12 @@ Convert audio files to multi-track MIDI with automatic 128 GM instrument recogni
 
 ## Features
 
-- **Multi-Instrument Transcription**: Uses a high-performance YourMT3+ MoE model for direct multi-instrument recognition from mixed audio
+- **Multi-Instrument Transcription**: Supports both `YourMT3+ MoE` and `MIROS (MusicFM)` as selectable multi-instrument backends
 - **Vocal Separation Mode**: BS-RoFormer separates vocals/accompaniment and transcribes both to independent MIDIs (optional extra merged MIDI; default checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`)
 - **Six-Stem Separation Mode**: BS-RoFormer SW separates `bass/drums/guitar/piano/vocals/other`, supports a “selected stems only” switch, and outputs stem MIDIs + 1 merged MIDI
+- **Backend Routing**: Lets `Aria-AMT` stay piano-preferred while `YourMT3+ / MIROS` continue handling the full multi-instrument path
 - **Lead/Harmony Proxy (Experimental)**: In six-stem mode, `vocals` can be further split into lead + harmony proxy stems (public male/female checkpoint)
-- **Piano-Dedicated Mode**: Aria-AMT transcribes piano-focused input directly to a dedicated piano MIDI
+- **Piano-Dedicated Modes**: Supports both `Aria-AMT` and `Transkun`; the packaged Transkun checkpoint focuses on note events rather than full pedal reconstruction
 - **128 GM Instruments**: Outputs standard General MIDI multi-track MIDI, accurately distinguishing drums, bass, guitar, piano, etc.
 - **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
 - **GPU Acceleration**: Auto-detects and uses CUDA (NVIDIA) / ROCm (AMD) / CPU
@@ -135,6 +136,12 @@ python download_multistem_model.py
 # 5.2 Download Aria-AMT piano checkpoint
 python download_aria_amt_model.py
 
+# 5.3 Optional: place the MIROS repository at one of these paths
+#   ai4m-miros/
+#   external/ai4m-miros/
+# upstream:
+#   https://github.com/amt-os/ai4m-miros
+
 # 6. Run the application
 python -m src.main
 ```
@@ -203,12 +210,14 @@ Download the latest release from the [Releases](https://github.com/mason369/musi
 ## Usage
 
 1. **Open Audio File**: Drag and drop an audio file (MP3, WAV, FLAC, OGG) or click to browse
-2. **Choose Mode**: SMART / VOCAL_SPLIT / SIX_STEM_SPLIT / PIANO_ARIA_AMT
-3. **Optional (VOCAL_SPLIT)**: Enable merged MIDI output (vocal + accompaniment)
-4. **Optional (SIX_STEM_SPLIT)**: Enable selected-stems-only and pick targets
-5. **Optional (SIX_STEM_SPLIT)**: Enable lead/harmony proxy split for `vocals`
-6. **Start Processing**: Click "Start" to begin conversion
-7. **Get Results**: Find MIDI files and separated audio tracks in output directory
+2. **Choose Mode**: SMART / VOCAL_SPLIT / SIX_STEM_SPLIT / PIANO_TRANSKUN / PIANO_ARIA_AMT
+3. **Choose Preferred Engine**: `Aria-AMT / YourMT3+ / MIROS`
+4. **Understand Routing**: direct `YourMT3+ / MIROS` selections own the full multi-instrument pass; when `Aria-AMT` is preferred, SMART and VOCAL_SPLIT still use the active multi-instrument backend, while SIX_STEM_SPLIT can additionally hand the separated piano stem to Aria-AMT
+5. **Optional (VOCAL_SPLIT)**: Enable merged MIDI output (vocal + accompaniment)
+6. **Optional (SIX_STEM_SPLIT)**: Enable selected-stems-only and pick targets
+7. **Optional (SIX_STEM_SPLIT)**: Enable lead/harmony proxy split for `vocals`
+8. **Start Processing**: Click "Start" to begin conversion
+9. **Get Results**: Find MIDI files and separated audio tracks in output directory
 
 ## Supported Formats
 
@@ -223,31 +232,22 @@ Download the latest release from the [Releases](https://github.com/mason369/musi
 ### Architecture Overview
 
 ```
-Audio Input (16kHz mono)
+Audio Input
     ↓
 MusicToMidiPipeline
     ├── BeatDetector (librosa) → BPM / beat grid
-    └── YourMT3Transcriber
-            ↓
-        ┌─────────────────────────────────────────────┐
-        │  YourMT3+ MoE (YPTF.MoE+Multi PS)          │
-        │                                             │
-        │  Audio → Mel Spectrogram (256×512)           │
-        │    ↓                                        │
-        │  Pre-Encoder (Conv2d Res3B, 1→C, /8 freq)   │
-        │    ↓                                        │
-        │  PerceiverTF Encoder (26 latents, MoE×8)    │
-        │    ↓                                        │
-        │  Multi-T5 Decoder (13 channels, AR greedy)  │
-        │    ↓                                        │
-        │  Token → Note Events (per channel)          │
-        └─────────────────────────────────────────────┘
-            ↓
-        Smart deduplication (overlapping segment merge)
-            ↓
-        MIDI post-processing (quantize / velocity / polyphony)
-            ↓
-        Multi-track MIDI Output (up to 128 GM instruments)
+    ├── Multi-instrument route
+    │   ├── YourMT3Transcriber
+    │   └── MirosTranscriber
+    ├── Piano-specialized route
+    │   ├── AriaAmtTranscriber
+    │   └── TranskunTranscriber
+    ↓
+Backend-specific inference
+    ↓
+MIDI generation / merge / post-processing
+    ↓
+Final MIDI output(s)
 ```
 
 ### Source Code Structure
@@ -258,7 +258,9 @@ src/
 ├── core/                            # Core processing engine
 │   ├── pipeline.py                  # Main processing pipeline (MusicToMidiPipeline)
 │   ├── yourmt3_transcriber.py       # YourMT3+ transcriber wrapper
+│   ├── miros_transcriber.py         # MIROS multi-instrument wrapper
 │   ├── aria_amt_transcriber.py      # Aria-AMT piano transcriber wrapper
+│   ├── transkun_transcriber.py      # Transkun piano transcriber wrapper
 │   ├── beat_detector.py             # Beat/BPM detection
 │   ├── midi_generator.py            # MIDI generation & post-processing
 │   ├── vocal_separator.py           # BS-RoFormer vocal separation
@@ -284,6 +286,19 @@ src/
     ├── logger.py                    # Colored logging system
     └── warnings_filter.py           # Third-party library warning suppression
 ```
+
+### Optional Backends
+
+| Backend | Type | Integration | Current quality semantics | Notes |
+|---------|------|-------------|---------------------------|-------|
+| MIROS (MusicFM) | Multi-instrument | Local `ai4m-miros` checkout + wrapper | Fixed checkpoint quality | Suitable as the multi-instrument backend for SMART / VOCAL_SPLIT / SIX_STEM_SPLIT |
+| Aria-AMT | Piano | Local checkpoint + wrapper | Fixed checkpoint quality | Can run as a dedicated piano mode and can also take over the separated piano stem in six-stem mode |
+| Transkun | Piano | `pip install transkun`, packaged weights included | Fixed checkpoint quality | Strong event-level piano transcription; current packaged checkpoint does not claim full pedal tracking |
+
+Quality preset semantics:
+- `YourMT3+` supports `fast / balanced / best`
+- `MIROS / Aria-AMT / Transkun` currently run at fixed checkpoint quality
+- In `SIX_STEM_SPLIT` with `Aria-AMT + YourMT3+`, the quality preset only affects the YourMT3+ full-mix pass
 
 ---
 
@@ -445,7 +460,7 @@ This project uses **BS-RoFormer** (Band-Split Rotary Transformer) for vocal/acco
 | First Use | Auto-downloaded from HuggingFace to `~/.music-to-midi/models/audio-separator/` |
 | Output options | Default: 2 MIDI files (accompaniment + vocal); optional extra merged MIDI |
 
-For six-stem separation, the project uses **BS-RoFormer SW** as the primary backend (with `htdemucs_6s` fallback) and downloads assets via `download_multistem_model.py`. The desktop UI includes switches for selected-stems-only and optional lead/harmony proxy split on vocals. For vocal split, the UI provides an optional merged-MIDI toggle. For piano-dedicated transcription, the project uses Aria-AMT with downloadable local checkpoint (`piano-medium-double-1.0.safetensors`).
+For six-stem separation, the project uses **BS-RoFormer SW** as the primary backend (with `htdemucs_6s` fallback) and downloads assets via `download_multistem_model.py`. The desktop UI includes switches for selected-stems-only and optional lead/harmony proxy split on vocals. For vocal split, the UI provides an optional merged-MIDI toggle. For piano-specialized transcription, the project supports both Aria-AMT with downloadable local checkpoint (`piano-medium-double-1.0.safetensors`) and Transkun via its PyPI package, while MIROS can be enabled by placing a local `ai4m-miros` checkout in a supported path.
 
 #### Architecture Overview
 
@@ -1150,6 +1165,7 @@ The MusicFM encoder itself is available (MIT license), but an encoder alone cann
 | YPTF.MoE+Multi (PS) (current) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Multi-instrument | ✅ In use | Slakh2100: Multi F1 0.7484 (same-protocol baseline used in this README) |
 | AI4Musician 2025 winner (ai4m-miros) | [AI4Musicians 2025](https://ai4musicians.org/transcription/2025transcription.html) / [amt-os/ai4m-miros](https://github.com/amt-os/ai4m-miros) | Multi-instrument | 🔬 Paper/repo stage | Winning approach published with code; publicly reproducible, same-protocol comparison vs YourMT3+ remains limited |
 | [Aria-AMT](https://github.com/EleutherAI/aria-amt) | EleutherAI | Piano | ✅ Open source | Seq-to-seq piano AMT implementation with released checkpoints |
+| [Transkun](https://github.com/Yujia-Yan/Transkun) | Yujia Yan | Piano | ✅ Open source | PyPI package ships the current public checkpoint; strong event-level piano transcription, but packaged weights do not claim full pedal extension |
 | MusicFM encoder + AMT decoder | [MusicFM paper](https://arxiv.org/abs/2311.03318) / [MusicFM HF](https://huggingface.co/minzwon/MusicFM) | Multi-instrument (research direction) | 📄 Paper/components available | Strong pretrained encoder; full AMT still needs Adapter + Decoder + fine-tuning |
 | CountEM (weakly-supervised AMT) | [arXiv:2511.14250](https://arxiv.org/abs/2511.14250) | AMT training method | 📄 Paper | Uses note histogram supervision to reduce aligned-label requirements |
 
@@ -1242,6 +1258,19 @@ python -c "import torch; print(torch.cuda.is_available())"
 # If returns False, reinstall correct PyTorch version
 pip uninstall torch torchaudio
 pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
+```
+
+**Q: MIROS is unavailable**
+```bash
+# Place the upstream repository at one of:
+#   ai4m-miros/
+#   external/ai4m-miros/
+# and install its runtime dependencies
+```
+
+**Q: Transkun is unavailable**
+```bash
+python -m pip install --force-reinstall transkun
 ```
 
 **Q: YourMT3+ not available**
