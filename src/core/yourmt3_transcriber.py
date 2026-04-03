@@ -40,7 +40,14 @@ import numpy as np
 
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
-from src.utils.gpu_utils import get_device, get_optimal_batch_size, _fix_torch_dll_path, get_optimal_thread_count
+from src.utils.gpu_utils import (
+    get_device,
+    get_optimal_batch_size,
+    _fix_torch_dll_path,
+    get_optimal_thread_count,
+    ensure_cuda_runtime_compatibility,
+    rewrite_cuda_runtime_error,
+)
 from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
 
 # 在任何 import torch 之前修复 Windows 特殊路径 DLL 加载问题
@@ -578,6 +585,8 @@ class YourMT3Transcriber:
                 logger.info("正在导入 YourMT3 依赖模块...")
                 _clear_yourmt3_import_state()
                 import torch
+                if self.device.startswith("cuda"):
+                    ensure_cuda_runtime_compatibility(self.device)
                 from utils.task_manager import TaskManager
                 from model.ymt3 import YourMT3
                 from config.config import shared_cfg as default_shared_cfg
@@ -819,6 +828,9 @@ class YourMT3Transcriber:
         返回:
             (pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold)
         """
+        if self.device.startswith("cuda"):
+            ensure_cuda_runtime_compatibility(self.device)
+
         # 加载模型
         self._load_model(
             progress_callback=(
@@ -953,7 +965,8 @@ class YourMT3Transcriber:
             return result
 
         except Exception as e:
-            logger.error(f"YourMT3+ 转写失败: {e}")
+            friendly_message = rewrite_cuda_runtime_error(e, self.device)
+            logger.error(f"YourMT3+ 转写失败: {friendly_message}")
             raise
 
     def transcribe_single_stem(
@@ -1015,8 +1028,9 @@ class YourMT3Transcriber:
             return notes
 
         except Exception as e:
-            logger.error(f"YourMT3+ 单轨转写失败: {e}")
-            raise
+            friendly_message = rewrite_cuda_runtime_error(e, self.device)
+            logger.error(f"YourMT3+ 单轨转写失败: {friendly_message}")
+            raise RuntimeError(friendly_message) from e
 
     def _parse_yourmt3_output_from_tokens(
         self,
@@ -1411,8 +1425,9 @@ class YourMT3Transcriber:
             return result
 
         except Exception as e:
-            logger.error(f"精确转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"精确转写失败: {e}") from e
+            friendly_message = rewrite_cuda_runtime_error(e, self.device)
+            logger.error(f"精确转写失败: {friendly_message}", exc_info=True)
+            raise RuntimeError(f"精确转写失败: {friendly_message}") from e
 
     def unload_model(self) -> None:
         """卸载模型以释放 GPU 内存"""
@@ -1523,8 +1538,9 @@ class YourMT3Transcriber:
             return instrument_notes, drum_notes
 
         except Exception as e:
-            logger.error(f"极致精度转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"极致精度转写失败: {e}") from e
+            friendly_message = rewrite_cuda_runtime_error(e, self.device)
+            logger.error(f"极致精度转写失败: {friendly_message}", exc_info=True)
+            raise RuntimeError(f"极致精度转写失败: {friendly_message}") from e
 
     def _deduplicate_overlapping_notes_smart(
         self,

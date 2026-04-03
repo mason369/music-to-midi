@@ -10,6 +10,11 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+_UNSUPPORTED_CUDA_ARCH_MARKERS = (
+    "no kernel image is available for execution on the device",
+    "device kernel image is invalid",
+)
+
 
 def _get_short_path(long_path: str) -> str:
     """
@@ -154,6 +159,94 @@ def _get_torch():
                         "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
                     )
             return None
+
+
+def _get_cuda_device_index(device: str) -> int:
+    if ":" in device:
+        try:
+            return int(device.split(":", 1)[1])
+        except ValueError:
+            return 0
+    return 0
+
+
+def is_unsupported_cuda_architecture_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in _UNSUPPORTED_CUDA_ARCH_MARKERS)
+
+
+def rewrite_cuda_runtime_error(error: BaseException, device: Optional[str] = None) -> str:
+    if not is_unsupported_cuda_architecture_error(error):
+        return str(error)
+
+    torch = _get_torch()
+    device_name = "未知 NVIDIA GPU"
+    compute_capability = "未知"
+    supported_arches = "未知"
+    torch_version = None
+    cuda_version = None
+
+    if torch is not None:
+        torch_version = getattr(torch, "__version__", None)
+        cuda_version = getattr(getattr(torch, "version", None), "cuda", None)
+        try:
+            if device is None:
+                device = "cuda:0"
+            props = torch.cuda.get_device_properties(_get_cuda_device_index(device))
+            device_name = getattr(props, "name", device_name)
+            major = getattr(props, "major", None)
+            minor = getattr(props, "minor", None)
+            if major is not None and minor is not None:
+                compute_capability = f"{major}.{minor} (sm_{major}{minor})"
+        except Exception:
+            pass
+        try:
+            arch_list = getattr(torch.cuda, "get_arch_list", lambda: [])()
+            if arch_list:
+                supported_arches = ", ".join(arch_list)
+        except Exception:
+            pass
+
+    details = [
+        "检测到当前 NVIDIA 显卡架构与内置 PyTorch/CUDA 运行时不兼容，无法使用 GPU 执行转写。",
+        f"当前显卡: {device_name}",
+        f"计算能力: {compute_capability}",
+    ]
+    if torch_version:
+        details.append(f"PyTorch 版本: {torch_version}")
+    if cuda_version:
+        details.append(f"CUDA 版本: {cuda_version}")
+    details.extend(
+        [
+            f"内置支持架构: {supported_arches}",
+            "这通常表示显卡架构过旧或过新，不在当前构建支持范围内。",
+            "请改用 CPU 版发布包，或使用与该显卡兼容的 PyTorch/CUDA 重新打包。",
+        ]
+    )
+    return "\n".join(details)
+
+
+def ensure_cuda_runtime_compatibility(device: str) -> None:
+    if not device.startswith("cuda"):
+        return
+
+    torch = _get_torch()
+    if torch is None:
+        return
+
+    device_index = _get_cuda_device_index(device)
+    try:
+        probe = torch.zeros(1, device=device)
+        add_in_place = getattr(probe, "add_", None)
+        if callable(add_in_place):
+            add_in_place(1)
+        synchronize = getattr(torch.cuda, "synchronize", None)
+        if callable(synchronize):
+            synchronize(device_index)
+    except RuntimeError as error:
+        if is_unsupported_cuda_architecture_error(error):
+            raise RuntimeError(rewrite_cuda_runtime_error(error, device)) from error
+        raise
 
 
 def get_accelerator_type() -> str:
