@@ -70,8 +70,11 @@ class ProcessingWorker(QThread):
         finally:
             # 确保 GPU 资源被清理
             try:
-                if self.pipeline and self.pipeline.yourmt3_transcriber:
-                    self.pipeline.yourmt3_transcriber.unload_model()
+                if self.pipeline:
+                    for attr_name in ("yourmt3_transcriber", "miros_transcriber"):
+                        transcriber = getattr(self.pipeline, attr_name, None)
+                        if transcriber and hasattr(transcriber, "unload_model"):
+                            transcriber.unload_model()
             except Exception as e:
                 logger.warning(f"工作线程清理模型失败: {e}")
             try:

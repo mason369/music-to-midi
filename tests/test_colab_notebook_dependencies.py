@@ -28,7 +28,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             source_text,
         )
 
-    def test_torch_audio_versions_are_synchronized(self):
+    def test_notebook_preserves_preinstalled_torch_and_avoids_reinstall(self):
         source_text = self._load_notebook_source_text()
         package_block_match = re.search(
             r"packages = \[\n(?P<block>.*?)\n\]",
@@ -39,11 +39,15 @@ class TestColabNotebookDependencies(unittest.TestCase):
         package_block = package_block_match.group("block")
 
         self.assertIn(
-            "Aligning torch/torchaudio versions to avoid ABI mismatch",
+            "检测 Colab 预装 torch 版本",
             source_text,
         )
         self.assertIn(
-            "torch=={torch_base} torchaudio=={torch_base}",
+            'log(f"torch=={torch.__version__}")',
+            source_text,
+        )
+        self.assertIn(
+            'log(f"CUDA available: {torch.cuda.is_available()}, CUDA version: {torch.version.cuda}")',
             source_text,
         )
         self.assertNotIn('"torchaudio"', package_block)
@@ -60,22 +64,22 @@ class TestColabNotebookDependencies(unittest.TestCase):
             source_text,
         )
 
-    def test_post_install_torch_torchaudio_resync_and_check(self):
+    def test_post_install_logs_torch_family_versions(self):
         source_text = self._load_notebook_source_text()
         self.assertIn(
-            "Re-syncing torch/torchaudio after dependency installation",
+            "关键包版本",
             source_text,
         )
         self.assertIn(
-            "--force-reinstall --no-deps",
+            'for module_name in ["torch", "torchaudio", "torchvision", "gradio", "huggingface_hub", "lightning", "librosa", "amt"]:',
             source_text,
         )
         self.assertIn(
-            "Verifying torch/torchaudio ABI compatibility",
+            "importlib.import_module(module_name)",
             source_text,
         )
         self.assertIn(
-            "import torchaudio",
+            'log(f"{module_name}=={version}")',
             source_text,
         )
 

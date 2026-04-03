@@ -27,6 +27,8 @@ class AriaAmtTranscriber:
         if checkpoint_path is None:
             checkpoint_path = self.default_checkpoint_path()
         self.checkpoint_path = Path(checkpoint_path)
+        self._cancelled = False
+        self._process: Optional[subprocess.Popen[str]] = None
 
     @staticmethod
     def default_checkpoint_path() -> Path:
@@ -86,17 +88,25 @@ class AriaAmtTranscriber:
         if progress_callback:
             progress_callback(0.05, "正在加载 Aria-AMT...")
 
+        self._cancelled = False
         logger.info("Running Aria-AMT transcription: %s", " ".join(command))
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
-            check=False,
             capture_output=True,
             text=True,
         )
-        if completed.returncode != 0:
+        self._process = process
+        try:
+            stdout, stderr = process.communicate()
+        finally:
+            self._process = None
+
+        if self._cancelled:
+            raise InterruptedError("Aria-AMT 转写处理已取消")
+        if process.returncode != 0:
             raise RuntimeError(
                 "Aria-AMT 转写失败:\n"
-                f"{completed.stdout}\n{completed.stderr}"
+                f"{stdout}\n{stderr}"
             )
 
         midi_path = self._guess_output_midi(temp_dir, input_path)
@@ -111,3 +121,10 @@ class AriaAmtTranscriber:
 
         logger.info("Aria-AMT output: %s", out_path)
         return str(out_path)
+
+    def cancel(self) -> None:
+        self._cancelled = True
+        process = self._process
+        if process is not None and process.poll() is None:
+            logger.info("正在终止 Aria-AMT 子进程...")
+            process.terminate()

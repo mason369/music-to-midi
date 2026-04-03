@@ -1,10 +1,41 @@
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+mido_stub = types.ModuleType("mido")
+mido_stub.__spec__ = None
+
+
+class _Dummy:
+    pass
+
+
+mido_stub.MidiFile = _Dummy
+mido_stub.MidiTrack = _Dummy
+mido_stub.Message = _Dummy
+mido_stub.MetaMessage = _Dummy
+sys.modules.setdefault("mido", mido_stub)
+
 from src.core.pipeline import MusicToMidiPipeline
 from src.models.data_models import BeatInfo, Config, NoteEvent, ProcessingResult
+
+
+def _make_split_ready_notes():
+    return (
+        {
+            0: [NoteEvent(pitch=60, start_time=0.0, end_time=0.4)],
+            24: [NoteEvent(pitch=64, start_time=0.1, end_time=0.5)],
+            32: [NoteEvent(pitch=40, start_time=0.2, end_time=0.6)],
+            52: [NoteEvent(pitch=67, start_time=0.3, end_time=0.7)],
+            80: [NoteEvent(pitch=72, start_time=0.4, end_time=0.8)],
+        },
+        {
+            36: [NoteEvent(pitch=36, start_time=0.05, end_time=0.15)],
+        },
+    )
 
 
 class TestPipelineSixStemMode(unittest.TestCase):
@@ -89,7 +120,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
                 def transcribe_precise(self, audio_path, quality, progress_callback=None):
                     if progress_callback:
                         progress_callback(1.0, "done")
-                    return ({0: [NoteEvent(pitch=60, start_time=0.0, end_time=0.4)]}, {})
+                    return _make_split_ready_notes()
 
                 def unload_model(self):
                     return None
@@ -115,6 +146,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
 
             config = Config()
             config.processing_mode = "six_stem_split"
+            config.transcription_backend = "yourmt3"
             pipeline = MusicToMidiPipeline(config)
             pipeline.yourmt3_transcriber = FakeTranscriber()
             pipeline.beat_detector = FakeBeatDetector()
@@ -154,14 +186,14 @@ class TestPipelineSixStemMode(unittest.TestCase):
                         result[stem] = str(stem_path)
                     return result
 
-            transcribed_stems = []
+            transcribe_calls = []
 
             class FakeTranscriber:
                 def transcribe_precise(self, audio_path, quality, progress_callback=None):
-                    transcribed_stems.append(Path(audio_path).stem.split("_")[-1])
+                    transcribe_calls.append(Path(audio_path).stem)
                     if progress_callback:
                         progress_callback(1.0, "done")
-                    return ({0: [NoteEvent(pitch=60, start_time=0.0, end_time=0.4)]}, {})
+                    return _make_split_ready_notes()
 
                 def unload_model(self):
                     return None
@@ -190,6 +222,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
 
             config = Config()
             config.processing_mode = "six_stem_split"
+            config.transcription_backend = "yourmt3"
             config.six_stem_targets = ["drums", "bass"]
             pipeline = MusicToMidiPipeline(config)
             pipeline.yourmt3_transcriber = FakeTranscriber()
@@ -203,7 +236,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
                 result = pipeline._process_six_stem_split(str(audio_path), str(out_dir))
 
             self.assertEqual(set(result.stem_midi_paths.keys()), {"bass", "drums"})
-            self.assertEqual(set(transcribed_stems), {"bass", "drums"})
+            self.assertEqual(transcribe_calls, ["song"])
             self.assertEqual(set(merged_keys), {"bass", "drums"})
             self.assertTrue(Path(result.midi_path).name.endswith("_selected_stems_merged.mid"))
 
@@ -257,7 +290,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
                 def transcribe_precise(self, audio_path, quality, progress_callback=None):
                     if progress_callback:
                         progress_callback(1.0, "done")
-                    return ({0: [NoteEvent(pitch=60, start_time=0.0, end_time=0.4)]}, {})
+                    return _make_split_ready_notes()
 
                 def unload_model(self):
                     return None
@@ -283,6 +316,7 @@ class TestPipelineSixStemMode(unittest.TestCase):
 
             config = Config()
             config.processing_mode = "six_stem_split"
+            config.transcription_backend = "yourmt3"
             config.six_stem_split_vocal_harmony = True
             pipeline = MusicToMidiPipeline(config)
             pipeline.yourmt3_transcriber = FakeTranscriber()

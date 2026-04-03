@@ -3,10 +3,14 @@ YourMT3 MoE 集成测试
 
 测试 YourMT3 MoE 模型的集成是否正常工作。
 """
-import pytest
 import os
 import sys
 from pathlib import Path
+
+try:
+    import pytest
+except ModuleNotFoundError:  # pragma: no cover - keeps unittest discovery import-safe
+    pytest = None
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -162,4 +166,6 @@ if __name__ == "__main__":
     print("========================================")
     print()
 
+    if pytest is None:
+        raise SystemExit("pytest is required to run test_yourmt3_integration.py directly")
     pytest.main([__file__, "-v", "-s"])

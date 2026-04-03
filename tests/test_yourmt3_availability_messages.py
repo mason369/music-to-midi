@@ -79,8 +79,15 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
         self.assertIn("No module named 'PIL'", reason)
 
     def test_yourmt3_missing_source_tree_reports_directory_message(self):
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pytorch_lightning":
+                return types.SimpleNamespace(__name__="pytorch_lightning")
+            return real_import(name, globals, locals, fromlist, level)
+
         with patch("src.core.yourmt3_transcriber._import_torch", return_value=object()), patch(
-            "builtins.__import__", return_value=types.SimpleNamespace(__name__="pytorch_lightning")
+            "builtins.__import__", side_effect=fake_import
         ), patch("src.core.yourmt3_transcriber._get_yourmt3_amt_src_path", return_value=None):
             available = YourMT3Transcriber.is_available()
 

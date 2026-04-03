@@ -16,9 +16,11 @@ from typing import Optional, Callable, Dict, List
 
 from src.models.data_models import (
     Config, ProcessingResult, ProcessingProgress,
-    ProcessingStage, Track, TrackType, ProcessingMode
+    ProcessingStage, Track, TrackType, ProcessingMode,
+    MultiInstrumentModel, QualityBehavior, TranscriptionBackend,
 )
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
+from src.core.transkun_transcriber import TranskunTranscriber
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.core.beat_detector import BeatDetector
 from src.core.midi_generator import MidiGenerator
@@ -26,6 +28,33 @@ from src.utils.gpu_utils import clear_gpu_memory
 from src.utils.runtime_paths import get_ffmpeg_executable
 
 logger = logging.getLogger(__name__)
+
+try:
+    from src.core.miros_transcriber import MirosTranscriber
+    _MIROS_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:  # pragma: no cover - exercised through pipeline fallback behavior
+    MirosTranscriber = None
+    _MIROS_IMPORT_ERROR = exc
+
+
+class _UnavailableMirosTranscriber:
+    def __init__(self, import_error: Exception):
+        self._import_error = import_error
+
+    def set_cancel_check(self, _callback):
+        return None
+
+    def cancel(self):
+        return None
+
+    def unload_model(self):
+        return None
+
+    def is_available(self) -> bool:
+        return False
+
+    def get_unavailable_reason(self) -> str:
+        return f"MIROS unavailable: {self._import_error}"
 
 
 class MusicToMidiPipeline:
@@ -42,7 +71,13 @@ class MusicToMidiPipeline:
     def __init__(self, config: Config):
         self.config = config
         self.yourmt3_transcriber = YourMT3Transcriber(config)
+        self.miros_transcriber = (
+            MirosTranscriber(config)
+            if MirosTranscriber is not None
+            else _UnavailableMirosTranscriber(_MIROS_IMPORT_ERROR or RuntimeError("MIROS import failed"))
+        )
         self.aria_amt_transcriber = AriaAmtTranscriber()
+        self.transkun_transcriber = TranskunTranscriber(config)
         self.beat_detector = BeatDetector(config)
         self.midi_generator = MidiGenerator(config)
 
@@ -50,6 +85,7 @@ class MusicToMidiPipeline:
         self._progress_callback: Optional[Callable[[ProcessingProgress], None]] = None
 
         self.yourmt3_transcriber.set_cancel_check(lambda: self._cancelled)
+        self.miros_transcriber.set_cancel_check(lambda: self._cancelled)
 
     def set_progress_callback(self, callback: Callable[[ProcessingProgress], None]) -> None:
         self._progress_callback = callback
@@ -57,6 +93,11 @@ class MusicToMidiPipeline:
     def cancel(self) -> None:
         self._cancelled = True
         self.yourmt3_transcriber.cancel()
+        self.miros_transcriber.cancel()
+        if hasattr(self.aria_amt_transcriber, "cancel"):
+            self.aria_amt_transcriber.cancel()
+        if hasattr(self.transkun_transcriber, "cancel"):
+            self.transkun_transcriber.cancel()
         logger.info("处理已取消")
 
     def _report(self, stage: ProcessingStage, sp: float, op: float, msg: str) -> None:
@@ -72,21 +113,162 @@ class MusicToMidiPipeline:
         if self._cancelled:
             raise InterruptedError("用户取消了处理")
 
-    @staticmethod
-    def _require_yourmt3_available() -> None:
-        if YourMT3Transcriber.is_available():
+    def _get_multi_instrument_model_name(self) -> str:
+        backend = str(getattr(self.config, "transcription_backend", None) or "").strip().lower()
+        valid_values = {model.value for model in MultiInstrumentModel}
+        if backend in valid_values:
+            return backend
+
+        multi_model = str(getattr(self.config, "multi_instrument_model", None) or "").strip().lower()
+        if multi_model in valid_values:
+            return multi_model
+
+        if any(candidate not in (None, "") for candidate in (backend, multi_model)):
+            logger.warning(
+                "Unknown multi-instrument model/backend (%s, %s); falling back to %s",
+                getattr(self.config, "multi_instrument_model", None),
+                getattr(self.config, "transcription_backend", None),
+                MultiInstrumentModel.YOURMT3.value,
+            )
+        return MultiInstrumentModel.YOURMT3.value
+
+    def _get_preferred_transcription_backend_name(self) -> str:
+        candidates = [
+            getattr(self.config, "transcription_backend", None),
+            getattr(self.config, "multi_instrument_model", None),
+        ]
+        valid_values = {backend.value for backend in TranscriptionBackend}
+
+        for candidate in candidates:
+            configured = str(candidate or "").strip().lower()
+            if configured in valid_values:
+                return configured
+
+        if any(candidate not in (None, "") for candidate in candidates):
+            logger.warning(
+                "Unknown preferred transcription backend (%s, %s); falling back to %s",
+                getattr(self.config, "transcription_backend", None),
+                getattr(self.config, "multi_instrument_model", None),
+                TranscriptionBackend.ARIA_AMT.value,
+            )
+        return TranscriptionBackend.ARIA_AMT.value
+
+    def _prefers_aria_amt(self) -> bool:
+        return self._get_preferred_transcription_backend_name() == TranscriptionBackend.ARIA_AMT.value
+
+    def _report_general_backend_routing(self, mode_label: str) -> None:
+        if not self._prefers_aria_amt():
+            return
+        logger.info(
+            "Preferred backend is Aria-AMT, but %s mode still uses %s for the full multi-instrument pass. "
+            "Aria-AMT remains reserved for dedicated piano mode and the separated piano stem in six-stem mode.",
+            mode_label,
+            self._get_multi_instrument_label(),
+        )
+
+    def _report_quality_behavior(self, mode_label: str) -> None:
+        quality = getattr(self.config, "transcription_quality", "best")
+        behavior = self.config.get_quality_behavior()
+
+        if behavior == QualityBehavior.CONFIGURABLE:
+            logger.info(
+                "Quality preset '%s' applies to the %s pass in %s mode.",
+                quality,
+                self._get_multi_instrument_label(),
+                mode_label,
+            )
             return
 
-        reason_getter = getattr(YourMT3Transcriber, "get_unavailable_reason", None)
+        if behavior == QualityBehavior.PARTIAL:
+            logger.info(
+                "Quality preset '%s' only affects the YourMT3+ full-mix pass in %s mode; "
+                "Aria-AMT keeps fixed checkpoint quality for the piano stem.",
+                quality,
+                mode_label,
+            )
+            return
+
+        logger.info(
+            "Quality preset '%s' does not change inference in %s mode because the active path uses fixed checkpoint quality.",
+            quality,
+            mode_label,
+        )
+
+    def _can_use_aria_amt(self) -> bool:
+        try:
+            return (
+                self.aria_amt_transcriber.is_available()
+                and self.aria_amt_transcriber.is_model_available()
+            )
+        except Exception as exc:
+            logger.debug("Failed to verify Aria-AMT availability: %s", exc)
+            return False
+
+    def _maybe_transcribe_piano_stem_with_aria(
+        self,
+        piano_audio_path: Optional[str],
+        output_dir: str,
+    ) -> Optional[str]:
+        if not piano_audio_path or not self._prefers_aria_amt():
+            return None
+        if not self._can_use_aria_amt():
+            logger.info(
+                "Aria-AMT is preferred for piano, but it is unavailable. Falling back to %s piano-stem MIDI generation.",
+                self._get_multi_instrument_label(),
+            )
+            return None
+
+        piano_audio = str(piano_audio_path)
+        midi_path = str(Path(output_dir) / f"{Path(piano_audio).stem}.mid")
+        logger.info("Using Aria-AMT for separated piano stem: %s", piano_audio)
+        try:
+            return self.aria_amt_transcriber.transcribe(
+                audio_path=piano_audio,
+                output_path=midi_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Aria-AMT piano-stem transcription failed; falling back to %s: %s",
+                self._get_multi_instrument_label(),
+                exc,
+            )
+            return None
+
+    def _get_multi_instrument_transcriber(self):
+        model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MIROS.value:
+            return self.miros_transcriber
+        return self.yourmt3_transcriber
+
+    def _get_multi_instrument_label(self) -> str:
+        model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MIROS.value:
+            return "MIROS"
+        return "YourMT3+"
+
+    def _require_multi_instrument_available(self) -> None:
+        transcriber = self._get_multi_instrument_transcriber()
+        is_available = getattr(transcriber, "is_available", None)
+        if not callable(is_available) or is_available():
+            return
+
+        reason_getter = getattr(transcriber, "get_unavailable_reason", None)
         if callable(reason_getter):
             raise RuntimeError(reason_getter())
 
-        raise RuntimeError(
-            "YourMT3+ 不可用。\n\n"
-            "请先下载模型权重：\n"
-            "  python download_sota_models.py\n\n"
-            "详见 README.md 中的安装说明。"
-        )
+        raise RuntimeError(f"{self._get_multi_instrument_label()} 不可用")
+
+    def _cleanup_multi_instrument_backend(self) -> None:
+        transcriber = self._get_multi_instrument_transcriber()
+        try:
+            if hasattr(transcriber, "unload_model"):
+                transcriber.unload_model()
+        except Exception as exc:
+            logger.warning("多乐器模型资源释放失败: %s", exc)
+        try:
+            clear_gpu_memory()
+        except Exception as exc:
+            logger.warning("GPU内存清理失败: %s", exc)
 
     @staticmethod
     def _ensure_wav(audio_path: str, output_dir: str) -> str:
@@ -157,6 +339,8 @@ class MusicToMidiPipeline:
             return self._process_vocal_split(audio_path, output_dir)
         if mode == "six_stem_split":
             return self._process_six_stem_split(audio_path, output_dir)
+        if mode == "piano_transkun":
+            return self._process_piano_transkun(audio_path, output_dir)
         if mode == "piano_aria_amt":
             return self._process_piano_aria_amt(audio_path, output_dir)
         else:
@@ -283,7 +467,7 @@ class MusicToMidiPipeline:
         """
         六声部分离模式（修正架构）：
         1. BS-RoFormer SW 分离六个 stem（仅用于 WAV 输出）
-        2. YourMT3+ 对 **完整混音** 做一次推理（模型设计如此）
+        2. 当前多乐器后端对 **完整混音** 做一次推理
         3. 按 GM 乐器族将转写结果拆分到对应 stem MIDI
         """
         from src.core.multi_stem_separator import SixStemSeparator, STEM_KEYS
@@ -300,7 +484,11 @@ class MusicToMidiPipeline:
 
         if not SixStemSeparator.is_available():
             raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator>=0.38.0")
-        self._require_yourmt3_available()
+        self._require_multi_instrument_available()
+        transcriber = self._get_multi_instrument_transcriber()
+        model_label = self._get_multi_instrument_label()
+        self._report_general_backend_routing("six_stem_split")
+        self._report_quality_behavior("six_stem_split")
 
         # ── 阶段0：节拍检测 ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
@@ -338,9 +526,9 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.SEPARATION, 1.0, 0.30, "六声部分离完成")
         self._check_cancelled()
 
-        # ── 阶段2：YourMT3+ 对完整混音做一次转写 ──
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.30, "正在加载 YourMT3+ 模型...")
-        logger.info("使用 YourMT3+ 对完整混音进行一次性多乐器转写")
+        # ── 阶段2：当前多乐器后端对完整混音做一次转写 ──
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.30, f"正在加载 {model_label} 模型...")
+        logger.info("使用 %s 对完整混音进行一次性多乐器转写", model_label)
 
         quality = self.config.transcription_quality
 
@@ -349,7 +537,7 @@ class MusicToMidiPipeline:
             self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
 
         try:
-            instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
+            instrument_notes, drum_notes = transcriber.transcribe_precise(
                 audio_path=audio_path,
                 quality=quality,
                 progress_callback=_transcribe_cb,
@@ -357,17 +545,10 @@ class MusicToMidiPipeline:
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"YourMT3+ 转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"YourMT3+ 转写失败: {e}") from e
+            logger.error("%s 转写失败: %s", model_label, e, exc_info=True)
+            raise RuntimeError(f"{model_label} 转写失败: {e}") from e
         finally:
-            try:
-                self.yourmt3_transcriber.unload_model()
-            except Exception:
-                pass
-            try:
-                clear_gpu_memory()
-            except Exception:
-                pass
+            self._cleanup_multi_instrument_backend()
 
         total_notes = sum(len(n) for n in instrument_notes.values()) + \
                       sum(len(n) for n in drum_notes.values())
@@ -451,6 +632,16 @@ class MusicToMidiPipeline:
         for stem_index, stem_name in enumerate(selected_stems):
             self._check_cancelled()
 
+            if stem_name == "piano":
+                aria_piano_midi_path = self._maybe_transcribe_piano_stem_with_aria(
+                    separated.get("piano"),
+                    output_dir,
+                )
+                if aria_piano_midi_path is not None:
+                    stem_midi_paths[stem_name] = aria_piano_midi_path
+                    logger.info("[piano] Using Aria-AMT specialized piano stem MIDI")
+                    continue
+
             s_instr = stem_instrument.get(stem_name, {})
             s_drum = stem_drums.get(stem_name, {})
             stem_note_count = sum(len(v) for v in s_instr.values()) + \
@@ -517,8 +708,17 @@ class MusicToMidiPipeline:
             merged_midi_path=merged_midi_path,
         )
 
-    def _process_piano_aria_amt(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """Aria-AMT 钢琴专用模式。"""
+    def _process_specialized_piano(
+        self,
+        audio_path: str,
+        output_dir: str,
+        *,
+        transcriber,
+        mode_label: str,
+        output_suffix: str,
+        install_hint: str,
+        model_hint: str,
+    ) -> ProcessingResult:
         start_time = time.time()
 
         audio_path = str(audio_path)
@@ -526,20 +726,15 @@ class MusicToMidiPipeline:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         stem = Path(Path(audio_path).name).stem
-        midi_path = str(Path(output_dir) / f"{stem}_piano_aria.mid")
+        midi_path = str(Path(output_dir) / f"{stem}_{output_suffix}.mid")
 
-        logger.info("开始处理 (Aria-AMT 钢琴模式): %s", audio_path)
+        logger.info("开始处理 (%s 钢琴模式): %s", mode_label, audio_path)
+        self._report_quality_behavior(mode_label)
 
-        if not self.aria_amt_transcriber.is_available():
-            raise RuntimeError(
-                "Aria-AMT 不可用，请先安装：\n"
-                "  python -m pip install git+https://github.com/EleutherAI/aria-amt.git"
-            )
-        if not self.aria_amt_transcriber.is_model_available():
-            raise RuntimeError(
-                "Aria-AMT 模型权重缺失，请先下载：\n"
-                "  python download_aria_amt_model.py"
-            )
+        if not transcriber.is_available():
+            raise RuntimeError(install_hint)
+        if not transcriber.is_model_available():
+            raise RuntimeError(model_hint)
 
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析钢琴音频...")
         self._check_cancelled()
@@ -555,16 +750,16 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.10, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.10, "正在运行 Aria-AMT...")
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.10, f"正在运行 {mode_label}...")
 
-        def _aria_cb(progress: float, msg: str) -> None:
+        def _piano_cb(progress: float, msg: str) -> None:
             overall = 0.10 + progress * 0.75
             self._report(ProcessingStage.TRANSCRIPTION, progress, overall, msg)
 
-        midi_path = self.aria_amt_transcriber.transcribe(
+        midi_path = transcriber.transcribe(
             audio_path=audio_path,
             output_path=midi_path,
-            progress_callback=_aria_cb,
+            progress_callback=_piano_cb,
         )
 
         self._check_cancelled()
@@ -582,8 +777,44 @@ class MusicToMidiPipeline:
             total_notes=note_count,
         )
 
+    def _process_piano_transkun(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Transkun 钢琴专用模式。"""
+        return self._process_specialized_piano(
+            audio_path=audio_path,
+            output_dir=output_dir,
+            transcriber=self.transkun_transcriber,
+            mode_label="Transkun",
+            output_suffix="piano_transkun",
+            install_hint=(
+                "Transkun 不可用，请先安装：\n"
+                "  python -m pip install transkun"
+            ),
+            model_hint=(
+                "Transkun 预训练资源缺失或安装不完整，请执行：\n"
+                "  python -m pip install --force-reinstall transkun"
+            ),
+        )
+
+    def _process_piano_aria_amt(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Aria-AMT 钢琴专用模式。"""
+        return self._process_specialized_piano(
+            audio_path=audio_path,
+            output_dir=output_dir,
+            transcriber=self.aria_amt_transcriber,
+            mode_label="Aria-AMT",
+            output_suffix="piano_aria",
+            install_hint=(
+                "Aria-AMT 不可用，请先安装：\n"
+                "  python -m pip install git+https://github.com/EleutherAI/aria-amt.git"
+            ),
+            model_hint=(
+                "Aria-AMT 模型权重缺失，请先下载：\n"
+                "  python download_aria_amt_model.py"
+            ),
+        )
+
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """YourMT3+ 智能模式：直接对完整混音进行多乐器转写"""
+        """智能模式：直接对完整混音进行多乐器转写。"""
         start_time = time.time()
 
         audio_path = str(audio_path)
@@ -592,13 +823,17 @@ class MusicToMidiPipeline:
 
         stem = Path(Path(audio_path).name).stem
         midi_path = str(Path(output_dir) / f"{stem}.mid")
+        transcriber = self._get_multi_instrument_transcriber()
+        model_label = self._get_multi_instrument_label()
+        self._report_general_backend_routing("smart")
 
         logger.info(f"开始处理 (智能模式): {audio_path}")
+        self._report_quality_behavior("smart")
 
-        # ── 检查 YourMT3+ 是否可用 ──
-        logger.info("正在检查 YourMT3+ 可用性...")
-        self._require_yourmt3_available()
-        logger.info("YourMT3+ 可用性检查通过")
+        # ── 检查多乐器后端是否可用 ──
+        logger.info("正在检查 %s 可用性...", model_label)
+        self._require_multi_instrument_available()
+        logger.info("%s 可用性检查通过", model_label)
 
         # ── 阶段1：预处理 / 节拍检测 ──
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
@@ -616,9 +851,9 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        # ── 阶段2：YourMT3+ 极致精度转写 ──
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.1, "正在加载 YourMT3+ 模型...")
-        logger.info("使用 YourMT3+ MoE 进行极致精度转写")
+        # ── 阶段2：多乐器后端极致精度转写 ──
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.1, f"正在加载 {model_label} 模型...")
+        logger.info("使用 %s 进行极致精度转写", model_label)
 
         quality = self.config.transcription_quality
 
@@ -627,7 +862,7 @@ class MusicToMidiPipeline:
             self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
 
         try:
-            instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
+            instrument_notes, drum_notes = transcriber.transcribe_precise(
                 audio_path=audio_path,
                 quality=quality,
                 progress_callback=_transcribe_cb,
@@ -635,17 +870,10 @@ class MusicToMidiPipeline:
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"YourMT3+ 转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"YourMT3+ 转写失败: {e}") from e
+            logger.error("%s 转写失败: %s", model_label, e, exc_info=True)
+            raise RuntimeError(f"{model_label} 转写失败: {e}") from e
         finally:
-            try:
-                self.yourmt3_transcriber.unload_model()
-            except Exception as e:
-                logger.warning(f"模型卸载失败: {e}")
-            try:
-                clear_gpu_memory()
-            except Exception as e:
-                logger.warning(f"GPU内存清理失败: {e}")
+            self._cleanup_multi_instrument_backend()
 
         self._check_cancelled()
 
@@ -693,7 +921,7 @@ class MusicToMidiPipeline:
         )
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """人声分离模式：BS-RoFormer 分离 → YourMT3+ 分别转写伴奏和人声"""
+        """人声分离模式：BS-RoFormer 分离 → 多乐器后端分别转写伴奏和人声"""
         from src.core.vocal_separator import VocalSeparator
 
         start_time = time.time()
@@ -705,14 +933,18 @@ class MusicToMidiPipeline:
         stem = Path(Path(audio_path).name).stem
 
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
+        transcriber = self._get_multi_instrument_transcriber()
+        model_label = self._get_multi_instrument_label()
+        self._report_general_backend_routing("vocal_split")
+        self._report_quality_behavior("vocal_split")
 
         # ── 检查依赖 ──
-        logger.info("正在检查依赖: BS-RoFormer, YourMT3+...")
+        logger.info("正在检查依赖: BS-RoFormer, %s...", model_label)
         if not VocalSeparator.is_available():
             raise RuntimeError(
                 "人声分离不可用。请安装: pip install audio-separator>=0.38.0"
             )
-        self._require_yourmt3_available()
+        self._require_multi_instrument_available()
         logger.info("所有依赖检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 (0-5%) ──
@@ -771,9 +1003,9 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.SEPARATION, 1.0, 0.35, "人声分离完成")
         self._check_cancelled()
 
-        # ── 阶段3：YourMT3+ 转写伴奏 (35-70%) ──
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.35, "正在加载 YourMT3+ 模型...")
-        logger.info("使用 YourMT3+ 转写伴奏")
+        # ── 阶段3：多乐器后端转写伴奏 (35-70%) ──
+        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.35, f"正在加载 {model_label} 模型...")
+        logger.info("使用 %s 转写伴奏", model_label)
 
         quality = self.config.transcription_quality
 
@@ -782,7 +1014,7 @@ class MusicToMidiPipeline:
             self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
 
         try:
-            instrument_notes, drum_notes = self.yourmt3_transcriber.transcribe_precise(
+            instrument_notes, drum_notes = transcriber.transcribe_precise(
                 audio_path=accompaniment_path,
                 quality=quality,
                 progress_callback=_transcribe_cb,
@@ -790,17 +1022,10 @@ class MusicToMidiPipeline:
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"伴奏转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"伴奏转写失败: {e}") from e
+            logger.error("%s 伴奏转写失败: %s", model_label, e, exc_info=True)
+            raise RuntimeError(f"{model_label} 伴奏转写失败: {e}") from e
         finally:
-            try:
-                self.yourmt3_transcriber.unload_model()
-            except Exception as e:
-                logger.warning(f"伴奏转写后模型卸载失败: {e}")
-            try:
-                clear_gpu_memory()
-            except Exception as e:
-                logger.warning(f"伴奏转写后GPU内存清理失败: {e}")
+            self._cleanup_multi_instrument_backend()
 
         self._check_cancelled()
 
@@ -810,16 +1035,16 @@ class MusicToMidiPipeline:
 
         self._report(ProcessingStage.TRANSCRIPTION, 1.0, 0.60, f"伴奏转写完成：{acc_total} 个音符")
 
-        # ── 阶段4：YourMT3+ 转写人声 (60-85%) ──
-        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.60, "正在用 YourMT3+ 转写人声...")
-        logger.info(f"开始 YourMT3+ 人声转写: {vocals_path}")
+        # ── 阶段4：多乐器后端转写人声 (60-85%) ──
+        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.60, f"正在用 {model_label} 转写人声...")
+        logger.info("开始 %s 人声转写: %s", model_label, vocals_path)
 
         def _vocal_cb(p: float, msg: str) -> None:
             overall = 0.60 + p * 0.25
             self._report(ProcessingStage.VOCAL_TRANSCRIPTION, p, overall, msg)
 
         try:
-            vocal_instrument_notes, vocal_drum_notes = self.yourmt3_transcriber.transcribe_precise(
+            vocal_instrument_notes, vocal_drum_notes = transcriber.transcribe_precise(
                 audio_path=vocals_path,
                 quality=quality,
                 progress_callback=_vocal_cb,
@@ -827,17 +1052,10 @@ class MusicToMidiPipeline:
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"人声转写失败: {e}", exc_info=True)
-            raise RuntimeError(f"人声转写失败: {e}") from e
+            logger.error("%s 人声转写失败: %s", model_label, e, exc_info=True)
+            raise RuntimeError(f"{model_label} 人声转写失败: {e}") from e
         finally:
-            try:
-                self.yourmt3_transcriber.unload_model()
-            except Exception as e:
-                logger.warning(f"模型卸载失败: {e}")
-            try:
-                clear_gpu_memory()
-            except Exception as e:
-                logger.warning(f"GPU内存清理失败: {e}")
+            self._cleanup_multi_instrument_backend()
 
         # 人声 MIDI 只保留人声旋律，丢弃模型幻觉出的其他乐器和鼓
         # YourMT3 人声程序号: 100 (主旋律), 101 (和声); 也可能输出 GM 0 (钢琴)

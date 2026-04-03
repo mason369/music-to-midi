@@ -26,6 +26,9 @@ torchmetrics>=0.11.0,<2
 # 模型下载
 huggingface_hub>=0.20.0,<2
 
+# 钢琴专精转写
+transkun>=2.0.1,<3
+
 # MIDI 处理
 mido>=1.3.0,<2
 python-rtmidi>=1.5.0,<2

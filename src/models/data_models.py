@@ -157,8 +157,24 @@ class ProcessingMode(Enum):
     SMART = "smart"         # YourMT3+ MoE 多乐器转写
     VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
     SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
+    PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
     PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
+
+
+class MultiInstrumentModel(Enum):
+    """多乐器转写模型枚举。"""
+
+    YOURMT3 = "yourmt3"
+    MIROS = "miros"
+
+
+class TranscriptionBackend(Enum):
+    """首选转写后端 stored in config/UI."""
+
+    ARIA_AMT = "aria_amt"
+    YOURMT3 = MultiInstrumentModel.YOURMT3.value
+    MIROS = MultiInstrumentModel.MIROS.value
 
 
 class TranscriptionQuality(Enum):
@@ -166,6 +182,14 @@ class TranscriptionQuality(Enum):
     FAST = "fast"           # 快速模式：无后处理，最快速度
     BALANCED = "balanced"   # 平衡模式：轻量后处理，平衡质量和速度
     BEST = "best"           # 极致质量模式：最小后处理，保留最多细节
+
+
+class QualityBehavior(Enum):
+    """How the current mode/backend interprets the quality preset."""
+
+    CONFIGURABLE = "configurable"
+    PARTIAL = "partial"
+    FIXED = "fixed"
 
 
 class ProcessingStage(Enum):
@@ -431,7 +455,7 @@ class Config:
     use_gpu: bool = True
     gpu_device: int = 0
 
-    # 处理模式（smart / vocal_split / six_stem_split / piano_aria_amt）
+    # 处理模式（smart / vocal_split / six_stem_split / piano_transkun / piano_aria_amt）
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
@@ -440,7 +464,9 @@ class Config:
     # six_stem_split 模式：是否将 vocals 进一步分离为主唱/和声（实验近似）
     six_stem_split_vocal_harmony: bool = False
 
-    # 转写引擎设置（仅 YourMT3+）
+    # 转写引擎设置
+    transcription_backend: str = TranscriptionBackend.ARIA_AMT.value
+    multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
     transcription_quality: str = "best"      # "fast", "balanced", "best"
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
     preserve_all_notes: bool = True          # 保留所有音符
@@ -461,6 +487,67 @@ class Config:
     output_dir: str = ""
     save_separated_tracks: bool = True
 
+    def __post_init__(self):
+        if self.processing_mode == ProcessingMode.PIANO.value:
+            self.processing_mode = ProcessingMode.SMART.value
+
+        valid_multi_models = {model.value for model in MultiInstrumentModel}
+        valid_backends = {backend.value for backend in TranscriptionBackend}
+
+        normalized_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
+        normalized_multi_model = str(getattr(self, "multi_instrument_model", "") or "").strip().lower()
+
+        if normalized_backend not in valid_backends and normalized_multi_model in valid_backends:
+            normalized_backend = normalized_multi_model
+        if normalized_backend not in valid_backends:
+            normalized_backend = TranscriptionBackend.ARIA_AMT.value
+
+        if normalized_backend in valid_multi_models:
+            normalized_multi_model = normalized_backend
+        elif normalized_multi_model not in valid_multi_models:
+            normalized_multi_model = MultiInstrumentModel.YOURMT3.value
+
+        self.transcription_backend = normalized_backend
+        self.multi_instrument_model = normalized_multi_model
+
+    def get_effective_multi_instrument_model(self) -> str:
+        backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
+        valid_multi_models = {model.value for model in MultiInstrumentModel}
+        if backend in valid_multi_models:
+            return backend
+
+        multi_model = str(getattr(self, "multi_instrument_model", "") or "").strip().lower()
+        if multi_model in valid_multi_models:
+            return multi_model
+
+        return MultiInstrumentModel.YOURMT3.value
+
+    def get_quality_behavior(self) -> QualityBehavior:
+        mode = str(getattr(self, "processing_mode", ProcessingMode.SMART.value) or "").strip().lower()
+        if mode == ProcessingMode.PIANO.value:
+            mode = ProcessingMode.SMART.value
+
+        if mode in {
+            ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_ARIA_AMT.value,
+        }:
+            return QualityBehavior.FIXED
+
+        effective_multi_model = self.get_effective_multi_instrument_model()
+        preferred_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
+
+        if (
+            mode == ProcessingMode.SIX_STEM_SPLIT.value
+            and preferred_backend == TranscriptionBackend.ARIA_AMT.value
+            and effective_multi_model == MultiInstrumentModel.YOURMT3.value
+        ):
+            return QualityBehavior.PARTIAL
+
+        if effective_multi_model == MultiInstrumentModel.YOURMT3.value:
+            return QualityBehavior.CONFIGURABLE
+
+        return QualityBehavior.FIXED
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "language": self.language,
@@ -468,6 +555,8 @@ class Config:
             "use_gpu": self.use_gpu,
             "gpu_device": self.gpu_device,
             "processing_mode": self.processing_mode,
+            "multi_instrument_model": self.multi_instrument_model,
+            "transcription_backend": self.transcription_backend,
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
             "six_stem_targets": self.six_stem_targets,
             "six_stem_split_vocal_harmony": self.six_stem_split_vocal_harmony,
@@ -488,6 +577,13 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
+        data = dict(data)
+        if "transcription_backend" not in data and "multi_instrument_model" in data:
+            data["transcription_backend"] = data["multi_instrument_model"]
+        if "multi_instrument_model" not in data:
+            backend = str(data.get("transcription_backend", "") or "").strip().lower()
+            if backend in {model.value for model in MultiInstrumentModel}:
+                data["multi_instrument_model"] = backend
         valid_fields = {f.name for f in dataclass_fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in valid_fields})
 

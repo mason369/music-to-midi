@@ -130,6 +130,17 @@ class MainWindow(QMainWindow):
 
         # 轨道面板
         self.track_panel = TrackPanel()
+        self.track_panel.set_processing_mode(self.config.processing_mode)
+        self.track_panel.set_transcription_backend(
+            getattr(
+                self.config,
+                "transcription_backend",
+                getattr(self.config, "multi_instrument_model", "aria_amt"),
+            )
+        )
+        self.track_panel.set_multi_instrument_model(
+            getattr(self.config, "multi_instrument_model", "yourmt3")
+        )
         self._add_shadow(self.track_panel)
 
         # 进度组件
@@ -624,6 +635,8 @@ class MainWindow(QMainWindow):
         self.config.output_dir = self.output_dir_edit.text()
         self.config.save_separated_tracks = self.tracks_check.isChecked()
         self.config.processing_mode = self.track_panel.get_processing_mode()
+        self.config.transcription_backend = self.track_panel.get_transcription_backend()
+        self.config.multi_instrument_model = self.track_panel.get_multi_instrument_model()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
         self.config.six_stem_targets = self.track_panel.get_selected_six_stem_targets()
         self.config.six_stem_split_vocal_harmony = self.track_panel.get_six_stem_vocal_harmony()
@@ -658,7 +671,7 @@ class MainWindow(QMainWindow):
         # 更新UI
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.track_panel.mode_combo.setEnabled(False)
+        self.track_panel.set_processing_controls_enabled(False)
         self.progress_widget.reset()
         self.status_label.setText(t("status.processing"))
 
@@ -684,7 +697,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.track_panel.mode_combo.setEnabled(True)
+        self.track_panel.set_processing_controls_enabled(True)
         self.status_label.setText(t("status.ready"))
 
     def _on_progress(self, progress: ProcessingProgress):
@@ -704,7 +717,7 @@ class MainWindow(QMainWindow):
             return
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.track_panel.mode_combo.setEnabled(True)
+        self.track_panel.set_processing_controls_enabled(True)
         self.save_action.setEnabled(True)
 
         self.status_label.setText(
@@ -934,7 +947,7 @@ class MainWindow(QMainWindow):
             return
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.track_panel.mode_combo.setEnabled(True)
+        self.track_panel.set_processing_controls_enabled(True)
         self.status_label.setText(t("status.error"))
 
         # 创建自定义错误对话框
