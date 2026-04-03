@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+_FALLBACK_STREAM = None
 
 # 警告消息的中文翻译
 WARNING_TRANSLATIONS = {
@@ -135,6 +136,36 @@ def patch_print_output():
     builtins.print = _patched_print
 
 
+def _get_fallback_stream():
+    global _FALLBACK_STREAM
+    if _FALLBACK_STREAM is None or _FALLBACK_STREAM.closed:
+        _FALLBACK_STREAM = open(
+            os.devnull,
+            "w",
+            encoding="utf-8",
+            buffering=1,
+            errors="replace",
+        )
+    return _FALLBACK_STREAM
+
+
+def _normalize_text_stream(stream, backup_name: str):
+    if stream is not None:
+        return stream
+
+    backup_stream = getattr(sys, backup_name, None)
+    if backup_stream is not None:
+        return backup_stream
+
+    return _get_fallback_stream()
+
+
+def ensure_standard_streams():
+    """确保 windowed/portable 运行时也始终存在可写的标准流。"""
+    sys.stdout = _normalize_text_stream(sys.stdout, "__stdout__")
+    sys.stderr = _normalize_text_stream(sys.stderr, "__stderr__")
+
+
 def patch_logging_output():
     """
     修补 logging 的 root 日志处理器，翻译警告消息
@@ -225,7 +256,7 @@ def patch_stderr_output():
     """
     修补 stderr 输出，过滤英文技术消息
     """
-    sys.stderr = FilteredStderr(sys.stderr)
+    sys.stderr = FilteredStderr(_normalize_text_stream(sys.stderr, "__stderr__"))
 
 
 def setup_chinese_environment():
@@ -237,6 +268,7 @@ def setup_chinese_environment():
     2. 修补输出以显示中文
     3. 替换默认警告显示函数
     """
+    ensure_standard_streams()
     suppress_third_party_warnings()
     patch_print_output()
     patch_logging_output()

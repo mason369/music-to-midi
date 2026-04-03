@@ -7,12 +7,17 @@ import logging
 import multiprocessing
 import warnings
 
+from src import __version__
 from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
+from src.utils.warnings_filter import ensure_standard_streams
 
 # 在导入其他模块之前抑制第三方库的警告
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 所有日志
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 警告
 os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
+
+# PyInstaller windowed/portable 模式下标准流可能为 None，先补成安全可写流
+ensure_standard_streams()
 
 # 预先注入 bundled ffmpeg/bin 到 PATH，供 librosa/audioread/subprocess 使用
 bootstrap_runtime_environment()
@@ -208,7 +213,7 @@ def main():
         # 创建应用程序
         app = QApplication(sys.argv)
         app.setApplicationName("音乐转MIDI")
-        app.setApplicationVersion("1.0.0")
+        app.setApplicationVersion(__version__)
         app.setOrganizationName("mason369")
 
         # 应用Fusion样式

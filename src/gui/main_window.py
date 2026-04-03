@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
+from src import __version__
 from src.models.data_models import (
     Config, ProcessingProgress, ProcessingResult, ProcessingStage,
 )
@@ -1051,7 +1052,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             t("dialogs.about.title"),
-            f"{t('app.name')} v1.0.0\n\n"
+            f"{t('app.name')} v{__version__}\n\n"
             f"{t('dialogs.about.description')}\n\n"
             f"{t('dialogs.about.author')}: mason369\n"
             f"{t('dialogs.about.license')}: MIT"
