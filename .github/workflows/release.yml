@@ -46,10 +46,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 设置 Python 环境
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -351,7 +351,7 @@ jobs:
           fi
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}
           path: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-Portable*
@@ -363,7 +363,7 @@ jobs:
 
     steps:
       - name: 下载所有构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
