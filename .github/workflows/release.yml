@@ -28,7 +28,7 @@ jobs:
           - os: windows-latest
             variant: GPU
             platform: Windows
-            pytorch_url: https://download.pytorch.org/whl/cu121
+            pytorch_url: https://download.pytorch.org/whl/cu128
             sep: ";"
           - os: ubuntu-22.04
             variant: CPU
@@ -38,7 +38,7 @@ jobs:
           - os: ubuntu-22.04
             variant: GPU
             platform: Linux
-            pytorch_url: https://download.pytorch.org/whl/cu121
+            pytorch_url: https://download.pytorch.org/whl/cu128
             sep: ":"
 
     runs-on: ${{ matrix.os }}
@@ -109,7 +109,7 @@ jobs:
           PY
           pip install numpy==1.26.4
           pip install -r .tmp/requirements-build.txt
-          pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url ${{ matrix.pytorch_url }}
+          pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
@@ -252,8 +252,8 @@ jobs:
 
           if ('${{ matrix.variant }}' -eq 'GPU') {
             $variantNote = @"
-          GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
-          如果没有 NVIDIA 显卡，程序会自动回退到 CPU 推理
+          GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
+          如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理
           "@
           } else {
             $variantNote = @"
@@ -286,8 +286,8 @@ jobs:
           mv dist/MusicToMidi "dist/${NAME}"
 
           if [ "${{ matrix.variant }}" = "GPU" ]; then
-            VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
-          如果没有 NVIDIA 显卡，程序会自动回退到 CPU 推理"
+            VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
+          如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理"
           else
             VARIANT_NOTE="CPU 版，无需显卡即可运行
           如需 GPU 加速，请下载 GPU 版本"
@@ -397,9 +397,9 @@ jobs:
 
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
-          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
           | \`MusicToMidi-Windows-CPU-Portable.*\` | Windows | CPU | 无显卡使用 |
-          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
           | \`MusicToMidi-Linux-CPU-Portable.*\` | Linux | CPU | 无显卡使用 |
 
           ### 使用方法
@@ -410,15 +410,15 @@ jobs:
 
           ### 说明
           - 无需安装 Python，解压即用
-          - GPU 版内含 CUDA 12.1 运行时，无需单独安装 CUDA
-          - GPU 版在没有 NVIDIA 显卡时会自动回退到 CPU
+          - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
+          - GPU 版在没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会自动回退到 CPU
           - 支持 128 种 GM 乐器精确识别
           - 4 种处理模式：智能转写 / 人声分离 / 六声部分离 / 钢琴专用
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)
           - **Linux**：Ubuntu 20.04+ / Debian 11+ (x64)
-          - **GPU 版**：NVIDIA 显卡（GTX 10xx 及以上）
+          - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡（不兼容时会自动回退到 CPU）
           - **内存**：建议 8GB+"
           fi
         env:

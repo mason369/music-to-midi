@@ -11,7 +11,11 @@ from download_multistem_model import (
     ROFORMER_SW_MODEL,
     download_multistem_model,
 )
-from src.utils.audio_separator_compat import get_separator_cls, patch_separator_package_metadata
+from src.utils.audio_separator_compat import (
+    execute_audio_separator_job,
+    get_separator_cls,
+    patch_separator_package_metadata,
+)
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -66,11 +70,9 @@ class SixStemSeparator:
 
         separator.list_supported_model_files = _patched_list_supported_model_files
 
-    def _load_model(self, separator) -> str:
+    def _prepare_separator(self, separator) -> None:
         self.ensure_assets_fn(cache_dir=self.cache_dir, printer=logger.info)
         self._attach_sw_model_registry(separator)
-        separator.load_model(BS_ROFORMER_SW_MODEL)
-        return BS_ROFORMER_SW_MODEL
 
     @staticmethod
     def _to_existing_paths(output_dir: Path, output_files: Iterable[str]) -> list[Path]:
@@ -143,17 +145,29 @@ class SixStemSeparator:
         output_path.mkdir(parents=True, exist_ok=True)
 
         separator_cls = self._get_separator_cls()
-        separator = separator_cls(
-            output_dir=str(output_path),
-            model_file_dir=str(self.cache_dir),
-            output_format="WAV",
+
+        def _after_load(_active_separator):
+            if progress_callback:
+                progress_callback(0.25, f"Loaded model: {BS_ROFORMER_SW_MODEL}")
+
+        _separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
+            separator_cls,
+            separator_kwargs={
+                "output_dir": str(output_path),
+                "model_file_dir": str(self.cache_dir),
+                "output_format": "WAV",
+            },
+            model_name=BS_ROFORMER_SW_MODEL,
+            action=lambda active_separator: active_separator.separate(audio_path),
+            logger=logger,
+            progress_callback=progress_callback,
+            fallback_progress=(
+                0.1,
+                "Detected an unsupported NVIDIA GPU architecture, retrying six-stem separation on CPU...",
+            ),
+            prepare_separator=self._prepare_separator,
+            after_load=_after_load,
         )
-
-        model_name = self._load_model(separator)
-        if progress_callback:
-            progress_callback(0.25, f"Loaded model: {model_name}")
-
-        output_files = separator.separate(audio_path)
         if progress_callback:
             progress_callback(0.85, "Normalizing stem files...")
 

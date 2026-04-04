@@ -9,7 +9,7 @@ from typing import Callable, Dict, Optional
 
 import numpy as np
 
-from src.utils.audio_separator_compat import get_separator_cls
+from src.utils.audio_separator_compat import execute_audio_separator_job, get_separator_cls
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -35,12 +35,11 @@ class VocalHarmonySeparator:
 
     @staticmethod
     def is_model_available() -> bool:
-        """检查 chorus 模型文件是否已下载到缓存目录。"""
+        """Check whether the chorus checkpoint exists in the cache directory."""
         cache_dir = get_audio_separator_model_dir()
         model_path = cache_dir / CHORUS_MODEL
         if model_path.exists() and model_path.stat().st_size > 0:
             return True
-        # 递归搜索
         for path in cache_dir.rglob(CHORUS_MODEL):
             if path.is_file() and path.stat().st_size > 0:
                 return True
@@ -78,7 +77,7 @@ class VocalHarmonySeparator:
         output_dir: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, str]:
-        Separator = get_separator_cls()
+        separator_cls = get_separator_cls()
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -87,17 +86,28 @@ class VocalHarmonySeparator:
         if progress_callback:
             progress_callback(0.0, "正在加载主唱/和声分离模型...")
 
-        separator = Separator(
-            output_dir=str(out_dir),
-            model_file_dir=self._get_model_cache_dir(),
-            output_format="WAV",
+        def _after_load(_active_separator):
+            if progress_callback:
+                progress_callback(0.25, "正在分离主唱/和声...")
+
+        _separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
+            separator_cls,
+            separator_kwargs={
+                "output_dir": str(out_dir),
+                "model_file_dir": self._get_model_cache_dir(),
+                "output_format": "WAV",
+            },
+            model_name=CHORUS_MODEL,
+            action=lambda active_separator: active_separator.separate(audio_path),
+            logger=logger,
+            progress_callback=progress_callback,
+            fallback_progress=(
+                0.1,
+                "检测到当前 NVIDIA 显卡与内置 PyTorch/CUDA 不兼容，已自动回退到 CPU 推理...",
+            ),
+            after_load=_after_load,
         )
-        separator.load_model(CHORUS_MODEL)
 
-        if progress_callback:
-            progress_callback(0.25, "正在分离主唱/和声...")
-
-        output_files = separator.separate(audio_path)
         paths = self._resolve_outputs(out_dir, output_files)
         if len(paths) < 2:
             raise RuntimeError("主唱/和声分离输出不足，至少需要 2 个 wav 文件")
@@ -112,12 +122,10 @@ class VocalHarmonySeparator:
                 female_path = path
 
         if male_path is None or female_path is None:
-            # Fallback: use first two outputs deterministically.
             chosen = sorted(paths)[:2]
             male_path = chosen[0]
             female_path = chosen[1]
 
-        # Proxy mapping: louder stem -> lead, quieter stem -> harmony.
         male_rms = self._score_rms(male_path)
         female_rms = self._score_rms(female_path)
         if female_rms >= male_rms:

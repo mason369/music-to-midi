@@ -52,6 +52,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
         self.assertIn("copy_metadata('audio-separator')", spec)
+        self.assertIn("collect_all('audio_separator')", spec)
+
+    def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡", workflow)
+        self.assertIn("当前显卡与内置 PyTorch/CUDA 不兼容", workflow)
+        self.assertNotIn("GTX 750 Ti 及以上", workflow)
 
     def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

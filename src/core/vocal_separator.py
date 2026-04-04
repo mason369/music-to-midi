@@ -8,7 +8,14 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict
 
-from src.utils.audio_separator_compat import get_separator_cls
+from src.utils.audio_separator_compat import (
+    execute_audio_separator_job,
+    get_separator_cls,
+)
+from src.utils.gpu_utils import (
+    is_unsupported_cuda_architecture_error,
+    rewrite_cuda_runtime_error,
+)
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -94,35 +101,6 @@ class VocalSeparator:
             load_start = time.time()
             logger.info("正在下载/加载 BS-RoFormer 预训练模型...")
 
-            separator = Separator(
-                output_dir=output_dir,
-                model_file_dir=self._get_model_cache_dir(),
-                output_format="WAV",
-            )
-            separator.load_model(_ROFORMER_MODEL)
-
-            # 记录实际使用的设备（由 audio-separator 自动检测）
-            actual_device = getattr(
-                separator, 'torch_device', 'unknown'
-            )
-            logger.info(
-                f"BS-RoFormer 模型加载完成: "
-                f"耗时={time.time() - load_start:.1f}s, "
-                f"设备={actual_device}"
-            )
-
-            self._check_cancelled()
-
-            if progress_callback:
-                progress_callback(0.2, "正在分离人声与伴奏...")
-
-            logger.info(f"开始分离: {audio_path}")
-
-            # 启动后台线程定期更新进度
-            # （separator.separate 是阻塞调用无回调）
-            sep_start = time.time()
-            _done = threading.Event()
-
             # 通过 soundfile 获取音频时长用于估算进度
             try:
                 import soundfile as sf
@@ -131,18 +109,19 @@ class VocalSeparator:
             except Exception:
                 duration_sec = 180.0  # 默认估算 3 分钟
 
-            is_cpu = str(actual_device) == "cpu"
+            actual_device = "unknown"
+            sep_elapsed = 0.0
 
-            def _progress_ticker():
+            def _progress_ticker(done_event: threading.Event, start_time: float, is_cpu: bool):
                 """基于已用时间估算进度，每 3 秒更新一次"""
                 if is_cpu:
                     speed_est = 0.15
                 else:
                     speed_est = 3.0
                 estimated_total = duration_sec / speed_est
-                while not _done.wait(3.0):
+                while not done_event.wait(3.0):
                     try:
-                        elapsed = time.time() - sep_start
+                        elapsed = time.time() - start_time
                         pct = min(
                             0.95,
                             elapsed / max(estimated_total, 1)
@@ -164,21 +143,62 @@ class VocalSeparator:
                     except Exception as e:
                         logger.warning(f"进度更新失败: {e}")
 
-            ticker = None
-            if progress_callback:
-                ticker = threading.Thread(
-                    target=_progress_ticker, daemon=True
+            def _after_load(active_separator):
+                nonlocal actual_device
+                actual_device = getattr(active_separator, 'torch_device', 'unknown')
+                logger.info(
+                    f"BS-RoFormer 模型加载完成: "
+                    f"耗时={time.time() - load_start:.1f}s, "
+                    f"设备={actual_device}"
                 )
-                ticker.start()
 
-            try:
-                output_files = separator.separate(audio_path)
-            finally:
-                _done.set()
-                if ticker is not None:
-                    ticker.join(timeout=2)
+            def _run_separation(active_separator):
+                nonlocal sep_elapsed
+                self._check_cancelled()
 
-            sep_elapsed = time.time() - sep_start
+                if progress_callback:
+                    progress_callback(0.2, "正在分离人声与伴奏...")
+
+                logger.info(f"开始分离: {audio_path}")
+                sep_start = time.time()
+                done_event = threading.Event()
+                ticker = None
+                is_cpu = str(getattr(active_separator, 'torch_device', 'unknown')) == "cpu"
+
+                if progress_callback:
+                    ticker = threading.Thread(
+                        target=_progress_ticker,
+                        args=(done_event, sep_start, is_cpu),
+                        daemon=True,
+                    )
+                    ticker.start()
+
+                try:
+                    return active_separator.separate(audio_path)
+                finally:
+                    sep_elapsed = time.time() - sep_start
+                    done_event.set()
+                    if ticker is not None:
+                        ticker.join(timeout=2)
+
+            separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
+                Separator,
+                separator_kwargs={
+                    "output_dir": output_dir,
+                    "model_file_dir": self._get_model_cache_dir(),
+                    "output_format": "WAV",
+                },
+                model_name=_ROFORMER_MODEL,
+                action=_run_separation,
+                logger=logger,
+                progress_callback=progress_callback,
+                fallback_progress=(
+                    0.05,
+                    "检测到当前 NVIDIA 显卡与内置 PyTorch/CUDA 不兼容，已自动回退到 CPU 推理...",
+                ),
+                after_load=_after_load,
+            )
+
             speed_ratio = (
                 duration_sec / sep_elapsed if sep_elapsed > 0 else 0
             )
@@ -304,6 +324,13 @@ class VocalSeparator:
             logger.info(f"伴奏已保存: {accompaniment_path}")
         except InterruptedError:
             raise
+        except RuntimeError as e:
+            if is_unsupported_cuda_architecture_error(e):
+                friendly = rewrite_cuda_runtime_error(e)
+                logger.error(f"人声分离 CUDA 架构不兼容:\n{friendly}")
+                raise RuntimeError(f"人声分离失败（GPU 不兼容）:\n{friendly}") from e
+            logger.error(f"音频分离失败: {e}")
+            raise RuntimeError(f"音频分离失败: {e}") from e
         except Exception as e:
             logger.error(f"音频分离失败: {e}")
             raise RuntimeError(f"音频分离失败: {e}") from e

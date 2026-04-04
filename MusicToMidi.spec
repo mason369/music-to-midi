@@ -120,6 +120,7 @@ if importlib.util.find_spec("torch_directml") is not None:
 # 收集 PyTorch 完整包（含 CUDA 运行时 DLL）
 from PyInstaller.utils.hooks import collect_all
 
+audio_sep_datas, audio_sep_binaries, audio_sep_hiddenimports = collect_all('audio_separator')
 torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
 torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
@@ -133,7 +134,8 @@ fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fab
 utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
 torchmetrics_datas, torchmetrics_binaries, torchmetrics_hiddenimports = collect_all('torchmetrics')
 datas += (
-    torch_datas
+    audio_sep_datas
+    + torch_datas
     + torchaudio_datas
     + torchvision_datas
     + onnxruntime_datas
@@ -147,7 +149,8 @@ datas += (
     + torchmetrics_datas
 )
 hiddenimports += (
-    torch_hiddenimports
+    audio_sep_hiddenimports
+    + torch_hiddenimports
     + torchaudio_hiddenimports
     + torchvision_hiddenimports
     + onnxruntime_hiddenimports
@@ -162,7 +165,8 @@ hiddenimports += (
 )
 
 all_binaries = (
-    torch_binaries
+    audio_sep_binaries
+    + torch_binaries
     + torchaudio_binaries
     + torchvision_binaries
     + onnxruntime_binaries
