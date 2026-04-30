@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "music-to-midi"
 version = "1.0.11"
-description = "Convert audio to multi-track MIDI with lyrics embedding"
+description = "Convert audio to MIDI with AI multi-instrument transcription"
 readme = "docs/README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

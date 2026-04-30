@@ -88,8 +88,8 @@ if ($nonAscii -or $hasSpaceOrParen) {
     Write-Warn "继续安装（路径问题可能导致运行失败）..."
 }
 
-# --- 第 1 步/共 15 步：检测 Python 版本 ---
-Write-Info "第 1 步/共 15 步  检测 Python 版本..."
+# --- 第 1 步/共 12 步：检测 Python 版本 ---
+Write-Info "第 1 步/共 12 步  检测 Python 版本..."
 
 $PYTHON_BIN = $null
 
@@ -138,8 +138,8 @@ if (-not $PYTHON_BIN) {
 
 $PYTHON_CMD = $PYTHON_BIN -split ' '
 
-# --- 第 2 步/共 15 步：检测 git ---
-Write-Info "第 2 步/共 15 步  检测 git..."
+# --- 第 2 步/共 12 步：检测 git ---
+Write-Info "第 2 步/共 12 步  检测 git..."
 
 try {
     $gitVer = & git --version 2>&1
@@ -151,8 +151,8 @@ catch {
     exit 1
 }
 
-# --- 第 3 步/共 15 步：检测 ffmpeg ---
-Write-Info "第 3 步/共 15 步  检测 ffmpeg..."
+# --- 第 3 步/共 12 步：检测 ffmpeg ---
+Write-Info "第 3 步/共 12 步  检测 ffmpeg..."
 
 $FFMPEG_OK = $false
 try {
@@ -285,8 +285,8 @@ catch {
     }
 }
 
-# --- 第 4 步/共 15 步：检测并安装 Visual C++ Redistributable 2022 ---
-Write-Info "第 4 步/共 15 步  检测 Visual C++ Redistributable 2022 x64..."
+# --- 第 4 步/共 12 步：检测并安装 Visual C++ Redistributable 2022 ---
+Write-Info "第 4 步/共 12 步  检测 Visual C++ Redistributable 2022 x64..."
 
 $vcRedistOk = $false
 $vcRegPaths = @(
@@ -339,8 +339,8 @@ if (-not $vcRedistOk) {
     }
 }
 
-# --- 第 5 步/共 15 步：创建 Python 虚拟环境 ---
-Write-Info "第 5 步/共 15 步  创建 Python 虚拟环境..."
+# --- 第 5 步/共 12 步：创建 Python 虚拟环境 ---
+Write-Info "第 5 步/共 12 步  创建 Python 虚拟环境..."
 
 if (-not (Test-Path $VENV_DIR) -or -not (Test-Path $PYTHON)) {
     if ((Test-Path $VENV_DIR) -and -not (Test-Path $PYTHON)) {
@@ -369,15 +369,15 @@ if (Test-Path $sitePackages) {
         Remove-Item $pkg.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-# --- 第 6 步/共 15 步：升级 pip ---
-Write-Info "第 6 步/共 15 步  升级 pip..."
+# --- 第 6 步/共 12 步：升级 pip ---
+Write-Info "第 6 步/共 12 步  升级 pip..."
 
 & "$PYTHON" -m pip install --upgrade pip setuptools wheel
 if ($LASTEXITCODE -ne 0) { Write-Err "pip 升级失败" }
 Write-Ok "pip 升级成功"
 
-# --- 第 7 步/共 15 步：检测 GPU / 安装 PyTorch ---
-Write-Info "第 7 步/共 15 步  检测 GPU / 安装 PyTorch..."
+# --- 第 7 步/共 12 步：检测 GPU / 安装 PyTorch ---
+Write-Info "第 7 步/共 12 步  检测 GPU / 安装 PyTorch..."
 
 $TORCH_INSTALLED = $false
 $torchDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Directory `
@@ -483,8 +483,8 @@ if ((Test-Path $torchLib) -and -not (Test-Path $libompDll)) {
     Write-Ok "libomp140.x86_64.dll 已存在"
 }
 
-# --- 第 8 步/共 15 步：Intel GPU 加速（可选）---
-Write-Info "第 8 步/共 15 步  检测 Intel GPU 加速（可选）..."
+# --- 第 8 步/共 12 步：Intel GPU 加速（可选）---
+Write-Info "第 8 步/共 12 步  检测 Intel GPU 加速（可选）..."
 
 # 预先检查：若已安装 IPEX 但 torch 无法正常导入，说明版本不兼容，自动卸载
 $preIpexDir = Join-Path $VENV_DIR "Lib\site-packages\intel_extension_for_pytorch"
@@ -545,25 +545,16 @@ if ($intelGpuFound) {
     Write-Info "未检测到 Intel GPU（Arc/Xe/UHD/Iris），跳过 IPEX 安装"
 }
 
-# --- 第 9 步/共 15 步：安装项目依赖 ---
-Write-Info "第 9 步/共 15 步  安装项目 Python 依赖..."
+# --- 第 9 步/共 12 步：安装项目依赖 ---
+Write-Info "第 9 步/共 12 步  安装项目 Python 依赖..."
 
 Set-Location $REPO_DIR
 & "$PIP" install -r (Join-Path $REPO_DIR "requirements.txt")
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
-# --- 第 10 步/共 15 步：安装 Aria-AMT（可选） ---
-Write-Info "第 10 步/共 15 步  安装 Aria-AMT（钢琴专用转写，可选）..."
-& "$PIP" install git+https://github.com/EleutherAI/aria-amt.git
-if ($LASTEXITCODE -eq 0) {
-    Write-Ok "Aria-AMT 安装成功"
-} else {
-    Write-Warn "Aria-AMT 安装失败（可选，钢琴专用模式将不可用）"
-}
-
-# --- 第 11 步/共 15 步：验证核心依赖 ---
-Write-Info "第 11 步/共 15 步  验证核心依赖..."
+# --- 第 10 步/共 12 步：验证核心依赖 ---
+Write-Info "第 10 步/共 12 步  验证核心依赖..."
 
 foreach ($dep in @("PyQt6", "torch", "librosa", "mido", "soundfile", "pytorch_lightning")) {
     Write-Info "  正在验证 $dep..."
@@ -581,8 +572,8 @@ if ($FFMPEG_OK) {
     Write-Warn "  ffmpeg 未安装（已在第 3 步提示）"
 }
 
-# --- 第 12 步/共 15 步：下载 SOTA 模型权重 ---
-Write-Info "第 12 步/共 15 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
+# --- 第 11 步/共 12 步：下载 SOTA 模型权重 ---
+Write-Info "第 11 步/共 12 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
 Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_sota_models.py"
 
 Set-Location $REPO_DIR
@@ -606,8 +597,8 @@ catch {
     Write-Host ""
 }
 
-# --- 第 13 步/共 15 步：下载 BS-RoFormer 人声分离模型 ---
-Write-Info "第 13 步/共 15 步  下载 BS-RoFormer ep368 模型（约 600 MB）..."
+# --- 第 12 步/共 12 步：下载 BS-RoFormer 人声分离模型 ---
+Write-Info "第 12 步/共 12 步  下载 BS-RoFormer ep368 模型（约 600 MB）..."
 Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_vocal_model.py"
 
 Set-Location $REPO_DIR
@@ -631,56 +622,6 @@ catch {
     Write-Host ""
 }
 
-# --- 第 14 步/共 15 步：下载 BS-RoFormer SW 六声部分离模型 ---
-Write-Info "第 14 步/共 15 步  下载 BS-RoFormer SW 六声部分离模型（约 500 MB）..."
-Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_multistem_model.py"
-
-Set-Location $REPO_DIR
-try {
-    & "$PYTHON" (Join-Path $REPO_DIR "download_multistem_model.py")
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "BS-RoFormer SW 六声部模型下载成功"
-    } else {
-        Write-Host ""
-        Write-Host "  !! BS-RoFormer SW 六声部模型下载失败 !!" -ForegroundColor Red
-        Write-Host "  可能原因：网络问题 / GitHub 或 HuggingFace 连接失败 / 代理环境" -ForegroundColor Yellow
-        Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
-        Write-Host "  （上方已输出完整下载日志）" -ForegroundColor Yellow
-        Write-Host ""
-    }
-}
-catch {
-    Write-Host ""
-    Write-Host "  !! BS-RoFormer SW 六声部模型下载失败 !!" -ForegroundColor Red
-    Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
-    Write-Host ""
-}
-
-# --- 第 15 步/共 15 步：下载 Aria-AMT 钢琴模型 ---
-Write-Info "第 15 步/共 15 步  下载 Aria-AMT 钢琴模型（约 426 MB）..."
-Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\\Scripts\\python.exe download_aria_amt_model.py"
-
-Set-Location $REPO_DIR
-try {
-    & "$PYTHON" (Join-Path $REPO_DIR "download_aria_amt_model.py")
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Aria-AMT 钢琴模型下载成功"
-    } else {
-        Write-Host ""
-        Write-Host "  !! Aria-AMT 模型下载失败 !!" -ForegroundColor Red
-        Write-Host "  可能原因：网络问题 / HuggingFace 连接失败 / 代理环境" -ForegroundColor Yellow
-        Write-Host "  请稍后手动执行: venv\\Scripts\\python.exe download_aria_amt_model.py" -ForegroundColor Yellow
-        Write-Host "  （上方已输出完整下载日志）" -ForegroundColor Yellow
-        Write-Host ""
-    }
-}
-catch {
-    Write-Host ""
-    Write-Host "  !! Aria-AMT 模型下载失败 !!" -ForegroundColor Red
-    Write-Host "  请稍后手动执行: venv\\Scripts\\python.exe download_aria_amt_model.py" -ForegroundColor Yellow
-    Write-Host ""
-}
-
 # --- 完成 ---
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -694,6 +635,4 @@ Write-Host ""
 Write-Host "  如果模型下载失败，请手动执行：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_aria_amt_model.py" -ForegroundColor Yellow
 Write-Host ""

@@ -73,57 +73,6 @@ sys.exit(0 if is_vocal_model_available() else 1)
     }
 }
 
-# 检查 5：BS-RoFormer SW 六声部分离模型
-if (-not $NEED_INSTALL) {
-    Write-Info "检查 BS-RoFormer SW 六声部分离模型..."
-    $checkMultistemScript = @"
-import sys
-sys.path.insert(0, r'$REPO_DIR')
-from download_multistem_model import is_multistem_model_available, resolve_multistem_model_paths
-model_path, config_path = resolve_multistem_model_paths()
-print('BS-RoFormer SW model:', model_path)
-print('BS-RoFormer SW config:', config_path)
-sys.exit(0 if is_multistem_model_available() else 1)
-"@
-    & "$VENV_PYTHON" -c $checkMultistemScript
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "未找到 BS-RoFormer SW 六声部模型资源"
-        $NEED_INSTALL = $true
-    } else {
-        Write-Ok "BS-RoFormer SW 六声部模型检查通过"
-    }
-}
-
-# 检查 6：Aria-AMT 包
-if (-not $NEED_INSTALL) {
-    Write-Info "检查 Aria-AMT 包..."
-    & "$VENV_PYTHON" -c "import importlib.util; ok = importlib.util.find_spec('amt.run') is not None; print('Aria-AMT package:', 'ok' if ok else 'missing'); raise SystemExit(0 if ok else 1)"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "未安装 Aria-AMT 包（可选，钢琴专用模式不可用）"
-    } else {
-        Write-Ok "Aria-AMT 包检查通过"
-    }
-}
-
-# 检查 7：Aria-AMT 钢琴模型
-if (-not $NEED_INSTALL) {
-    Write-Info "检查 Aria-AMT 钢琴模型..."
-    $checkAriaScript = @"
-import sys
-sys.path.insert(0, r'$REPO_DIR')
-from download_aria_amt_model import is_aria_model_available, resolve_aria_model_path
-model_path = resolve_aria_model_path()
-print('Aria-AMT model:', model_path)
-sys.exit(0 if is_aria_model_available() else 1)
-"@
-    & "$VENV_PYTHON" -c $checkAriaScript
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "未找到 Aria-AMT 钢琴模型权重（可选，钢琴专用模式不可用）"
-    } else {
-        Write-Ok "Aria-AMT 钢琴模型检查通过"
-    }
-}
-
 # --- 如需要则运行安装程序 ---
 if ($NEED_INSTALL) {
     Write-Info "依赖不完整，正在运行安装程序..."

@@ -182,11 +182,6 @@ $YourMt3Source = Resolve-ExistingDir @(
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\yourmt3_all"),
     (Join-Path $Root "checkpoints\yourmt3_all")
 )
-$AriaSource = Resolve-ExistingDir @(
-    $env:MUSIC_TO_MIDI_BUNDLE_ARIA_DIR,
-    (Join-Path $env:USERPROFILE ".cache\music_ai_models\aria_amt"),
-    (Join-Path $Root "checkpoints\aria_amt")
-)
 $MirosSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR,
     (Join-Path $Root ".tmp\ai4m-miros")
@@ -209,13 +204,11 @@ if (-not $ResolvedFfmpegDir) {
 
 $AudioSeparatorBundle = Join-Path $BuildAssetRoot "audio-separator"
 $YourMt3Bundle = Join-Path $BuildAssetRoot "yourmt3_all"
-$AriaBundle = Join-Path $BuildAssetRoot "aria_amt"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
 Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" | Out-Null
 Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" | Out-Null
-Copy-Tree -Source $AriaSource -Destination $AriaBundle -Label "Aria-AMT models" | Out-Null
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" | Out-Null
 
 if ($ResolvedFfmpegDir) {
@@ -234,7 +227,6 @@ if ($ResolvedFfmpegDir) {
 
 $env:MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR = $AudioSeparatorBundle
 $env:MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR = $YourMt3Bundle
-$env:MUSIC_TO_MIDI_BUNDLE_ARIA_DIR = $AriaBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
@@ -243,7 +235,6 @@ try {
 } finally {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
-    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_ARIA_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
 }

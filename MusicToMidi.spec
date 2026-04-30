@@ -45,10 +45,6 @@ yourmt3_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "yourmt3_all"),
 )
-aria_amt_models_dir = _resolve_existing_dir(
-    os.environ.get("MUSIC_TO_MIDI_BUNDLE_ARIA_DIR"),
-    os.path.join(USER_HOME, ".cache", "music_ai_models", "aria_amt"),
-)
 miros_source_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR"),
     os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
@@ -75,7 +71,6 @@ datas = [
 datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3/amt/src")
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
-datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 datas += copy_metadata('audio-separator')
@@ -107,7 +102,6 @@ hiddenimports = [
     'scipy',
     # 其他
     'mido',
-    'transkun',
     'wandb',
     'pytorch_lightning',
     'lightning_fabric',
@@ -127,7 +121,6 @@ torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all('onnxruntime')
 pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
-transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
@@ -141,7 +134,6 @@ datas += (
     + onnxruntime_datas
     + pil_datas
     + mir_eval_datas
-    + transkun_datas
     + wandb_datas
     + lightning_datas
     + fabric_datas
@@ -156,7 +148,6 @@ hiddenimports += (
     + onnxruntime_hiddenimports
     + pil_hiddenimports
     + mir_eval_hiddenimports
-    + transkun_hiddenimports
     + wandb_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
@@ -172,7 +163,6 @@ all_binaries = (
     + onnxruntime_binaries
     + pil_binaries
     + mir_eval_binaries
-    + transkun_binaries
     + wandb_binaries
     + lightning_binaries
     + fabric_binaries

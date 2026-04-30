@@ -3,8 +3,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.core.multi_stem_separator import STEM_KEYS, SixStemSeparator
-from src.core.vocal_harmony_separator import VocalHarmonySeparator
 from src.core.vocal_separator import VocalSeparator
 
 
@@ -59,32 +57,6 @@ class _VocalSeparatorFallbackFake(_BaseFallbackSeparator):
         return [str(path) for path in files]
 
 
-class _SixStemSeparatorFallbackFake(_BaseFallbackSeparator):
-    def _write_outputs(self):
-        files = [
-            self.output_dir / "song_(Vocals).wav",
-            self.output_dir / "song_(Drums).wav",
-            self.output_dir / "song_(Bass).wav",
-            self.output_dir / "song_(Guitar).wav",
-            self.output_dir / "song_(Piano).wav",
-            self.output_dir / "song_(Other).wav",
-        ]
-        for path in files:
-            path.write_bytes(b"wav")
-        return [str(path) for path in files]
-
-
-class _VocalHarmonySeparatorFallbackFake(_BaseFallbackSeparator):
-    def _write_outputs(self):
-        files = [
-            self.output_dir / "song_(Male).wav",
-            self.output_dir / "song_(Female).wav",
-        ]
-        for path in files:
-            path.write_bytes(b"wav")
-        return [str(path) for path in files]
-
-
 class AudioSeparatorCpuFallbackTests(unittest.TestCase):
     def test_vocal_separator_preflights_unsupported_cuda_and_retries_on_cpu(self):
         _VocalSeparatorFallbackFake.reset()
@@ -112,63 +84,6 @@ class AudioSeparatorCpuFallbackTests(unittest.TestCase):
                 self.assertEqual(_VocalSeparatorFallbackFake.separate_devices, ["cpu"])
                 self.assertTrue(Path(result["vocals"]).exists())
                 self.assertTrue(Path(result["no_vocals"]).exists())
-
-    def test_six_stem_separator_preflights_unsupported_cuda_and_retries_on_cpu(self):
-        _SixStemSeparatorFallbackFake.reset()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            audio_path = tmp_path / "song.wav"
-            audio_path.write_bytes(b"audio")
-            out_dir = tmp_path / "out"
-
-            with patch(
-                "src.core.multi_stem_separator.get_separator_cls",
-                return_value=_SixStemSeparatorFallbackFake,
-            ), patch(
-                "src.utils.audio_separator_compat.get_device",
-                return_value="cuda:0",
-                create=True,
-            ), patch(
-                "src.utils.audio_separator_compat.ensure_cuda_runtime_compatibility",
-                side_effect=_NO_KERNEL_IMAGE,
-                create=True,
-            ):
-                result = SixStemSeparator(
-                    ensure_assets_fn=lambda *_args, **_kwargs: None,
-                ).separate(str(audio_path), str(out_dir))
-
-        self.assertEqual(_SixStemSeparatorFallbackFake.load_devices, ["cpu"])
-        self.assertEqual(_SixStemSeparatorFallbackFake.separate_devices, ["cpu"])
-        self.assertEqual(set(result.keys()), set(STEM_KEYS))
-
-    def test_vocal_harmony_separator_preflights_unsupported_cuda_and_retries_on_cpu(self):
-        _VocalHarmonySeparatorFallbackFake.reset()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            audio_path = tmp_path / "song.wav"
-            audio_path.write_bytes(b"audio")
-            out_dir = tmp_path / "out"
-
-            with patch(
-                "src.core.vocal_harmony_separator.get_separator_cls",
-                return_value=_VocalHarmonySeparatorFallbackFake,
-            ), patch(
-                "src.utils.audio_separator_compat.get_device",
-                return_value="cuda:0",
-                create=True,
-            ), patch(
-                "src.utils.audio_separator_compat.ensure_cuda_runtime_compatibility",
-                side_effect=_NO_KERNEL_IMAGE,
-                create=True,
-            ):
-                result = VocalHarmonySeparator().separate(str(audio_path), str(out_dir))
-                self.assertEqual(_VocalHarmonySeparatorFallbackFake.load_devices, ["cpu"])
-                self.assertEqual(_VocalHarmonySeparatorFallbackFake.separate_devices, ["cpu"])
-                self.assertTrue(Path(result["lead_vocals"]).exists())
-                self.assertTrue(Path(result["harmony_vocals"]).exists())
-
 
 if __name__ == "__main__":
     unittest.main()

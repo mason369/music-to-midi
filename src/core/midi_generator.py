@@ -11,7 +11,7 @@ from mido import MidiFile, MidiTrack, Message, MetaMessage
 
 from src.models.data_models import (
     Config, NoteEvent, TrackType,
-    InstrumentType, TrackConfig, TrackLayout, PedalEvent
+    InstrumentType, TrackConfig, TrackLayout, PedalEvent, MidiTrackMode
 )
 
 logger = logging.getLogger(__name__)
@@ -1289,6 +1289,20 @@ class MidiGenerator:
         logger.info(f"乐器: {len(instrument_notes)} 种，共 {total_instrument_notes} 个音符")
         logger.info(f"鼓: {len(drum_notes)} 种音高，共 {total_drum_notes} 个音符")
 
+        midi_track_mode = getattr(
+            self.config,
+            "midi_track_mode",
+            MidiTrackMode.MULTI_TRACK.value,
+        )
+        if midi_track_mode == MidiTrackMode.SINGLE_TRACK.value:
+            return self._generate_precise_single_track_midi(
+                instrument_notes=instrument_notes,
+                drum_notes=drum_notes,
+                tempo=tempo,
+                output_path=output_path,
+                quality=quality,
+            )
+
         # 创建 MIDI 文件
         midi = MidiFile(type=1, ticks_per_beat=self.ticks_per_beat)
 
@@ -1435,6 +1449,136 @@ class MidiGenerator:
 
         return output_path
 
+    def _generate_precise_single_track_midi(
+        self,
+        instrument_notes: Dict[int, List[NoteEvent]],
+        drum_notes: Dict[int, List[NoteEvent]],
+        tempo: float,
+        output_path: str,
+        quality: str = "best"
+    ) -> str:
+        """生成单旋律轨 MIDI：非鼓音符合并到一条轨，鼓仍保留 GM 鼓轨。"""
+        from src.models.gm_instruments import get_instrument_name
+
+        logger.info("YourMT3+ 输出布局: 单轨（旋律合并，鼓独立）")
+
+        midi = MidiFile(type=1, ticks_per_beat=self.ticks_per_beat)
+
+        main_track = MidiTrack()
+        midi.tracks.append(main_track)
+
+        tempo = max(1.0, min(500.0, tempo))
+        tempo_microseconds = mido.bpm2tempo(tempo)
+        main_track.append(MetaMessage('set_tempo', tempo=tempo_microseconds, time=0))
+        main_track.append(MetaMessage(
+            'time_signature',
+            numerator=4, denominator=4,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8,
+            time=0
+        ))
+        main_track.append(MetaMessage('end_of_track', time=0))
+
+        MAX_INSTRUMENT_CHANNELS = 15
+        sorted_instruments = sorted(
+            instrument_notes.items(),
+            key=lambda x: len(x[1]),
+            reverse=True
+        )
+        if len(sorted_instruments) > MAX_INSTRUMENT_CHANNELS:
+            logger.info(
+                f"乐器数量 ({len(sorted_instruments)}) 超过通道限制 ({MAX_INSTRUMENT_CHANNELS})，启用智能合并"
+            )
+            sorted_instruments = self._merge_instruments_for_channels(
+                sorted_instruments, MAX_INSTRUMENT_CHANNELS
+            )
+
+        initial_total = (
+            sum(len(notes) for notes in instrument_notes.values())
+            + sum(len(notes) for notes in drum_notes.values())
+        )
+        final_total = 0
+        melodic_notes: List[Tuple[NoteEvent, int]] = []
+        program_channels: List[Tuple[int, int]] = []
+        channel_index = 0
+
+        for program, notes in sorted_instruments:
+            if not notes:
+                continue
+
+            if channel_index == 9:
+                channel_index = 10
+            if channel_index >= 16:
+                logger.error(f"通道分配错误：程序 {program}")
+                continue
+
+            midi_channel = channel_index
+            channel_index += 1
+
+            if quality == "best":
+                processed_notes = self.post_process_minimal(notes, tempo)
+            else:
+                processed_notes = self.post_process_by_quality(notes, tempo, quality)
+
+            if not processed_notes:
+                continue
+
+            final_total += len(processed_notes)
+            program_channels.append((program, midi_channel))
+            melodic_notes.extend((note, midi_channel) for note in processed_notes)
+            logger.info(
+                f"单轨合并 {get_instrument_name(program, 'zh_CN')} "
+                f"(GM{program:03d}): {len(processed_notes)} 个音符，通道 {midi_channel}"
+            )
+
+        if melodic_notes:
+            melodic_track = MidiTrack()
+            midi.tracks.append(melodic_track)
+            melodic_track.append(MetaMessage('track_name', name="All Instruments", time=0))
+
+            for program, midi_channel in program_channels:
+                midi_program = 0 if program in (100, 101) else program
+                melodic_track.append(Message(
+                    'program_change',
+                    channel=midi_channel,
+                    program=midi_program,
+                    time=0
+                ))
+
+            self._write_tagged_notes_to_track(melodic_track, melodic_notes, tempo)
+            melodic_track.append(MetaMessage('end_of_track', time=0))
+
+        if drum_notes:
+            all_drum_notes = []
+            for notes in drum_notes.values():
+                all_drum_notes.extend(notes)
+            all_drum_notes.sort(key=lambda n: n.start_time)
+
+            if all_drum_notes:
+                if quality == "best":
+                    processed_drums = self.post_process_minimal(all_drum_notes, tempo, is_drum=True)
+                else:
+                    processed_drums = self.post_process_by_quality(all_drum_notes, tempo, quality, is_drum=True)
+
+                final_total += len(processed_drums)
+
+                if processed_drums:
+                    drum_track = MidiTrack()
+                    midi.tracks.append(drum_track)
+                    drum_track.append(MetaMessage('track_name', name="Drums", time=0))
+                    self._write_notes_to_track(drum_track, processed_drums, 9, tempo)
+                    drum_track.append(MetaMessage('end_of_track', time=0))
+                    logger.info(f"鼓轨道: {len(processed_drums)} 个音符，通道 9")
+
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+        midi.save(output_path)
+
+        retention_rate = final_total / max(initial_total, 1)
+        logger.info(f"单轨布局 MIDI 已保存: {output_path}")
+        logger.info(f"音符保留率: {final_total}/{initial_total} = {retention_rate:.1%}")
+        logger.info(f"轨道总数: {len(midi.tracks)} (含指挥轨道)")
+
+        return output_path
+
     def _merge_instruments_for_channels(
         self,
         sorted_instruments: List[tuple],
@@ -1540,40 +1684,54 @@ class MidiGenerator:
             channel: MIDI 通道
             tempo: BPM
         """
+        self._write_tagged_notes_to_track(
+            track,
+            [(note, channel) for note in notes],
+            tempo
+        )
+
+    def _write_tagged_notes_to_track(
+        self,
+        track: MidiTrack,
+        tagged_notes: List[Tuple[NoteEvent, int]],
+        tempo: float
+    ) -> None:
+        """将带通道信息的音符写入同一条 MIDI 轨道。"""
         # 按开始时间排序
-        sorted_notes = sorted(notes, key=lambda n: n.start_time)
+        sorted_notes = sorted(tagged_notes, key=lambda item: item[0].start_time)
 
-        # 解决同音高重叠：前一个音符在后一个开始前截断，避免 note_off 提前终止后续音符
+        # 解决同通道同音高重叠：前一个音符在后一个开始前截断，避免 note_off 提前终止后续音符
         from collections import defaultdict
-        pitch_groups: Dict[int, List[NoteEvent]] = defaultdict(list)
-        for note in sorted_notes:
-            pitch_groups[note.pitch].append(note)
+        pitch_groups: Dict[Tuple[int, int], List[NoteEvent]] = defaultdict(list)
+        for note, channel in sorted_notes:
+            pitch_groups[(channel, note.pitch)].append(note)
 
-        resolved_notes = []
-        for pitch, group in pitch_groups.items():
+        resolved_notes: List[Tuple[NoteEvent, int]] = []
+        for (channel, _pitch), group in pitch_groups.items():
             group.sort(key=lambda n: n.start_time)
-            for k in range(len(group) - 1):
-                if group[k].end_time > group[k + 1].start_time:
+            for k, note in enumerate(group):
+                current_note = note
+                if k < len(group) - 1 and note.end_time > group[k + 1].start_time:
                     # 截断前一个音符，留 1 tick 的间隔（约 1ms）
                     new_end = group[k + 1].start_time - 0.001
-                    if new_end > group[k].start_time:
-                        group[k] = NoteEvent(
-                            pitch=group[k].pitch,
-                            start_time=group[k].start_time,
+                    if new_end > note.start_time:
+                        current_note = NoteEvent(
+                            pitch=note.pitch,
+                            start_time=note.start_time,
                             end_time=new_end,
-                            velocity=group[k].velocity,
-                            program=group[k].program,
+                            velocity=note.velocity,
+                            program=note.program,
                         )
                     else:
                         # 前一个音符太短，直接丢弃
-                        group[k] = None
-            resolved_notes.extend(n for n in group if n is not None)
+                        continue
+                resolved_notes.append((current_note, channel))
 
-        resolved_notes.sort(key=lambda n: n.start_time)
+        resolved_notes.sort(key=lambda item: item[0].start_time)
 
         # 创建音符开/关事件
         events = []
-        for note in resolved_notes:
+        for note, channel in resolved_notes:
             start_tick = self._time_to_ticks(note.start_time, tempo)
             end_tick = self._time_to_ticks(note.end_time, tempo)
 

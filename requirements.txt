@@ -1,5 +1,5 @@
 # Music to MIDI - Python 依赖
-# 唯一转写引擎：YourMT3+ MoE（不再包含 Basic Pitch / PANNs / ByteDance 钢琴模型）
+# 默认转写引擎：YourMT3+ MoE；MIROS 为本地可选后端
 
 # PyTorch 核心（三件套版本必须匹配）
 torch>=2.4.0
@@ -26,9 +26,6 @@ torchmetrics>=0.11.0,<2
 # 模型下载
 huggingface_hub>=0.20.0,<2
 
-# 钢琴专精转写
-transkun>=2.0.1,<3
-
 # MIDI 处理
 mido>=1.3.0,<2
 python-rtmidi>=1.5.0,<2
@@ -42,8 +39,7 @@ PyQt6>=6.6.0,<7
 PyQt6-Qt6>=6.6.0,<7
 PyQt6-sip>=13.6.0,<14
 
-# 人声分离 / 六声部分离（audio-separator + BS-RoFormer / BS-RoFormer SW）
-# >=0.38.0 起支持 BS-RoFormer SW 六声部分离
+# 人声分离（audio-separator + BS-RoFormer）
 audio-separator>=0.38.0
 onnxruntime>=1.16.0,<2
 

@@ -3,19 +3,20 @@ import types
 import unittest
 from unittest.mock import patch
 
-mido_stub = types.ModuleType("mido")
-mido_stub.__spec__ = None
+try:
+    import mido  # noqa: F401
+except ImportError:
+    mido_stub = types.ModuleType("mido")
+    mido_stub.__spec__ = None
 
+    class _Dummy:
+        pass
 
-class _Dummy:
-    pass
-
-
-mido_stub.MidiFile = _Dummy
-mido_stub.MidiTrack = _Dummy
-mido_stub.Message = _Dummy
-mido_stub.MetaMessage = _Dummy
-sys.modules.setdefault("mido", mido_stub)
+    mido_stub.MidiFile = _Dummy
+    mido_stub.MidiTrack = _Dummy
+    mido_stub.Message = _Dummy
+    mido_stub.MetaMessage = _Dummy
+    sys.modules.setdefault("mido", mido_stub)
 
 from src.core.pipeline import MusicToMidiPipeline
 from src.core.yourmt3_transcriber import YourMT3Transcriber
@@ -39,10 +40,6 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
             def get_unavailable_reason():
                 return "YourMT3+ ?????? pytorch-lightning"
 
-        class FakeAriaAmtTranscriber:
-            def __init__(self):
-                pass
-
         class FakeBeatDetector:
             def __init__(self, _config):
                 pass
@@ -52,8 +49,8 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
                 pass
 
         with patch("src.core.pipeline.YourMT3Transcriber", FakeYourMT3Transcriber), patch(
-            "src.core.pipeline.AriaAmtTranscriber", FakeAriaAmtTranscriber
-        ), patch("src.core.pipeline.BeatDetector", FakeBeatDetector), patch(
+            "src.core.pipeline.BeatDetector", FakeBeatDetector
+        ), patch(
             "src.core.pipeline.MidiGenerator", FakeMidiGenerator
         ):
             pipeline = MusicToMidiPipeline(Config())
