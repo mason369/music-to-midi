@@ -185,20 +185,6 @@ def get_yourmt3_download_root() -> Path:
     return ensure_dir(Path.home() / ".cache" / "music_ai_models" / "yourmt3_all")
 
 
-def get_aria_amt_dir() -> Path:
-    bundled = _find_existing_relative_path(
-        [
-            "models/aria_amt",
-            "assets/models/aria_amt",
-        ]
-    )
-    if bundled is not None:
-        return bundled
-    if is_frozen_app():
-        return ensure_dir(get_runtime_data_dir() / "models" / "aria_amt")
-    return ensure_dir(Path.home() / ".cache" / "music_ai_models" / "aria_amt")
-
-
 def get_ffmpeg_bin_dir() -> Optional[Path]:
     candidate = _find_existing_relative_path(
         [

@@ -4,1322 +4,445 @@
   <a href="./README_zh.md">中文</a> | English
 </p>
 
-Convert audio files to multi-track MIDI with automatic 128 GM instrument recognition.
-
-**Platform Support: Windows / Linux / WSL2**
+Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop app, a Gradio Web interface, and a Google Colab notebook. The current product surface intentionally focuses on two supported workflows: full-mix multi-instrument transcription, and vocal/accompaniment split transcription.
 
 ## Screenshots
 
 | Windows | Linux |
 |---------|-------|
-| ![Windows Demo](../resources/icons/Windows演示.png) | ![Linux Demo](../resources/icons/Linux演示.png) |
+| ![Windows demo](../resources/icons/Windows演示.png) | ![Linux demo](../resources/icons/Linux演示.png) |
 
-## Features
+## Current Capabilities
 
-- **Multi-Instrument Transcription**: Supports both `YourMT3+ MoE` and `MIROS (MusicFM)` as selectable multi-instrument backends
-- **Vocal Separation Mode**: BS-RoFormer separates vocals/accompaniment and transcribes both to independent MIDIs (optional extra merged MIDI; default checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`)
-- **Six-Stem Separation Mode**: BS-RoFormer SW separates `bass/drums/guitar/piano/vocals/other`, supports a “selected stems only” switch, and outputs stem MIDIs + 1 merged MIDI
-- **Backend Routing**: Lets `Aria-AMT` stay piano-preferred while `YourMT3+ / MIROS` continue handling the full multi-instrument path
-- **Lead/Harmony Proxy (Experimental)**: In six-stem mode, `vocals` can be further split into lead + harmony proxy stems (public male/female checkpoint)
-- **Piano-Dedicated Modes**: Supports both `Aria-AMT` and `Transkun`; the packaged Transkun checkpoint focuses on note events rather than full pedal reconstruction
-- **128 GM Instruments**: Outputs standard General MIDI multi-track MIDI, accurately distinguishing drums, bass, guitar, piano, etc.
-- **MIDI Post-processing**: Note quantization, velocity smoothing, deduplication, polyphony limiting
-- **GPU Acceleration**: Auto-detects and uses CUDA (NVIDIA) / ROCm (AMD) / CPU
-- **Multi-language UI**: Support for English and Chinese interface
-- **Professional Dark Theme**: Modern audio software-style interface design
+- **Full-mix transcription**: `SMART` mode sends the whole audio file to the selected multi-instrument backend.
+- **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` separates vocals and accompaniment, transcribes both, and can optionally export one merged MIDI.
+- **YourMT3+ default backend**: YourMT3+ MoE is the default path for multi-instrument notes, GM programs, drums, and multi-track MIDI output.
+- **Optional MIROS backend**: the desktop app can route transcription through a local `ai4m-miros` checkout as an experimental backend.
+- **MIDI layout control**: YourMT3+ can export by GM instrument, or merge non-drum notes into one melodic track while keeping drums separate.
+- **Beat and post-processing**: BPM is detected automatically; MIDI generation includes tempo metadata, quantization, duplicate removal, velocity smoothing, and polyphony limiting.
+- **Common audio formats**: `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted. Non-WAV input is converted to 44.1 kHz PCM WAV, preferably with FFmpeg.
+- **Consistent mode set**: desktop, Space, and Colab expose only the two supported processing modes.
 
-## Platform Support
+## Interface Matrix
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Windows 10/11 (x64) | ✅ Supported | Double-click `run.bat` to launch |
-| Linux (Ubuntu/Debian) | ✅ Supported | Full functionality, Ubuntu 22.04+ recommended |
-| WSL2 (Windows 11) | ✅ Supported | Requires WSLg (built-in on Win11) |
-| macOS | 🚧 Planned | Apple Silicon MPS support in development |
+| Interface | Modes | Backend Selection | Best For |
+|-----------|-------|-------------------|----------|
+| PyQt6 desktop | `SMART`, `VOCAL_SPLIT` | `YourMT3+`, `MIROS` | Local GPU use and persistent output folders |
+| Gradio Space | `SMART`, `VOCAL_SPLIT` | Default `YourMT3+` | Browser-based use or hosted demos |
+| Google Colab | `SMART`, `VOCAL_SPLIT` | Default `YourMT3+` | Temporary Colab GPU sessions |
+
+## Processing Modes
+
+| Mode | Internal Pipeline | Main Output | Notes |
+|------|-------------------|-------------|-------|
+| `SMART` | Audio -> multi-instrument backend -> MIDI generation | `<song>.mid` | No source separation. Suitable for most full mixes, instrumentals, and short multi-instrument clips. |
+| `VOCAL_SPLIT` | Audio -> vocal/accompaniment separation -> accompaniment transcription -> vocal transcription -> MIDI generation | `<song>_accompaniment.mid`, `<song>_vocal.mid`, optional `<song>_vocal_accompaniment_merged.mid` | The vocal MIDI path filters the backend output toward a vocal melody track to reduce accompaniment hallucinations. |
+
+## Output Files
+
+The desktop app writes to:
+
+```text
+MidiOutput/<audio-file-name>/
+```
+
+If the folder already exists, the app chooses `<audio-file-name>_2`, `<audio-file-name>_3`, and so on.
+
+Common outputs:
+
+```text
+song.mid
+song_accompaniment.mid
+song_vocal.mid
+song_vocal_accompaniment_merged.mid
+song_(Vocals).wav
+song_(Instrumental).wav
+```
+
+The exact files depend on the selected mode, whether merged MIDI is enabled, and what the separator returns.
+
+## Backends
+
+### YourMT3+
+
+YourMT3+ is the default backend. `download_sota_models.py` downloads the default checkpoint, and `src/core/yourmt3_transcriber.py` imports a local `YourMT3/amt/src` source tree.
+
+The source tree must include:
+
+```text
+YourMT3/amt/src/model/ymt3.py
+YourMT3/amt/src/utils/task_manager.py
+YourMT3/amt/src/config/config.py
+```
+
+If your checkout does not include `YourMT3/amt/src`, place the YourMT3 source at the repository root:
+
+```bash
+git clone https://github.com/mimbres/YourMT3.git
+```
+
+Download model weights:
+
+```bash
+python download_sota_models.py
+```
+
+Default model search roots include:
+
+```text
+~/.cache/music_ai_models/yourmt3_all
+runtime/models/yourmt3_all
+models/yourmt3_all
+```
+
+### MIROS
+
+MIROS is an optional experimental backend in the desktop app. It is not integrated as a PyPI package; the wrapper expects a local upstream checkout, runs its entrypoint to produce temporary MIDI, then converts that MIDI into the app's internal note format.
+
+Supported locations:
+
+```text
+ai4m-miros/
+external/ai4m-miros/
+MIROS/
+external/MIROS/
+```
+
+The wrapper checks for:
+
+```text
+main.py
+transcribe.py
+model/musicfm/data/pretrained_msd.pt
+logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
+```
+
+MIROS also needs its upstream runtime dependencies. `requirements.txt` installs this project; it does not guarantee a complete MIROS environment.
+
+## MIDI Track Layout
+
+YourMT3+ provides two output layouts:
+
+| Layout | Behavior |
+|--------|----------|
+| Multi-track by GM instrument | Each recognized GM program is kept as separate as possible; drums use the GM drum channel. |
+| Single melodic track, drums separate | Non-drum notes are written into one melodic track while keeping channel/program changes; drums remain separate. |
+
+If the detected instrument count exceeds available non-drum MIDI channels, the generator merges related instrument families instead of dropping notes outright.
+
+## Quality Presets
+
+The desktop and Web interfaces expose:
+
+```text
+fast
+balanced
+best
+```
+
+- For `YourMT3+`, the preset affects post-processing.
+- For `MIROS`, the current wrapper uses fixed checkpoint quality; the preset does not change MIROS inference.
+
+## Requirements
+
+| Item | Requirement |
+|------|-------------|
+| Python | 3.10+; the Windows installer prefers 3.10-3.12 |
+| PyTorch | 2.4.0 or newer, with matching `torchaudio` and `torchvision` |
+| FFmpeg | Required for reliable MP3/M4A/FLAC/OGG handling |
+| GPU | NVIDIA CUDA recommended; CPU works but is slow |
+| OS | Windows 10/11, Linux, WSL2 |
+
+On Windows, use a plain ASCII path with no spaces where possible:
+
+```text
+C:\MusicToMidi
+D:\Projects\music-to-midi
+```
+
+Paths containing non-ASCII characters, spaces, or parentheses can cause PyTorch DLL loading failures.
 
 ## Quick Start
 
 ### Windows
 
-```
-1. Clone or download the repository
-2. Double-click run.bat (auto-installs all dependencies on first run)
-```
-
-Or use PowerShell:
 ```powershell
-powershell -ExecutionPolicy Bypass -File run.ps1
+powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
-### Linux
+You can also double-click `run.bat`. `run.ps1` checks the virtual environment, core imports, YourMT3+ weights, and the vocal separation model, then calls `install.ps1` if something is missing.
+
+### Linux / WSL2
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/mason369/music-to-midi.git
-cd music-to-midi
-
-# 2. Run directly (auto-installs all dependencies on first run)
+chmod +x run.sh
 ./run.sh
 ```
 
-## Installation
+`run.sh` checks the virtual environment, core imports, YourMT3+ source, YourMT3+ weights, and the vocal separation model, then calls `install.sh` if something is missing.
 
-### Prerequisites
-
-- **Python 3.10+** (3.10 or 3.11 recommended, 3.12 may have compatibility issues)
-- **FFmpeg**: Required for audio processing
-  - Windows: `choco install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)
-  - Linux: `sudo apt install ffmpeg` (Ubuntu/Debian) or `sudo dnf install ffmpeg` (Fedora)
-  - macOS: `brew install ffmpeg`
-- **NVIDIA GPU + CUDA** (recommended): For significantly faster processing
-
-### Git LFS Installation
-
-- Windows:
-  - `choco install git-lfs` or `winget install GitHub.GitLFS`
-  - After install: `git lfs install`
-- macOS:
-  - `brew install git-lfs`
-  - After install: `git lfs install`
-- Linux:
-  - Ubuntu/Debian: `sudo apt-get install git-lfs`
-  - Fedora: `sudo dnf install git-lfs`
-  - After install: `git lfs install`
-
-### Dependency Requirements
-
-| Dependency | Version | Notes |
-|------------|---------|-------|
-| PyTorch | 2.1.0 - 2.4.x | YourMT3+ compatibility |
-| torchaudio | 2.1.0 - 2.4.x | Must match PyTorch version |
-| NumPy | < 2.0 | numba compatibility |
-| CUDA | 11.8 or 12.1 | GPU acceleration (optional) |
-| Python | 3.10+ | 3.10 or 3.11 recommended |
-
-### Linux Installation (Recommended)
-
-Linux is the recommended platform for running this project - environment setup is simpler and GPU acceleration is more stable.
+### Direct Source Run
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/mason369/music-to-midi.git
-cd music-to-midi
+python -m src.main
+```
 
-# 2. Create virtual environment (conda recommended)
-conda create -n music2midi python=3.10
-conda activate music2midi
+## Manual Setup
 
-# Or use venv
-python -m venv venv
+### 1. Create a Virtual Environment
+
+Windows:
+
+```powershell
+py -3.11 -m venv venv
+.\venv\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
+Linux:
+
+```bash
+python3.11 -m venv venv
 source venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
 
-# 3. Install PyTorch (choose based on your CUDA version)
-# CUDA 11.8
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
+### 2. Install PyTorch
 
-# CUDA 12.1
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+CUDA 12.1:
 
-# CPU only (not recommended, slower)
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
+```bash
+pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+```
 
-# 4. Install project dependencies
+CUDA 11.8:
+
+```bash
+pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu118
+```
+
+CPU:
+
+```bash
+pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cpu
+```
+
+### 3. Install Project Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-# 5. Download YourMT3+ models
+### 4. Prepare YourMT3+ Source and Weights
+
+```bash
+git clone https://github.com/mimbres/YourMT3.git
 python download_sota_models.py
+```
 
-# 5.1 Download source-separation models
+If `YourMT3/` already exists, you only need the model download step.
+
+### 5. Prepare the Vocal Separation Model
+
+```bash
 python download_vocal_model.py
-python download_multistem_model.py
+```
 
-# 5.2 Download Aria-AMT piano checkpoint
-python download_aria_amt_model.py
+The default cache location is:
 
-# 5.3 Optional: place the MIROS repository at one of these paths
-#   ai4m-miros/
-#   external/ai4m-miros/
-# upstream:
-#   https://github.com/amt-os/ai4m-miros
+```text
+~/.music-to-midi/models/audio-separator
+```
 
-# 6. Run the application
+### 6. Launch
+
+```bash
 python -m src.main
 ```
 
-### Windows Installation
+## Google Colab
 
-Note: `tflite-runtime` is not available on Windows. `requirements.txt` uses a platform marker to install `tensorflow` instead, so make sure you are using a recent version of `pip`.
+Notebook entry:
+
+```text
+colab_notebook.ipynb
+```
+
+Steps:
+
+1. Open the notebook.
+2. Select a GPU runtime.
+3. Run the cells in order.
+4. The final cell launches Gradio and prints a public URL.
+
+The Colab setup preserves the preinstalled PyTorch package to avoid CUDA runtime conflicts.
+
+## Gradio Space
+
+Space entry:
+
+```text
+space/app.py
+```
+
+Local launch:
 
 ```bash
-# Clone the repository
-git clone https://github.com/mason369/music-to-midi.git
-cd music-to-midi
-
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate
-
-# Install PyTorch (choose one)
-# CUDA 11.8
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
-
-# CUDA 12.1
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
-
-# CPU only (no GPU or no CUDA needed)
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cpu
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Download YourMT3+ models
-python download_sota_models.py
-
-# Run the application
-python -m src.main
+cd space
+python app.py
 ```
 
-### CUDA Installation Guide
+The Space app tries to sync YourMT3 source from the Hugging Face Space repository and checks the default model weights automatically.
 
-#### Linux (Ubuntu/Debian)
+## Portable Build
 
-```bash
-# Method 1: Using NVIDIA official repository
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-sudo apt-get install cuda-toolkit-12-1
+Windows directory-style portable build:
 
-# Method 2: Using conda (recommended, automatic management)
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
-
-# Verify CUDA
-python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_portable.ps1
 ```
 
-#### Windows
+Specify Python or FFmpeg:
 
-1. Download CUDA Toolkit from [NVIDIA website](https://developer.nvidia.com/cuda-downloads)
-2. Choose custom installation, ensure cuDNN is selected
-3. Restart and verify: `nvidia-smi`
-
-### Install from Release
-
-Download the latest release from the [Releases](https://github.com/mason369/music-to-midi/releases) page.
-
-## Usage
-
-1. **Open Audio File**: Drag and drop an audio file (MP3, WAV, FLAC, OGG) or click to browse
-2. **Choose Mode**: SMART / VOCAL_SPLIT / SIX_STEM_SPLIT / PIANO_TRANSKUN / PIANO_ARIA_AMT
-3. **Choose Preferred Engine**: `Aria-AMT / YourMT3+ / MIROS`
-4. **Understand Routing**: direct `YourMT3+ / MIROS` selections own the full multi-instrument pass; when `Aria-AMT` is preferred, SMART and VOCAL_SPLIT still use the active multi-instrument backend, while SIX_STEM_SPLIT can additionally hand the separated piano stem to Aria-AMT
-5. **Optional (VOCAL_SPLIT)**: Enable merged MIDI output (vocal + accompaniment)
-6. **Optional (SIX_STEM_SPLIT)**: Enable selected-stems-only and pick targets
-7. **Optional (SIX_STEM_SPLIT)**: Enable lead/harmony proxy split for `vocals`
-8. **Start Processing**: Click "Start" to begin conversion
-9. **Get Results**: Find MIDI files and separated audio tracks in output directory
-
-## Supported Formats
-
-### Input
-- MP3, WAV, FLAC, OGG, M4A, AAC, WMA
-
-### Output
-- MIDI (.mid) - Multi-track MIDI
-
-## Technical Details
-
-### Architecture Overview
-
-```
-Audio Input
-    ↓
-MusicToMidiPipeline
-    ├── BeatDetector (librosa) → BPM / beat grid
-    ├── Multi-instrument route
-    │   ├── YourMT3Transcriber
-    │   └── MirosTranscriber
-    ├── Piano-specialized route
-    │   ├── AriaAmtTranscriber
-    │   └── TranskunTranscriber
-    ↓
-Backend-specific inference
-    ↓
-MIDI generation / merge / post-processing
-    ↓
-Final MIDI output(s)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_portable.ps1 `
+  -PythonExe .\venv\Scripts\python.exe `
+  -FfmpegDir C:\ffmpeg\bin
 ```
 
-### Source Code Structure
+The build script attempts to collect:
 
+```text
+YourMT3/amt/src
+YourMT3 model cache
+audio-separator model cache
+optional local MIROS checkout
+ffmpeg.exe / ffprobe.exe
 ```
+
+Distribute the entire folder:
+
+```text
+dist/MusicToMidi/
+```
+
+Do not distribute only the single executable.
+
+## Project Structure
+
+```text
 src/
-├── main.py                          # Application entry point
-├── core/                            # Core processing engine
-│   ├── pipeline.py                  # Main processing pipeline (MusicToMidiPipeline)
-│   ├── yourmt3_transcriber.py       # YourMT3+ transcriber wrapper
-│   ├── miros_transcriber.py         # MIROS multi-instrument wrapper
-│   ├── aria_amt_transcriber.py      # Aria-AMT piano transcriber wrapper
-│   ├── transkun_transcriber.py      # Transkun piano transcriber wrapper
-│   ├── beat_detector.py             # Beat/BPM detection
-│   ├── midi_generator.py            # MIDI generation & post-processing
-│   ├── vocal_separator.py           # BS-RoFormer vocal separation
-│   ├── multi_stem_separator.py      # BS-RoFormer SW six-stem separation
-│   └── vocal_harmony_separator.py   # Lead/harmony proxy splitter (experimental)
-├── gui/                             # PyQt6 graphical interface
-│   ├── main_window.py               # Main window (MainWindow)
-│   ├── widgets/
-│   │   ├── dropzone.py              # File drag-and-drop zone
-│   │   ├── track_panel.py           # Track/mode configuration panel
-│   │   └── progress_widget.py       # Progress display component
-│   └── workers/
-│       └── processing_worker.py     # QThread background worker
-├── models/                          # Data models
-│   ├── data_models.py               # All core data classes (Config, NoteEvent, BeatInfo...)
-│   └── gm_instruments.py            # 128 GM instrument definitions & mappings
-├── i18n/                            # Internationalization
-│   └── translator.py                # Translation system (zh_CN / en_US)
-└── utils/                           # Utility modules
-    ├── gpu_utils.py                 # GPU detection/device selection/memory management
-    ├── yourmt3_downloader.py        # Model weight download & caching
-    ├── audio_utils.py               # Audio loading/resampling/format conversion
-    ├── logger.py                    # Colored logging system
-    └── warnings_filter.py           # Third-party library warning suppression
+  core/
+    pipeline.py              # Main processing pipeline
+    yourmt3_transcriber.py   # YourMT3+ backend
+    miros_transcriber.py     # Local MIROS wrapper
+    vocal_separator.py       # Vocal/accompaniment separation
+    midi_generator.py        # MIDI generation and post-processing
+    beat_detector.py         # BPM/beat detection
+  gui/
+    main_window.py           # PyQt6 main window
+    widgets/track_panel.py   # Mode, backend, and layout selector
+    workers/processing_worker.py
+  models/
+    data_models.py           # Config, ProcessingResult, NoteEvent, etc.
+    gm_instruments.py        # GM 128 instrument mapping
+  utils/
+    runtime_paths.py         # Runtime resource paths
+    yourmt3_downloader.py    # YourMT3+ model path and download helpers
+
+space/app.py                 # Gradio Web UI
+colab_notebook.ipynb         # Colab entry
+download_sota_models.py      # Default YourMT3+ model download
+download_vocal_model.py      # Vocal separation model download
+MusicToMidi.spec             # PyInstaller configuration
 ```
 
-### Optional Backends
-
-| Backend | Type | Integration | Current quality semantics | Notes |
-|---------|------|-------------|---------------------------|-------|
-| MIROS (MusicFM) | Multi-instrument | Local `ai4m-miros` checkout + wrapper | Fixed checkpoint quality | Suitable as the multi-instrument backend for SMART / VOCAL_SPLIT / SIX_STEM_SPLIT |
-| Aria-AMT | Piano | Local checkpoint + wrapper | Fixed checkpoint quality | Can run as a dedicated piano mode and can also take over the separated piano stem in six-stem mode |
-| Transkun | Piano | `pip install transkun`, packaged weights included | Fixed checkpoint quality | Strong event-level piano transcription; current packaged checkpoint does not claim full pedal tracking |
-
-Quality preset semantics:
-- `YourMT3+` supports `fast / balanced / best`
-- `MIROS / Aria-AMT / Transkun` currently run at fixed checkpoint quality
-- In `SIX_STEM_SPLIT` with `Aria-AMT + YourMT3+`, the quality preset only affects the YourMT3+ full-mix pass
-
----
-
-### Application Entry & Startup Flow
-
-`src/main.py` (~150 lines) handles environment initialization and GUI launch:
-
-```
-main()
-├── Environment variables
-│   ├── OMP_NUM_THREADS = physical core count (dynamically detected)
-│   ├── MKL_NUM_THREADS = same
-│   └── TF_CPP_MIN_LOG_LEVEL = 3 (suppress TensorFlow logs)
-├── Windows-specific handling
-│   ├── DLL path fix (CJK paths → 8.3 short paths)
-│   └── PyTorch DLL preloading (torch.dll, torch_cpu.dll)
-├── Third-party warning suppression (warnings_filter.py)
-├── Logging system initialization (logger.py)
-└── PyQt6 application launch
-    ├── High DPI scaling: Floor policy (prevent oversized UI)
-    ├── Style: Fusion (cross-platform consistent)
-    ├── CJK font: Microsoft YaHei / Noto Sans CJK
-    ├── MainWindow creation
-    └── Event loop (app.exec())
-```
-
----
-
-### Processing Pipeline: MusicToMidiPipeline
-
-`src/core/pipeline.py` (~400 lines) is the core orchestrator coordinating all processing stages.
-
-Four processing modes are supported:
-
-#### Mode 1: SMART (Default)
-
-```
-Audio file
-    ↓
-BeatDetector.detect() → BPM / beat grid          [0-10%]
-    ↓
-YourMT3Transcriber.transcribe_precise()           [10-85%]
-    → instrument_notes: Dict[program, List[NoteEvent]]
-    → drum_notes: Dict[program, List[NoteEvent]]
-    ↓
-MidiGenerator.generate_from_precise_instruments_v2()  [85-95%]
-    ↓
-Multi-track MIDI file                              [95-100%]
-```
-
-#### Mode 2: VOCAL_SPLIT
-
-```
-Audio file
-    ↓
-BeatDetector.detect() → BPM                       [0-5%]
-    ↓
-VocalSeparator.separate()                          [5-35%]
-    → vocals.wav + no_vocals.wav
-    ↓
-YourMT3Transcriber.transcribe_precise(accompaniment)  [35-60%]
-    ↓
-YourMT3Transcriber.transcribe_precise(vocals)      [60-85%]
-    ↓
-MidiGenerator × 2 (accompaniment MIDI + vocal MIDI)  [85-92%]
-    ↓
-Optional merge → +1 merged MIDI                   [92-95%]
-    ↓
-Two MIDIs (default) or + merged MIDI              [95-100%]
-```
-
-#### Mode 3: SIX_STEM_SPLIT
-
-```
-Audio file
-    ↓
-BeatDetector.detect() → BPM                       [0-5%]
-    ↓
-SixStemSeparator.separate()                        [5-30%]
-    → bass.wav / drums.wav / guitar.wav / piano.wav / vocals.wav / other.wav
-    ↓
-Optional switch: split vocals into lead/harmony proxy (experimental)
-    ↓
-Optional switch: transcribe selected stems only
-    ↓
-YourMT3Transcriber.transcribe_precise() × N        [30-75%]
-    ↓
-MidiGenerator × N                                  [75-93%]
-    ↓
-Merge selected MIDIs into one combined MIDI        [93-100%]
-```
-
-#### Mode 4: PIANO_ARIA_AMT
-
-```
-Audio file (piano-focused)
-    ↓
-BeatDetector.detect() → BPM                        [0-10%]
-    ↓
-AriaAmtTranscriber.transcribe()                    [10-85%]
-    ↓
-Dedicated piano MIDI output                        [85-100%]
-```
-
-Key design decisions:
-- **Cancel propagation**: `pipeline.cancel()` propagates to all submodules, supports abort at any stage
-- **Progress callbacks**: each stage sends `ProcessingProgress` via `_report()`, containing both stage and overall progress
-- **Error isolation**: each stage has independent try/catch, finally blocks ensure model unloading and GPU memory cleanup
-
----
-
-### Beat Detection: BeatDetector
-
-`src/core/beat_detector.py` (~380 lines) uses a multi-algorithm fusion strategy with librosa for BPM detection.
-
-```
-Audio file
-    ↓
-librosa.load(sr=22050, mono=True)
-    ↓
-4 algorithms in parallel:
-    ├── librosa.beat.beat_track() → tempo₁
-    ├── librosa.beat.tempo(onset_envelope) → tempo₂
-    ├── librosa.beat.tempo(aggregate=np.mean) → tempo₃
-    └── librosa.feature.tempogram() → tempo₄
-    ↓
-Octave correction: _correct_octave_error()
-    Constrain candidates to 60-200 BPM range
-    (e.g., 240 BPM → 120 BPM, 50 BPM → 100 BPM)
-    ↓
-Cluster voting: _vote_best_tempo()
-    Clustering threshold: 8 BPM
-    Select cluster center containing the most candidates
-    ↓
-BeatInfo(bpm, beat_times, downbeats, time_signature)
-```
-
-Design highlights:
-- Multi-algorithm voting is more robust than any single algorithm, avoiding extreme values
-- Octave correction solves the common "double/half BPM" misdetection problem
-- Graceful degradation to default 120 BPM on failure
-
----
-
-### Vocal Separation Model: BS-RoFormer
-
-This project uses **BS-RoFormer** (Band-Split Rotary Transformer) for vocal/accompaniment separation, wrapped via the [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) library.
-
-| Item | Details |
-|------|---------|
-| Full Name | Band-Split RoFormer |
-| Paper | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
-| Checkpoint | `model_bs_roformer_ep_368_sdr_12.9628.ckpt` (epoch 368) |
-| Trainer | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
-| License | MIT |
-| Metric note | Checkpoint filename includes `sdr_12.9628` (training-time score tag, not a universal benchmark score) |
-| Public comparison (vocal SDR) | Multisong: BS-RoFormer 10.87 / MelBand-RoFormer(Kim) 10.98 / HTDemucs_ft 8.38 |
-| Model Size | ~500 MB |
-| First Use | Auto-downloaded from HuggingFace to `~/.music-to-midi/models/audio-separator/` |
-| Output options | Default: 2 MIDI files (accompaniment + vocal); optional extra merged MIDI |
-
-For six-stem separation, the project uses **BS-RoFormer SW** as the primary backend (with `htdemucs_6s` fallback) and downloads assets via `download_multistem_model.py`. The desktop UI includes switches for selected-stems-only and optional lead/harmony proxy split on vocals. For vocal split, the UI provides an optional merged-MIDI toggle. For piano-specialized transcription, the project supports both Aria-AMT with downloadable local checkpoint (`piano-medium-double-1.0.safetensors`) and Transkun via its PyPI package, while MIROS can be enabled by placing a local `ai4m-miros` checkout in a supported path.
-
-#### Architecture Overview
-
-BS-RoFormer's core idea is to split the spectrogram into frequency bands for independent modeling, enhanced with Rotary Position Embedding (RoPE) for temporal modeling:
-
-```
-Audio waveform (44.1kHz stereo)
-    ↓
-STFT → Complex spectrogram (F × T)
-    ↓
-Band-Split Module
-    Split frequency axis into K sub-bands by predefined boundaries
-    Each band independently mapped to D-dim embedding via MLP
-    → (K, T, D)
-    ↓
-N × Band-Split RoFormer Blocks
-    ├── Band-level Self-Attention (inter-band interaction)
-    │   K bands as tokens, captures cross-band harmonic relationships
-    │   RoPE encodes temporal position
-    ├── Temporal Self-Attention (temporal modeling)
-    │   T time frames as tokens, captures temporal dependencies
-    │   RoPE encodes temporal position
-    └── Feed-Forward Network
-    ↓
-Band-Merge Module
-    Map K band embeddings back to frequency dimension
-    → Complex mask (F × T)
-    ↓
-Mask × Original spectrogram → iSTFT
-    ↓
-Separated waveform (vocals / instrumental)
-```
-
-#### Why BS-RoFormer (Replacing Demucs)
-
-The project originally used Meta's Demucs (htdemucs) for vocal separation, replaced entirely with BS-RoFormer in commit `d6309de`:
-
-| Dimension | Demucs (htdemucs) | BS-RoFormer |
-|-----------|-------------------|-------------|
-| Public comparison (Multisong vocal SDR) | 8.38 (HTDemucs_ft) | 10.87 (BS-RoFormer_ep_317, reference protocol) |
-| Architecture | Hybrid U-Net + Transformer | Pure Transformer (band-split) |
-| Integration | Manual model management | audio-separator 3-step API |
-| Dependencies | Heavy (demucs' own deps) | Lightweight (audio-separator + onnxruntime) |
-| Packaging | Poor PyInstaller compat | Good |
-
-Separation quality directly affects downstream YourMT3+ transcription quality. This document now annotates source + dataset + metric together to avoid cross-benchmark misinterpretation.
-
-#### Processing Flow
-
-`src/core/vocal_separator.py` (~200 lines):
-
-```
-Audio file
-    ↓
-Separator(output_dir, model_file_dir, output_format="WAV")
-    ↓
-separator.load_model("model_bs_roformer_ep_368_sdr_12.9628.ckpt")
-    ↓
-separator.separate(audio_path)
-    ↓
-2 stems:
-    ├── {stem}_(Vocals).wav   → renamed to {stem}_vocals.wav
-    └── {stem}_(Instrumental).wav → renamed to {stem}_accompaniment.wav
-    ↓
-Output: {"vocals": vocals_path, "no_vocals": accompaniment_path}
-```
-
-Key design decisions:
-- **Auto GPU detection**: audio-separator's Separator class detects GPU devices internally, does not accept external device parameter
-- **Blocking call**: `separator.separate()` is a blocking call; cancellation can only be checked before/after the call, not during
-- **Background progress thread**: estimates progress every 3 seconds based on elapsed time (audio-separator provides no fine-grained callbacks)
-- **Speed estimation**: GPU ~3x real-time, CPU ~0.15x real-time
-
-#### Frontier Vocal Separation Models (Verified on 2026-03-01)
-
-| Model/Direction | Source | Type | Status | Notes |
-|-----------------|--------|------|--------|-------|
-| BS-RoFormer ep368 (current) | Current project default checkpoint | Local drop-in (audio-separator) | ✅ In use | Current default checkpoint: `model_bs_roformer_ep_368_sdr_12.9628.ckpt`; audio-separator median score ~12.10 (vocals) / 16.31 (instrumental) |
-| SCNet XL IHF | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 11.11 (`model_scnet_xl_2ep_..._musdb18hq.ckpt`), stronger practical local replacement |
-| MelBand-RoFormer (Kim) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local drop-in (audio-separator) | ✅ Drop-in | Multisong vocal SDR 10.98 (`Kim_Vocal_2.onnx`) |
-| Ensemble (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | Frontier leaderboard (service/ensemble) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.93 (ver 2025.06), among the highest public entries |
-| BS Roformer (vocals,instrum) | [MVSEP Algorithms](https://mvsep.com/algorithms) | Frontier leaderboard (service/single model) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.89 (ver 2025.07) |
-| BS Roformer SW (vocals,instrum, 6 stem) | [MVSEP Quality Checker](https://mvsep.ru/quality_checker/synth_mutlitrack/create_table) | Frontier leaderboard (service/multi-stem) | 🌐 Available (not local drop-in) | MVSEP vocals SDR 11.30; multi-stem oriented, not equal to this project's 2-stem local replacement path |
-| Mel-RoFormer (ISMIR 2024) | [arXiv:2409.04702](https://arxiv.org/abs/2409.04702) / [ar5iv Table 2](https://ar5iv.org/html/2409.04702v1) | Paper-stage (research model) | 📄 Published paper | MUSDB18-HQ (Table 2, Scenario ⓑ, with extra data): Vocals SDR 13.29; same table reports BS-RoFormer 12.82 |
-| Mamba2 Meets Silence (v2, 2025) | [arXiv:2508.14556](https://arxiv.org/abs/2508.14556) | Paper-stage (research model) | 📄 Paper | Abstract reports cSDR 11.03 dB (claimed as best reported), focused on sparse-vocal robustness |
-| Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | Paper-stage (efficiency direction) | 📄 Paper + open code | Under fine-tuning, recovers ~92% of original model SDR with ~44.5x FLOPs reduction (primarily efficiency gain) |
-
-> **Conclusion (by protocol):**  
-> - For **practical local open replacement**, compare only under the same benchmark protocol; this project currently uses ep368 as default.  
-> - For **MVSEP leaderboard**, Ensemble (11.93) and BS Roformer (11.89) are higher.  
-> - For **paper-specific MUSDB18-HQ setting (Table 2, Scenario ⓑ)**, Mel-RoFormer reports 13.29.  
-> **Protocol note:** Do not directly compare numbers across different datasets/protocols (Multisong, MUSDB, MVSEP, cSDR/uSDR).
-
-#### Six-Stem & Fine-Grained Instrument Separation Frontier (Verified on 2026-03-03)
-
-> Note: This table focuses on **6-stem / fine-grained separation** and clearly marks local-download models vs service/API-only models.
-
-| Model/Direction | Source | Type | Status | Notes |
-|-----------------|--------|------|--------|-------|
-| BS Roformer SW (current six-stem primary backend) | [MVSEP Algorithms #77](https://mvsep.com/algorithms/77) / [HF: jarredou/BS-ROFO-SW-Fixed](https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/blob/main/BS-Rofo-SW-Fixed.ckpt) / [openmirlab config](https://raw.githubusercontent.com/openmirlab/bs-roformer-infer/main/src/bs_roformer/configs/config_bs_roformer_sw.yaml) | Local downloadable (6-stem) | ✅ In use | MVSEP page reports **vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71**; integrated as primary backend for `SIX_STEM_SPLIT` |
-| HTDemucs4 (6 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | Local downloadable (6-stem baseline) | ✅ Available (fallback) | Same-table Multisong examples: bass 11.22 / drums 10.22 / vocals 8.05 |
-| DrumSep mdx23c (jarredou, 5 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | Local downloadable (drum sub-stems) | ✅ Available | Public drum-substem metrics: kick 16.66 / snare 11.53 / toms 12.33 / hh 4.04 / cymbals 6.36 |
-| DrumSep mdx23c (aufr33+jarredou, 6 stems) | [ZFTurbo pretrained list](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [jarredou models](https://github.com/jarredou/models/releases) | Local downloadable (drum sub-stems) | ✅ Available (experimental) | Public drum-substem metrics: kick 14.54 / snare 9.79 / toms 10.63 / hh 3.19 / ride+crash 6.08 |
-| MVSep Bass/Drums/Piano/Guitar specialist tracks | [Bass #37](https://mvsep.com/algorithms/37) / [Drums #43](https://mvsep.com/algorithms/43) / [Piano #14](https://mvsep.com/algorithms/14) / [Guitar #17](https://mvsep.com/algorithms/17) | Service/leaderboard specialist pipelines | 🌐 Service available (not local drop-in) | Pages show strong BS Roformer SW single-model values (Bass 14.62, Drums 14.11, Piano 7.83, Guitar 9.05); higher scores usually come from ensembles |
-| Ensemble All-In (vocals,bass,drums,piano,guitar,lead/back,other) | [MVSEP Algorithms #47](https://mvsep.com/algorithms/47) | Service ensemble | 🌐 Service available (not open checkpoint) | Broadest stem coverage in one workflow, but no full public checkpoint mapping was found |
-| Lead/Back vocals frontier track | [MVSEP Karaoke #76](https://mvsep.com/algorithms/76) / [QC #8211](https://mvsep.com/quality_checker/entry/8211) / [QC #7845](https://mvsep.com/quality_checker/entry/7845) | Service + partial open checkpoints | 🔬 Mixed (open + service) | Public downloadable options are mostly karaoke or male/female proxy routes; stronger lead/back combinations are mostly service-side or fused pipelines |
-
-> **Practical local-open recommendation:**  
-> - Primary 6-stem chain: `BS Roformer SW`.  
-> - Drum refinement: add `DrumSep mdx23c` on top of separated `drums`.  
-> - Lead/back vocals: add karaoke/chorus routing on top of separated `vocals` and label it as proxy/non-unified-benchmark.  
-> - Always mark service/API models as non-public-checkpoint (not local drop-in).
-
----
-
-### MIDI Generation & Post-Processing: MidiGenerator
-
-`src/core/midi_generator.py` (~1100 lines) converts note events into standard MIDI files.
-
-#### Core Method: generate_from_precise_instruments_v2()
-
-```
-instrument_notes: Dict[int, List[NoteEvent]]  (program → note list)
-drum_notes: Dict[int, List[NoteEvent]]        (program → drum note list)
-    ↓
-Post-processing chain (selected by quality mode):
-    ↓
-MIDI channel allocation:
-    ├── Channels 0-8, 10-15: melodic instruments (max 15 types)
-    ├── Channel 9: drums (GM standard, fixed)
-    └── Over 15 instruments: smart merge of same-family instruments
-    ↓
-Vocal special handling:
-    program 100/101 (YourMT3 vocals) → mapped to piano timbre
-    ↓
-mido.MidiFile write:
-    ├── Track 0: tempo track (tempo meta event)
-    └── Track 1-N: instrument tracks
-        ├── program_change (timbre selection)
-        ├── note_on / note_off (note events)
-        └── control_change (pedals etc.)
-    ↓
-.mid file output
-```
-
-#### Post-Processing Chain (7 Steps)
-
-Different post-processing intensity based on `transcription_quality`:
-
-| Step | Method | best | balanced | fast |
-|------|--------|------|----------|------|
-| 1 | `_smooth_vibrato()` vibrato smoothing | ❌ | ✅ | ❌ |
-| 2 | `_remove_duplicate_notes(25ms)` dedup | ❌ | ✅ | ❌ |
-| 3 | `_merge_close_notes(10ms)` merge fragments | ❌ | ✅ | ❌ |
-| 4 | `_quantize_notes(1/32)` grid quantization | ❌ | ✅ | ❌ |
-| 5 | `_smooth_velocity(window=5)` velocity smoothing | ❌ | ✅ | ❌ |
-| 6 | `_normalize_velocity(mean=80)` velocity normalization | ❌ | ✅ | ❌ |
-| 7 | `_limit_polyphony(max=40)` polyphony limit | ❌ | ✅ | ❌ |
-| Special | `post_process_minimal()` remove <10ms only | ✅ | ❌ | ❌ |
-
-`best` mode intentionally skips most post-processing, preserving the AI model's raw output and only removing obvious noise notes (<10ms). This is because YourMT3+'s output quality is already high — excessive post-processing would lose detail.
-
----
-
-### GUI Layer
-
-#### Main Window: MainWindow
-
-`src/gui/main_window.py` (~900 lines) built with PyQt6, dark theme Fusion style.
-
-```
-┌─────────────────────────────────────────┐
-│  🎵 Music to MIDI                       │  ← _create_header()
-│  Convert audio to multi-track MIDI      │
-├─────────────────────────────────────────┤
-│  ┌─────────────────────────────────┐    │
-│  │  🎵 Drag & drop audio here      │    │  ← DropZoneWidget
-│  │     or click to browse          │    │
-│  └─────────────────────────────────┘    │
-├─────────────────────────────────────────┤
-│  Mode: [Smart Mode ▼]                   │  ← TrackPanel
-│  YourMT3+ direct multi-instrument       │
-├─────────────────────────────────────────┤
-│  ● Preprocess → ● Transcribe → ○ Gen   │  ← ProgressWidget
-│  ████████████████░░░░░░░░  65%          │     (StageIndicator × N)
-│  Transcribing: segment 15/28...         │
-├─────────────────────────────────────────┤
-│  Output: [/path/to/output] [Browse]     │  ← _create_output_settings()
-├─────────────────────────────────────────┤
-│  [  Start  ]  [  Stop  ]               │  ← _create_action_buttons()
-├─────────────────────────────────────────┤
-│  GPU: NVIDIA RTX 4090 | VRAM: 8.2/24GB │  ← Status bar
-└─────────────────────────────────────────┘
-```
-
-Key design:
-- **Background GPU detection**: GPU detected in a separate thread at startup to avoid blocking UI
-- **Signal-slot communication**: `ProcessingWorker` sends progress/result/error via Qt signals, thread-safe
-- **Shadow effects**: `QGraphicsDropShadowEffect` adds depth to card components
-- **Menu bar**: File (Open/Exit), Edit (Settings), View (Language switch), Help (About)
-
-#### Background Worker: ProcessingWorker
-
-`src/gui/workers/processing_worker.py` (~70 lines) extends `QThread`.
-
-```
-MainWindow._start_processing()
-    ↓
-ProcessingWorker(QThread)
-    ├── Signals:
-    │   ├── progress_updated(ProcessingProgress)  → update progress bar
-    │   ├── processing_finished(ProcessingResult) → show completion dialog
-    │   └── error_occurred(str)                   → show error dialog
-    ├── run():
-    │   ├── MusicToMidiPipeline(config)
-    │   ├── pipeline.process(audio_path, output_dir)
-    │   └── finally: clear_gpu_memory()
-    └── cancel():
-        └── pipeline.cancel()
-```
-
-#### Custom Widgets
-
-| Widget | File | Function |
-|--------|------|----------|
-| `DropZoneWidget` | `widgets/dropzone.py` (~200 lines) | Drag-drop + browse dual-channel file input, supports MP3/WAV/FLAC/OGG/M4A/AAC/WMA |
-| `TrackPanel` | `widgets/track_panel.py` (~120 lines) | Processing mode selection (Smart/Vocal Split), emits `mode_changed` signal |
-| `ProgressWidget` | `widgets/progress_widget.py` (~280 lines) | Stage flow indicators + progress bar, dynamically rebuilds stages per mode |
-| `StageIndicator` | `widgets/progress_widget.py` | Single stage status indicator (pending/current/done), with color and icon transitions |
-
----
-
-### Data Models
-
-`src/models/data_models.py` (~650 lines) defines all core data structures.
-
-#### Enum Types
-
-```python
-ProcessingMode        # SMART | VOCAL_SPLIT | SIX_STEM_SPLIT | PIANO(deprecated→SMART)
-TranscriptionQuality  # FAST | BALANCED | BEST
-ProcessingStage       # PREPROCESSING | SEPARATION | TRANSCRIPTION |
-                      # VOCAL_TRANSCRIPTION | SYNTHESIS | COMPLETE
-InstrumentType        # PIANO | DRUMS | BASS | GUITAR | VOCALS | STRINGS |
-                      # BRASS | WOODWIND | SYNTH | ORGAN | ... (25 types)
-                      # Provides to_program_number() / get_display_name(lang)
-```
-
-#### Core Data Classes
-
-```python
-@dataclass
-class NoteEvent:
-    pitch: int          # MIDI pitch (0-127)
-    start_time: float   # Start time (seconds)
-    end_time: float     # End time (seconds)
-    velocity: int       # Velocity (0-127)
-    program: int        # GM program number (0-127, 128=drums)
-
-@dataclass
-class BeatInfo:
-    bpm: float                          # Detected BPM
-    beat_times: List[float]             # Beat time points
-    downbeats: Optional[List[float]]    # Downbeat time points
-    time_signature: tuple               # Time signature (4, 4)
-
-@dataclass
-class ProcessingProgress:
-    stage: ProcessingStage      # Current stage
-    stage_progress: float       # Stage progress (0-1)
-    overall_progress: float     # Overall progress (0-1)
-    message: str                # Display message
-
-@dataclass
-class ProcessingResult:
-    midi_path: str                              # Main MIDI file path
-    tracks: List[Track]                         # Track list
-    beat_info: Optional[BeatInfo]               # Beat info
-    processing_time: float                      # Processing time (seconds)
-    total_notes: int                            # Total note count
-    vocal_midi_path: Optional[str]              # Vocal MIDI (VOCAL_SPLIT only)
-    accompaniment_midi_path: Optional[str]      # Accompaniment MIDI (VOCAL_SPLIT only)
-    separated_audio: Optional[Dict[str, str]]   # Separated audio paths
-    stem_midi_paths: Optional[Dict[str, str]]   # Stem MIDI paths (SIX_STEM_SPLIT only)
-    merged_midi_path: Optional[str]             # Merged MIDI path (SIX_STEM_SPLIT or optional VOCAL_SPLIT)
-
-@dataclass
-class Config:
-    # Interface
-    language: str = "zh_CN"             # UI language
-    theme: str = "dark"                 # Theme
-    # GPU
-    use_gpu: bool = True                # Enable GPU
-    gpu_device: int = 0                 # GPU device index
-    # Processing
-    processing_mode: str = "smart"      # Processing mode
-    #   values: smart / vocal_split / six_stem_split / piano_aria_amt
-    vocal_split_merge_midi: bool        # Optional merged MIDI for VOCAL_SPLIT
-    six_stem_targets: List[str]         # Optional selected stems for SIX_STEM_SPLIT (empty=all)
-    six_stem_split_vocal_harmony: bool  # Optional vocals->lead+harmony proxy split in SIX_STEM_SPLIT
-    transcription_quality: str = "best" # Transcription quality
-    # MIDI post-processing
-    quantize_notes: bool = True         # Note quantization
-    quantize_grid: str = "1/32"         # Quantization grid
-    max_polyphony: int = 40             # Max polyphony
-    aggressive_post_processing: bool = False  # Aggressive post-processing
-    # ... more fields in source
-```
-
-#### GM Instrument Mapping
-
-`src/models/gm_instruments.py` (~450 lines) defines the complete 128 General MIDI instruments:
-
-```
-16 instrument families (GMFamily):
-├── PIANO (0-7):       Acoustic Grand → Clavinet
-├── CHROMATIC (8-15):  Celesta → Dulcimer
-├── ORGAN (16-23):     Drawbar Organ → Tango Accordion
-├── GUITAR (24-31):    Nylon Guitar → Guitar Harmonics
-├── BASS (32-39):      Acoustic Bass → Synth Bass 2
-├── STRINGS (40-47):   Violin → Tremolo Strings
-├── ENSEMBLE (48-55):  String Ensemble → Orchestra Hit
-├── BRASS (56-63):     Trumpet → Tuba
-├── REED (64-71):      Soprano Sax → Bassoon
-├── PIPE (72-79):      Piccolo → Ocarina
-├── SYNTH_LEAD (80-87): Square → Charang
-├── SYNTH_PAD (88-95): New Age → Sweep
-├── SYNTH_FX (96-103): Rain → Sci-fi
-├── ETHNIC (104-111):  Sitar → Shanai
-├── PERCUSSIVE (112-119): Tinkle Bell → Reverse Cymbal
-└── SOUND_FX (120-127): Guitar Fret → Gunshot
-
-YourMT3 extensions:
-├── Program 100: Singing Voice (female)
-└── Program 101: Singing Voice (male)
-```
-
-Bilingual instrument name lookup: `get_instrument_name(program=0, language="zh_CN")` → `"原声大钢琴"`
-
----
-
-### Utility Modules
-
-#### GPU Management: gpu_utils.py
-
-`src/utils/gpu_utils.py` (~900 lines) manages detection, selection, and memory optimization for multiple accelerators.
-
-```
-Supported accelerators:
-├── CUDA (NVIDIA)     — Primary support, auto-detects CUDA version
-├── ROCm (AMD)        — Via torch.cuda (ROCm compatibility layer)
-├── MPS (Apple)       — macOS Apple Silicon
-├── XPU (Intel)       — Requires intel_extension_for_pytorch
-├── DirectML          — Windows universal GPU (experimental)
-└── CPU               — Fallback
-
-Key functions:
-├── get_device(prefer_gpu, gpu_index) → "cuda:0" / "cpu" / ...
-├── get_optimal_batch_size(n_segments, quality, device, ultra_quality)
-│   ├── Performance tier detection: high (≥8GB) / medium (4-8GB) / low (<4GB)
-│   ├── best mode: bsz = 4/2/1
-│   ├── balanced mode: bsz = 8/4/2
-│   └── fast mode: bsz = 16/8/4
-├── clear_gpu_memory()
-│   ├── torch.cuda.empty_cache()
-│   ├── gc.collect()
-│   └── Platform-specific cleanup
-└── diagnose_gpu() → full diagnostic report (dict)
-```
-
-Special handling:
-- Windows DLL path fix: CJK username/special character paths → 8.3 short paths
-- OOM auto-fallback: CUDA OOM during inference → halve batch size and retry
-- Dynamic thread count: `OMP_NUM_THREADS` set to physical core count (not logical)
-
-#### Model Download: yourmt3_downloader.py
-
-`src/utils/yourmt3_downloader.py` (~550 lines) manages YourMT3+ model weight download and caching.
-
-```
-Model cache structure:
-~/.cache/music_ai_models/yourmt3_all/
-└── amt/logs/2024/{checkpoint_name}/checkpoints/model.ckpt
-
-Download flow:
-├── Check local cache → hit: return path directly
-├── Try Hugging Face main site download
-├── Fail → try HF mirror (hf-mirror.com, China acceleration)
-├── SSL certificate fix (corporate network/proxy environments)
-├── Resume download support
-└── Recursive path search (compatible with repo structure changes)
-
-Checkpoint name mapping:
-├── "YPTF.MoE+Multi (PS)" → mc13_256_g4_all_v7_mt3f_...
-├── "YPTF.MoE+Multi (noPS)" → ...
-├── "YPTF+Multi (PS)" → ...
-└── "YPTF+Multi (noPS)" → ...
-```
-
-#### Internationalization: translator.py
-
-`src/i18n/translator.py` (~200 lines) provides the global translation function `t(key)`.
-
-```
-Design:
-├── Singleton pattern: get_translator() returns global instance
-├── JSON storage: src/i18n/zh_CN.json, src/i18n/en_US.json
-├── Nested keys: t("menu.file.open") → lookup {"menu": {"file": {"open": "Open"}}}
-├── Parameter substitution: t("progress.segment", current=5, total=28) → "Segment 5/28"
-└── Fallback: current language missing → try en_US → return raw key
-
-Supported languages:
-├── zh_CN: Simplified Chinese (default)
-└── en_US: English
-```
-
-#### Other Utilities
-
-| Module | Lines | Function |
-|--------|-------|----------|
-| `audio_utils.py` | ~100 | Audio load/save/resample/format detection, supports 7 formats |
-| `logger.py` | ~150 | ANSI colored console logging + plain text file logging, color-coded by level |
-| `warnings_filter.py` | ~250 | Suppress TensorFlow/Keras/librosa warnings, custom stderr filter |
-
----
-
-### Core AI Model: YourMT3+ YPTF.MoE+Multi (PS)
-
-The sole transcription engine used in this project. Developed by Sungkyun Chang at KAIST (Korea Advanced Institute of Science and Technology), published at IEEE MLSP 2024.
-
-| Item | Details |
-|------|---------|
-| Full Name | YPTF.MoE+Multi (PS) |
-| Checkpoint | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2` |
-| Source | [KAIST - YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) ([arXiv:2407.04822](https://arxiv.org/abs/2407.04822)) |
-| License | Apache 2.0 |
-| Model Size | ~724 MB |
-| Task Type | `mc13_full_plus_256` (34 MT3 instrument classes → 13 decoding channels, max 256 tokens/channel) |
-
-#### Encoder: PerceiverTF + MoE
-
-PerceiverTF is a hierarchical attention Transformer. Its core idea is to use a small set of learnable latent vectors to extract information from high-dimensional input via cross-attention, avoiding the quadratic complexity of standard Transformers on long sequences.
-
-```
-Mel Spectrogram (B, 256, 512)
-    ↓
-Pre-Encoder: Conv2d Res3B
-    3 residual conv blocks, kernel=(3,3), frequency dim /8
-    Output: (B, 256, 64, C) → reshape → (B, 256, 64*C)
-    ↓
-PerceiverTF Encoder
-    ├── 26 learnable Latent vectors (d_latent)
-    ├── 3 PerceiverTF Blocks, each containing:
-    │   ├── SCA (Stochastic Cross-Attention)
-    │   │   Latents as Query, spectrogram features as Key/Value
-    │   │   attention_to_channel=True: attention along frequency channel dim
-    │   │   sca_use_query_residual=True: query residual connection
-    │   ├── 2 × Local Self-Attention
-    │   │   Local self-attention among latents
-    │   └── 2 × Temporal Self-Attention
-    │       Global self-attention along time dimension
-    ├── Position Encoding: RoPE (Rotary Position Embedding)
-    │   rope_partial_pe=True: rotation applied to partial dimensions only
-    ├── Normalization: RMSNorm (more efficient than LayerNorm)
-    └── Feed-Forward: MoE (Mixture of Experts)
-        ├── 8 expert networks (num_experts=8)
-        ├── Top-2 routing (topk=2): each token activates 2 experts
-        ├── Widening factor: 4 (ff_widening_factor=4)
-        └── Activation: SiLU (Sigmoid Linear Unit)
-```
-
-Key advantage of MoE: only 2 of 8 experts are activated per token, so the model has 8× the parameters but only 2× the compute of a single expert. Different experts naturally specialize in different instrument families, achieving implicit instrument specialization.
-
-#### Decoder: Multi-Channel T5
-
-The Multi-T5 decoder maps 128 GM instruments to 13 independent decoding channels, each responsible for one instrument family:
-
-| Channel | Instrument Family | GM Program Range |
-|---------|------------------|-----------------|
-| 0 | Piano | 0-7 |
-| 1 | Chromatic Percussion | 8-15 |
-| 2 | Organ | 16-23 |
-| 3 | Guitar | 24-31 |
-| 4 | Bass | 32-39 |
-| 5 | Strings (+ Ensemble) | 40-55 |
-| 6 | Brass | 56-63 |
-| 7 | Reed | 64-71 |
-| 8 | Pipe | 72-79 |
-| 9 | Synth Lead | 80-87 |
-| 10 | Synth Pad | 88-95 |
-| 11 | Singing Voice | 100-101 |
-| 12 | Drums | 128 (internal) |
-
-Each channel performs independent autoregressive decoding with max 256 tokens. Decoding strategy is greedy (`logits.argmax(-1)`) with KV-cache acceleration.
-
-```
-Encoder Hidden States (B, T, D)
-    ↓
-Multi-Channel T5 Decoder
-    ├── 13 independent decoding channels, shared weights
-    ├── Based on T5-small architecture (google/t5-v1_1-small)
-    ├── Autoregressive generation: <BOS> → token₁ → token₂ → ... → <EOS>
-    ├── Each step: embed → decoder(+KV-cache) → lm_head → argmax
-    └── Max length: 256 tokens/channel
-        ↓
-    Token sequence (B, 13, ≤256)
-        ↓
-    TaskManager.detokenize() → NoteEvent / TieEvent
-        ↓
-    merge_zipped_note_events_and_ties_to_notes()
-        ↓
-    mix_notes() → merge 13 channels
-```
-
-#### Training Configuration
-
-```
-Training command (published by author):
-python train.py mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2 \
-  -p slakh2024 -d all_cross_final -it 320000 -vit 20000 \
-  -enc perceiver-tf -dec multi-t5 -nl 26 \
-  -ff moe -wf 4 -nmoe 8 -kmoe 2 -act silu \
-  -epe rope -rp 1 -sqr 1 -atc 1 \
-  -ac spec -hop 300 -bsz 10 10 -xk 5 \
-  -tk mc13_full_plus_256 \
-  -edr 0.05 -ddr 0.05 -sb 1 -ps -2 2 \
-  -st ddp -wb online
-```
-
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| Dataset | Slakh2024 + all_cross_final | Multi-dataset cross-training |
-| Iterations | 320,000 | Total training steps |
-| Global batch size | 80 | 10×10 (2 GPU × 5 accumulation) |
-| Pitch shift | [-2, +2] semitones | Data augmentation |
-| Precision | bf16-mixed | Mixed precision training |
-| Sample rate | 16,000 Hz | Input audio |
-| Hop length | 300 | Spectrogram frame step |
-| Input frames | 32,767 (~2.05s) | Audio segment length |
-
-#### Inference Pipeline (This Project)
-
-```
-Full audio (any length)
-    ↓
-Resample to 16kHz, convert to mono
-    ↓
-Segmentation: slice_padded_array()
-    25% overlap (best mode), 32,767 frames (~2.05s) per segment
-    ↓
-Batch inference: inference_file(bsz=auto)
-    Auto mixed precision (bf16/fp16)
-    OOM auto-fallback (halve bsz and retry)
-    ↓
-13-channel token decoding
-    ↓
-Smart dedup: _deduplicate_overlapping_notes_smart()
-    Group by (pitch, program, is_drum)
-    Cluster-merge notes with onset diff < 10ms
-    Keep the longest duration
-    ↓
-MIDI post-processing (by quality mode):
-    best:     only remove <10ms noise notes
-    balanced: light dedup + velocity smoothing + polyphony limit
-    fast:     no post-processing
-```
-
-#### Benchmark (Slakh2100 Dataset)
-
-| Metric | YPTF.MoE+Multi (PS) | MT3 (Google Baseline) |
-|--------|---------------------|----------------------|
-| Multi F1 | **0.7484** | 0.62 |
-| Frame F1 | 0.8487 | — |
-| Onset F1 | 0.8419 | — |
-| Offset F1 | 0.6961 | — |
-| Drum Onset F1 | 0.9113 | — |
-
-Per-instrument Onset F1: Bass 0.93 / Piano 0.88 / Guitar 0.82 / Synth Lead 0.82 / Brass 0.73 / Strings 0.73
-
-#### Available Model Variants
-
-| Model | MoE | Pitch Shift | Size | Notes |
-|-------|-----|-------------|------|-------|
-| YPTF.MoE+Multi (PS) | 8 experts | Yes | 724 MB | **Default, highest performance** |
-| YPTF.MoE+Multi (noPS) | 8 experts | No | 724 MB | Without pitch shift augmentation |
-| YPTF+Multi (PS) | No | Yes | 2.0 GB | Standard Perceiver |
-| YPTF+Multi (noPS) | No | No | 2.0 GB | Standard Perceiver, no augmentation |
-
----
-
-### Encoder Architecture Comparison: PerceiverTF vs MusicFM
-
-The winning solution of the 2025 AI4Musician AMT Challenge replaced PerceiverTF with a MusicFM encoder. Below is an in-depth comparison of both architectures.
-
-#### MusicFM Encoder
-
-MusicFM is a music foundation model proposed by Minz Won et al. (ICASSP 2024, [arXiv:2311.03318](https://arxiv.org/abs/2311.03318)), pre-trained on 160,000 hours of unlabeled music from the Million Song Dataset via self-supervised learning.
-
-```
-Audio (24kHz)
-    ↓
-128-band Mel Spectrogram
-    ↓
-2-layer Residual Conv2dSubsampling (downsample to 25Hz frame rate)
-    ↓
-12-layer Wav2Vec2 Conformer
-    ├── Each layer: Multi-Head Self-Attention + Convolution Module
-    ├── RoPE position encoding
-    ├── Output dimension: 1024
-    └── Frame rate: 25 Hz
-    ↓
-Dense music embeddings (B, T, 1024) @ 25Hz
-```
-
-Training: BEST-RQ style masked token modeling with random projection quantizer. The model learns to predict original features from masked audio segments, capturing rich musical structure information.
-
-#### Competition Winner Full Architecture (amt-os/ai4m-miros)
-
-```
-Audio (16kHz → resample to 24kHz)
-    ↓
-MusicFM 25Hz Encoder (frozen, 12-layer Conformer, 1024-dim)
-    ↓
-MusicFMAdapter (novel component)
-    ├── 13 learnable view embeddings (512-dim)
-    ├── 4 recurrent iterations:
-    │   concat(encoder_output, recurrent_state)
-    │   → Linear → 3-layer Self-Attention (RoPE, QK-norm, SiLU)
-    └── Output: (B, 13, T, 512) — 13 instrument views
-    ↓
-TemporalUpsample (2× ConvTranspose1d, 25Hz → 100Hz)
-    ↓
-Multi-Dec Decoder (Llama-style, not T5)
-    ├── 13 channels, 8 layers, 8 heads
-    ├── RoPE + RMSNorm + SiLU
-    ├── torch.compile support
-    └── Max token length: 1024
-    ↓
-LM Head → Token predictions
-```
-
-| Dimension | PerceiverTF + MoE (Current) | MusicFM + Multi-Dec (Winner) |
-|-----------|---------------------------|------------------------------|
-| Encoder type | End-to-end from scratch | Self-supervised pretrained (160K hrs) |
-| Encoder arch | PerceiverTF (cross-attn + MoE) | Conformer (self-attn + conv) |
-| Encoder params | Smaller (MoE sparse activation) | ~300M (full activation) |
-| Output dim | ~512 | 1024 |
-| Decoder | Multi-T5 (T5-small arch) | Multi-Dec (Llama-style) |
-| Input window | 32,767 frames (~2.05s) | 87,381 frames (~5.46s) |
-| Token length | 256 / channel | 1024 / channel |
-| Frame rate | ~53 Hz | 25 Hz → 100 Hz (upsampled) |
-| Inference speed | Fast (MoE sparse + short window) | Slow (full + long window) |
-| VRAM requirement | Low (~2GB) | High (~6GB+) |
-| Music understanding | Transcription task only | Broad musical structure |
-| Dense polyphony | 256 tokens may truncate | 1024 tokens sufficient |
-
-#### Core Difference Analysis
-
-**PerceiverTF + MoE (Specialist Model):**
-- Strengths: Extremely efficient — MoE sparse activation means 8 experts' parameters with only 2 experts' compute; short window = fast inference; VRAM-friendly
-- Weaknesses: Narrow knowledge — only learns from labeled data; 2.05s window may cause boundary errors on long notes and slow pieces; 256 tokens may truncate in dense polyphonic passages
-
-**MusicFM (Generalist Model):**
-- Strengths: 160K hours of pretraining provides deep musical understanding (chord structure, timbre features, rhythmic patterns); 5.46s window drastically reduces boundary errors; 1024 tokens handles any density
-- Weaknesses: Slow inference (full Conformer); high VRAM; requires additional Adapter layer to bridge encoder and decoder
-
-**Analogy:** PerceiverTF is like a professional stenographer who only learned shorthand — efficient but narrow. MusicFM is like a conservatory graduate — deep musical literacy but needs to learn shorthand before they can do the job.
-
----
-
-### AI4Musician 2025 AMT Challenge
-
-| Item | Details |
-|------|---------|
-| Name | 2025 Automatic Music Transcription (AMT) Challenge |
-| Organizer | AI4Musicians (Purdue University affiliated) |
-| Date | April 2025 |
-| Paper | "Advancing Multi-Instrument Music Transcription: Results from the 2025 AMT Challenge", NeurIPS 2025 Datasets & Benchmarks Track |
-| Scale | 8 teams submitted valid solutions, 2 outperformed baseline (MT3) |
-| Winner | amt-os (University of Osnabrück) |
-| Repository | [amt-os/ai4m-miros](https://github.com/amt-os/ai4m-miros) |
-
-#### Winner Model Integration Feasibility: Not Currently Viable
-
-| Blocker | Status | Details |
-|---------|--------|---------|
-| Model weights | ⚠️ Needs verification | Repository includes a `checkpoints/` path; completeness, usability, and reproducibility still require manual validation |
-| License | ❌ None | No LICENSE file, legally all rights reserved by default |
-| Documentation | ❌ None | No README, no usage instructions |
-| Performance comparison | ❓ Unknown | Competition baseline was MT3, not YourMT3+; no direct comparison data |
-| Community | ⚠️ Minimal | 1 star, 0 forks |
-| MusicFM pretrained weights | ✅ Available | [HuggingFace](https://huggingface.co/minzwon/MusicFM), MIT license, ~1.3GB |
-
-The MusicFM encoder itself is available (MIT license), but an encoder alone cannot perform transcription — it also requires an Adapter + Decoder + fine-tuning on AMT datasets, which is a research-project-level effort.
-
----
-
-### Frontier Models & Research Directions
-
-> The tables below only keep publicly verifiable information. `Slakh2100 Multi (Onset-Offset) F1`, `MAESTRO onset F1`, official challenge ranking, and subjective/downstream gains are different evaluation protocols and should not be read as one unified leaderboard.
-
-#### Multi-instrument Models (Publicly Verifiable)
-
-| Model | Source | Benchmark / Protocol | Public Result | Status | Notes |
-|-------|--------|----------------------|---------------|--------|-------|
-| YPTF.MoE+Multi (PS) (current) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**; same table reports `MT3 = 62.0` | ✅ In use | This is the most directly comparable numeric row for the current project's main backend |
-| [MT3](https://github.com/magenta/mt3) | [YourMT3+ paper](https://arxiv.org/abs/2407.04822) / [Magenta repo](https://github.com/magenta/mt3) | Slakh2100 `Multi (Onset-Offset) F1` | **62.0** | ✅ Open-source baseline | Token-based multi-instrument baseline that YourMT3+ extends |
-| AI4Musician 2025 winning route ([ai4m-miros](https://github.com/amt-os/ai4m-miros)) | [ICME 2025 workshop page](https://ai4musicians.org/2025icme.html) / [challenge page](https://ai4musicians.org/transcription/2025transcription.html) / [repo](https://github.com/amt-os/ai4m-miros) | Official challenge result | **Winning solution / 1st place** | 🔬 Winning route / code visible | This is a competition ranking, not a Slakh-style benchmark row; public materials describe a MusicFM-based encoder plus multi-decoder route |
-
-#### Piano-Specialized Models (Publicly Verifiable)
-
-| Model | Source | Benchmark / Protocol | Public Result | Status | Notes |
-|-------|--------|----------------------|---------------|--------|-------|
-| [Transkun V2 (paper checkpoint)](https://github.com/Yujia-Yan/Transkun) | [official repo / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 `note onset F1 / onset+offset F1 / onset+offset+velocity F1` | **0.9832 / 0.9349 / 0.9296** | ✅ Open source | Paper-reported checkpoint, not the default `pip install transkun` weight used by this project |
-| [Transkun packaged checkpoint (No Ext)](https://github.com/Yujia-Yan/Transkun) | [official repo / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 No Ext, same metric trio | **0.9833 / 0.8149 / 0.8109** | ✅ Open source, integrated | The repo explicitly says the packaged checkpoint is `without pedal extension of notes`; this is the easiest fully local install path |
-| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | [official repo](https://github.com/EleutherAI/aria-amt) | Public checkpoint release | The repo exposes `piano-medium-double-1.0.safetensors`, but does not surface a unified MAESTRO/MAPS comparison table in the same style as the rows above | ✅ Open source, integrated | Strong practical piano backend, but the README should not invent a benchmark row that the public repo does not publish |
-| [High-Resolution Piano Transcription with Pedals by Regressing Onset and Offset Times](https://arxiv.org/abs/2010.01815) | [paper](https://arxiv.org/abs/2010.01815) / [ByteDance repo](https://github.com/bytedance/piano_transcription) | MAESTRO `onset F1 / pedal onset F1` | **96.72% / 91.86%** | 📄 Paper + code | Strong pedal-aware reference system; piano-only protocol, so it should not be mixed into the multi-instrument table above |
-
-#### Paper-Stage or Protocol-Mismatched Directions
-
-| Model / Direction | Source | Public Protocol / Task | Publicly Verifiable Information | Why It Is Not Mixed Into the Tables Above |
-|-------------------|--------|------------------------|---------------------------------|-------------------------------------------|
-| [MR-MT3](https://arxiv.org/abs/2403.10024) | [paper](https://arxiv.org/abs/2403.10024) / [code](https://github.com/gudgud96/MR-MT3) | Slakh2100 with `onset F1`, `instrument leakage ratio`, and `instrument detection F1` | The abstract explicitly reports improved onset F1 and reduced instrument leakage vs MT3 | Leakage-focused MT3 branch, but not the same metric as Slakh `Multi (Onset-Offset) F1` |
-| [Jointist](https://arxiv.org/abs/2302.00286) | [paper](https://arxiv.org/abs/2302.00286) | Popular-music joint transcription + separation | The abstract reports `>1 ppt` transcription gain, `+5 SDR` source separation, `+1.8 ppt` downbeat, and `+1.4 ppt` chord/key gains | Joint transcription/separation protocol differs materially from Slakh / MAESTRO |
-| MusicFM encoder + AMT decoder | [MusicFM paper](https://arxiv.org/abs/2311.03318) / [repo](https://github.com/minzwon/musicfm) / [HF weights](https://huggingface.co/minzwon/MusicFM) | Pretrained encoder transfer | Public encoder weights exist, but a generic turnkey AMT decoder + fine-tuning pipeline is not released as a drop-in backend | Relevant to MIROS-like systems, but still a research-stack component rather than a ready backend |
-| [CountEM / Count The Notes](https://arxiv.org/abs/2511.14250) | [paper](https://arxiv.org/abs/2511.14250) / [project page](https://yoni-yaffe.github.io/count-the-notes) / [code](https://github.com/Yoni-Yaffe/count-the-notes) | Weakly supervised AMT training | Public paper, code, and models; the core idea is note-histogram supervision plus EM instead of aligned labels | Training-method direction, not a fixed production checkpoint/backend |
-| [PerceiverTF](https://arxiv.org/abs/2306.10785) | [paper](https://arxiv.org/abs/2306.10785) | Multi-track public datasets under the paper's own protocol | The abstract states it outperforms MT3 and SpecTNT on multiple public datasets | Best read as an architectural ancestor of YourMT3+, not as a row that should be forced into the same benchmark table |
-
-> **Additional Notes**:
-> - [Basic Pitch](https://github.com/spotify/basic-pitch) remains useful as a lightweight engineering baseline; Spotify's public positioning emphasizes `<20MB` and `<17K params`, but it does not publish a benchmark table directly matching the Slakh/MAESTRO protocols above.
-> - [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) is still a useful multi-task toolkit, but its latest GitHub release is still `0.5.0` (2021-12-09), and its public evaluation framing does not line up cleanly with the comparison tables above.
-
-> **Trend Summary**: As of early 2026, strong public multi-instrument AMT routes still split into two broad families: specialized token-based systems (`MT3 / YourMT3+ / MR-MT3`) and pretrained-encoder-enhanced routes (`MusicFM`-style systems). Piano AMT remains more mature in the open, but even there the gap between `packaged Transkun`, `paper checkpoints`, and `pedal-aware research systems` needs to be spelled out explicitly instead of being merged into a single overstated leaderboard.
-
-## Development
-
-### Setup Development Environment
+## Development Commands
 
 ```bash
-# Install dev dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
 pytest
-
-# Run specific tests
 pytest tests/test_yourmt3_integration.py -v
-
-# Optional: coverage report (generates htmlcov/ and .coverage)
-pytest --cov=src --cov-report=html
-
-# Format code
 black src/
 isort src/
-
-# Type checking
+flake8 src/
 mypy src/
-```
-
-### Build Executable
-
-```bash
-# Install PyInstaller
-pip install pyinstaller
-
-# Build using project spec file (recommended)
 pyinstaller MusicToMidi.spec
-
-# Build output is in dist/MusicToMidi/ directory
 ```
 
-### GPU Diagnostics
+Useful self-checks:
 
 ```bash
-# Check GPU status
+python -m src.main --self-test
 python -c "from src.utils.gpu_utils import print_gpu_diagnosis; print_gpu_diagnosis()"
-
-# Check YourMT3+ availability
 python -c "from src.core.yourmt3_transcriber import YourMT3Transcriber; print(YourMT3Transcriber.is_available())"
 ```
 
 ## Troubleshooting
 
-### Linux Environment Issues
+### PyTorch DLL Loading Fails
 
-**Q: Missing libGL.so.1**
-```bash
-# Ubuntu/Debian
-sudo apt install libgl1-mesa-glx
+Check:
 
-# CentOS/RHEL
-sudo yum install mesa-libGL
+- Whether the project path contains non-ASCII characters, spaces, or parentheses.
+- Whether Visual C++ Redistributable 2022 x64 is installed.
+- Whether PyTorch, torchaudio, and torchvision versions match.
+
+On Windows, rerun:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-**Q: PyQt6 won't start, shows "could not load Qt platform plugin"**
-```bash
-# Install Qt dependencies
-sudo apt install libxcb-xinerama0 libxkbcommon-x11-0
+### FFmpeg Is Unavailable
 
-# If running on headless server, need virtual display
-sudo apt install xvfb
-xvfb-run python -m src.main
+The Windows installer can install FFmpeg automatically, or you can install it manually and add it to PATH. Linux:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
 ```
 
-**Q: CUDA not available**
-```bash
-# Check NVIDIA driver
-nvidia-smi
+### YourMT3+ Is Unavailable
 
-# Check PyTorch CUDA
-python -c "import torch; print(torch.cuda.is_available())"
+Check source:
 
-# If returns False, reinstall correct PyTorch version
-pip uninstall torch torchaudio
-pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu118
+```text
+YourMT3/amt/src
 ```
 
-**Q: MIROS is unavailable**
+Check model:
+
 ```bash
-# Place the upstream repository at one of:
-#   ai4m-miros/
-#   external/ai4m-miros/
-# and install its runtime dependencies
+python -c "from src.utils.yourmt3_downloader import get_model_path; print(get_model_path())"
 ```
 
-**Q: Transkun is unavailable**
-```bash
-python -m pip install --force-reinstall transkun
-```
+If missing:
 
-**Q: YourMT3+ not available**
 ```bash
-# Download models
+git clone https://github.com/mimbres/YourMT3.git
 python download_sota_models.py
 ```
 
-## Contributing
+### Vocal Separation Is Unavailable
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Confirm dependency and model:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```bash
+pip install "audio-separator>=0.38.0" "onnxruntime>=1.16.0,<2"
+python download_vocal_model.py
+```
+
+### MIROS Is Unavailable
+
+Check local repository files:
+
+```text
+ai4m-miros/main.py
+ai4m-miros/transcribe.py
+```
+
+If the error lists missing Python modules, install the dependencies required by the upstream MIROS repository.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
-
-## Acknowledgments
-
-- [YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3) - Core multi-instrument transcription model
-- [BS-RoFormer](https://arxiv.org/abs/2309.02612) - Vocal separation architecture paper
-- [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) - Source separation inference framework
-- [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) - BS-RoFormer pretrained weights
-- [mido](https://github.com/mido/mido) - MIDI file handling
-- [librosa](https://librosa.org/) - Audio analysis
-
-## Support
-
-If you encounter any issues, please [open an issue](https://github.com/mason369/music-to-midi/issues).
+This project uses the MIT License. Third-party models, datasets, and upstream repositories remain governed by their own licenses and terms.
