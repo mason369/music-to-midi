@@ -156,6 +156,9 @@ class ProcessingMode(Enum):
     """处理模式枚举"""
     SMART = "smart"         # YourMT3+ MoE 多乐器转写
     VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
+    SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
+    PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
+    PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
@@ -169,6 +172,7 @@ class MultiInstrumentModel(Enum):
 class TranscriptionBackend(Enum):
     """首选转写后端 stored in config/UI."""
 
+    ARIA_AMT = "aria_amt"
     YOURMT3 = MultiInstrumentModel.YOURMT3.value
     MIROS = MultiInstrumentModel.MIROS.value
 
@@ -446,6 +450,7 @@ class ProcessingResult:
     vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
     accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
     separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径 {"vocals": ..., "no_vocals": ...}
+    stem_midi_paths: Optional[Dict[str, str]] = None  # 多 stem 模式下每个 stem 的 MIDI 路径
     merged_midi_path: Optional[str] = None  # 合并 MIDI 路径（人声分离可选合并）
 
 
@@ -460,13 +465,17 @@ class Config:
     use_gpu: bool = True
     gpu_device: int = 0
 
-    # 处理模式（smart / vocal_split）
+    # 处理模式（smart / vocal_split / six_stem_split / piano_transkun / piano_aria_amt）
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
+    # six_stem_split 模式：仅转写指定 stem（为空表示转写全部 six stems）
+    six_stem_targets: List[str] = field(default_factory=list)
+    # six_stem_split 模式：是否将 vocals 进一步分离为主唱/和声（实验近似）
+    six_stem_split_vocal_harmony: bool = False
 
     # 转写引擎设置
-    transcription_backend: str = TranscriptionBackend.YOURMT3.value
+    transcription_backend: str = TranscriptionBackend.ARIA_AMT.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
     transcription_quality: str = "best"      # "fast", "balanced", "best"
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
@@ -494,6 +503,9 @@ class Config:
         valid_modes = {
             ProcessingMode.SMART.value,
             ProcessingMode.VOCAL_SPLIT.value,
+            ProcessingMode.SIX_STEM_SPLIT.value,
+            ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_ARIA_AMT.value,
         }
         if mode == ProcessingMode.PIANO.value or mode not in valid_modes:
             mode = ProcessingMode.SMART.value
@@ -508,7 +520,7 @@ class Config:
         if normalized_backend not in valid_backends and normalized_multi_model in valid_backends:
             normalized_backend = normalized_multi_model
         if normalized_backend not in valid_backends:
-            normalized_backend = TranscriptionBackend.YOURMT3.value
+            normalized_backend = TranscriptionBackend.ARIA_AMT.value
 
         if normalized_backend in valid_multi_models:
             normalized_multi_model = normalized_backend
@@ -538,13 +550,24 @@ class Config:
 
     def get_quality_behavior(self) -> QualityBehavior:
         mode = str(getattr(self, "processing_mode", ProcessingMode.SMART.value) or "").strip().lower()
-        if mode == ProcessingMode.PIANO.value or mode not in {
-            ProcessingMode.SMART.value,
-            ProcessingMode.VOCAL_SPLIT.value,
-        }:
+        if mode == ProcessingMode.PIANO.value:
             mode = ProcessingMode.SMART.value
 
+        if mode in {
+            ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_ARIA_AMT.value,
+        }:
+            return QualityBehavior.FIXED
+
         effective_multi_model = self.get_effective_multi_instrument_model()
+        preferred_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
+
+        if (
+            mode == ProcessingMode.SIX_STEM_SPLIT.value
+            and preferred_backend == TranscriptionBackend.ARIA_AMT.value
+            and effective_multi_model == MultiInstrumentModel.YOURMT3.value
+        ):
+            return QualityBehavior.PARTIAL
 
         if effective_multi_model == MultiInstrumentModel.YOURMT3.value:
             return QualityBehavior.CONFIGURABLE
@@ -561,6 +584,8 @@ class Config:
             "multi_instrument_model": self.multi_instrument_model,
             "transcription_backend": self.transcription_backend,
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
+            "six_stem_targets": self.six_stem_targets,
+            "six_stem_split_vocal_harmony": self.six_stem_split_vocal_harmony,
             "transcription_quality": self.transcription_quality,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,

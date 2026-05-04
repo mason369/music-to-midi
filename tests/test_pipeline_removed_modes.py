@@ -25,40 +25,77 @@ from src.core.pipeline import MusicToMidiPipeline
 from src.models.data_models import BeatInfo, Config, NoteEvent
 
 
-class TestRemovedProcessingModes(unittest.TestCase):
-    def test_removed_backend_modules_are_not_importable(self):
+class TestRestoredProcessingModes(unittest.TestCase):
+    def test_restored_backend_modules_are_importable(self):
         for module_name in (
             "src.core.aria_amt_transcriber",
             "src.core.transkun_transcriber",
             "src.core.multi_stem_separator",
         ):
             with self.subTest(module_name=module_name):
-                self.assertIsNone(importlib.util.find_spec(module_name))
+                self.assertIsNotNone(importlib.util.find_spec(module_name))
 
-    def test_pipeline_no_longer_constructs_removed_transcribers(self):
+    def test_pipeline_constructs_restored_transcribers(self):
         pipeline = MusicToMidiPipeline(Config())
 
-        self.assertFalse(hasattr(pipeline, "aria_amt_transcriber"))
-        self.assertFalse(hasattr(pipeline, "transkun_transcriber"))
+        self.assertTrue(hasattr(pipeline, "aria_amt_transcriber"))
+        self.assertTrue(hasattr(pipeline, "transkun_transcriber"))
 
-    def test_stale_removed_modes_dispatch_to_smart_path(self):
-        for removed_mode in ("six_stem_split", "piano_transkun", "piano_aria_amt"):
-            with self.subTest(removed_mode=removed_mode):
+    def test_restored_modes_dispatch_to_their_specific_paths(self):
+        cases = (
+            ("six_stem_split", "_process_six_stem_split"),
+            ("piano_transkun", "_process_piano_transkun"),
+            ("piano_aria_amt", "_process_piano_aria_amt"),
+        )
+        for restored_mode, method_name in cases:
+            with self.subTest(restored_mode=restored_mode):
                 config = Config()
-                config.processing_mode = removed_mode
+                config.processing_mode = restored_mode
                 pipeline = MusicToMidiPipeline(config)
 
                 calls = []
 
-                def fake_smart(audio_path, output_dir):
+                def fake_handler(audio_path, output_dir):
                     calls.append((audio_path, output_dir))
-                    return "smart-result"
+                    return f"{restored_mode}-result"
 
-                pipeline._process_smart = fake_smart
+                setattr(pipeline, method_name, fake_handler)
                 result = pipeline.process("input.wav", "output")
 
-                self.assertEqual(result, "smart-result")
+                self.assertEqual(result, f"{restored_mode}-result")
                 self.assertEqual(calls, [("input.wav", "output")])
+
+    def test_aria_piano_stem_preference_fails_when_backend_is_unavailable(self):
+        pipeline = MusicToMidiPipeline(Config())
+        pipeline.aria_amt_transcriber.is_available = lambda: False
+
+        with self.assertRaisesRegex(RuntimeError, "Aria-AMT"):
+            pipeline._maybe_transcribe_piano_stem_with_aria("piano.wav", "output")
+
+    def test_requested_vocal_harmony_split_fails_when_model_is_missing(self):
+        config = Config(processing_mode="six_stem_split")
+        config.six_stem_split_vocal_harmony = True
+        pipeline = MusicToMidiPipeline(config)
+
+        class FakeVocalHarmonySeparator:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def is_model_available():
+                return False
+
+        with patch(
+            "src.core.vocal_harmony_separator.VocalHarmonySeparator",
+            FakeVocalHarmonySeparator,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "download_vocal_harmony_model.py"):
+                pipeline._apply_vocal_harmony_split(
+                    separated={"vocals": "vocals.wav"},
+                    selected_stems=["vocals"],
+                    output_dir="output",
+                )
 
 
 class TestVocalSplitMode(unittest.TestCase):

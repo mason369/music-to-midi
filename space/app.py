@@ -156,6 +156,26 @@ try:
 except Exception as exc:
     logger.warning("Model preload failed: %s", exc)
 
+
+def ensure_aria_amt_weights():
+    """确保 Aria-AMT 钢琴 checkpoint 已下载。"""
+    try:
+        from download_aria_amt_model import download_aria_model, is_aria_model_available
+    except Exception as exc:
+        logger.warning("Aria-AMT downloader unavailable: %s", exc)
+        return
+
+    if is_aria_model_available():
+        logger.info("Aria-AMT checkpoint found")
+        return
+
+    logger.info("Aria-AMT checkpoint not found, downloading...")
+    try:
+        download_aria_model()
+        logger.info("Aria-AMT checkpoint downloaded")
+    except Exception as exc:
+        logger.warning("Aria-AMT checkpoint download failed: %s", exc)
+
 clear_logs()
 
 
@@ -175,6 +195,9 @@ def _convert_impl(
     mode,
     quality,
     vocal_split_merge_midi=False,
+    six_stem_only_selected=False,
+    six_stem_targets=None,
+    six_stem_vocal_harmony=False,
     progress=gr.Progress(),
 ):
     import datetime
@@ -205,14 +228,27 @@ def _convert_impl(
     mode_mapping = {
         "YourMT3+ 多乐器转写": "smart",
         "人声分离 + 分别转写": "vocal_split",
+        "六声部分离 + 分别转写": "six_stem_split",
+        "钢琴专用转写 (Transkun)": "piano_transkun",
+        "钢琴专用转写 (Aria-AMT)": "piano_aria_amt",
     }
     config.processing_mode = mode_mapping.get(mode, "smart")
     config.transcription_quality = quality
     config.vocal_split_merge_midi = bool(
         config.processing_mode == "vocal_split" and vocal_split_merge_midi
     )
+    if config.processing_mode == "six_stem_split" and six_stem_only_selected:
+        config.six_stem_targets = [str(stem).lower() for stem in (six_stem_targets or [])]
+    else:
+        config.six_stem_targets = []
+    config.six_stem_split_vocal_harmony = bool(
+        config.processing_mode == "six_stem_split" and six_stem_vocal_harmony
+    )
 
-    ensure_model_weights()
+    if config.processing_mode == "piano_aria_amt":
+        ensure_aria_amt_weights()
+    elif config.processing_mode != "piano_transkun":
+        ensure_model_weights()
 
     pipeline = MusicToMidiPipeline(config)
     output_dir = tempfile.mkdtemp(prefix="midi_output_")
@@ -246,6 +282,14 @@ def _convert_impl(
     output_files = []
     if result.midi_path and Path(result.midi_path).exists():
         output_files.append(result.midi_path)
+    if result.stem_midi_paths:
+        for stem_midi_path in result.stem_midi_paths.values():
+            if (
+                stem_midi_path
+                and Path(stem_midi_path).exists()
+                and stem_midi_path not in output_files
+            ):
+                output_files.append(stem_midi_path)
     if result.vocal_midi_path and Path(result.vocal_midi_path).exists():
         output_files.append(result.vocal_midi_path)
     if result.accompaniment_midi_path and Path(result.accompaniment_midi_path).exists():
@@ -265,7 +309,10 @@ def _convert_impl(
         f"BPM: {bpm_str}",
         f"设备: {device_label}",
     ]
-    if result.vocal_midi_path:
+    if result.stem_midi_paths:
+        status_lines.append(f"合并 MIDI: {Path(result.midi_path).name}")
+        status_lines.append(f"分 stem MIDI: {len(result.stem_midi_paths)} 个")
+    elif result.vocal_midi_path:
         status_lines.append(f"伴奏 MIDI: {Path(result.accompaniment_midi_path).name}")
         status_lines.append(f"人声 MIDI: {Path(result.vocal_midi_path).name}")
         if result.merged_midi_path:
@@ -284,18 +331,42 @@ if ZERO_GPU:
         mode,
         quality,
         vocal_split_merge_midi=False,
+        six_stem_only_selected=False,
+        six_stem_targets=None,
+        six_stem_vocal_harmony=False,
         progress=gr.Progress(),
     ):
-        return _convert_impl(audio_path, mode, quality, vocal_split_merge_midi, progress)
+        return _convert_impl(
+            audio_path,
+            mode,
+            quality,
+            vocal_split_merge_midi,
+            six_stem_only_selected,
+            six_stem_targets,
+            six_stem_vocal_harmony,
+            progress,
+        )
 else:
     def convert_audio_to_midi(
         audio_path,
         mode,
         quality,
         vocal_split_merge_midi=False,
+        six_stem_only_selected=False,
+        six_stem_targets=None,
+        six_stem_vocal_harmony=False,
         progress=gr.Progress(),
     ):
-        return _convert_impl(audio_path, mode, quality, vocal_split_merge_midi, progress)
+        return _convert_impl(
+            audio_path,
+            mode,
+            quality,
+            vocal_split_merge_midi,
+            six_stem_only_selected,
+            six_stem_targets,
+            six_stem_vocal_harmony,
+            progress,
+        )
 
 
 def update_mode_info(mode):
@@ -304,15 +375,41 @@ def update_mode_info(mode):
             "**BS-RoFormer + YourMT3+** — 先用 BS-RoFormer 分离人声与伴奏，"
             "再分别用 YourMT3+ 转写；默认输出两个独立 MIDI，可选额外输出 1 个合并 MIDI。"
         )
+    if mode == "六声部分离 + 分别转写":
+        return (
+            "**BS-RoFormer SW + YourMT3+ / Aria-AMT** — 分离 bass/drums/guitar/piano/vocals/other "
+            "六个 stem，默认转写全部 stem，可切换为只转写选中 stem，并输出合并 MIDI。"
+        )
+    if mode == "钢琴专用转写 (Transkun)":
+        return (
+            "**Transkun (Piano)** — 针对独奏钢琴的专用转写模型，"
+            "适合纯钢琴音频，直接输出钢琴 MIDI。"
+        )
+    if mode == "钢琴专用转写 (Aria-AMT)":
+        return (
+            "**Aria-AMT (Piano)** — 针对独奏钢琴场景的专用转写模型，"
+            "首次使用会准备 Aria-AMT checkpoint。"
+        )
     return (
         "**YourMT3+ MoE** — 直接对完整音频进行多乐器转写，"
         "精确识别 128 种 GM 乐器，轨道数量由模型自动决定。"
     )
 
 
-def update_mode_controls(mode):
+def update_mode_controls(mode, only_selected):
     is_vocal = mode == "人声分离 + 分别转写"
-    return update_mode_info(mode), gr.update(visible=is_vocal)
+    is_six = mode == "六声部分离 + 分别转写"
+    return (
+        update_mode_info(mode),
+        gr.update(visible=is_vocal),
+        gr.update(visible=is_six),
+        gr.update(visible=(is_six and bool(only_selected))),
+        gr.update(visible=is_six),
+    )
+
+
+def update_six_stem_targets_visibility(mode, only_selected):
+    return gr.update(visible=(mode == "六声部分离 + 分别转写" and bool(only_selected)))
 
 
 CUSTOM_CSS = """
@@ -476,7 +573,13 @@ with gr.Blocks(
 
             gr.Markdown("**轨道设置**", elem_classes="section-title")
             mode_radio = gr.Radio(
-                choices=["YourMT3+ 多乐器转写", "人声分离 + 分别转写"],
+                choices=[
+                    "YourMT3+ 多乐器转写",
+                    "人声分离 + 分别转写",
+                    "六声部分离 + 分别转写",
+                    "钢琴专用转写 (Transkun)",
+                    "钢琴专用转写 (Aria-AMT)",
+                ],
                 value="YourMT3+ 多乐器转写",
                 label="处理模式",
             )
@@ -486,10 +589,39 @@ with gr.Blocks(
                 label="输出 1 个人声+伴奏合并 MIDI（人声分离模式）",
                 visible=False,
             )
+            six_stem_only_selected = gr.Checkbox(
+                value=False,
+                label="仅转写选中的 stem（六声部模式）",
+                visible=False,
+            )
+            six_stem_targets = gr.CheckboxGroup(
+                choices=["bass", "drums", "guitar", "piano", "vocals", "other"],
+                value=["bass", "drums", "guitar", "piano", "vocals", "other"],
+                label="六声部转写目标",
+                info="仅在勾选“仅转写选中的 stem”且模式为六声部分离时生效",
+                visible=False,
+            )
+            six_stem_vocal_harmony = gr.Checkbox(
+                value=False,
+                label="将 vocals 进一步分离为主唱 + 和声（实验近似）",
+                visible=False,
+            )
             mode_radio.change(
                 fn=update_mode_controls,
-                inputs=[mode_radio],
-                outputs=[mode_info, vocal_split_merge_midi],
+                inputs=[mode_radio, six_stem_only_selected],
+                outputs=[
+                    mode_info,
+                    vocal_split_merge_midi,
+                    six_stem_only_selected,
+                    six_stem_targets,
+                    six_stem_vocal_harmony,
+                ],
+                api_name=False,
+            )
+            six_stem_only_selected.change(
+                fn=update_six_stem_targets_visibility,
+                inputs=[mode_radio, six_stem_only_selected],
+                outputs=[six_stem_targets],
                 api_name=False,
             )
 
@@ -538,7 +670,15 @@ with gr.Blocks(
 
     convert_btn.click(
         fn=convert_audio_to_midi,
-        inputs=[audio_input, mode_radio, quality_radio, vocal_split_merge_midi],
+        inputs=[
+            audio_input,
+            mode_radio,
+            quality_radio,
+            vocal_split_merge_midi,
+            six_stem_only_selected,
+            six_stem_targets,
+            six_stem_vocal_harmony,
+        ],
         outputs=[file_output, status_output],
         api_name="convert",
     )
