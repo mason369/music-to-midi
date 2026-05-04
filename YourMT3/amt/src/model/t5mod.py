@@ -113,6 +113,8 @@ class T5BlockYMT3(nn.Module):
             self.layer.append(T5LayerCrossAttention(config, layer_idx=layer_idx))
 
         # FF layer
+        if not hasattr(config, 'ff_layer_type'):
+            config.ff_layer_type = 't5_gmlp'
         if config.ff_layer_type == 't5_gmlp':
             self.layer.append(T5LayerFF(config))
         elif config.ff_layer_type == 'moe':

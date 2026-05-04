@@ -79,11 +79,13 @@
       "quality_partial_hint": "质量档位只影响多乐器后端；Aria-AMT/Transkun 使用固定 checkpoint 质量。",
       "quality_configurable_hint": "质量档位会作用于 YourMT3+ 的 full-mix 转写，并支持 fast / balanced / best。",
       "quality_fixed_hint": "当前路径使用固定 checkpoint 质量，fast / balanced / best 不会改变该后端推理。",
+      "yourmt3_model_label": "YourMT3+ 模型模式",
+      "yourmt3_model_tooltip": "官方 Colab 风格的 YourMT3+ checkpoint / 架构选择。缺少对应权重时会显式失败，需要先下载。",
       "track_mode_label": "轨道布局",
       "track_mode_multi": "多轨（按 GM 乐器分轨）",
       "track_mode_single": "单轨（旋律合并，鼓独立）",
       "track_mode_tooltip": "YourMT3+ 输出布局：多轨会按识别到的 GM 乐器分轨；单轨会把非鼓音符合并到一条旋律轨，并保留 GM 鼓轨。",
-      "yourmt3_arch_hint": "官方 YourMT3 命名说明：YPTF+Single 是单解码 checkpoint；YPTF+Multi / MoE+Multi 使用 mc13_full_plus_256、multi-t5 这类多通道解码配置，再合并各通道音符。本项目保留更强的 YourMT3+ MoE Multi 后端；上面的“单轨/多轨”只改变 MIDI 输出布局，不切换或降级 checkpoint。"
+      "yourmt3_arch_hint": "官方 YourMT3 命名说明：YPTF+Single 是单解码 checkpoint；YPTF+Multi / MoE+Multi 使用 mc13_full_plus_256、multi-t5 这类多通道解码配置，再合并各通道音符。上面的模型模式会切换实际 checkpoint；轨道布局只改变 MIDI 输出布局。"
     },
     "tracks": {
       "title": "轨道设置",

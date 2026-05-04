@@ -358,6 +358,44 @@ class YourMT3Transcriber:
     def _pt(self, key: str, **kwargs) -> str:
         return self._translator.t(key, **kwargs)
 
+    @staticmethod
+    def _resolve_max_shift_steps(shared_cfg: dict, task_manager_obj=None) -> int:
+        task_manager_value = getattr(task_manager_obj, "max_shift_steps", None)
+        if task_manager_value is not None:
+            return int(task_manager_value)
+
+        tokenizer_cfg = shared_cfg.get("TOKENIZER") if isinstance(shared_cfg, dict) else None
+        if isinstance(tokenizer_cfg, dict) and "max_shift_steps" in tokenizer_cfg:
+            max_shift_steps_value = tokenizer_cfg["max_shift_steps"]
+            if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
+                return 206
+            return int(max_shift_steps_value)
+
+        logger.info(
+            "Checkpoint shared_cfg has no TOKENIZER.max_shift_steps; using legacy official checkpoint default 206."
+        )
+        return 206
+
+    @staticmethod
+    def _cap_batch_size_for_model(model_key: str, batch_size: int) -> int:
+        from src.models.data_models import YourMT3Model
+
+        legacy_single_batch_models = {
+            YourMT3Model.YMT3_PLUS.value,
+            YourMT3Model.YPTF_SINGLE_NOPS.value,
+            YourMT3Model.YPTF_MULTI_PS.value,
+            YourMT3Model.LEGACY_MC13.value,
+        }
+        moe_models = {
+            YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            YourMT3Model.YPTF_MOE_MULTI_PS.value,
+        }
+        if model_key in legacy_single_batch_models:
+            return min(batch_size, 1)
+        if model_key in moe_models:
+            return min(batch_size, 2)
+        return batch_size
+
     def _inference_with_oom_retry(self, model, bsz, audio_segments, progress_callback=None):
         """执行推理，逐批处理并输出实时进度，VRAM 不足时自动减半 batch size 重试"""
         import torch
@@ -571,6 +609,17 @@ class YourMT3Transcriber:
     def reset_cancel(self) -> None:
         """重置取消标志"""
         self._cancelled = False
+
+    def _get_selected_model_name(self) -> str:
+        from src.models.data_models import YourMT3Model
+
+        selected = str(
+            getattr(self.config, "yourmt3_model", YourMT3Model.YPTF_MOE_MULTI_PS.value) or ""
+        ).strip().lower()
+        valid_models = {model.value for model in YourMT3Model}
+        if selected not in valid_models:
+            raise ValueError(f"invalid yourmt3_model: {selected!r}")
+        return selected
 
     def _check_cancelled(self) -> None:
         """检查是否已取消"""
@@ -796,11 +845,7 @@ class YourMT3Transcriber:
                         progress_callback(0.6, self._pt("progress.creating_task_manager"))
 
                     # 6. 创建任务管理器
-                    max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
-                    if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
-                        max_shift_steps = 127  # 默认值
-                    else:
-                        max_shift_steps = int(max_shift_steps_value)
+                    max_shift_steps = self._resolve_max_shift_steps(shared_cfg, task_manager_obj)
 
                     tm = TaskManager(
                         task_name=task_name,
@@ -882,6 +927,7 @@ class YourMT3Transcriber:
 
         # 加载模型
         self._load_model(
+            model_name=self._get_selected_model_name(),
             progress_callback=(
                 lambda p, m: progress_callback(p * load_progress_weight, m)
                 if progress_callback else None
@@ -954,6 +1000,17 @@ class YourMT3Transcriber:
 
         # 推理
         bsz = get_optimal_batch_size(n_segments, quality, self.device, ultra_quality)
+        if not os.getenv("MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE"):
+            selected_model = self._get_selected_model_name()
+            capped_bsz = self._cap_batch_size_for_model(selected_model, bsz)
+            if capped_bsz != bsz:
+                logger.info(
+                    "YourMT3 模型 %s 批处理上限: %s -> %s",
+                    selected_model,
+                    bsz,
+                    capped_bsz,
+                )
+                bsz = capped_bsz
         logger.info(f"推理批处理大小: {bsz}, 预计处理 {(n_segments + bsz - 1) // bsz} 个批次")
 
         pred_token_arr = self._inference_with_oom_retry(model, bsz, audio_segments, progress_callback)

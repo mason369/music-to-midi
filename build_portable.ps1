@@ -134,11 +134,15 @@ function Copy-Tree {
     param(
         [string]$Source,
         [string]$Destination,
-        [string]$Label
+        [string]$Label,
+        [switch]$Required
     )
 
     if (-not $Source) {
-        Write-Host "[skip] $Label not found"
+        if ($Required) {
+            throw "Required asset missing: $Label"
+        }
+        Write-Host "[warn] $Label not found"
         return $false
     }
 
@@ -222,11 +226,11 @@ $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
-Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" | Out-Null
-Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" | Out-Null
-Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" | Out-Null
-Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" | Out-Null
-Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" | Out-Null
+Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" -Required | Out-Null
+Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required | Out-Null
+Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required | Out-Null
+Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required | Out-Null
+Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
 
 if ($ResolvedFfmpegDir) {
     $FfmpegBundleBin = Join-Path $FfmpegBundle "bin"

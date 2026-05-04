@@ -28,7 +28,7 @@ jobs:
           - os: windows-latest
             variant: GPU
             platform: Windows
-            pytorch_url: https://download.pytorch.org/whl/cu128
+            pytorch_url: https://download.pytorch.org/whl/cu121
             sep: ";"
           - os: ubuntu-22.04
             variant: CPU
@@ -38,7 +38,7 @@ jobs:
           - os: ubuntu-22.04
             variant: GPU
             platform: Linux
-            pytorch_url: https://download.pytorch.org/whl/cu128
+            pytorch_url: https://download.pytorch.org/whl/cu121
             sep: ":"
 
     runs-on: ${{ matrix.os }}
@@ -109,7 +109,7 @@ jobs:
           PY
           pip install numpy==1.26.4
           pip install -r .tmp/requirements-build.txt
-          pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
+          pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url ${{ matrix.pytorch_url }}
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
@@ -128,7 +128,7 @@ jobs:
           if [ -d "/c/ProgramData/chocolatey/bin" ]; then
             export PATH="/c/ProgramData/chocolatey/bin:$PATH"
           fi
-          echo "=== Download YourMT3+ MoE model ==="
+          echo "=== Download all official YourMT3+ model modes ==="
           python download_sota_models.py
 
           echo "=== Download BS-RoFormer ep368 vocal model ==="
@@ -146,15 +146,30 @@ jobs:
           echo "=== Download ByteDance pedal piano model ==="
           python download_bytedance_piano_model.py
 
+          echo "=== Download MIROS MusicFM model ==="
+          python download_miros_model.py
+
           echo "=== Verify downloaded models ==="
           echo "YourMT3+:"
-          find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \; 2>/dev/null || echo "  (not found)"
+          find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \;
           echo "Audio-Separator:"
-          ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt 2>/dev/null || echo "  (not found)"
+          ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt
           echo "Aria-AMT:"
-          ls -lh ~/.cache/music_ai_models/aria_amt/* 2>/dev/null || echo "  (not found)"
+          ls -lh ~/.cache/music_ai_models/aria_amt/*
           echo "ByteDance Piano:"
-          ls -lh ~/.cache/music_ai_models/bytedance_piano/* 2>/dev/null || echo "  (not found)"
+          ls -lh ~/.cache/music_ai_models/bytedance_piano/*
+          echo "MIROS:"
+          ls -lh external/ai4m-miros/model/musicfm/data/pretrained_msd.pt
+          ls -lh external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
+          python - <<'PY'
+          from src.core.miros_transcriber import MirosTranscriber
+          reason = MirosTranscriber.get_unavailable_reason()
+          if reason:
+              raise RuntimeError(reason)
+          if not MirosTranscriber.is_model_available():
+              raise RuntimeError("MIROS model files are not available")
+          print("MIROS available")
+          PY
 
       - name: 修复 Torch OpenMP 运行时 (Windows)
         if: runner.os == 'Windows'
@@ -169,25 +184,15 @@ jobs:
           BUILD_ASSET_ROOT="$GITHUB_WORKSPACE/build/portable_assets"
           mkdir -p "$BUILD_ASSET_ROOT"
 
-          if [ -d "$HOME/.music-to-midi/models/audio-separator" ]; then
-            cp -a "$HOME/.music-to-midi/models/audio-separator" "$BUILD_ASSET_ROOT/audio-separator"
-          fi
+          cp -a "$HOME/.music-to-midi/models/audio-separator" "$BUILD_ASSET_ROOT/audio-separator"
 
-          if [ -d "$HOME/.cache/music_ai_models/yourmt3_all" ]; then
-            cp -a "$HOME/.cache/music_ai_models/yourmt3_all" "$BUILD_ASSET_ROOT/yourmt3_all"
-          fi
+          cp -a "$HOME/.cache/music_ai_models/yourmt3_all" "$BUILD_ASSET_ROOT/yourmt3_all"
 
-          if [ -d "$HOME/.cache/music_ai_models/aria_amt" ]; then
-            cp -a "$HOME/.cache/music_ai_models/aria_amt" "$BUILD_ASSET_ROOT/aria_amt"
-          fi
+          cp -a "$HOME/.cache/music_ai_models/aria_amt" "$BUILD_ASSET_ROOT/aria_amt"
 
-          if [ -d "$HOME/.cache/music_ai_models/bytedance_piano" ]; then
-            cp -a "$HOME/.cache/music_ai_models/bytedance_piano" "$BUILD_ASSET_ROOT/bytedance_piano"
-          fi
+          cp -a "$HOME/.cache/music_ai_models/bytedance_piano" "$BUILD_ASSET_ROOT/bytedance_piano"
 
-          if [ -d "$GITHUB_WORKSPACE/.tmp/ai4m-miros" ]; then
-            cp -a "$GITHUB_WORKSPACE/.tmp/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
-          fi
+          cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
 
           if command -v ffmpeg >/dev/null 2>&1; then
             mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
@@ -267,7 +272,7 @@ jobs:
 
           if ('${{ matrix.variant }}' -eq 'GPU') {
             $variantNote = @"
-          GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
+          GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
           如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理
           "@
           } else {
@@ -301,7 +306,7 @@ jobs:
           mv dist/MusicToMidi "dist/${NAME}"
 
           if [ "${{ matrix.variant }}" = "GPU" ]; then
-            VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
+            VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
           如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理"
           else
             VARIANT_NOTE="CPU 版，无需显卡即可运行
@@ -412,9 +417,9 @@ jobs:
 
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
-          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
           | \`MusicToMidi-Windows-CPU-Portable.*\` | Windows | CPU | 无显卡使用 |
-          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
           | \`MusicToMidi-Linux-CPU-Portable.*\` | Linux | CPU | 无显卡使用 |
 
           ### 使用方法
@@ -425,7 +430,7 @@ jobs:
 
           ### 说明
           - 无需安装 Python，解压即用
-          - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
+          - GPU 版内含 CUDA 12.1 运行时，无需单独安装 CUDA
           - GPU 版在没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会自动回退到 CPU
           - 支持 128 种 GM 乐器精确识别
           - 6 种处理模式：智能转写 / 人声分离 / 六声部分离 / Transkun 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴

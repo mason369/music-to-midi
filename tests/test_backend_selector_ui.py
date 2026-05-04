@@ -131,6 +131,42 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertIn("multi-t5", text)
         self.assertIn("output layout", text)
 
+    def test_track_panel_lists_official_yourmt3_checkpoint_modes(self):
+        panel = TrackPanel()
+
+        modes = [
+            panel.yourmt3_model_combo.itemData(index)
+            for index in range(panel.yourmt3_model_combo.count())
+        ]
+
+        self.assertEqual(
+            modes,
+            [
+                "ymt3_plus",
+                "yptf_single_nops",
+                "yptf_multi_ps",
+                "yptf_moe_multi_nops",
+                "yptf_moe_multi_ps",
+            ],
+        )
+
+    def test_track_panel_shows_selected_yourmt3_model_description(self):
+        panel = TrackPanel()
+
+        panel.set_yourmt3_model("yptf_moe_multi_nops")
+
+        self.assertEqual(panel.get_yourmt3_model(), "yptf_moe_multi_nops")
+        self.assertIn("official Hugging Face Space", panel.yourmt3_model_hint_label.text())
+        self.assertIn("MoE", panel.yourmt3_model_hint_label.text())
+
+    def test_track_panel_hides_yourmt3_model_picker_for_miros(self):
+        panel = TrackPanel()
+        panel.set_processing_mode("smart")
+        panel.set_transcription_backend("miros")
+
+        self.assertTrue(panel._yourmt3_model_row.isHidden())
+        self.assertTrue(panel.yourmt3_model_hint_label.isHidden())
+
     def test_track_panel_hides_midi_track_mode_for_non_yourmt3_backend(self):
         panel = TrackPanel()
         panel.set_processing_mode("smart")

@@ -27,6 +27,21 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
 
+    def test_build_workflow_installs_audio_separator_runtime_pins(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("beartype==0.18.5", workflow)
+        self.assertIn("onnx-weekly==1.21.0.dev20260302", workflow)
+        self.assertIn("onnxruntime==1.23.2", workflow)
+        self.assertIn("samplerate==0.1.0", workflow)
+        self.assertIn("six==1.17.0", workflow)
+
+    def test_build_workflow_does_not_mask_test_failures(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("pytest tests/ -v --tb=short", workflow)
+        self.assertNotIn("pytest tests/ -v --tb=short || true", workflow)
+
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 
