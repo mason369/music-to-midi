@@ -69,6 +69,7 @@ sudo apt-get update
 SYSTEM_PKGS=(
     # 版本控制
     git
+    curl
     # 音频处理
     ffmpeg
     libsndfile1
@@ -391,6 +392,19 @@ fi
 "$PYTHON" "${REPO_DIR}/download_bytedance_piano_model.py"
 success "ByteDance Piano 模型准备完成"
 
+info "准备 MIROS 多乐器后端..."
+"$PYTHON" "${REPO_DIR}/download_miros_model.py" --repo-dir "${REPO_DIR}/external/ai4m-miros"
+"$PYTHON" - <<'PY'
+import sys
+sys.path.insert(0, ".")
+from src.core.miros_transcriber import MirosTranscriber
+reason = MirosTranscriber.get_unavailable_reason()
+print(reason or "MIROS available")
+print("MIROS model:", MirosTranscriber.is_model_available())
+raise SystemExit(0 if reason == "" and MirosTranscriber.is_model_available() else 1)
+PY
+success "MIROS 后端准备完成"
+
 # ───────────────────────── 验证核心依赖 ─────────────────────────
 info "验证核心依赖..."
 DEPS_OK=true
@@ -426,20 +440,20 @@ else
     success "  ffmpeg $FFMPEG_VER OK"
 fi
 
-# ───────────────────────── 下载 SOTA 模型权重 ─────────────────────────
-info "下载 YourMT3+ SOTA 模型权重（YPTF.MoE+Multi PS，约 800MB）..."
-info "如需跳过，按 Ctrl+C 后手动运行: venv/bin/python download_sota_models.py"
+# ───────────────────────── 下载 YourMT3+ 官方模式模型权重 ─────────────────────────
+info "下载 YourMT3+ 官方模式模型权重..."
 
-"$PYTHON" "${REPO_DIR}/download_sota_models.py" && \
-    success "SOTA 模型权重下载完成" || \
-    warn "模型下载失败，可稍后手动运行: venv/bin/python download_sota_models.py"
+if ! "$PYTHON" "${REPO_DIR}/download_sota_models.py"; then
+    error "YourMT3+ 官方模式模型下载失败"
+fi
+success "YourMT3+ 官方模式模型权重下载完成"
 
 info "Downloading BS-RoFormer ep368 vocal model (~600MB)..."
-info "Press Ctrl+C to skip, run later: venv/bin/python download_vocal_model.py"
 
-"$PYTHON" "${REPO_DIR}/download_vocal_model.py" && \
-    success "BS-RoFormer model download completed" || \
-    warn "BS-RoFormer download failed, run later: venv/bin/python download_vocal_model.py"
+if ! "$PYTHON" "${REPO_DIR}/download_vocal_model.py"; then
+    error "BS-RoFormer model download failed"
+fi
+success "BS-RoFormer model download completed"
 
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
@@ -490,9 +504,18 @@ fi
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from src.utils.yourmt3_downloader import get_model_path
-model_path = get_model_path()
-print('YourMT3+ model:', model_path if model_path else 'missing')
-exit(0 if model_path else 1)
+from src.utils.yourmt3_downloader import OFFICIAL_YOURMT3_MODEL_KEYS, YOURMT3_MODELS
+missing = []
+for model_key in OFFICIAL_YOURMT3_MODEL_KEYS:
+    model_info = YOURMT3_MODELS[model_key]
+    label = model_info.get('ui_label', model_key)
+    model_path = get_model_path(model_key)
+    print(f'YourMT3+ {label}:', model_path if model_path else 'missing')
+    if model_path is None:
+        missing.append(label)
+if missing:
+    print('missing YourMT3+ official model modes:', ', '.join(missing))
+exit(0 if not missing else 1)
 "; then
     warn "YourMT3+ model weights missing"; NEED_INSTALL=true
 fi
@@ -519,6 +542,33 @@ print('Aria-AMT model:', transcriber.is_model_available())
 exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
 "; then
     warn "Aria-AMT backend or model missing"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+transcriber = ByteDancePianoTranscriber()
+print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
+print('ByteDance Piano model:', transcriber.is_model_available())
+exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
+"; then
+    warn "ByteDance Piano backend or model missing"
+    warn "  先运行: python download_bytedance_piano_model.py"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.miros_transcriber import MirosTranscriber
+reason = MirosTranscriber.get_unavailable_reason()
+print(reason or 'MIROS available')
+print('MIROS package:', MirosTranscriber.is_available())
+print('MIROS model:', MirosTranscriber.is_model_available())
+exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_available() else 1)
+"; then
+    warn "MIROS backend or model missing"
+    warn "  先运行: python download_miros_model.py"
     NEED_INSTALL=true
 fi
 
@@ -562,11 +612,11 @@ echo -e "  ${GREEN}source venv/bin/activate && python -m src.main${NC}"
 echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
-echo -e "  ${GREEN}✔${NC} YPTF.MoE+Multi (PS) 模型权重"
+echo -e "  ${GREEN}✔${NC} YourMT3+ 官方模式模型权重"
 echo -e "  ${GREEN}✔${NC} BS-RoFormer ep368 人声模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
 echo ""
-echo -e "  ${BOLD}若模型下载失败，可手动补下：${NC}"
+echo -e "  ${BOLD}模型维护命令：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"

@@ -192,6 +192,17 @@ class MidiTrackMode(Enum):
     SINGLE_TRACK = "single_track"
 
 
+class YourMT3Model(Enum):
+    """Official YourMT3+ checkpoint / architecture modes exposed in the UI."""
+
+    YMT3_PLUS = "ymt3_plus"
+    YPTF_SINGLE_NOPS = "yptf_single_nops"
+    YPTF_MULTI_PS = "yptf_multi_ps"
+    YPTF_MOE_MULTI_NOPS = "yptf_moe_multi_nops"
+    YPTF_MOE_MULTI_PS = "yptf_moe_multi_ps"
+    LEGACY_MC13 = "mc13_256_all_cross_v6"
+
+
 class QualityBehavior(Enum):
     """How the current mode/backend interprets the quality preset."""
 
@@ -482,6 +493,7 @@ class Config:
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
     preserve_all_notes: bool = True          # 保留所有音符
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
+    yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_PS.value
 
     # MIDI设置
     ticks_per_beat: int = 480
@@ -542,6 +554,12 @@ class Config:
             raise ValueError(f"invalid midi_track_mode: {self.midi_track_mode!r}")
         self.midi_track_mode = normalized_track_mode
 
+        valid_yourmt3_models = {model.value for model in YourMT3Model}
+        normalized_yourmt3_model = str(getattr(self, "yourmt3_model", "") or "").strip().lower()
+        if normalized_yourmt3_model not in valid_yourmt3_models:
+            raise ValueError(f"invalid yourmt3_model: {self.yourmt3_model!r}")
+        self.yourmt3_model = normalized_yourmt3_model
+
     def get_effective_multi_instrument_model(self) -> str:
         backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
         valid_multi_models = {model.value for model in MultiInstrumentModel}
@@ -597,6 +615,7 @@ class Config:
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,
+            "yourmt3_model": self.yourmt3_model,
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
             "quantize_notes": self.quantize_notes,

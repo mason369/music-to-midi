@@ -33,6 +33,25 @@ Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop a
 | Gradio Space | Same six modes as desktop | Default `Aria-AMT` / `ByteDance Pedal` piano backend + `YourMT3+` multi-instrument backend | Browser-based use or hosted demos |
 | Google Colab | Same six modes as desktop | Default `Aria-AMT` / `ByteDance Pedal` piano backend + `YourMT3+` multi-instrument backend | Temporary Colab GPU sessions |
 
+## Entry And Dependency Sync Status
+
+This repository keeps project workflows separate from official YourMT3+ checkpoint modes:
+
+- `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` are this project's six processing workflows.
+- `YMT3+`, `YPTF+Single (noPS)`, `YPTF+Multi (PS)`, `YPTF.MoE+Multi (noPS)`, and `YPTF.MoE+Multi (PS)` are the five checkpoint / architecture modes exposed by the official YourMT3 demo.
+- Desktop, Gradio Space, and Colab expose the same six workflows; workflows that need multi-instrument transcription then choose one of the official YourMT3+ checkpoint modes.
+
+Current synchronization coverage:
+
+| Location | Synced Content | Notes |
+|----------|----------------|-------|
+| `download_sota_models.py` | Downloads all five official YourMT3+ checkpoint modes | Uses `OFFICIAL_YOURMT3_MODEL_KEYS` and verifies that each checkpoint can be resolved. |
+| `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, Aria-AMT, ByteDance Pedal, MIROS, and separator availability before launch | Missing required resources are reported explicitly. |
+| `install.ps1` / `install.sh` | Installs PyTorch 2.4, NumPy 1.26, audio-separator 0.41.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
+| `.github/workflows/build.yml` | CI build and test jobs install the same pinned runtime dependencies | Test failures are not masked with `|| true`. |
+| `.github/workflows/release.yml` | Release packages download and bundle all official YourMT3+ modes, BS-RoFormer, Aria-AMT, ByteDance Pedal, and MIROS | GPU builds use PyTorch 2.4 + CUDA 12.1 wheels. |
+| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and downloads all official YourMT3+ modes | The Colab UI includes a YourMT3 model selector with per-mode descriptions. |
+
 ## Processing Modes
 
 | Mode | Internal Pipeline | Main Output | Notes |
@@ -231,6 +250,31 @@ This section separates public benchmark claims from project integration status. 
 
 YourMT3+ / MIROS are multi-instrument backends, Transkun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and BS-RoFormer models are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
 
+#### YourMT3+ Official Checkpoint Modes
+
+The official Hugging Face / Colab demo's model selector is a checkpoint / architecture selector, not a processing-workflow selector. This project aligns the YourMT3+ selector with the official list, then embeds the chosen checkpoint into workflows such as `SMART`, `VOCAL_SPLIT`, and `SIX_STEM_SPLIT`.
+
+| Model | MoE | Pitch Shift | Notes |
+|-------|-----|-------------|-------|
+| YMT3+ | No | No | Baseline checkpoint from the official YourMT3+ model family. |
+| YPTF+Single (noPS) | No | No | Perceiver-TF with a single decoder and no pitch-shift augmentation. |
+| YPTF+Multi (PS) | No | Yes | Perceiver-TF with multi-t5 / multi-channel decoding. |
+| YPTF.MoE+Multi (noPS) | 8 experts | No | Official Hugging Face Space default model. |
+| YPTF.MoE+Multi (PS) | 8 experts | Yes | Project default and strongest integrated YourMT3+ mode. |
+
+Main alignment points:
+
+- The five official mode names, checkpoint directory mappings, and UI order match the official demo.
+- `YPTF.MoE+Multi (noPS)` is kept available because it is the official Hugging Face Space default.
+- Older checkpoints that do not store `TOKENIZER.max_shift_steps` are loaded with the official MT3 tokenizer default of `206`.
+- Older T5 checkpoints that do not store `ff_layer_type` are loaded with the standard T5 feed-forward layer type `t5_gmlp`.
+
+Known differences from the official demo:
+
+- The official demo runs one selected YourMT3 checkpoint; this project also adds separation workflows, dedicated piano models, MIDI post-processing, and track-layout control.
+- The official GPU Space usually runs 16-bit inference; this project defaults to full precision for better stability across Windows / CUDA environments.
+- To avoid long-audio stalls with oversized batches, this project caps YourMT3+ batch size conservatively: older official modes default to 1, MoE modes default to 2. Set `MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE` to override this explicitly for experiments.
+
 #### Piano Model Quality Comparison
 
 | Model | Current Project Entry | Same-Type Quality Protocol | Public Result | How To Read It |
@@ -365,15 +409,17 @@ git clone https://github.com/mimbres/YourMT3.git
 python download_sota_models.py
 ```
 
-If `YourMT3/` already exists, you only need the model download step.
+If `YourMT3/` already exists, you only need the model download step. `download_sota_models.py` prepares all five official YourMT3+ checkpoint modes, not only the default MoE model.
 
 ### 5. Prepare Separation and Piano Models
 
 ```bash
 python download_vocal_model.py
 python download_multistem_model.py
+python download_vocal_harmony_model.py
 python download_aria_amt_model.py
 python download_bytedance_piano_model.py
+python download_miros_model.py
 ```
 
 The default cache location is:
@@ -382,6 +428,7 @@ The default cache location is:
 ~/.music-to-midi/models/audio-separator
 ~/.cache/music_ai_models/aria_amt
 ~/.cache/music_ai_models/bytedance_piano
+external/ai4m-miros
 ```
 
 Transkun resources are bundled with the `transkun` package. If Transkun mode reports missing resources, run `python -m pip install --force-reinstall transkun`.

@@ -80,43 +80,60 @@ HF_MIRRORS = [
 
 # 模型配置 - YourMT3+ (2024年7月发布，MLSP2024论文)
 YOURMT3_MODELS = {
-    # YPTF.MoE+Multi 系列 - 最强性能 (Mixture of Experts)
-    "yptf_moe_multi_ps": {
-        "name": "YPTF.MoE+Multi (PS) - 顶级性能",
-        "description": "混合专家模型，支持音高偏移增强，2025 AMT Challenge 顶级性能",
-        "checkpoint": "YPTF.MoE+Multi (PS)",  # 带音高偏移，鲁棒性更好
-        "size_mb": 2500,
-        "recommended": True,
-        "features": ["MoE架构", "Perceiver编码器", "多通道解码器", "音高偏移增强"],
+    # 官方 Colab / Space 中展示的模型族，顺序与官方演示保持一致。
+    "ymt3_plus": {
+        "name": "YMT3+",
+        "ui_label": "YMT3+",
+        "description": "YourMT3+ 基线模型，使用原始 YMT3+ 风格配置。",
+        "ui_description": "Baseline YourMT3+ checkpoint from the official Colab family. Useful for comparison with older YourMT3+ results.",
+        "checkpoint": "YMT3+",
+        "size_mb": 2000,
+        "features": ["YourMT3+ baseline", "MT3 tokens with singing extension"],
+    },
+    "yptf_single_nops": {
+        "name": "YPTF+Single (noPS)",
+        "ui_label": "YPTF+Single (noPS)",
+        "description": "Perceiver-TF 编码器 + 单解码器，不使用音高偏移增强。",
+        "ui_description": "Single-decoder Perceiver-TF checkpoint from the official Colab modes. Lighter architecture, no pitch-shift augmentation.",
+        "checkpoint": "YPTF+Single (noPS)",
+        "size_mb": 2000,
+        "features": ["Perceiver-TF", "single decoder", "no pitch-shift augmentation"],
+    },
+    "yptf_multi_ps": {
+        "name": "YPTF+Multi (PS)",
+        "ui_label": "YPTF+Multi (PS)",
+        "description": "Perceiver-TF 编码器 + multi-t5 多通道解码，使用音高偏移增强。",
+        "ui_description": "Multi-channel Perceiver-TF checkpoint using multi-t5 / mc13_full_plus_256 style decoding with pitch-shift augmentation.",
+        "checkpoint": "YPTF+Multi (PS)",
+        "size_mb": 2000,
+        "features": ["Perceiver-TF", "multi-t5", "multi-channel decoding", "pitch-shift augmentation"],
     },
     "yptf_moe_multi_nops": {
         "name": "YPTF.MoE+Multi (noPS)",
-        "description": "混合专家模型，不含音高偏移增强",
+        "ui_label": "YPTF.MoE+Multi (noPS)",
+        "description": "官方 Hugging Face Space 默认模型，MoE + multi-t5，不使用音高偏移增强。",
+        "ui_description": "Matches the official Hugging Face Space default: Perceiver-TF + MoE + multi-channel decoding, no pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (noPS)",
         "size_mb": 2500,
-        "features": ["MoE架构", "Perceiver编码器", "多通道解码器"],
+        "features": ["MoE", "Perceiver-TF", "multi-t5", "official Hugging Face Space default"],
     },
-
-    # YPTF+Multi 系列 - 标准高性能
-    "yptf_multi_ps": {
-        "name": "YPTF+Multi (PS)",
-        "description": "标准高性能模型，支持音高偏移增强",
-        "checkpoint": "YPTF+Multi (PS)",
-        "size_mb": 2000,
-        "features": ["Perceiver编码器", "多通道解码器", "音高偏移增强"],
-    },
-    "yptf_multi_nops": {
-        "name": "YPTF+Multi (noPS)",
-        "description": "标准高性能模型，不含音高偏移增强",
-        "checkpoint": "YPTF+Multi (noPS)",
-        "size_mb": 2000,
-        "features": ["Perceiver编码器", "多通道解码器"],
+    "yptf_moe_multi_ps": {
+        "name": "YPTF.MoE+Multi (PS)",
+        "ui_label": "YPTF.MoE+Multi (PS)",
+        "description": "MoE + multi-t5 顶级性能模型，使用音高偏移增强。",
+        "ui_description": "Strongest MoE Multi checkpoint in this app: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
+        "checkpoint": "YPTF.MoE+Multi (PS)",
+        "size_mb": 2500,
+        "recommended": True,
+        "features": ["MoE", "Perceiver-TF", "multi-t5", "pitch-shift augmentation"],
     },
 
     # 传统checkpoint名称格式（兼容旧版）
     "mc13_256_all_cross_v6": {
         "name": "YourMT3+ 全乐器模型 (传统版)",
+        "ui_label": "YourMT3+ legacy multi",
         "description": "支持多种乐器的通用转写模型",
+        "ui_description": "Legacy YourMT3+ multi-instrument checkpoint kept for older saved configurations.",
         "checkpoint": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k@model.ckpt",
         "size_mb": 2000,
         "default": True,  # 保持向后兼容
@@ -124,16 +141,25 @@ YOURMT3_MODELS = {
     },
 }
 
+OFFICIAL_YOURMT3_MODEL_KEYS = (
+    "ymt3_plus",
+    "yptf_single_nops",
+    "yptf_multi_ps",
+    "yptf_moe_multi_nops",
+    "yptf_moe_multi_ps",
+)
+
 # 统一的 Hugging Face 仓库
 YOURMT3_REPO_ID = "mimbres/YourMT3"
 
 # Checkpoint 名称到实际目录名的映射表
 # 用于将 Hugging Face 上的模型名称映射到本地文件系统结构
 CHECKPOINT_FILENAME_MAP = {
+    "YMT3+": "notask_all_cross_v6_xk2_amp0811_gm_ext_plus_nops_b72",
+    "YPTF+Single (noPS)": "ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100",
+    "YPTF+Multi (PS)": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k",
     "YPTF.MoE+Multi (PS)": "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2",
     "YPTF.MoE+Multi (noPS)": "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops",
-    "YPTF+Multi (PS)": "ptf_all_cross_rebal5_mirst_xk2_edr005_attend_c_full_plus_b100",
-    "YPTF+Multi (noPS)": "notask_all_cross_v6_xk2_amp0811_gm_ext_plus_nops_b72",
     "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k@model.ckpt": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k",
 }
 

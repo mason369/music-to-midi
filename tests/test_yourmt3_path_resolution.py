@@ -11,7 +11,8 @@ from src.utils.yourmt3_downloader import (
     resolve_model_checkpoint_path,
     CHECKPOINT_FILENAME_MAP,
     DEFAULT_MODEL,
-    YOURMT3_MODELS
+    YOURMT3_MODELS,
+    OFFICIAL_YOURMT3_MODEL_KEYS,
 )
 
 
@@ -33,6 +34,18 @@ class TestYourMT3PathResolution(unittest.TestCase):
     def test_default_model_is_moe(self):
         """测试默认模型已切换为 MoE"""
         self.assertEqual(DEFAULT_MODEL, "yptf_moe_multi_ps")
+
+    def test_official_colab_model_modes_are_registered_with_descriptions(self):
+        """测试官方 Colab 风格模型模式都已注册并带用户说明"""
+        self.assertEqual(
+            list(OFFICIAL_YOURMT3_MODEL_KEYS),
+            list(YOURMT3_MODELS.keys())[:5],
+        )
+        self.assertEqual(YOURMT3_MODELS["yptf_moe_multi_nops"]["checkpoint"], "YPTF.MoE+Multi (noPS)")
+        self.assertEqual(YOURMT3_MODELS["ymt3_plus"]["checkpoint"], "YMT3+")
+        for model_info in YOURMT3_MODELS.values():
+            self.assertTrue(model_info.get("ui_label"))
+            self.assertTrue(model_info.get("ui_description"))
 
     def test_resolve_moe_checkpoint_path(self):
         """测试解析 MoE checkpoint 路径"""

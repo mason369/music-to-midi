@@ -100,7 +100,17 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR", workflow)
         self.assertIn("download_aria_amt_model.py", workflow)
         self.assertIn("download_bytedance_piano_model.py", workflow)
+        self.assertIn("download_miros_model.py", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
+        self.assertIn("Download all official YourMT3+ model modes", workflow)
+
+    def test_release_workflow_prepares_miros_instead_of_optionally_copying_it(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("python download_miros_model.py", workflow)
+        self.assertIn("MirosTranscriber.is_model_available()", workflow)
+        self.assertNotIn('if [ -d "$GITHUB_WORKSPACE/.tmp/ai4m-miros" ]', workflow)
 
     def test_release_workflow_smoke_tests_built_binary(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -137,6 +147,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
         self.assertIn("six==1.17.0", workflow)
 
+    def test_release_workflow_matches_supported_torch_runtime(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0", workflow)
+        self.assertIn("https://download.pytorch.org/whl/cu121", workflow)
+        self.assertNotIn("torch==2.7.0", workflow)
+        self.assertNotIn("cu128", workflow)
+
     def test_release_workflow_filters_pinned_runtime_packages_from_requirements_build(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -159,6 +177,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", script)
         self.assertIn("ai4m-miros", script)
         self.assertIn('external\\ai4m-miros', script)
+        self.assertIn("Required asset missing", script)
+        self.assertNotIn("[skip] $Label not found", script)
 
     def test_pyinstaller_spec_collects_miros_from_external_checkout(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")

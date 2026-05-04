@@ -148,6 +148,9 @@ class MainWindow(QMainWindow):
         self.track_panel.set_midi_track_mode(
             getattr(self.config, "midi_track_mode", "multi_track")
         )
+        self.track_panel.set_yourmt3_model(
+            getattr(self.config, "yourmt3_model", "yptf_moe_multi_ps")
+        )
         self._add_shadow(self.track_panel)
 
         # 进度组件
@@ -659,6 +662,7 @@ class MainWindow(QMainWindow):
         self.config.transcription_backend = self.track_panel.get_transcription_backend()
         self.config.multi_instrument_model = self.track_panel.get_multi_instrument_model()
         self.config.midi_track_mode = self.track_panel.get_midi_track_mode()
+        self.config.yourmt3_model = self.track_panel.get_yourmt3_model()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
         self.config.six_stem_targets = self.track_panel.get_selected_six_stem_targets()
         self.config.six_stem_split_vocal_harmony = self.track_panel.get_six_stem_vocal_harmony()

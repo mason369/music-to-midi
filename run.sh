@@ -44,9 +44,18 @@ fi
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from src.utils.yourmt3_downloader import get_model_path
-model_path = get_model_path()
-print('YourMT3+ model:', model_path if model_path else 'missing')
-exit(0 if model_path else 1)
+from src.utils.yourmt3_downloader import OFFICIAL_YOURMT3_MODEL_KEYS, YOURMT3_MODELS
+missing = []
+for model_key in OFFICIAL_YOURMT3_MODEL_KEYS:
+    model_info = YOURMT3_MODELS[model_key]
+    label = model_info.get('ui_label', model_key)
+    model_path = get_model_path(model_key)
+    print(f'YourMT3+ {label}:', model_path if model_path else 'missing')
+    if model_path is None:
+        missing.append(label)
+if missing:
+    print('missing YourMT3+ official model modes:', ', '.join(missing))
+exit(0 if not missing else 1)
 "; then
     warn "YourMT3+ model weights missing"
     NEED_INSTALL=true
@@ -91,6 +100,20 @@ exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_avai
 "; then
     warn "ByteDance Piano backend or model missing"
     warn "  先运行: python download_bytedance_piano_model.py"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.miros_transcriber import MirosTranscriber
+reason = MirosTranscriber.get_unavailable_reason()
+print(reason or 'MIROS available')
+print('MIROS package:', MirosTranscriber.is_available())
+print('MIROS model:', MirosTranscriber.is_model_available())
+exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_available() else 1)
+"; then
+    warn "MIROS backend or model missing"
+    warn "  先运行: python download_miros_model.py"
     NEED_INSTALL=true
 fi
 

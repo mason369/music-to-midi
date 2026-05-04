@@ -20,6 +20,19 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_bytedance_piano_model.py", script)
         self.assertIn("ByteDance Piano", script)
 
+    def test_windows_launcher_checks_miros_backend_and_model(self):
+        script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("MirosTranscriber", script)
+        self.assertIn("MirosTranscriber.is_available()", script)
+        self.assertIn("download_miros_model.py", script)
+
+    def test_windows_launcher_checks_all_selectable_yourmt3_models(self):
+        script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("OFFICIAL_YOURMT3_MODEL_KEYS", script)
+        self.assertIn("missing YourMT3+ official model modes", script)
+
     def test_windows_installer_downloads_aria_amt_model(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
 
@@ -36,9 +49,18 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_bytedance_piano_model.py", script)
         self.assertIn("ByteDance Piano", script)
 
+    def test_windows_installer_stops_when_required_model_downloads_fail(self):
+        script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("Write-Err \"YourMT3+ 官方模式模型下载失败\"", script)
+        self.assertIn("Write-Err \"BS-RoFormer 模型下载失败\"", script)
+        self.assertNotIn("按 Ctrl+C 可跳过", script)
+        self.assertNotIn("稍后手动执行", script)
+
     def test_windows_installer_prepares_miros_without_masking_failures(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
 
+        self.assertIn("download_miros_model.py", script)
         self.assertIn("https://github.com/amt-os/ai4m-miros.git", script)
         self.assertIn('external\\ai4m-miros', script)
         self.assertIn("MirosTranscriber.PRETRAINED_REL_PATH", script)
@@ -62,6 +84,19 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_bytedance_piano_model.py", script)
         self.assertIn("ByteDance Piano", script)
 
+    def test_linux_launcher_checks_miros_backend_and_model(self):
+        script = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
+
+        self.assertIn("MirosTranscriber", script)
+        self.assertIn("MirosTranscriber.is_available()", script)
+        self.assertIn("download_miros_model.py", script)
+
+    def test_linux_launcher_checks_all_selectable_yourmt3_models(self):
+        script = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
+
+        self.assertIn("OFFICIAL_YOURMT3_MODEL_KEYS", script)
+        self.assertIn("missing YourMT3+ official model modes", script)
+
     def test_linux_installer_downloads_aria_amt_model_and_requires_python_311(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
 
@@ -77,6 +112,22 @@ class OneClickScriptContractTests(unittest.TestCase):
 
         self.assertIn("download_bytedance_piano_model.py", script)
         self.assertIn("ByteDance Piano", script)
+
+    def test_linux_installer_stops_when_required_model_downloads_fail(self):
+        script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn('error "YourMT3+ 官方模式模型下载失败"', script)
+        self.assertIn('error "BS-RoFormer model download failed"', script)
+        self.assertNotIn("Press Ctrl+C to skip", script)
+        self.assertNotIn("可稍后手动运行", script)
+
+    def test_linux_installer_prepares_miros_without_masking_failures(self):
+        script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn("download_miros_model.py", script)
+        self.assertIn("MirosTranscriber.is_model_available()", script)
+        self.assertIn("MIROS", script)
+        self.assertNotIn("MIROS download failed", script)
 
     def test_project_requires_python_matches_aria_amt_requirement(self):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

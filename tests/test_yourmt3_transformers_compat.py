@@ -43,6 +43,14 @@ class YourMT3TransformersCompatTests(unittest.TestCase):
         self.assertEqual(self_attn.layer_idx, 0)
         self.assertEqual(cross_attn.layer_idx, 0)
 
+    def test_t5_stack_defaults_missing_ff_layer_type_to_standard_t5_layer(self):
+        config = self._tiny_decoder_config()
+        delattr(config, "ff_layer_type")
+
+        stack = T5StackYMT3(config)
+
+        self.assertEqual(stack.block[0].ff_layer_type, "t5_gmlp")
+
     def test_t5_stack_provides_cache_position_for_transformers_448_cache_api(self):
         captured = {}
 

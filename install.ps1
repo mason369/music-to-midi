@@ -652,17 +652,23 @@ if ($LASTEXITCODE -eq 0) {
 Write-Info "第 9.7 步/共 12 步  准备 MIROS 多乐器后端（可选实验）..."
 
 $mirosDir = Join-Path $REPO_DIR "external\ai4m-miros"
-if (-not (Test-Path (Join-Path $mirosDir ".git"))) {
+& "$PYTHON" (Join-Path $REPO_DIR "download_miros_model.py") --repo-dir "$mirosDir"
+if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 权重准备失败" }
+
+$mirosHasSource = (Test-Path (Join-Path $mirosDir "main.py")) -and (Test-Path (Join-Path $mirosDir "transcribe.py"))
+if ((-not (Test-Path (Join-Path $mirosDir ".git"))) -and (-not $mirosHasSource)) {
     Write-Info "MIROS 源码不存在，正在克隆 ai4m-miros..."
     if (-not (Test-Path (Split-Path -Parent $mirosDir))) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $mirosDir) | Out-Null
     }
     & git clone https://github.com/amt-os/ai4m-miros.git "$mirosDir"
     if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码克隆失败" }
-} else {
+} elseif (Test-Path (Join-Path $mirosDir ".git")) {
     Write-Info "MIROS 源码已存在，检查 main 分支更新..."
     & git -C "$mirosDir" fetch --depth=1 origin main
     if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码更新失败" }
+} else {
+    Write-Info "MIROS 源码已存在，使用当前目录。"
 }
 
 & "$PIP" install "h5py>=3.10,<4" "mirdata>=0.3.8,<1"
@@ -732,54 +738,26 @@ if ($FFMPEG_OK) {
     Write-Warn "  ffmpeg 未安装（已在第 3 步提示）"
 }
 
-# --- 第 11 步/共 12 步：下载 SOTA 模型权重 ---
-Write-Info "第 11 步/共 12 步  下载 YourMT3+ SOTA 模型权重（约 800 MB）..."
-Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_sota_models.py"
+# --- 第 11 步/共 12 步：下载 YourMT3+ 官方模式模型权重 ---
+Write-Info "第 11 步/共 12 步  下载 YourMT3+ 官方模式模型权重..."
 
 Set-Location $REPO_DIR
-try {
-    & "$PYTHON" (Join-Path $REPO_DIR "download_sota_models.py")
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "SOTA 模型权重下载成功"
-    } else {
-        Write-Host ""
-        Write-Host "  !! 模型下载失败 !!" -ForegroundColor Red
-        Write-Host "  可能原因：网络问题 / SSL 证书验证失败 / 代理环境" -ForegroundColor Yellow
-        Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
-        Write-Host "  （上方已输出完整下载日志）" -ForegroundColor Yellow
-        Write-Host ""
-    }
-}
-catch {
-    Write-Host ""
-    Write-Host "  !! 模型下载失败 !!" -ForegroundColor Red
-    Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
-    Write-Host ""
+& "$PYTHON" (Join-Path $REPO_DIR "download_sota_models.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "YourMT3+ 官方模式模型权重下载成功"
+} else {
+    Write-Err "YourMT3+ 官方模式模型下载失败"
 }
 
 # --- 第 12 步/共 12 步：下载 BS-RoFormer 人声分离模型 ---
 Write-Info "第 12 步/共 12 步  下载 BS-RoFormer ep368 模型（约 600 MB）..."
-Write-Info "按 Ctrl+C 可跳过，稍后手动执行: venv\Scripts\python.exe download_vocal_model.py"
 
 Set-Location $REPO_DIR
-try {
-    & "$PYTHON" (Join-Path $REPO_DIR "download_vocal_model.py")
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "BS-RoFormer 模型下载成功"
-    } else {
-        Write-Host ""
-        Write-Host "  !! BS-RoFormer 模型下载失败 !!" -ForegroundColor Red
-        Write-Host "  可能原因：网络问题 / HuggingFace 连接失败 / 代理环境" -ForegroundColor Yellow
-        Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
-        Write-Host "  （上方已输出完整下载日志）" -ForegroundColor Yellow
-        Write-Host ""
-    }
-}
-catch {
-    Write-Host ""
-    Write-Host "  !! BS-RoFormer 模型下载失败 !!" -ForegroundColor Red
-    Write-Host "  请稍后手动执行: venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
-    Write-Host ""
+& "$PYTHON" (Join-Path $REPO_DIR "download_vocal_model.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "BS-RoFormer 模型下载成功"
+} else {
+    Write-Err "BS-RoFormer 模型下载失败"
 }
 
 # --- 完成 ---
@@ -792,7 +770,7 @@ Write-Host "  运行方式：" -ForegroundColor White
 Write-Host "  .\run.bat                 （推荐）" -ForegroundColor Green
 Write-Host "  .\run.ps1" -ForegroundColor Green
 Write-Host ""
-Write-Host "  如果模型下载失败，请手动执行：" -ForegroundColor White
+Write-Host "  模型维护命令：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow

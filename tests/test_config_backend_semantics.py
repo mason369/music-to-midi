@@ -55,6 +55,17 @@ class ConfigBackendSemanticsTests(unittest.TestCase):
         config = Config()
 
         self.assertEqual(config.midi_track_mode, "multi_track")
+        self.assertEqual(config.yourmt3_model, "yptf_moe_multi_ps")
+
+    def test_invalid_yourmt3_model_raises_validation_error(self):
+        with self.assertRaisesRegex(ValueError, "yourmt3_model"):
+            Config(yourmt3_model="unknown_yourmt3_checkpoint")
+
+    def test_from_dict_preserves_yourmt3_model_choice(self):
+        config = Config.from_dict({"yourmt3_model": "yptf_moe_multi_nops"})
+
+        self.assertEqual(config.yourmt3_model, "yptf_moe_multi_nops")
+        self.assertEqual(config.to_dict()["yourmt3_model"], "yptf_moe_multi_nops")
 
     def test_invalid_midi_track_mode_raises_validation_error(self):
         with self.assertRaisesRegex(ValueError, "midi_track_mode"):

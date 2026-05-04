@@ -1,0 +1,62 @@
+import unittest
+from unittest.mock import patch
+
+from src.core.yourmt3_transcriber import YourMT3Transcriber
+from src.models.data_models import YourMT3Model
+from src.models.data_models import Config
+
+
+class YourMT3ModelSelectionTests(unittest.TestCase):
+    def test_prepare_and_infer_passes_configured_yourmt3_model_to_loader(self):
+        transcriber = YourMT3Transcriber(Config(yourmt3_model="yptf_moe_multi_nops"))
+
+        with patch.object(transcriber, "_load_model", side_effect=InterruptedError("stop")) as load_model:
+            with self.assertRaises(InterruptedError):
+                transcriber._prepare_and_infer("unused.wav")
+
+        self.assertEqual(load_model.call_args.kwargs["model_name"], "yptf_moe_multi_nops")
+
+    def test_resolve_max_shift_steps_supports_legacy_official_checkpoints_without_tokenizer_cfg(self):
+        self.assertEqual(
+            YourMT3Transcriber._resolve_max_shift_steps({}, None),
+            206,
+        )
+
+    def test_resolve_max_shift_steps_prefers_checkpoint_task_manager_value(self):
+        task_manager = type("TaskManagerWithShift", (), {"max_shift_steps": 206})()
+
+        self.assertEqual(
+            YourMT3Transcriber._resolve_max_shift_steps({"TOKENIZER": {"max_shift_steps": 127}}, task_manager),
+            206,
+        )
+
+    def test_legacy_official_modes_cap_batch_size_to_single_segment(self):
+        for model in (
+            YourMT3Model.YMT3_PLUS.value,
+            YourMT3Model.YPTF_SINGLE_NOPS.value,
+            YourMT3Model.YPTF_MULTI_PS.value,
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    YourMT3Transcriber._cap_batch_size_for_model(model, 8),
+                    1,
+                )
+
+    def test_moe_official_modes_cap_batch_size_to_two_segments(self):
+        for model in (
+            YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            YourMT3Model.YPTF_MOE_MULTI_PS.value,
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    YourMT3Transcriber._cap_batch_size_for_model(model, 8),
+                    2,
+                )
+                self.assertEqual(
+                    YourMT3Transcriber._cap_batch_size_for_model(model, 1),
+                    1,
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

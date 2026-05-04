@@ -759,6 +759,21 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
     返回:
         推荐的 batch size
     """
+    batch_override = os.getenv("MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE")
+    if batch_override:
+        try:
+            override_value = int(batch_override)
+        except ValueError as exc:
+            raise ValueError(
+                "MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE must be a positive integer"
+            ) from exc
+        if override_value < 1:
+            raise ValueError(
+                "MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE must be a positive integer"
+            )
+        logger.info("使用显式 YourMT3 batch size: %s", override_value)
+        return override_value
+
     profile = get_system_performance_profile()
     tier = profile["tier"]
     is_best = (quality == "best" or ultra_quality)
@@ -772,21 +787,22 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
     if is_gpu_device and not is_directml:
         vram = profile["gpu_vram_gb"] or 4.0
         if is_cuda:
-            # CUDA：autocast 混合精度节省约 30-40% 显存，bsz 适度提升
+            # CUDA YourMT3 generation is autoregressive; high batch sizes can
+            # thrash memory and stall without raising OOM on long audio.
             if is_best:
                 if vram >= 10:
-                    bsz_table = {100: 36, 300: 28, 999999: 24}
+                    bsz_table = {100: 8, 300: 4, 999999: 2}
                 elif vram >= 6:
-                    bsz_table = {100: 24, 300: 18, 999999: 14}
+                    bsz_table = {100: 6, 300: 3, 999999: 2}
                 else:
-                    bsz_table = {100: 16, 300: 14, 999999: 10}
+                    bsz_table = {100: 4, 300: 2, 999999: 1}
             else:
                 if vram >= 10:
-                    bsz_table = {150: 28, 400: 24, 999999: 18}
+                    bsz_table = {150: 8, 400: 4, 999999: 2}
                 elif vram >= 6:
-                    bsz_table = {150: 18, 400: 14, 999999: 12}
+                    bsz_table = {150: 6, 400: 3, 999999: 2}
                 else:
-                    bsz_table = {150: 14, 400: 12, 999999: 8}
+                    bsz_table = {150: 4, 400: 2, 999999: 1}
         else:
             # ROCm/MPS/XPU：无 fp16 autocast，使用保守 bsz
             if is_best:
