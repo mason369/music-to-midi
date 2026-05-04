@@ -338,6 +338,15 @@ jobs:
         shell: bash
         run: |
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          echo "压缩前磁盘空间:"
+          df -h .
+
+          # PyInstaller 构建完成后，build/ 中的中间产物和 staged model assets
+          # 已经复制进 dist/${NAME}，压缩前清掉它们以降低 runner 磁盘峰值。
+          rm -rf build
+          rm -rf "$HOME/.cache/pip" "$HOME/.cache/torch" "$HOME/.cache/music_ai_models" "$HOME/.music-to-midi"
+          echo "清理构建缓存后磁盘空间:"
+          df -h .
 
           if [ "${{ matrix.platform }}" = "Windows" ]; then
             # 先检查未压缩目录大小，避免对大包做无意义的多轮压缩
@@ -362,12 +371,9 @@ jobs:
               fi
             fi
           else
-            tar -czf "${NAME}-Portable.tar.gz" -C dist "${NAME}"
-            FILE_SIZE=$(stat -c%s "${NAME}-Portable.tar.gz" 2>/dev/null || stat -f%z "${NAME}-Portable.tar.gz")
-            if [ "$FILE_SIZE" -gt 1900000000 ]; then
-              split -b 1900M "${NAME}-Portable.tar.gz" "${NAME}-Portable.tar.gz.part"
-              rm "${NAME}-Portable.tar.gz"
-            fi
+            # Linux GPU 包较大，直接流式写入分卷，避免先生成一个完整 tar.gz
+            # 再 split 造成额外磁盘峰值。
+            tar -czf - -C dist "${NAME}" | split -b 1900M - "${NAME}-Portable.tar.gz.part"
           fi
 
       - name: 上传构建产物
