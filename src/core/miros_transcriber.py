@@ -13,6 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config, NoteEvent
 from src.utils.gpu_utils import clear_gpu_memory
 from src.utils.runtime_paths import get_miros_source_dir
@@ -58,6 +59,10 @@ class MirosTranscriber:
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._process: Optional[subprocess.Popen[str]] = None
         self._process_lock = threading.Lock()
+        self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     @classmethod
     def _repo_dir(cls) -> Optional[Path]:
@@ -108,6 +113,20 @@ class MirosTranscriber:
                 "MIROS 不可用：缺少运行依赖。\n\n"
                 f"缺少模块：{', '.join(missing_modules)}\n"
                 "请先安装 requirements.txt 中的依赖，并补充 ai4m-miros 要求的环境。"
+            )
+
+        pretrained_path = repo_dir / cls.PRETRAINED_REL_PATH
+        checkpoint_path = repo_dir / cls.CHECKPOINT_REL_PATH
+        if not pretrained_path.is_file() or not checkpoint_path.is_file():
+            missing = [
+                str(path)
+                for path in (pretrained_path, checkpoint_path)
+                if not path.is_file()
+            ]
+            return (
+                "MIROS 不可用：模型权重缺失。\n\n"
+                f"缺少文件：{', '.join(missing)}\n"
+                "请重新运行 install.ps1 准备 ai4m-miros 权重。"
             )
 
         return ""
@@ -164,14 +183,17 @@ class MirosTranscriber:
     ) -> str:
         repo_dir = self._repo_dir()
         entrypoint = self._entrypoint_path()
+        unavailable_reason = self.get_unavailable_reason()
+        if unavailable_reason:
+            raise RuntimeError(unavailable_reason)
         if repo_dir is None or entrypoint is None:
-            raise RuntimeError(self.get_unavailable_reason())
+            raise RuntimeError("MIROS 不可用：未找到可执行入口")
 
         self.reset_cancel()
         self._check_cancelled()
 
-        input_path = Path(audio_path)
-        out_path = Path(output_path)
+        input_path = Path(audio_path).resolve()
+        out_path = Path(output_path).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         command = [
@@ -184,7 +206,7 @@ class MirosTranscriber:
         ]
 
         if progress_callback:
-            progress_callback(0.05, "正在准备 MIROS...")
+            progress_callback(0.05, self._pt("progress.preparing_miros"))
 
         logger.info("Running MIROS transcription: %s", " ".join(command))
         process = subprocess.Popen(
@@ -200,7 +222,7 @@ class MirosTranscriber:
 
         try:
             if progress_callback:
-                progress_callback(0.50, "正在运行 MIROS 推理...")
+                progress_callback(0.50, self._pt("progress.running_miros"))
             stdout, stderr = process.communicate()
         finally:
             with self._process_lock:
@@ -215,7 +237,7 @@ class MirosTranscriber:
             raise RuntimeError("MIROS 未生成 MIDI 输出")
 
         if progress_callback:
-            progress_callback(1.0, "MIROS 转写完成")
+            progress_callback(1.0, self._pt("progress.miros_complete"))
         return str(out_path)
 
     def transcribe_precise(

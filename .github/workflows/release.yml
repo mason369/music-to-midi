@@ -140,11 +140,21 @@ jobs:
           echo "=== Download Chorus BS-RoFormer model ==="
           python download_vocal_harmony_model.py
 
+          echo "=== Download Aria-AMT piano model ==="
+          python download_aria_amt_model.py
+
+          echo "=== Download ByteDance pedal piano model ==="
+          python download_bytedance_piano_model.py
+
           echo "=== Verify downloaded models ==="
           echo "YourMT3+:"
           find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \; 2>/dev/null || echo "  (not found)"
           echo "Audio-Separator:"
           ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt 2>/dev/null || echo "  (not found)"
+          echo "Aria-AMT:"
+          ls -lh ~/.cache/music_ai_models/aria_amt/* 2>/dev/null || echo "  (not found)"
+          echo "ByteDance Piano:"
+          ls -lh ~/.cache/music_ai_models/bytedance_piano/* 2>/dev/null || echo "  (not found)"
 
       - name: 修复 Torch OpenMP 运行时 (Windows)
         if: runner.os == 'Windows'
@@ -171,6 +181,10 @@ jobs:
             cp -a "$HOME/.cache/music_ai_models/aria_amt" "$BUILD_ASSET_ROOT/aria_amt"
           fi
 
+          if [ -d "$HOME/.cache/music_ai_models/bytedance_piano" ]; then
+            cp -a "$HOME/.cache/music_ai_models/bytedance_piano" "$BUILD_ASSET_ROOT/bytedance_piano"
+          fi
+
           if [ -d "$GITHUB_WORKSPACE/.tmp/ai4m-miros" ]; then
             cp -a "$GITHUB_WORKSPACE/.tmp/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
           fi
@@ -188,6 +202,7 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR=$BUILD_ASSET_ROOT/audio-separator" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR=$BUILD_ASSET_ROOT/yourmt3_all" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_ARIA_DIR=$BUILD_ASSET_ROOT/aria_amt" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR=$BUILD_ASSET_ROOT/bytedance_piano" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
 
@@ -413,7 +428,7 @@ jobs:
           - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
           - GPU 版在没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会自动回退到 CPU
           - 支持 128 种 GM 乐器精确识别
-          - 4 种处理模式：智能转写 / 人声分离 / 六声部分离 / 钢琴专用
+          - 6 种处理模式：智能转写 / 人声分离 / 六声部分离 / Transkun 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)

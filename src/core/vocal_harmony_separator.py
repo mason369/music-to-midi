@@ -9,6 +9,7 @@ from typing import Callable, Dict, Optional
 
 import numpy as np
 
+from src.i18n.translator import Translator
 from src.utils.audio_separator_compat import execute_audio_separator_job, get_separator_cls
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
@@ -19,6 +20,12 @@ CHORUS_MODEL = "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt"
 
 class VocalHarmonySeparator:
     """Approximate lead/harmony split by running male/female vocal separation."""
+
+    def __init__(self, language: str = Translator.DEFAULT_LANGUAGE):
+        self._translator = Translator(language)
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     @staticmethod
     def _get_model_cache_dir() -> str:
@@ -84,11 +91,11 @@ class VocalHarmonySeparator:
         stem_name = Path(audio_path).stem
 
         if progress_callback:
-            progress_callback(0.0, "正在加载主唱/和声分离模型...")
+            progress_callback(0.0, self._pt("progress.loading_vocal_harmony_model"))
 
         def _after_load(_active_separator):
             if progress_callback:
-                progress_callback(0.25, "正在分离主唱/和声...")
+                progress_callback(0.25, self._pt("progress.separating_vocal_harmony"))
 
         _separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
             separator_cls,
@@ -101,10 +108,7 @@ class VocalHarmonySeparator:
             action=lambda active_separator: active_separator.separate(audio_path),
             logger=logger,
             progress_callback=progress_callback,
-            fallback_progress=(
-                0.1,
-                "检测到当前 NVIDIA 显卡与内置 PyTorch/CUDA 不兼容，已自动回退到 CPU 推理...",
-            ),
+            fallback_progress=(0.1, self._pt("progress.cpu_retry")),
             after_load=_after_load,
         )
 
@@ -142,7 +146,7 @@ class VocalHarmonySeparator:
             os.replace(harmony_src, harmony_path)
 
         if progress_callback:
-            progress_callback(1.0, "主唱/和声分离完成")
+            progress_callback(1.0, self._pt("progress.vocal_harmony_complete"))
 
         logger.info(
             "Vocal harmony split complete: lead=%s harmony=%s",

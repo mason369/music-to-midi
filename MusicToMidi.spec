@@ -37,6 +37,19 @@ def _resolve_existing_dir(*candidates):
     return None
 
 
+def _collect_aria_amt_config_datas():
+    amt_spec = importlib.util.find_spec("amt")
+    if not amt_spec or not amt_spec.origin:
+        return []
+
+    config_dir = os.path.abspath(os.path.join(os.path.dirname(amt_spec.origin), "..", "config"))
+    config_file = os.path.join(config_dir, "config.json")
+    if not os.path.exists(config_file):
+        return []
+
+    return _collect_tree(config_dir, "config")
+
+
 audio_separator_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR"),
     os.path.join(USER_HOME, ".music-to-midi", "models", "audio-separator"),
@@ -45,12 +58,18 @@ aria_amt_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "aria_amt"),
 )
+bytedance_piano_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "bytedance_piano"),
+)
 yourmt3_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "yourmt3_all"),
 )
 miros_source_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR"),
+    os.path.join(ROOT_DIR, "external", "ai4m-miros"),
+    os.path.join(ROOT_DIR, "ai4m-miros"),
     os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
 )
 ffmpeg_dir = _resolve_existing_dir(
@@ -72,13 +91,18 @@ datas = [
     # 资源文件（图标等）
     ('resources/icons', 'resources/icons'),
 ]
+aria_amt_config_datas = _collect_aria_amt_config_datas()
 datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3/amt/src")
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
+datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
+datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')
+datas += copy_metadata('piano-transcription-inference')
+datas += copy_metadata('torchlibrosa')
 
 hiddenimports = [
     # PyQt6 相关
@@ -107,6 +131,8 @@ hiddenimports = [
     'transkun.transcribe',
     'amt',
     'amt.run',
+    'piano_transcription_inference',
+    'torchlibrosa',
     # 数值计算
     'numpy',
     'scipy',
@@ -133,6 +159,8 @@ pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
 transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
 aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
+bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
+torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
@@ -148,6 +176,8 @@ datas += (
     + mir_eval_datas
     + transkun_datas
     + aria_amt_datas
+    + bytedance_piano_datas
+    + torchlibrosa_datas
     + wandb_datas
     + lightning_datas
     + fabric_datas
@@ -164,6 +194,8 @@ hiddenimports += (
     + mir_eval_hiddenimports
     + transkun_hiddenimports
     + aria_amt_hiddenimports
+    + bytedance_piano_hiddenimports
+    + torchlibrosa_hiddenimports
     + wandb_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
@@ -181,6 +213,8 @@ all_binaries = (
     + mir_eval_binaries
     + transkun_binaries
     + aria_amt_binaries
+    + bytedance_piano_binaries
+    + torchlibrosa_binaries
     + wandb_binaries
     + lightning_binaries
     + fabric_binaries

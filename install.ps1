@@ -93,7 +93,7 @@ Write-Info "第 1 步/共 12 步  检测 Python 版本..."
 
 $PYTHON_BIN = $null
 
-# 优先使用 py launcher 指定兼容版本（3.10~3.12），避免选中过新的 Python（3.13+ 尚未被 PyTorch 完全支持）
+# 优先使用 py launcher 指定兼容版本（3.11~3.12），避免选中过新的 Python（3.13+ 尚未被 PyTorch 完全支持）
 foreach ($ver in @("-3.12", "-3.11", "-3.10")) {
     try {
         $verStr = & py $ver -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
@@ -106,7 +106,7 @@ foreach ($ver in @("-3.12", "-3.11", "-3.10")) {
     catch {}
 }
 
-# 回退：检测 py / python 命令，但限制版本 3.10~3.12
+# 回退：检测 py / python 命令，但限制版本 3.11~3.12
 if (-not $PYTHON_BIN) {
     foreach ($cmd in @("py", "python")) {
         try {
@@ -114,7 +114,7 @@ if (-not $PYTHON_BIN) {
             if ($LASTEXITCODE -eq 0 -and ("$verStr" -match '^(\d+)\.(\d+)')) {
                 $major = [int]$Matches[1]
                 $minor = [int]$Matches[2]
-                if ($major -eq 3 -and $minor -ge 10 -and $minor -le 12) {
+                if ($major -eq 3 -and $minor -ge 11 -and $minor -le 12) {
                     $PYTHON_BIN = $cmd
                     Write-Ok "找到 Python $verStr ($cmd)"
                     break
@@ -129,8 +129,8 @@ if (-not $PYTHON_BIN) {
 }
 
 if (-not $PYTHON_BIN) {
-    Write-Host "[错误] 未找到兼容的 Python 版本（需要 3.10~3.12）。" -ForegroundColor Red
-    Write-Host "  当前系统可能安装了过新的 Python（3.13+），PyTorch 尚不支持。" -ForegroundColor Yellow
+    Write-Host "[错误] 未找到兼容的 Python 版本（需要 3.11~3.12）。" -ForegroundColor Red
+    Write-Host "  当前系统可能安装了过旧或过新的 Python，Aria-AMT 需要 3.11+。" -ForegroundColor Yellow
     Write-Host "  请安装 Python 3.11: winget install Python.Python.3.11" -ForegroundColor Yellow
     Write-Host "  或访问 https://www.python.org/downloads/ 下载 3.11 或 3.12" -ForegroundColor Yellow
     exit 1
@@ -549,14 +549,174 @@ if ($intelGpuFound) {
 Write-Info "第 9 步/共 12 步  安装项目 Python 依赖..."
 
 Set-Location $REPO_DIR
-& "$PIP" install -r (Join-Path $REPO_DIR "requirements.txt")
+$audioSeparatorInstalled = & "$PIP" show audio-separator 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Info "检测到旧的 audio-separator，先卸载以避免 NumPy 解析冲突..."
+    & "$PIP" uninstall audio-separator -y
+    if ($LASTEXITCODE -ne 0) { Write-Err "卸载旧 audio-separator 失败" }
+}
+
+$tmpReq = Join-Path $env:TEMP "requirements-without-aria-amt.txt"
+Get-Content (Join-Path $REPO_DIR "requirements.txt") |
+    Where-Object { $_ -notmatch '^\s*aria-amt\s*@' } |
+    Set-Content -Encoding UTF8 $tmpReq
+
+& "$PIP" install -r $tmpReq
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
+
+# audio-separator 0.41.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.4 在 Windows
+# 上需要 NumPy 1.26.x。按发布脚本的做法，先安装其运行依赖，再 no-deps 安装包本体。
+Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
+& "$PIP" install `
+    "numpy==1.26.4" `
+    "beartype==0.18.5" `
+    "diffq-fixed==0.2.4" `
+    "julius==0.2.7" `
+    "ml_collections==1.1.0" `
+    "onnx-weekly==1.21.0.dev20260302" `
+    "onnx2torch-py313==1.6.0" `
+    "pydub==0.25.1" `
+    "requests>=2.32.5,<3" `
+    "chardet>=5,<6" `
+    "onnxruntime==1.23.2" `
+    "resampy==0.4.3" `
+    "rotary-embedding-torch==0.6.5" `
+    "samplerate==0.1.0" `
+    "h5py>=3.10,<4" `
+    "mirdata>=0.3.8,<1" `
+    "six==1.17.0"
+if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 运行依赖安装失败" }
+
+& "$PIP" install "audio-separator==0.41.1" --no-deps
+if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
+Write-Ok "audio-separator 安装成功"
+
+# --- 第 9.5 步：验证 Aria-AMT 可用性并补装模型权重 ---
+Write-Info "第 9.5 步/共 12 步  验证 Aria-AMT 钢琴后端..."
+
+$ariaCheckScript = @"
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+print('Aria-AMT model:', AriaAmtTranscriber().is_model_available())
+sys.exit(0 if AriaAmtTranscriber.is_available() else 1)
+"@
+
+& "$PYTHON" -c $ariaCheckScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Info "Aria-AMT 未安装，正在从 GitHub 安装..."
+    & "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Aria-AMT 安装失败，请确认 Python 3.11+ 且能访问 GitHub 仓库。"
+    }
+    & "$PYTHON" -c $ariaCheckScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Aria-AMT 安装后仍不可用"
+    }
+}
+
+& "$PYTHON" (Join-Path $REPO_DIR "download_aria_amt_model.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "Aria-AMT 模型准备完成"
+} else {
+    Write-Err "Aria-AMT 模型下载失败"
+}
+
+# --- 第 9.6 步：验证 ByteDance Piano 带踏板后端并补装模型权重 ---
+Write-Info "第 9.6 步/共 12 步  验证 ByteDance Piano 带踏板钢琴后端..."
+
+$byteDanceCheckScript = @"
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
+print('ByteDance Piano model:', ByteDancePianoTranscriber().is_model_available())
+sys.exit(0 if ByteDancePianoTranscriber.is_available() else 1)
+"@
+
+& "$PYTHON" -c $byteDanceCheckScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "ByteDance Piano 安装失败，请确认 piano-transcription-inference 与 torchlibrosa 已安装。"
+}
+
+& "$PYTHON" (Join-Path $REPO_DIR "download_bytedance_piano_model.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "ByteDance Piano 模型准备完成"
+} else {
+    Write-Err "ByteDance Piano 模型下载失败"
+}
+
+# --- 第 9.7 步：准备 MIROS 实验后端源码和权重 ---
+Write-Info "第 9.7 步/共 12 步  准备 MIROS 多乐器后端（可选实验）..."
+
+$mirosDir = Join-Path $REPO_DIR "external\ai4m-miros"
+if (-not (Test-Path (Join-Path $mirosDir ".git"))) {
+    Write-Info "MIROS 源码不存在，正在克隆 ai4m-miros..."
+    if (-not (Test-Path (Split-Path -Parent $mirosDir))) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $mirosDir) | Out-Null
+    }
+    & git clone https://github.com/amt-os/ai4m-miros.git "$mirosDir"
+    if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码克隆失败" }
+} else {
+    Write-Info "MIROS 源码已存在，检查 main 分支更新..."
+    & git -C "$mirosDir" fetch --depth=1 origin main
+    if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码更新失败" }
+}
+
+& "$PIP" install "h5py>=3.10,<4" "mirdata>=0.3.8,<1"
+if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 基础依赖安装失败" }
+
+$mirosPrepScript = @"
+import pathlib
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from src.core.miros_transcriber import MirosTranscriber
+
+repo = pathlib.Path(r'$mirosDir')
+pretrained = repo / MirosTranscriber.PRETRAINED_REL_PATH
+checkpoint = repo / MirosTranscriber.CHECKPOINT_REL_PATH
+print('MIROS source:', repo)
+print('MIROS pretrained:', pretrained.exists())
+print('MIROS checkpoint:', checkpoint.exists())
+sys.exit(0 if repo.exists() and (repo / 'main.py').exists() and (repo / 'transcribe.py').exists() else 1)
+"@
+
+& "$PYTHON" -c $mirosPrepScript
+if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码目录不完整" }
+
+$mirosMain = Join-Path $mirosDir "main.py"
+if ((-not (Test-Path (Join-Path $mirosDir "model\musicfm\data\pretrained_msd.pt"))) -or
+    (-not (Test-Path (Join-Path $mirosDir "logs\Multi_longer_seq_length_frozen_enc_silu\le2bzt53\checkpoints\last.ckpt")))) {
+    Write-Info "MIROS 权重缺失，调用上游 main.py 准备 Google Drive 权重..."
+    $dummyInput = Join-Path $REPO_DIR "output\miros_weight_probe.wav"
+    $dummyOutput = Join-Path $REPO_DIR "output\miros_weight_probe.mid"
+    if (-not (Test-Path (Split-Path -Parent $dummyInput))) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dummyInput) | Out-Null
+    }
+    & "$PYTHON" -c "import wave; p=r'$dummyInput'; f=wave.open(p, 'wb'); f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000); f.writeframes(b'\0\0' * 1600); f.close()"
+    if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 权重探测音频生成失败" }
+    Push-Location $mirosDir
+    try {
+        & "$PYTHON" "$mirosMain" -i "$dummyInput" -o "$dummyOutput"
+        if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 权重准备失败" }
+    } finally {
+        Pop-Location
+    }
+    if ((-not (Test-Path (Join-Path $mirosDir "model\musicfm\data\pretrained_msd.pt"))) -or
+        (-not (Test-Path (Join-Path $mirosDir "logs\Multi_longer_seq_length_frozen_enc_silu\le2bzt53\checkpoints\last.ckpt")))) {
+        Write-Err "MIROS 权重准备失败"
+    }
+}
+
+& "$PYTHON" -c "import sys; sys.path.insert(0, r'$REPO_DIR'); from src.core.miros_transcriber import MirosTranscriber; reason=MirosTranscriber.get_unavailable_reason(); print(reason or 'MIROS available'); print('MIROS model:', MirosTranscriber.is_model_available()); sys.exit(0 if reason == '' else 1)"
+if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 后端检查失败" }
 
 # --- 第 10 步/共 12 步：验证核心依赖 ---
 Write-Info "第 10 步/共 12 步  验证核心依赖..."
 
-foreach ($dep in @("PyQt6", "torch", "librosa", "mido", "soundfile", "pytorch_lightning")) {
+foreach ($dep in @("PyQt6", "torch", "numpy", "librosa", "mido", "soundfile", "pytorch_lightning", "amt.run", "audio_separator.separator", "h5py", "mirdata")) {
     Write-Info "  正在验证 $dep..."
     & "$PYTHON" -c "import importlib; m=importlib.import_module('$dep'); print(getattr(m, '__version__', 'unknown'))"
     if ($LASTEXITCODE -eq 0) {
@@ -635,4 +795,5 @@ Write-Host ""
 Write-Host "  如果模型下载失败，请手动执行：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
+Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
 Write-Host ""

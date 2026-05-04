@@ -16,6 +16,12 @@ from src.utils.runtime_paths import get_runtime_data_dir, get_yourmt3_download_r
 
 logger = logging.getLogger(__name__)
 
+_ALLOW_INSECURE_HF_DOWNLOAD = "ALLOW_INSECURE_HF_DOWNLOAD"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _fix_ssl_if_needed():
     """
@@ -45,8 +51,17 @@ def _fix_ssl_if_needed():
     except Exception:
         pass
 
-    # 回退：跳过验证
-    logger.warning("SSL 证书验证失败，将跳过验证（可能处于代理/企业网络环境）")
+    if not _env_flag_enabled(_ALLOW_INSECURE_HF_DOWNLOAD):
+        raise RuntimeError(
+            "SSL 证书验证失败，已停止下载。\n"
+            "请配置系统/代理 CA，或设置 SSL_CERT_FILE / REQUESTS_CA_BUNDLE 指向可信 CA。\n"
+            f"仅在你明确接受风险时，才可设置 {_ALLOW_INSECURE_HF_DOWNLOAD}=1 跳过验证。"
+        )
+
+    logger.warning(
+        "SSL certificate verification failed; %s=1 is set, disabling verification for Hugging Face download.",
+        _ALLOW_INSECURE_HF_DOWNLOAD,
+    )
     os.environ["HF_HUB_DISABLE_SSL_VERIFY"] = "1"
     os.environ["CURL_CA_BUNDLE"] = ""
     try:

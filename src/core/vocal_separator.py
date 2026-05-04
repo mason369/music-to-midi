@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict
 
+from src.i18n.translator import Translator
 from src.utils.audio_separator_compat import (
     execute_audio_separator_job,
     get_separator_cls,
@@ -35,9 +36,13 @@ class VocalSeparator:
     分离过程中无法响应取消，仅在调用前后检查取消状态。
     """
 
-    def __init__(self):
+    def __init__(self, language: str = Translator.DEFAULT_LANGUAGE):
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
+        self._translator = Translator(language)
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     def set_cancel_check(self, fn: Callable[[], bool]) -> None:
         self._cancel_check = fn
@@ -59,6 +64,17 @@ class VocalSeparator:
             return True
         except ImportError:
             return False
+
+    @staticmethod
+    def is_model_available() -> bool:
+        cache_dir = get_audio_separator_model_dir()
+        direct = cache_dir / _ROFORMER_MODEL
+        if direct.exists() and direct.stat().st_size > 0:
+            return True
+        for path in cache_dir.rglob(_ROFORMER_MODEL):
+            if path.is_file() and path.stat().st_size > 0:
+                return True
+        return False
 
     @staticmethod
     def _get_model_cache_dir() -> str:
@@ -92,7 +108,7 @@ class VocalSeparator:
         stem = Path(Path(audio_path).name).stem
 
         if progress_callback:
-            progress_callback(0.0, "正在加载 BS-RoFormer 模型...")
+            progress_callback(0.0, self._pt("progress.loading_vocal_separator"))
 
         separator = None
 
@@ -132,9 +148,8 @@ class VocalSeparator:
                         if progress_callback:
                             progress_callback(
                                 local_progress,
-                                f"正在分离人声与伴奏... "
-                                f"已用时 {elapsed:.0f}s, "
-                                f"预计剩余 {remaining:.0f}s"
+                                f"{self._pt('progress.separating_vocals_accompaniment_detail')} "
+                                f"{self._pt('progress.elapsed_remaining', elapsed=f'{elapsed:.0f}', remaining=f'{remaining:.0f}')}"
                             )
                         logger.debug(
                             f"BS-RoFormer 推理中: {elapsed:.0f}s / "
@@ -157,7 +172,7 @@ class VocalSeparator:
                 self._check_cancelled()
 
                 if progress_callback:
-                    progress_callback(0.2, "正在分离人声与伴奏...")
+                    progress_callback(0.2, self._pt("progress.separating_vocals_accompaniment_detail"))
 
                 logger.info(f"开始分离: {audio_path}")
                 sep_start = time.time()
@@ -192,10 +207,7 @@ class VocalSeparator:
                 action=_run_separation,
                 logger=logger,
                 progress_callback=progress_callback,
-                fallback_progress=(
-                    0.05,
-                    "检测到当前 NVIDIA 显卡与内置 PyTorch/CUDA 不兼容，已自动回退到 CPU 推理...",
-                ),
+                fallback_progress=(0.05, self._pt("progress.cpu_retry")),
                 after_load=_after_load,
             )
 
@@ -217,7 +229,7 @@ class VocalSeparator:
                 )
 
             if progress_callback:
-                progress_callback(0.8, "正在保存分离结果...")
+                progress_callback(0.8, self._pt("progress.saving_separation_results"))
 
             # audio-separator 输出文件名含 (Vocals) / (Instrumental) 后缀
             # 需要重命名为统一格式
@@ -344,7 +356,7 @@ class VocalSeparator:
             clear_gpu_memory()
 
         if progress_callback:
-            progress_callback(1.0, "分离完成")
+            progress_callback(1.0, self._pt("progress.separation_complete"))
 
         return {
             "vocals": vocals_path,

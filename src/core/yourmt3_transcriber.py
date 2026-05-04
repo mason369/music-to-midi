@@ -38,6 +38,7 @@ from typing import Any, List, Optional, Callable, Dict, Tuple, Union
 from contextlib import contextmanager
 import numpy as np
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
 from src.models.gm_instruments import get_instrument_name
 from src.utils.gpu_utils import (
@@ -351,6 +352,11 @@ class YourMT3Transcriber:
 
         self._cancelled = False
         self._cancel_check_callback = None
+        self.last_oom_retry = None
+        self._translator = Translator(getattr(config, "language", Translator.DEFAULT_LANGUAGE))
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     def _inference_with_oom_retry(self, model, bsz, audio_segments, progress_callback=None):
         """执行推理，逐批处理并输出实时进度，VRAM 不足时自动减半 batch size 重试"""
@@ -361,6 +367,8 @@ class YourMT3Transcriber:
         # Keep official full precision during inference.
 
         n_segments = audio_segments.shape[0]
+        original_bsz = bsz
+        self.last_oom_retry = None
 
         while bsz >= 1:
             n_batches = (n_segments + bsz - 1) // bsz
@@ -370,7 +378,10 @@ class YourMT3Transcriber:
             )
 
             if progress_callback:
-                progress_callback(0.5, f"正在进行神经网络推理（共 {n_batches} 批）...")
+                progress_callback(
+                    0.5,
+                    self._pt("progress.yourmt3_inference_start", batch_count=n_batches),
+                )
 
             pred_token_array_file = []
             _infer_start = _time.time()
@@ -404,16 +415,37 @@ class YourMT3Transcriber:
                             cb_progress = 0.5 + (pct / 100) * 0.3
                             progress_callback(
                                 cb_progress,
-                                f"神经网络推理 {done}/{n_batches} | "
-                                f"剩余 ~{remaining:.0f}s"
+                                self._pt(
+                                    "progress.yourmt3_inference_progress",
+                                    done=done,
+                                    total=n_batches,
+                                    batch_size=bsz,
+                                    remaining=f"{remaining:.0f}",
+                                ),
                             )
 
                 _infer_elapsed = _time.time() - _infer_start
                 speed = n_segments / _infer_elapsed
                 logger.info(
                     f"YourMT3 推理完成: 耗时={_infer_elapsed:.1f}s, "
-                    f"速度={speed:.1f} segments/s ({1/speed:.2f}s/segment)"
+                    f"速度={speed:.1f} segments/s ({1/speed:.2f}s/segment), "
+                    f"batch={bsz}"
                 )
+                if self.last_oom_retry is not None:
+                    logger.warning(
+                        "YourMT3 OOM 重试已生效: 初始 batch=%s, 最终 batch=%s",
+                        original_bsz,
+                        bsz,
+                    )
+                    if progress_callback:
+                        progress_callback(
+                            0.8,
+                            self._pt(
+                                "progress.yourmt3_oom_retry_applied",
+                                initial_batch=original_bsz,
+                                final_batch=bsz,
+                            ),
+                        )
                 return pred_token_array_file
 
             except InterruptedError:
@@ -422,11 +454,27 @@ class YourMT3Transcriber:
                 if "out of memory" in str(e).lower() and bsz > 1:
                     old_bsz = bsz
                     bsz = max(1, bsz // 2)
-                    logger.warning(f"VRAM 不足 (bsz={old_bsz})，自动回退到 bsz={bsz}")
+                    self.last_oom_retry = {
+                        "initial_batch_size": original_bsz,
+                        "failed_batch_size": old_bsz,
+                        "final_batch_size": bsz,
+                    }
+                    logger.warning(
+                        "VRAM 不足 (bsz=%s)，显式降低 batch size 到 %s 后重试",
+                        old_bsz,
+                        bsz,
+                    )
                     clear_gpu_memory()
                     pred_token_array_file.clear()
                     if progress_callback:
-                        progress_callback(0.5, f"显存不足，降低批处理到 {bsz} 重试...")
+                        progress_callback(
+                            0.5,
+                            self._pt(
+                                "progress.yourmt3_vram_retry",
+                                initial_batch=original_bsz,
+                                final_batch=bsz,
+                            ),
+                        )
                 else:
                     raise
         raise RuntimeError("YourMT3 推理失败：即使 bsz=1 也无法完成")
@@ -559,7 +607,7 @@ class YourMT3Transcriber:
             features = ", ".join(model_info.get("features", []))
 
             if progress_callback:
-                progress_callback(0.1, f"正在加载 {friendly_name}...")
+                progress_callback(0.1, self._pt("progress.loading_named_model", model=friendly_name))
 
             logger.info(f"加载模型: {friendly_name}")
             if features:
@@ -598,7 +646,7 @@ class YourMT3Transcriber:
                 logger.info("YourMT3 依赖模块导入完成")
 
                 if progress_callback:
-                    progress_callback(0.2, "正在获取模型路径...")
+                    progress_callback(0.2, self._pt("progress.getting_model_path"))
 
                 # 3. 获取模型 checkpoint 路径
                 from src.utils.yourmt3_downloader import get_model_path
@@ -613,7 +661,7 @@ class YourMT3Transcriber:
                 logger.info(f"使用 checkpoint: {model_path}")
 
                 if progress_callback:
-                    progress_callback(0.3, "正在构建配置...")
+                    progress_callback(0.3, self._pt("progress.building_config"))
 
                 # 4. 构建配置参数（参考 model_helper.py）
                 import argparse
@@ -714,7 +762,7 @@ class YourMT3Transcriber:
                 )
 
                 if progress_callback:
-                    progress_callback(0.5, "正在从 checkpoint 加载配置...")
+                    progress_callback(0.5, self._pt("progress.loading_checkpoint_config"))
 
                 # 5. 从 checkpoint 加载超参数（最可靠的方法）
                 logger.info(f"正在加载 checkpoint: {model_path} ...")
@@ -745,7 +793,7 @@ class YourMT3Transcriber:
                     logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
 
                     if progress_callback:
-                        progress_callback(0.6, "正在创建任务管理器...")
+                        progress_callback(0.6, self._pt("progress.creating_task_manager"))
 
                     # 6. 创建任务管理器
                     max_shift_steps_value = shared_cfg["TOKENIZER"]["max_shift_steps"]
@@ -762,23 +810,24 @@ class YourMT3Transcriber:
                     logger.info(f"任务: {tm.task_name}, 最大偏移步数: {tm.max_shift_steps}")
 
                     if progress_callback:
-                        progress_callback(0.7, "正在创建模型实例...")
+                        progress_callback(0.7, self._pt("progress.creating_model_instance"))
 
                     # 7. 创建 YourMT3 MoE 模型实例
                     logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
-                    model = YourMT3(
-                        audio_cfg=audio_cfg,
-                        model_cfg=model_cfg,
-                        shared_cfg=shared_cfg,
-                        optimizer=None,
-                        task_manager=tm,
-                        eval_subtask_key=args.eval_subtask_key,
-                        write_output_dir=None
-                    ).to(self.device)
+                    with suppress_output():
+                        model = YourMT3(
+                            audio_cfg=audio_cfg,
+                            model_cfg=model_cfg,
+                            shared_cfg=shared_cfg,
+                            optimizer=None,
+                            task_manager=tm,
+                            eval_subtask_key=args.eval_subtask_key,
+                            write_output_dir=None
+                        ).to(self.device)
                     logger.info("模型实例创建完成")
 
                     if progress_callback:
-                        progress_callback(0.8, "正在加载 checkpoint 权重...")
+                        progress_callback(0.8, self._pt("progress.loading_checkpoint_weights"))
 
                     # 8. 加载权重（checkpoint已经在步骤5加载）
                     logger.info("正在加载 checkpoint 权重到模型...")
@@ -801,7 +850,7 @@ class YourMT3Transcriber:
                 YourMT3Transcriber._task_manager = tm
 
                 if progress_callback:
-                    progress_callback(1.0, "模型加载完成")
+                    progress_callback(1.0, self._pt("progress.model_load_complete"))
 
                 logger.info(f"模型加载完成: {friendly_name}, 设备: {self.device}")
 
@@ -936,7 +985,7 @@ class YourMT3Transcriber:
         self._check_cancelled()
 
         if progress_callback:
-            progress_callback(0.0, "正在准备 YourMT3+ 转写...")
+            progress_callback(0.0, self._pt("progress.preparing_yourmt3"))
 
         if not self.is_available():
             raise RuntimeError(self.get_unavailable_reason())
@@ -946,7 +995,7 @@ class YourMT3Transcriber:
                 self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
-                progress_callback(0.8, "正在处理转写结果...")
+                progress_callback(0.8, self._pt("progress.processing_transcription_results"))
 
             # 解析输出并按乐器类型分类
             result = self._parse_yourmt3_output_from_tokens(
@@ -960,7 +1009,14 @@ class YourMT3Transcriber:
 
             if progress_callback:
                 total_notes = sum(len(notes) for notes in result.values())
-                progress_callback(1.0, f"发现 {len(result)} 种乐器，共 {total_notes} 个音符")
+                progress_callback(
+                    1.0,
+                    self._pt(
+                        "progress.found_instruments_notes",
+                        instrument_count=len(result),
+                        note_count=total_notes,
+                    ),
+                )
 
             return result
 
@@ -1000,7 +1056,7 @@ class YourMT3Transcriber:
                 self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.2)
 
             if progress_callback:
-                progress_callback(0.8, "正在处理结果...")
+                progress_callback(0.8, self._pt("progress.processing_results"))
 
             # 解析输出
             all_notes = self._parse_yourmt3_output_from_tokens(
@@ -1023,7 +1079,7 @@ class YourMT3Transcriber:
                 notes.sort(key=lambda n: n.start_time)
 
             if progress_callback:
-                progress_callback(1.0, f"发现 {len(notes)} 个音符")
+                progress_callback(1.0, self._pt("progress.found_notes", note_count=len(notes)))
 
             return notes
 
@@ -1395,7 +1451,7 @@ class YourMT3Transcriber:
         self._check_cancelled()
 
         if progress_callback:
-            progress_callback(0.0, "正在准备精确转写...")
+            progress_callback(0.0, self._pt("progress.preparing_precise_transcription"))
 
         if not self.is_available():
             raise RuntimeError(self.get_unavailable_reason())
@@ -1405,7 +1461,7 @@ class YourMT3Transcriber:
                 self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
-                progress_callback(0.8, "正在解析精确乐器...")
+                progress_callback(0.8, self._pt("progress.parsing_precise_instruments"))
 
             mixed_notes = self._decode_channels_to_notes(
                 pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold
@@ -1415,7 +1471,14 @@ class YourMT3Transcriber:
 
             if progress_callback:
                 total_notes = sum(len(notes) for notes in result.values())
-                progress_callback(1.0, f"发现 {len(result)} 种精确乐器，共 {total_notes} 个音符")
+                progress_callback(
+                    1.0,
+                    self._pt(
+                        "progress.found_precise_instruments_notes",
+                        instrument_count=len(result),
+                        note_count=total_notes,
+                    ),
+                )
 
             # 输出详细日志
             for program, notes in result.items():
@@ -1480,7 +1543,7 @@ class YourMT3Transcriber:
         self._check_cancelled()
 
         if progress_callback:
-            progress_callback(0.0, "正在准备极致精度转写...")
+            progress_callback(0.0, self._pt("progress.preparing_best_transcription"))
 
         if not self.is_available():
             raise RuntimeError(self.get_unavailable_reason())
@@ -1490,7 +1553,7 @@ class YourMT3Transcriber:
                 self._prepare_and_infer(audio_path, progress_callback, load_progress_weight=0.3)
 
             if progress_callback:
-                progress_callback(0.8, "正在解析精确乐器...")
+                progress_callback(0.8, self._pt("progress.parsing_precise_instruments"))
 
             logger.info("正在解析 token 输出为音符事件...")
 
@@ -1522,7 +1585,14 @@ class YourMT3Transcriber:
             total_drum_notes = sum(len(notes) for notes in drum_notes.values())
 
             if progress_callback:
-                progress_callback(1.0, f"发现 {len(instrument_notes)} 种乐器 + {len(drum_notes)} 种鼓音色")
+                progress_callback(
+                    1.0,
+                    self._pt(
+                        "progress.found_instruments_drums",
+                        instrument_count=len(instrument_notes),
+                        drum_count=len(drum_notes),
+                    ),
+                )
 
             logger.info(f"极致精度转写完成:")
             logger.info(f"  原始音符: {total_raw_notes}")

@@ -22,6 +22,7 @@ class DropZoneWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self._selected_file_path = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -165,6 +166,7 @@ class DropZoneWidget(QWidget):
 
     def _set_file(self, file_path: str):
         """设置已选文件"""
+        self._selected_file_path = file_path
         self.file_label.setText(f"{t('main.dropzone.selected')}: {Path(file_path).name}")
         self.file_label.show()
         self.file_selected.emit(file_path)
@@ -206,3 +208,7 @@ class DropZoneWidget(QWidget):
         self.subtitle_label.setText(t("main.dropzone.subtitle"))
         self.format_label.setText(t("main.dropzone.subtitle"))
         self.browse_btn.setText("📂  " + t("main.output.browse"))
+        if self._selected_file_path:
+            self.file_label.setText(
+                f"{t('main.dropzone.selected')}: {Path(self._selected_file_path).name}"
+            )

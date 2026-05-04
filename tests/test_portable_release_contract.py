@@ -36,6 +36,21 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("collect_all('onnxruntime')", spec)
         self.assertIn("collect_all('mir_eval')", spec)
 
+    def test_pyinstaller_spec_bundles_aria_amt_package_config(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("_collect_aria_amt_config_datas", spec)
+        self.assertIn('"config"', spec)
+        self.assertIn("aria_amt_config_datas", spec)
+
+    def test_pyinstaller_spec_bundles_bytedance_pedal_backend(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", spec)
+        self.assertIn("models/bytedance_piano", spec)
+        self.assertIn("collect_all('piano_transcription_inference')", spec)
+        self.assertIn("collect_all('torchlibrosa')", spec)
+
     def test_pyinstaller_spec_does_not_exclude_pillow(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
         excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]
@@ -83,6 +98,9 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("build/portable_assets", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR", workflow)
+        self.assertIn("download_aria_amt_model.py", workflow)
+        self.assertIn("download_bytedance_piano_model.py", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", workflow)
 
     def test_release_workflow_smoke_tests_built_binary(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -132,12 +150,34 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
         self.assertIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
         self.assertIn("同名前缀的全部分卷", workflow)
+        self.assertIn("6 种处理模式", workflow)
+        self.assertIn("ByteDance Pedal", workflow)
 
     def test_build_portable_collects_miros_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
 
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", script)
         self.assertIn("ai4m-miros", script)
+        self.assertIn('external\\ai4m-miros', script)
+
+    def test_pyinstaller_spec_collects_miros_from_external_checkout(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn('"external", "ai4m-miros"', spec)
+
+    def test_build_portable_collects_aria_amt_bundle_assets(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR", script)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_ARIA_DIR", script)
+        self.assertIn("aria_amt", script)
+
+    def test_build_portable_collects_bytedance_pedal_bundle_assets(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", script)
+        self.assertIn("bytedance_piano", script)
+        self.assertIn("ByteDance Piano models", script)
 
     def test_build_portable_collects_real_ffmpeg_binaries_into_bin_layout(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

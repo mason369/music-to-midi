@@ -55,11 +55,42 @@ fi
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
+from src.core.vocal_separator import VocalSeparator
 target = resolve_vocal_model_path()
 print('BS-RoFormer model:', target)
-exit(0 if is_vocal_model_available() else 1)
+print('audio-separator package:', VocalSeparator.is_available())
+print('BS-RoFormer model available:', VocalSeparator.is_model_available())
+exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
 "; then
     warn "BS-RoFormer model weights missing"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+transcriber = AriaAmtTranscriber()
+import importlib.util
+print('amt.run spec:', importlib.util.find_spec('amt.run'))
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+print('Aria-AMT model:', transcriber.is_model_available())
+exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
+"; then
+    warn "Aria-AMT backend or model missing"
+    warn "  先运行: python download_aria_amt_model.py"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+transcriber = ByteDancePianoTranscriber()
+print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
+print('ByteDance Piano model:', transcriber.is_model_available())
+exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
+"; then
+    warn "ByteDance Piano backend or model missing"
+    warn "  先运行: python download_bytedance_piano_model.py"
     NEED_INSTALL=true
 fi
 

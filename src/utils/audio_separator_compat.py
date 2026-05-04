@@ -91,6 +91,7 @@ def execute_audio_separator_job(
     logger: logging.Logger,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     fallback_progress: Optional[tuple[float, str]] = None,
+    allow_cpu_fallback: bool = False,
     prepare_separator: Optional[Callable[[Any], None]] = None,
     after_load: Optional[Callable[[Any], None]] = None,
 ) -> tuple[Any, T, bool, Optional[str]]:
@@ -98,6 +99,11 @@ def execute_audio_separator_job(
     force_cpu = fallback_reason is not None
 
     if force_cpu:
+        if not allow_cpu_fallback:
+            raise RuntimeError(
+                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n"
+                f"{fallback_reason}"
+            )
         logger.warning(
             "Detected unsupported CUDA architecture for audio-separator; falling back to CPU.\n%s",
             fallback_reason,
@@ -129,6 +135,12 @@ def execute_audio_separator_job(
             error,
             str(getattr(separator, "torch_device", "cuda:0")),
         )
+        if not allow_cpu_fallback:
+            raise RuntimeError(
+                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n"
+                f"{fallback_reason}"
+            ) from error
+
         logger.warning(
             "audio-separator hit an unsupported CUDA architecture at runtime; retrying on CPU.\n%s",
             fallback_reason,

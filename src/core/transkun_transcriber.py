@@ -10,6 +10,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable, Optional
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config
 from src.utils.gpu_utils import clear_gpu_memory, get_device
 
@@ -72,6 +73,10 @@ class TranskunTranscriber:
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._process = None
+        self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     @staticmethod
     def is_available() -> bool:
@@ -162,7 +167,7 @@ class TranskunTranscriber:
                 )
 
                 if progress_callback:
-                    progress_callback(0.05, f"正在准备 Transkun ({device})...")
+                    progress_callback(0.05, self._pt("progress.preparing_transkun", device=device))
 
                 result_queue = multiprocessing.Queue()
                 process = multiprocessing.Process(
@@ -180,7 +185,7 @@ class TranskunTranscriber:
                 process.start()
 
                 if progress_callback:
-                    progress_callback(0.30, "正在运行 Transkun 钢琴转写...")
+                    progress_callback(0.30, self._pt("progress.running_transkun"))
 
                 while process.is_alive():
                     self._check_cancelled()
@@ -213,7 +218,7 @@ class TranskunTranscriber:
                 pass
 
         if progress_callback:
-            progress_callback(1.0, "Transkun 转写完成")
+            progress_callback(1.0, self._pt("progress.transkun_complete"))
 
         logger.info("Transkun output: %s", out_path)
         return str(out_path)

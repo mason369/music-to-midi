@@ -41,11 +41,11 @@ fi
 # ───────────────────────── 检查 Python ─────────────────────────
 info "检查 Python 版本..."
 PYTHON_BIN=""
-for cmd in python3.11 python3.10 python3; do
+for cmd in python3.12 python3.11 python3; do
     if command -v "$cmd" &>/dev/null; then
         VER=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
         MAJOR="${VER%%.*}"; MINOR="${VER##*.}"
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 10 ]; then
+        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 11 ]; then
             PYTHON_BIN="$cmd"
             success "找到 Python $VER ($cmd)"
             break
@@ -54,11 +54,11 @@ for cmd in python3.11 python3.10 python3; do
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-    warn "未找到 Python 3.10+，尝试安装..."
+    warn "未找到 Python 3.11+，尝试安装..."
     info "更新包列表..."
     sudo apt-get update
-    sudo apt-get install -y python3.10 python3.10-venv python3.10-dev python3-pip
-    PYTHON_BIN="python3.10"
+    sudo apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip
+    PYTHON_BIN="python3.11"
 fi
 
 # ───────────────────────── 安装系统依赖 ─────────────────────────
@@ -77,7 +77,6 @@ SYSTEM_PKGS=(
     # Python 开发
     python3-dev
     python3-venv
-    python3.10-venv
     python3.11-venv
     # PyQt6 / X11 运行时库
     libxcb-xinerama0
@@ -322,8 +321,75 @@ cd "$REPO_DIR"
 info "安装 tflite-runtime（可选，Linux 专用 TensorFlow Lite 后端）..."
 "$PIP" install tflite-runtime || warn "tflite-runtime 安装失败（可选，不影响主要功能）"
 
-"$PIP" install -r requirements.txt
+if "$PIP" show audio-separator >/dev/null 2>&1; then
+    info "检测到旧的 audio-separator，先卸载以避免 NumPy 解析冲突..."
+    "$PIP" uninstall audio-separator -y
+fi
+
+TMP_REQ="${TMPDIR:-/tmp}/requirements-without-aria-amt.txt"
+grep -vE '^[[:space:]]*aria-amt[[:space:]]*@' requirements.txt > "$TMP_REQ"
+"$PIP" install -r "$TMP_REQ"
 success "Python 依赖安装完成"
+
+info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
+"$PIP" install \
+    "numpy==1.26.4" \
+    "beartype==0.18.5" \
+    "diffq-fixed==0.2.4" \
+    "julius==0.2.7" \
+    "ml_collections==1.1.0" \
+    "onnx-weekly==1.21.0.dev20260302" \
+    "onnx2torch-py313==1.6.0" \
+    "pydub==0.25.1" \
+    "requests>=2.32.5,<3" \
+    "chardet>=5,<6" \
+    "onnxruntime==1.23.2" \
+    "resampy==0.4.3" \
+    "rotary-embedding-torch==0.6.5" \
+    "samplerate==0.1.0" \
+    "six==1.17.0"
+"$PIP" install "audio-separator==0.41.1" --no-deps
+success "audio-separator 安装完成"
+
+info "验证 Aria-AMT 钢琴后端..."
+if ! "$PYTHON" - <<'PY'
+import sys
+sys.path.insert(0, '.')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+print('Aria-AMT model:', AriaAmtTranscriber().is_model_available())
+raise SystemExit(0 if AriaAmtTranscriber.is_available() else 1)
+PY
+then
+    info "Aria-AMT 未安装，正在从 GitHub 安装..."
+    "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git"
+    "$PYTHON" - <<'PY'
+import sys
+sys.path.insert(0, '.')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+raise SystemExit(0 if AriaAmtTranscriber.is_available() else 1)
+PY
+fi
+
+"$PYTHON" "${REPO_DIR}/download_aria_amt_model.py"
+success "Aria-AMT 模型准备完成"
+
+info "验证 ByteDance Piano 带踏板钢琴后端..."
+if ! "$PYTHON" - <<'PY'
+import sys
+sys.path.insert(0, '.')
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
+print('ByteDance Piano model:', ByteDancePianoTranscriber().is_model_available())
+raise SystemExit(0 if ByteDancePianoTranscriber.is_available() else 1)
+PY
+then
+    error "ByteDance Piano 安装失败，请确认 piano-transcription-inference 与 torchlibrosa 已安装。"
+fi
+
+"$PYTHON" "${REPO_DIR}/download_bytedance_piano_model.py"
+success "ByteDance Piano 模型准备完成"
 
 # ───────────────────────── 验证核心依赖 ─────────────────────────
 info "验证核心依赖..."
@@ -336,6 +402,7 @@ declare -A DEP_CHECKS=(
     ["mido"]="mido"
     ["soundfile"]="soundfile"
     ["pytorch_lightning"]="pytorch_lightning"
+    ["audio_separator"]="audio_separator.separator"
 )
 
 for name in "${!DEP_CHECKS[@]}"; do
@@ -433,11 +500,26 @@ fi
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
+from src.core.vocal_separator import VocalSeparator
 target = resolve_vocal_model_path()
 print('BS-RoFormer model:', target)
-exit(0 if is_vocal_model_available() else 1)
+print('audio-separator package:', VocalSeparator.is_available())
+print('BS-RoFormer model available:', VocalSeparator.is_model_available())
+exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
 "; then
     warn "BS-RoFormer model weights missing"; NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+transcriber = AriaAmtTranscriber()
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+print('Aria-AMT model:', transcriber.is_model_available())
+exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
+"; then
+    warn "Aria-AMT backend or model missing"
+    NEED_INSTALL=true
 fi
 
 # ───────────────────────── 按需安装 ─────────────────────────
@@ -482,10 +564,12 @@ echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YPTF.MoE+Multi (PS) 模型权重"
 echo -e "  ${GREEN}✔${NC} BS-RoFormer ep368 人声模型"
+echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
 echo ""
 echo -e "  ${BOLD}若模型下载失败，可手动补下：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
 echo ""
 if $IS_WSL; then
     echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"

@@ -182,8 +182,21 @@ $YourMt3Source = Resolve-ExistingDir @(
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\yourmt3_all"),
     (Join-Path $Root "checkpoints\yourmt3_all")
 )
+$AriaAmtSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR,
+    $env:MUSIC_TO_MIDI_BUNDLE_ARIA_DIR,
+    (Join-Path $env:USERPROFILE ".cache\music_ai_models\aria_amt"),
+    (Join-Path $Root "checkpoints\aria_amt")
+)
+$ByteDancePianoSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR,
+    (Join-Path $env:USERPROFILE ".cache\music_ai_models\bytedance_piano"),
+    (Join-Path $Root "checkpoints\bytedance_piano")
+)
 $MirosSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR,
+    (Join-Path $Root "external\ai4m-miros"),
+    (Join-Path $Root "ai4m-miros"),
     (Join-Path $Root ".tmp\ai4m-miros")
 )
 
@@ -204,11 +217,15 @@ if (-not $ResolvedFfmpegDir) {
 
 $AudioSeparatorBundle = Join-Path $BuildAssetRoot "audio-separator"
 $YourMt3Bundle = Join-Path $BuildAssetRoot "yourmt3_all"
+$AriaAmtBundle = Join-Path $BuildAssetRoot "aria_amt"
+$ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
 Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" | Out-Null
 Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" | Out-Null
+Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" | Out-Null
+Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" | Out-Null
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" | Out-Null
 
 if ($ResolvedFfmpegDir) {
@@ -222,11 +239,13 @@ if ($ResolvedFfmpegDir) {
     }
     Write-Host "[ok] Collected ffmpeg -> $FfmpegBundleBin"
 } else {
-    Write-Host "[warn] ffmpeg not found; build will continue, but non-WAV inputs will rely on librosa fallback."
+    Write-Host "[warn] ffmpeg not found; build will continue, but non-WAV inputs will fail until ffmpeg is bundled or installed."
 }
 
 $env:MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR = $AudioSeparatorBundle
 $env:MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR = $YourMt3Bundle
+$env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR = $AriaAmtBundle
+$env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
@@ -235,6 +254,8 @@ try {
 } finally {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
 }

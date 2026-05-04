@@ -32,11 +32,14 @@ class TestColabNotebookDependencies(unittest.TestCase):
         for restored_text in (
             "aria-amt",
             "Aria-AMT",
+            "ByteDance Pedal",
             "Transkun",
             "六声部分离 + 分别转写",
             "six_stem_split",
+            "piano_bytedance_pedal",
             "download_multistem_model.py",
             "download_aria_amt_model.py",
+            "download_bytedance_piano_model.py",
         ):
             with self.subTest(restored_text=restored_text):
                 self.assertIn(restored_text, source_text)
@@ -101,12 +104,13 @@ class TestColabNotebookDependencies(unittest.TestCase):
         code_source_text = self._load_notebook_source_text()
 
         for expected_text in (
-            "当前 Colab 版提供五种处理模式",
+            "当前 Colab 版提供六种处理模式",
             "完整混音多乐器转写（SMART）",
             "人声/伴奏分离后分别转写（VOCAL_SPLIT）",
             "六声部分离 + 分别转写",
             "钢琴专用转写 (Transkun)",
             "钢琴专用转写 (Aria-AMT)",
+            "钢琴专用转写 (ByteDance Pedal)",
         ):
             with self.subTest(expected_text=expected_text):
                 self.assertIn(expected_text, all_source_text)
