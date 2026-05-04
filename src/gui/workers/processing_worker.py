@@ -4,6 +4,7 @@
 import logging
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config, ProcessingProgress, ProcessingResult
 from src.core.pipeline import MusicToMidiPipeline
 
@@ -43,6 +44,7 @@ class ProcessingWorker(QThread):
         self.audio_path = audio_path
         self.output_dir = output_dir
         self.config = config
+        self._translator = Translator(config.language)
         self.pipeline = MusicToMidiPipeline(config)
 
     def run(self):
@@ -61,7 +63,7 @@ class ProcessingWorker(QThread):
 
         except InterruptedError:
             logger.info("工作线程已取消")
-            self.error_occurred.emit("处理已取消")
+            self.error_occurred.emit(self._translator.t("status.cancelled"))
 
         except Exception as e:
             logger.error(f"工作线程错误: {e}", exc_info=True)

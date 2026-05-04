@@ -22,20 +22,75 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import copy
+import sys
+import types
+from importlib.machinery import ModuleSpec
 from typing import Optional, Tuple, Union, Dict
 from einops import rearrange
-from model.ops import count_parameters
 
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
+from transformers.utils import import_utils as _transformers_import_utils
+
+_transformers_import_utils._torchvision_available = False
+_transformers_import_utils._torchvision_version = "0.0"
+
+_torchvision_stubbed = False
+if "torchvision" not in sys.modules:
+    _torchvision_stub = types.ModuleType("torchvision")
+    _torchvision_stub.__spec__ = ModuleSpec("torchvision", loader=None, is_package=True)
+    _torchvision_stub.__path__ = []
+    _transforms_stub = types.ModuleType("torchvision.transforms")
+    _transforms_stub.__spec__ = ModuleSpec("torchvision.transforms", loader=None)
+    _InterpolationMode = type(
+        "InterpolationMode",
+        (),
+        {
+            "NEAREST": "nearest",
+            "NEAREST_EXACT": "nearest_exact",
+            "BOX": "box",
+            "BILINEAR": "bilinear",
+            "HAMMING": "hamming",
+            "BICUBIC": "bicubic",
+            "LANCZOS": "lanczos",
+        },
+    )
+    _transforms_stub.InterpolationMode = _InterpolationMode
+    _torchvision_stub.transforms = _transforms_stub
+    sys.modules["torchvision"] = _torchvision_stub
+    sys.modules["torchvision.transforms"] = _transforms_stub
+    _torchvision_stubbed = True
+
+_onnxruntime_stubbed = False
+if "onnxruntime" not in sys.modules:
+    _onnxruntime_stub = types.ModuleType("onnxruntime")
+    _onnxruntime_stub.__spec__ = ModuleSpec("onnxruntime", loader=None, is_package=True)
+    _onnxruntime_stub.__path__ = []
+    _onnxruntime_stub.__version__ = "0.0"
+    _onnxruntime_stub.get_available_providers = lambda: []
+    _onnxruntime_stub.SessionOptions = type("SessionOptions", (), {})
+    _onnxruntime_stub.InferenceSession = type("InferenceSession", (), {})
+    sys.modules["onnxruntime"] = _onnxruntime_stub
+    _onnxruntime_stubbed = True
+
 from transformers.utils import logging
 from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
 from transformers.models.t5.modeling_t5 import (T5LayerNorm, T5LayerSelfAttention, T5LayerCrossAttention, T5LayerFF)
 from transformers.modeling_outputs import (BaseModelOutput, BaseModelOutputWithPastAndCrossAttentions)
 from transformers import T5Config, T5PreTrainedModel
+from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache
+from model.ops import count_parameters
 from model.positional_encoding import FixedSinusoidalPositionalEmbedding
 from model.ff_layer import get_ff_layer
+if _onnxruntime_stubbed:
+    for _module_name in list(sys.modules):
+        if _module_name == "onnxruntime" or _module_name.startswith("onnxruntime."):
+            sys.modules.pop(_module_name, None)
+if _torchvision_stubbed:
+    for _module_name in list(sys.modules):
+        if _module_name == "torchvision" or _module_name.startswith("torchvision."):
+            sys.modules.pop(_module_name, None)
 
 logger = logging.get_logger(__name__)
 
@@ -43,13 +98,19 @@ logger = logging.get_logger(__name__)
 class T5BlockYMT3(nn.Module):
     """T5 Block, modified to allow using different types of FF layers."""
 
-    def __init__(self, config, has_relative_attention_bias=False):
+    def __init__(self, config, has_relative_attention_bias=False, layer_idx=None):
         super().__init__()
         self.is_decoder = config.is_decoder
         self.layer = nn.ModuleList()
-        self.layer.append(T5LayerSelfAttention(config, has_relative_attention_bias=has_relative_attention_bias))
+        self.layer.append(
+            T5LayerSelfAttention(
+                config,
+                has_relative_attention_bias=has_relative_attention_bias,
+                layer_idx=layer_idx,
+            )
+        )
         if self.is_decoder:
-            self.layer.append(T5LayerCrossAttention(config))
+            self.layer.append(T5LayerCrossAttention(config, layer_idx=layer_idx))
 
         # FF layer
         if config.ff_layer_type == 't5_gmlp':
@@ -77,9 +138,13 @@ class T5BlockYMT3(nn.Module):
         past_key_value=None,
         use_cache=False,
         output_attentions=False,
+        cache_position=None,
         return_dict=True,
     ):
-        if past_key_value is not None:
+        if isinstance(past_key_value, EncoderDecoderCache):
+            self_attn_past_key_value = past_key_value
+            cross_attn_past_key_value = past_key_value
+        elif past_key_value is not None:
             if not self.is_decoder:
                 logger.warning("`past_key_values` is passed to the encoder. Please make sure this is intended.")
             expected_num_past_key_values = 2 if encoder_hidden_states is None else 4
@@ -103,6 +168,7 @@ class T5BlockYMT3(nn.Module):
             past_key_value=self_attn_past_key_value,
             use_cache=use_cache,
             output_attentions=output_attentions,
+            cache_position=cache_position,
         )
         hidden_states, present_key_value_state = self_attention_outputs[:2]
         attention_outputs = self_attention_outputs[2:]  # Keep self-attention outputs and relative position weights
@@ -120,7 +186,9 @@ class T5BlockYMT3(nn.Module):
         if do_cross_attention:
             # the actual query length is unknown for cross attention
             # if using past key value states. Need to inject it here
-            if present_key_value_state is not None:
+            if isinstance(present_key_value_state, EncoderDecoderCache):
+                query_length = cache_position[-1] + 1 if cache_position is not None else None
+            elif present_key_value_state is not None:
                 query_length = present_key_value_state[0].shape[2]
             else:
                 query_length = None
@@ -135,8 +203,9 @@ class T5BlockYMT3(nn.Module):
                 query_length=query_length,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
+                cache_position=cache_position,
             )
-            hidden_states = cross_attention_outputs[0]
+            hidden_states, cross_present_key_value_state = cross_attention_outputs[:2]
 
             # clamp inf values to enable fp16 training
             if hidden_states.dtype == torch.float16:
@@ -148,7 +217,9 @@ class T5BlockYMT3(nn.Module):
                 hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
             # Combine self attn and cross attn key value states
-            if present_key_value_state is not None:
+            if isinstance(present_key_value_state, EncoderDecoderCache):
+                present_key_value_state = cross_present_key_value_state
+            elif present_key_value_state is not None:
                 present_key_value_state = present_key_value_state + cross_attention_outputs[1]
 
             # Keep cross-attention outputs and relative position weights
@@ -203,12 +274,18 @@ class T5StackYMT3(T5PreTrainedModel):
             self.additive_pe = FixedSinusoidalPositionalEmbedding(config.num_max_positions,
                                                                   embedding_dim=config.d_model)
             self.block = nn.ModuleList(
-                [T5BlockYMT3(config, has_relative_attention_bias=False) for i in range(config.num_layers)])
+                [
+                    T5BlockYMT3(config, has_relative_attention_bias=False, layer_idx=i)
+                    for i in range(config.num_layers)
+                ])
         elif pos_enc_type == 'trainable':
             self.use_t5_trainable_pe = True
             # Stack blocks
             self.block = nn.ModuleList(
-                [T5BlockYMT3(config, has_relative_attention_bias=bool(i == 0)) for i in range(config.num_layers)])
+                [
+                    T5BlockYMT3(config, has_relative_attention_bias=bool(i == 0), layer_idx=i)
+                    for i in range(config.num_layers)
+                ])
 
         self.final_layer_norm = T5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
@@ -247,14 +324,24 @@ class T5StackYMT3(T5PreTrainedModel):
 
         batch_size, seq_length = input_shape
 
-        # required mask seq length can be calculated via length of past
-        mask_seq_length = past_key_values[0][0].shape[2] + seq_length if past_key_values is not None else seq_length
-
-        # mod: required for additive PE
-        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
-
         if use_cache is True:
             assert self.is_decoder, f"`use_cache` can only be set to `True` if {self} is used as a decoder"
+
+        return_legacy_cache = False
+        return_self_attention_cache = False
+        if self.is_decoder and (use_cache or past_key_values is not None):
+            if isinstance(past_key_values, Cache) and not isinstance(past_key_values, EncoderDecoderCache):
+                return_self_attention_cache = True
+                past_key_values = EncoderDecoderCache(past_key_values, DynamicCache())
+            elif not isinstance(past_key_values, EncoderDecoderCache):
+                return_legacy_cache = True
+                past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
+        elif not self.is_decoder:
+            past_key_values = None
+
+        # mod: required for additive PE
+        past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
+        mask_seq_length = past_key_values_length + seq_length
 
         if attention_mask is None:
             attention_mask = torch.ones(batch_size, mask_seq_length, device=inputs_embeds.device)
@@ -264,10 +351,6 @@ class T5StackYMT3(T5PreTrainedModel):
                                                 encoder_seq_length,
                                                 device=inputs_embeds.device,
                                                 dtype=torch.long)
-
-        # initialize past_key_values with `None` if past does not exist
-        if past_key_values is None:
-            past_key_values = [None] * len(self.block)
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
@@ -293,12 +376,17 @@ class T5StackYMT3(T5PreTrainedModel):
         # Prepare head mask if needed
         head_mask = self.get_head_mask(head_mask, self.config.num_layers)
         cross_attn_head_mask = self.get_head_mask(cross_attn_head_mask, self.config.num_layers)
-        present_key_value_states = () if use_cache else None
+        next_decoder_cache = None
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and self.is_decoder) else None
         position_bias = None
         encoder_decoder_position_bias = None
+        cache_position = torch.arange(
+            past_key_values_length,
+            past_key_values_length + seq_length,
+            device=inputs_embeds.device,
+        )
 
         # mod: additive absolute PE (sinusoidal)
         if self.additive_pe is not None:
@@ -308,7 +396,7 @@ class T5StackYMT3(T5PreTrainedModel):
 
         hidden_states = self.dropout(inputs_embeds)
 
-        for i, (layer_module, past_key_value) in enumerate(zip(self.block, past_key_values)):
+        for i, layer_module in enumerate(self.block):
             layer_head_mask = head_mask[i]
             cross_attn_layer_head_mask = cross_attn_head_mask[i]
 
@@ -346,9 +434,10 @@ class T5StackYMT3(T5PreTrainedModel):
                     encoder_decoder_position_bias=encoder_decoder_position_bias,
                     layer_head_mask=layer_head_mask,
                     cross_attn_layer_head_mask=cross_attn_layer_head_mask,
-                    past_key_value=past_key_value,
+                    past_key_value=past_key_values,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
+                    cache_position=cache_position,
                 )
 
             # layer_outputs is a tuple with:
@@ -356,7 +445,7 @@ class T5StackYMT3(T5PreTrainedModel):
             if use_cache is False:
                 layer_outputs = layer_outputs[:1] + (None,) + layer_outputs[1:]
 
-            hidden_states, present_key_value_state = layer_outputs[:2]
+            hidden_states, next_decoder_cache = layer_outputs[:2]
 
             # We share the position biases between the layers - the first layer store them
             # layer_outputs = hidden-states, key-value-states (self-attention position bias), (self-attention weights),
@@ -364,10 +453,6 @@ class T5StackYMT3(T5PreTrainedModel):
             position_bias = layer_outputs[2]
             if self.is_decoder and encoder_hidden_states is not None:
                 encoder_decoder_position_bias = layer_outputs[4 if output_attentions else 3]
-            # append next layer key value states
-            if use_cache:
-                present_key_value_states = present_key_value_states + (present_key_value_state,)
-
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[3],)
                 if self.is_decoder:
@@ -380,17 +465,23 @@ class T5StackYMT3(T5PreTrainedModel):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
+        next_cache = next_decoder_cache if use_cache else None
+        if return_self_attention_cache:
+            next_cache = past_key_values.self_attention_cache
+        if return_legacy_cache:
+            next_cache = past_key_values.to_legacy_cache()
+
         if not return_dict:
             return tuple(v for v in [
                 hidden_states,
-                present_key_value_states,
+                next_cache,
                 all_hidden_states,
                 all_attentions,
                 all_cross_attentions,
             ] if v is not None)
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
-            past_key_values=present_key_value_states,
+            past_key_values=next_cache,
             hidden_states=all_hidden_states,
             attentions=all_attentions,
             cross_attentions=all_cross_attentions,

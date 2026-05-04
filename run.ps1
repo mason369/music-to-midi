@@ -60,9 +60,12 @@ if (-not $NEED_INSTALL) {
 import sys
 sys.path.insert(0, r'$REPO_DIR')
 from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
+from src.core.vocal_separator import VocalSeparator
 target = resolve_vocal_model_path()
 print('BS-RoFormer model:', target)
-sys.exit(0 if is_vocal_model_available() else 1)
+print('audio-separator package:', VocalSeparator.is_available())
+print('BS-RoFormer model available:', VocalSeparator.is_model_available())
+sys.exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
 "@
     & "$VENV_PYTHON" -c $checkVocalScript
     if ($LASTEXITCODE -ne 0) {
@@ -70,6 +73,52 @@ sys.exit(0 if is_vocal_model_available() else 1)
         $NEED_INSTALL = $true
     } else {
         Write-Ok "BS-RoFormer 模型权重检查通过"
+    }
+}
+
+# 检查 5：Aria-AMT 钢琴后端
+if (-not $NEED_INSTALL) {
+    Write-Info "检查 Aria-AMT 钢琴后端..."
+    $checkAriaScript = @"
+import sys
+import importlib.util
+sys.path.insert(0, r'$REPO_DIR')
+from src.core.aria_amt_transcriber import AriaAmtTranscriber
+transcriber = AriaAmtTranscriber()
+print('amt.run spec:', importlib.util.find_spec('amt.run'))
+print('Aria-AMT package:', AriaAmtTranscriber.is_available())
+print('Aria-AMT model:', transcriber.is_model_available())
+sys.exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
+"@
+    & "$VENV_PYTHON" -c $checkAriaScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "未找到 Aria-AMT 包或模型权重"
+        Write-Warn "  请先运行: python download_aria_amt_model.py"
+        $NEED_INSTALL = $true
+    } else {
+        Write-Ok "Aria-AMT 后端检查通过"
+    }
+}
+
+# 检查 6：ByteDance Piano 带踏板钢琴后端
+if (-not $NEED_INSTALL) {
+    Write-Info "检查 ByteDance Piano 带踏板钢琴后端..."
+    $checkByteDanceScript = @"
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+transcriber = ByteDancePianoTranscriber()
+print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
+print('ByteDance Piano model:', transcriber.is_model_available())
+sys.exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
+"@
+    & "$VENV_PYTHON" -c $checkByteDanceScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "未找到 ByteDance Piano 包或模型权重"
+        Write-Warn "  请先运行: python download_bytedance_piano_model.py"
+        $NEED_INSTALL = $true
+    } else {
+        Write-Ok "ByteDance Piano 后端检查通过"
     }
 }
 

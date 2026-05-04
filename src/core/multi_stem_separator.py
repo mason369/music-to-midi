@@ -11,6 +11,7 @@ from download_multistem_model import (
     ROFORMER_SW_MODEL,
     download_multistem_model,
 )
+from src.i18n.translator import Translator
 from src.utils.audio_separator_compat import (
     execute_audio_separator_job,
     get_separator_cls,
@@ -31,10 +32,15 @@ class SixStemSeparator:
         separator_cls=None,
         ensure_assets_fn: Optional[Callable[..., object]] = None,
         cache_dir: Optional[Path] = None,
+        language: str = Translator.DEFAULT_LANGUAGE,
     ):
         self.separator_cls = separator_cls
         self.ensure_assets_fn = ensure_assets_fn or download_multistem_model
         self.cache_dir = Path(cache_dir) if cache_dir is not None else get_audio_separator_model_dir()
+        self._translator = Translator(language)
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     @staticmethod
     def is_available() -> bool:
@@ -139,7 +145,7 @@ class SixStemSeparator:
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, str]:
         if progress_callback:
-            progress_callback(0.0, "Preparing six-stem separator...")
+            progress_callback(0.0, self._pt("progress.preparing_six_stem_separator"))
 
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -148,7 +154,7 @@ class SixStemSeparator:
 
         def _after_load(_active_separator):
             if progress_callback:
-                progress_callback(0.25, f"Loaded model: {BS_ROFORMER_SW_MODEL}")
+                progress_callback(0.25, self._pt("progress.loaded_model", model=BS_ROFORMER_SW_MODEL))
 
         _separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
             separator_cls,
@@ -156,23 +162,27 @@ class SixStemSeparator:
                 "output_dir": str(output_path),
                 "model_file_dir": str(self.cache_dir),
                 "output_format": "WAV",
+                "mdxc_params": {
+                    "segment_size": 128,
+                    "override_model_segment_size": True,
+                    "batch_size": 1,
+                    "overlap": 8,
+                    "pitch_shift": 0,
+                },
             },
             model_name=BS_ROFORMER_SW_MODEL,
             action=lambda active_separator: active_separator.separate(audio_path),
             logger=logger,
             progress_callback=progress_callback,
-            fallback_progress=(
-                0.1,
-                "Detected an unsupported NVIDIA GPU architecture, retrying six-stem separation on CPU...",
-            ),
+            fallback_progress=(0.1, self._pt("progress.cpu_retry")),
             prepare_separator=self._prepare_separator,
             after_load=_after_load,
         )
         if progress_callback:
-            progress_callback(0.85, "Normalizing stem files...")
+            progress_callback(0.85, self._pt("progress.normalizing_stem_files"))
 
         normalized = self._normalize_outputs(audio_path, output_path, output_files)
 
         if progress_callback:
-            progress_callback(1.0, "Six-stem separation complete")
+            progress_callback(1.0, self._pt("progress.six_stem_separation_complete"))
         return normalized

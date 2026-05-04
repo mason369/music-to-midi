@@ -159,6 +159,7 @@ class ProcessingMode(Enum):
     SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
     PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
     PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
+    PIANO_BYTEDANCE_PEDAL = "piano_bytedance_pedal"  # ByteDance 带踏板钢琴转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
@@ -170,7 +171,7 @@ class MultiInstrumentModel(Enum):
 
 
 class TranscriptionBackend(Enum):
-    """首选转写后端 stored in config/UI."""
+    """转写后端 stored in config/UI."""
 
     ARIA_AMT = "aria_amt"
     YOURMT3 = MultiInstrumentModel.YOURMT3.value
@@ -475,7 +476,7 @@ class Config:
     six_stem_split_vocal_harmony: bool = False
 
     # 转写引擎设置
-    transcription_backend: str = TranscriptionBackend.ARIA_AMT.value
+    transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
     transcription_quality: str = "best"      # "fast", "balanced", "best"
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
@@ -506,9 +507,12 @@ class Config:
             ProcessingMode.SIX_STEM_SPLIT.value,
             ProcessingMode.PIANO_TRANSKUN.value,
             ProcessingMode.PIANO_ARIA_AMT.value,
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         }
-        if mode == ProcessingMode.PIANO.value or mode not in valid_modes:
+        if mode == ProcessingMode.PIANO.value:
             mode = ProcessingMode.SMART.value
+        elif mode not in valid_modes:
+            raise ValueError(f"invalid processing_mode: {self.processing_mode!r}")
         self.processing_mode = mode
 
         valid_multi_models = {model.value for model in MultiInstrumentModel}
@@ -520,12 +524,14 @@ class Config:
         if normalized_backend not in valid_backends and normalized_multi_model in valid_backends:
             normalized_backend = normalized_multi_model
         if normalized_backend not in valid_backends:
-            normalized_backend = TranscriptionBackend.ARIA_AMT.value
+            raise ValueError(f"invalid transcription_backend: {self.transcription_backend!r}")
 
-        if normalized_backend in valid_multi_models:
+        if normalized_backend == TranscriptionBackend.ARIA_AMT.value:
+            normalized_multi_model = MultiInstrumentModel.YOURMT3.value
+        elif normalized_backend in valid_multi_models:
             normalized_multi_model = normalized_backend
         elif normalized_multi_model not in valid_multi_models:
-            normalized_multi_model = MultiInstrumentModel.YOURMT3.value
+            raise ValueError(f"invalid multi_instrument_model: {self.multi_instrument_model!r}")
 
         self.transcription_backend = normalized_backend
         self.multi_instrument_model = normalized_multi_model
@@ -533,7 +539,7 @@ class Config:
         valid_track_modes = {mode.value for mode in MidiTrackMode}
         normalized_track_mode = str(getattr(self, "midi_track_mode", "") or "").strip().lower()
         if normalized_track_mode not in valid_track_modes:
-            normalized_track_mode = MidiTrackMode.MULTI_TRACK.value
+            raise ValueError(f"invalid midi_track_mode: {self.midi_track_mode!r}")
         self.midi_track_mode = normalized_track_mode
 
     def get_effective_multi_instrument_model(self) -> str:
@@ -556,6 +562,7 @@ class Config:
         if mode in {
             ProcessingMode.PIANO_TRANSKUN.value,
             ProcessingMode.PIANO_ARIA_AMT.value,
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         }:
             return QualityBehavior.FIXED
 

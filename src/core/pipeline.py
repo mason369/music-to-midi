@@ -18,12 +18,15 @@ from src.models.data_models import (
     Config, ProcessingResult, ProcessingProgress,
     ProcessingStage, Track, TrackType, ProcessingMode,
     MultiInstrumentModel, QualityBehavior, TranscriptionBackend,
+    BeatInfo, NoteEvent,
 )
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
+from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
 from src.core.transkun_transcriber import TranskunTranscriber
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.core.beat_detector import BeatDetector
 from src.core.midi_generator import MidiGenerator
+from src.i18n.translator import Translator
 from src.utils.gpu_utils import clear_gpu_memory
 from src.utils.runtime_paths import get_ffmpeg_executable
 
@@ -75,13 +78,18 @@ class MusicToMidiPipeline:
             if MirosTranscriber is not None
             else _UnavailableMirosTranscriber(_MIROS_IMPORT_ERROR or RuntimeError("MIROS import failed"))
         )
-        self.aria_amt_transcriber = AriaAmtTranscriber()
+        self.aria_amt_transcriber = AriaAmtTranscriber(
+            language=getattr(config, "language", Translator.DEFAULT_LANGUAGE)
+        )
+        self.bytedance_piano_transcriber = ByteDancePianoTranscriber(config)
         self.transkun_transcriber = TranskunTranscriber(config)
         self.beat_detector = BeatDetector(config)
         self.midi_generator = MidiGenerator(config)
 
         self._cancelled = False
         self._progress_callback: Optional[Callable[[ProcessingProgress], None]] = None
+        language = getattr(config, "language", Translator.DEFAULT_LANGUAGE)
+        self._translator = Translator(language)
 
         self.yourmt3_transcriber.set_cancel_check(lambda: self._cancelled)
         self.miros_transcriber.set_cancel_check(lambda: self._cancelled)
@@ -89,12 +97,17 @@ class MusicToMidiPipeline:
     def set_progress_callback(self, callback: Callable[[ProcessingProgress], None]) -> None:
         self._progress_callback = callback
 
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
+
     def cancel(self) -> None:
         self._cancelled = True
         self.yourmt3_transcriber.cancel()
         self.miros_transcriber.cancel()
         if hasattr(self.aria_amt_transcriber, "cancel"):
             self.aria_amt_transcriber.cancel()
+        if hasattr(self.bytedance_piano_transcriber, "cancel"):
+            self.bytedance_piano_transcriber.cancel()
         if hasattr(self.transkun_transcriber, "cancel"):
             self.transkun_transcriber.cancel()
         logger.info("处理已取消")
@@ -117,6 +130,8 @@ class MusicToMidiPipeline:
         valid_values = {model.value for model in MultiInstrumentModel}
         if backend in valid_values:
             return backend
+        if backend == TranscriptionBackend.ARIA_AMT.value:
+            return MultiInstrumentModel.YOURMT3.value
 
         multi_model = str(getattr(self.config, "multi_instrument_model", None) or "").strip().lower()
         if multi_model in valid_values:
@@ -262,7 +277,7 @@ class MusicToMidiPipeline:
 
     @staticmethod
     def _ensure_wav(audio_path: str, output_dir: str) -> str:
-        """非 WAV 格式自动转换为 WAV（44100Hz, PCM 16-bit），WAV 直接返回。"""
+        """非 WAV 格式使用 FFmpeg 转换为 WAV（44100Hz, PCM 16-bit），WAV 直接返回。"""
         audio_path = str(audio_path)
         if Path(audio_path).suffix.lower() == ".wav":
             return audio_path
@@ -271,41 +286,106 @@ class MusicToMidiPipeline:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         wav_path = str(Path(output_dir) / f"{stem}_converted.wav")
 
-        # 优先使用 FFmpeg
+        ffmpeg_exe = get_ffmpeg_executable()
+        cmd = [
+            ffmpeg_exe, "-y", "-i", audio_path,
+            "-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
+            wav_path,
+        ]
         try:
-            ffmpeg_exe = get_ffmpeg_executable()
-            cmd = [
-                ffmpeg_exe, "-y", "-i", audio_path,
-                "-ar", "44100", "-ac", "2", "-sample_fmt", "s16",
-                wav_path,
-            ]
             subprocess.run(
-                cmd, check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 timeout=300,
             )
-            if Path(wav_path).exists() and Path(wav_path).stat().st_size > 0:
-                logger.info("已将 %s 转换为 WAV（FFmpeg）", Path(audio_path).name)
-                return wav_path
-        except (FileNotFoundError, subprocess.SubprocessError) as exc:
-            logger.warning("FFmpeg 转换失败，尝试 librosa fallback: %s", exc)
-
-        # Fallback: librosa + soundfile
-        try:
-            import librosa
-            import soundfile as sf
-
-            audio, sr = librosa.load(audio_path, sr=44100, mono=False)
-            if audio.ndim == 1:
-                audio = audio.reshape(1, -1)
-            sf.write(wav_path, audio.T, sr, subtype="PCM_16")
-            logger.info("已将 %s 转换为 WAV（librosa）", Path(audio_path).name)
-            return wav_path
-        except Exception as exc:
+        except FileNotFoundError as exc:
             raise RuntimeError(
-                f"无法将 {Path(audio_path).name} 转换为 WAV: {exc}\n"
-                "请安装 FFmpeg 或确保 librosa/soundfile 可用。"
+                "FFmpeg 不可用，无法转换非 WAV 音频。\n"
+                "请安装 FFmpeg 并确保 ffmpeg 可执行文件在 PATH 或打包资源中。"
             ) from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            detail = f"\nFFmpeg stderr:\n{stderr}" if stderr else ""
+            raise RuntimeError(
+                f"FFmpeg 转换 {Path(audio_path).name} 失败，已停止。{detail}"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"FFmpeg 转换 {Path(audio_path).name} 超时，已停止。"
+            ) from exc
+        except subprocess.SubprocessError as exc:
+            raise RuntimeError(
+                f"FFmpeg 转换 {Path(audio_path).name} 失败，已停止: {exc}"
+            ) from exc
+
+        if Path(wav_path).exists() and Path(wav_path).stat().st_size > 0:
+            logger.info("已将 %s 转换为 WAV（FFmpeg）", Path(audio_path).name)
+            return wav_path
+
+        raise RuntimeError(
+            f"FFmpeg 转换 {Path(audio_path).name} 未生成有效 WAV 文件，已停止。"
+        )
+
+    def _detect_beat_or_raise(self, audio_path: str) -> BeatInfo:
+        try:
+            beat_info = self.beat_detector.detect(audio_path)
+        except Exception as exc:
+            logger.error("节拍检测失败: %s", exc)
+            raise RuntimeError(f"节拍检测失败，已停止: {exc}") from exc
+
+        if beat_info is None:
+            raise RuntimeError("节拍检测失败，检测器未返回 BPM，已停止。")
+
+        logger.info("节拍检测完成: %.1f BPM", beat_info.bpm)
+        return beat_info
+
+    @staticmethod
+    def _filter_vocal_melody_notes(
+        instrument_notes,
+        drum_notes,
+        *,
+        preserve_isolated_vocal_stem: bool = False,
+    ):
+        vocal_programs = [p for p in (100, 101, 0) if p in instrument_notes]
+        if not vocal_programs:
+            raw_note_count = sum(len(notes) for notes in instrument_notes.values())
+            raw_drum_count = sum(len(notes) for notes in drum_notes.values())
+            if preserve_isolated_vocal_stem and raw_note_count:
+                merged_vocal_notes = [
+                    NoteEvent(
+                        pitch=note.pitch,
+                        start_time=note.start_time,
+                        end_time=note.end_time,
+                        velocity=note.velocity,
+                        program=0,
+                    )
+                    for notes in instrument_notes.values()
+                    for note in notes
+                ]
+                merged_vocal_notes.sort(key=lambda note: note.start_time)
+                logger.warning(
+                    "人声 stem 转写未产生 program 100/101/0；"
+                    "已保留 %s 个真实非鼓音符并归入 vocal 轨，丢弃 %s 个鼓音符。",
+                    raw_note_count,
+                    raw_drum_count,
+                )
+                return {0: merged_vocal_notes}, {}
+            logger.warning(
+                "人声转写未产生 program 100/101/0，输出空人声 MIDI；"
+                "丢弃 %s 个非人声乐器音符和 %s 个鼓音符。",
+                raw_note_count,
+                raw_drum_count,
+            )
+            return {}, {}
+
+        merged_vocal_notes = []
+        for program in vocal_programs:
+            merged_vocal_notes.extend(instrument_notes[program])
+        merged_vocal_notes.sort(key=lambda note: note.start_time)
+        return {0: merged_vocal_notes}, {}
 
     def process(
         self,
@@ -333,6 +413,8 @@ class MusicToMidiPipeline:
             return self._process_piano_transkun(audio_path, output_dir)
         if mode == "piano_aria_amt":
             return self._process_piano_aria_amt(audio_path, output_dir)
+        if mode == "piano_bytedance_pedal":
+            return self._process_piano_bytedance_pedal(audio_path, output_dir)
         return self._process_smart(audio_path, output_dir)
 
     @staticmethod
@@ -427,8 +509,10 @@ class MusicToMidiPipeline:
                 "请运行 python download_vocal_harmony_model.py 后重试。"
             )
 
-        self._report(ProcessingStage.SEPARATION, 0.85, 0.27, "正在分离主唱与和声...")
-        harmony_separator = VocalHarmonySeparator()
+        self._report(ProcessingStage.SEPARATION, 0.85, 0.27, self._pt("progress.separating_lead_harmony"))
+        harmony_separator = VocalHarmonySeparator(
+            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE)
+        )
         vocal_split = harmony_separator.separate(
             audio_path=separated["vocals"],
             output_dir=output_dir,
@@ -472,22 +556,19 @@ class MusicToMidiPipeline:
         self._report_general_backend_routing("six_stem_split")
         self._report_quality_behavior("six_stem_split")
 
-        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_audio"))
         self._check_cancelled()
 
-        beat_info = None
-        try:
-            beat_info = self.beat_detector.detect(audio_path)
-            tempo = beat_info.bpm if beat_info else 120.0
-        except Exception as exc:
-            logger.warning(f"节拍检测失败，使用默认 120 BPM: {exc}")
-            tempo = 120.0
+        beat_info = self._detect_beat_or_raise(audio_path)
+        tempo = beat_info.bpm
 
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        self._report(ProcessingStage.SEPARATION, 0.0, 0.05, "正在进行六声部分离...")
-        separator = SixStemSeparator()
+        self._report(ProcessingStage.SEPARATION, 0.0, 0.05, self._pt("progress.six_stem_separating"))
+        separator = SixStemSeparator(
+            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE)
+        )
 
         def _sep_cb(p: float, msg: str) -> None:
             overall = 0.05 + p * 0.25
@@ -503,10 +584,15 @@ class MusicToMidiPipeline:
         if missing_stems:
             raise RuntimeError(f"六声部分离输出不完整，缺少: {missing_stems}")
 
-        self._report(ProcessingStage.SEPARATION, 1.0, 0.30, "六声部分离完成")
+        self._report(ProcessingStage.SEPARATION, 1.0, 0.30, self._pt("progress.six_stem_complete"))
         self._check_cancelled()
 
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.30, f"正在加载 {model_label} 模型...")
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.30,
+            self._pt("progress.loading_model", model=model_label),
+        )
         logger.info("使用 %s 对完整混音进行一次性多乐器转写", model_label)
 
         quality = self.config.transcription_quality
@@ -536,11 +622,15 @@ class MusicToMidiPipeline:
             ProcessingStage.TRANSCRIPTION,
             1.0,
             0.75,
-            f"转写完成：{len(instrument_notes)} 种乐器，{total_notes} 个音符",
+            self._pt(
+                "progress.transcription_complete",
+                instrument_count=len(instrument_notes),
+                note_count=total_notes,
+            ),
         )
         self._check_cancelled()
 
-        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.75, "正在按乐器族拆分 MIDI...")
+        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.75, self._pt("progress.splitting_midi_by_family"))
 
         family_to_stem: Dict[GMFamily, str] = {
             GMFamily.PIANO: "piano",
@@ -622,7 +712,11 @@ class MusicToMidiPipeline:
                 ProcessingStage.SYNTHESIS,
                 stem_index / total_selected,
                 progress,
-                f"正在生成 {stem_name} MIDI ({stem_note_count} 个音符)...",
+                self._pt(
+                    "progress.generating_stem_midi",
+                    stem=stem_name,
+                    note_count=stem_note_count,
+                ),
             )
 
             stem_midi_path = self.midi_generator.generate_from_precise_instruments_v2(
@@ -641,16 +735,16 @@ class MusicToMidiPipeline:
             else "selected_stems_merged"
         )
         merged_midi_path = str(Path(output_dir) / f"{input_stem}_{merged_suffix}.mid")
-        self._report(ProcessingStage.SYNTHESIS, 0.95, 0.93, "正在合并 stem MIDI...")
+        self._report(ProcessingStage.SYNTHESIS, 0.95, 0.93, self._pt("progress.merging_stem_midi"))
         merged_midi_path = self._merge_stem_midis(stem_midi_paths, merged_midi_path, tempo)
-        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.97, "六声部 MIDI 生成完成")
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.97, self._pt("progress.six_stem_midi_complete"))
 
         processing_time = time.time() - start_time
         self._report(
             ProcessingStage.COMPLETE,
             1.0,
             1.0,
-            f"处理完成，耗时 {processing_time:.1f} 秒",
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
         )
 
         return ProcessingResult(
@@ -691,21 +785,21 @@ class MusicToMidiPipeline:
         if not transcriber.is_model_available():
             raise RuntimeError(model_hint)
 
-        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析钢琴音频...")
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_piano_audio"))
         self._check_cancelled()
 
-        beat_info = None
-        try:
-            beat_info = self.beat_detector.detect(audio_path)
-            tempo = beat_info.bpm if beat_info else 120.0
-        except Exception as exc:
-            logger.warning("节拍检测失败，使用默认 120 BPM: %s", exc)
-            tempo = 120.0
+        beat_info = self._detect_beat_or_raise(audio_path)
+        tempo = beat_info.bpm
 
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.10, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.10, f"正在运行 {mode_label}...")
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.10,
+            self._pt("progress.running_backend", backend=mode_label),
+        )
 
         def _piano_cb(progress: float, msg: str) -> None:
             overall = 0.10 + progress * 0.75
@@ -718,7 +812,7 @@ class MusicToMidiPipeline:
         )
 
         self._check_cancelled()
-        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "钢琴 MIDI 文件已生成")
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.piano_midi_generated"))
 
         processing_time = time.time() - start_time
         note_count = self._count_midi_notes(midi_path)
@@ -726,7 +820,7 @@ class MusicToMidiPipeline:
             ProcessingStage.COMPLETE,
             1.0,
             1.0,
-            f"处理完成，耗时 {processing_time:.1f} 秒",
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
         )
 
         return ProcessingResult(
@@ -773,6 +867,24 @@ class MusicToMidiPipeline:
             ),
         )
 
+    def _process_piano_bytedance_pedal(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """ByteDance 带踏板钢琴专用模式。"""
+        return self._process_specialized_piano(
+            audio_path=audio_path,
+            output_dir=output_dir,
+            transcriber=self.bytedance_piano_transcriber,
+            mode_label="ByteDance Piano",
+            output_suffix="piano_bytedance_pedal",
+            install_hint=(
+                "ByteDance Piano 不可用，请先安装：\n"
+                "  python -m pip install piano-transcription-inference torchlibrosa"
+            ),
+            model_hint=(
+                "ByteDance Piano checkpoint 缺失或不完整，请先下载：\n"
+                "  python download_bytedance_piano_model.py"
+            ),
+        )
+
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
         """智能模式：直接对完整混音进行多乐器转写。"""
         start_time = time.time()
@@ -796,23 +908,22 @@ class MusicToMidiPipeline:
         logger.info("%s 可用性检查通过", model_label)
 
         # ── 阶段1：预处理 / 节拍检测 ──
-        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_audio"))
         self._check_cancelled()
 
-        beat_info = None
-        try:
-            beat_info = self.beat_detector.detect(audio_path)
-            tempo = beat_info.bpm if beat_info else 120.0
-            logger.info(f"节拍检测完成: {tempo:.1f} BPM")
-        except Exception as e:
-            logger.warning(f"节拍检测失败，使用默认 120 BPM: {e}")
-            tempo = 120.0
+        beat_info = self._detect_beat_or_raise(audio_path)
+        tempo = beat_info.bpm
 
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
         # ── 阶段2：多乐器后端极致精度转写 ──
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.1, f"正在加载 {model_label} 模型...")
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.1,
+            self._pt("progress.loading_model", model=model_label),
+        )
         logger.info("使用 %s 进行极致精度转写", model_label)
 
         quality = self.config.transcription_quality
@@ -843,11 +954,15 @@ class MusicToMidiPipeline:
 
         self._report(
             ProcessingStage.TRANSCRIPTION, 1.0, 0.85,
-            f"转写完成：{len(instrument_notes)} 种乐器，{total_notes} 个音符"
+            self._pt(
+                "progress.transcription_complete",
+                instrument_count=len(instrument_notes),
+                note_count=total_notes,
+            )
         )
 
         # ── 阶段3：生成 MIDI ──
-        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, "正在生成 MIDI 文件...")
+        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, self._pt("progress.generating_midi"))
         self._check_cancelled()
         logger.info("开始生成 MIDI 文件...")
 
@@ -863,12 +978,16 @@ class MusicToMidiPipeline:
             logger.error(f"MIDI 生成失败: {e}", exc_info=True)
             raise RuntimeError(f"MIDI 生成失败: {e}") from e
 
-        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成")
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
 
         # ── 完成 ──
         processing_time = time.time() - start_time
-        self._report(ProcessingStage.COMPLETE, 1.0, 1.0,
-                     f"处理完成，耗时 {processing_time:.1f} 秒")
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
+        )
 
         logger.info(f"处理完成: {midi_path} (耗时 {processing_time:.1f}s)")
 
@@ -907,25 +1026,21 @@ class MusicToMidiPipeline:
         logger.info("所有依赖检查通过")
 
         # ── 阶段1：预处理 / 节拍检测 (0-5%) ──
-        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, "正在分析音频...")
+        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_audio"))
         self._check_cancelled()
 
-        beat_info = None
-        try:
-            beat_info = self.beat_detector.detect(audio_path)
-            tempo = beat_info.bpm if beat_info else 120.0
-            logger.info(f"节拍检测完成: {tempo:.1f} BPM")
-        except Exception as e:
-            logger.warning(f"节拍检测失败，使用默认 120 BPM: {e}")
-            tempo = 120.0
+        beat_info = self._detect_beat_or_raise(audio_path)
+        tempo = beat_info.bpm
 
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
         # ── 阶段2：BS-RoFormer 人声分离 (5-35%) ──
-        self._report(ProcessingStage.SEPARATION, 0.0, 0.05, "正在分离人声与伴奏...")
+        self._report(ProcessingStage.SEPARATION, 0.0, 0.05, self._pt("progress.separating_vocals_accompaniment"))
 
-        separator = VocalSeparator()
+        separator = VocalSeparator(
+            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE)
+        )
         separator.set_cancel_check(lambda: self._cancelled)
 
         def _sep_cb(p: float, msg: str) -> None:
@@ -959,11 +1074,16 @@ class MusicToMidiPipeline:
         logger.info(f"人声文件: {vocals_path}")
         logger.info(f"伴奏文件: {accompaniment_path}")
 
-        self._report(ProcessingStage.SEPARATION, 1.0, 0.35, "人声分离完成")
+        self._report(ProcessingStage.SEPARATION, 1.0, 0.35, self._pt("progress.vocal_separation_complete"))
         self._check_cancelled()
 
         # ── 阶段3：多乐器后端转写伴奏 (35-70%) ──
-        self._report(ProcessingStage.TRANSCRIPTION, 0.0, 0.35, f"正在加载 {model_label} 模型...")
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.35,
+            self._pt("progress.loading_model", model=model_label),
+        )
         logger.info("使用 %s 转写伴奏", model_label)
 
         quality = self.config.transcription_quality
@@ -992,10 +1112,20 @@ class MusicToMidiPipeline:
                     sum(len(n) for n in drum_notes.values())
         logger.info(f"伴奏转写完成: {len(instrument_notes)} 种乐器, {acc_total} 个音符")
 
-        self._report(ProcessingStage.TRANSCRIPTION, 1.0, 0.60, f"伴奏转写完成：{acc_total} 个音符")
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            1.0,
+            0.60,
+            self._pt("progress.accompaniment_transcription_complete", note_count=acc_total),
+        )
 
         # ── 阶段4：多乐器后端转写人声 (60-85%) ──
-        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 0.0, 0.60, f"正在用 {model_label} 转写人声...")
+        self._report(
+            ProcessingStage.VOCAL_TRANSCRIPTION,
+            0.0,
+            0.60,
+            self._pt("progress.transcribing_vocals_with", model=model_label),
+        )
         logger.info("开始 %s 人声转写: %s", model_label, vocals_path)
 
         def _vocal_cb(p: float, msg: str) -> None:
@@ -1016,34 +1146,15 @@ class MusicToMidiPipeline:
         finally:
             self._cleanup_multi_instrument_backend()
 
-        # 人声 MIDI 只保留人声旋律，丢弃模型幻觉出的其他乐器和鼓
-        # YourMT3 人声程序号: 100 (主旋律), 101 (和声); 也可能输出 GM 0 (钢琴)
         raw_inst_count = len(vocal_instrument_notes)
         raw_note_count = sum(len(n) for n in vocal_instrument_notes.values())
         raw_drum_count = sum(len(n) for n in vocal_drum_notes.values())
 
-        # 优先使用 YourMT3 人声程序号 100/101，其次回退到 GM 0
-        vocal_programs = [p for p in (100, 101, 0) if p in vocal_instrument_notes]
-        if vocal_programs:
-            # 合并所有匹配的人声音符，统一为 program 0（钢琴音色）
-            merged_vocal_notes = []
-            for vp in vocal_programs:
-                merged_vocal_notes.extend(vocal_instrument_notes[vp])
-            merged_vocal_notes.sort(key=lambda n: n.start_time)
-            vocal_instrument_notes = {0: merged_vocal_notes}
-        else:
-            # 模型未识别出人声旋律，尝试使用音符最多的乐器作为人声
-            if vocal_instrument_notes:
-                best_program = max(vocal_instrument_notes, key=lambda k: len(vocal_instrument_notes[k]))
-                logger.warning(
-                    f"人声转写未产生人声/钢琴音符，回退使用 GM {best_program:03d} "
-                    f"({len(vocal_instrument_notes[best_program])} 个音符) 作为人声旋律"
-                )
-                vocal_instrument_notes = {0: vocal_instrument_notes[best_program]}
-            else:
-                logger.warning("人声转写未产生任何音符，人声 MIDI 将为空")
-                vocal_instrument_notes = {}
-        vocal_drum_notes = {}
+        vocal_instrument_notes, vocal_drum_notes = self._filter_vocal_melody_notes(
+            vocal_instrument_notes,
+            vocal_drum_notes,
+            preserve_isolated_vocal_stem=True,
+        )
 
         kept = sum(len(n) for n in vocal_instrument_notes.values())
         logger.info(
@@ -1055,13 +1166,17 @@ class MusicToMidiPipeline:
         vocal_total = kept
         logger.info(f"人声转写完成: {len(vocal_instrument_notes)} 种乐器, {vocal_total} 个音符")
 
-        self._report(ProcessingStage.VOCAL_TRANSCRIPTION, 1.0, 0.85,
-                     f"人声转写完成：{vocal_total} 个音符")
+        self._report(
+            ProcessingStage.VOCAL_TRANSCRIPTION,
+            1.0,
+            0.85,
+            self._pt("progress.vocal_transcription_complete", note_count=vocal_total),
+        )
         self._check_cancelled()
 
         # ── 阶段5：生成两个 MIDI 文件 (85-95%) ──
         self._check_cancelled()
-        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, "正在生成 MIDI 文件...")
+        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, self._pt("progress.generating_midi"))
         logger.info("开始生成 MIDI 文件...")
 
         accompaniment_midi_path = str(Path(output_dir) / f"{stem}_accompaniment.mid")
@@ -1095,7 +1210,7 @@ class MusicToMidiPipeline:
         merged_midi_path = None
         if getattr(self.config, "vocal_split_merge_midi", False):
             self._check_cancelled()
-            self._report(ProcessingStage.SYNTHESIS, 0.85, 0.92, "正在合并伴奏+人声 MIDI...")
+            self._report(ProcessingStage.SYNTHESIS, 0.85, 0.92, self._pt("progress.merging_vocal_accompaniment_midi"))
             merged_midi_path = str(Path(output_dir) / f"{stem}_vocal_accompaniment_merged.mid")
             merged_midi_path = self._merge_stem_midis(
                 {
@@ -1105,16 +1220,20 @@ class MusicToMidiPipeline:
                 merged_midi_path,
                 tempo,
             )
-            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成（含合并）")
+            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated_with_merge"))
         else:
-            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, "MIDI 文件已生成")
+            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
 
         final_midi_path = merged_midi_path or accompaniment_midi_path
 
         # ── 完成 ──
         processing_time = time.time() - start_time
-        self._report(ProcessingStage.COMPLETE, 1.0, 1.0,
-                     f"处理完成，耗时 {processing_time:.1f} 秒")
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
+        )
 
         logger.info(
             f"处理完成: 伴奏={accompaniment_midi_path}, 人声={vocal_midi_path}, "

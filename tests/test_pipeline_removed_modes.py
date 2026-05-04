@@ -29,6 +29,7 @@ class TestRestoredProcessingModes(unittest.TestCase):
     def test_restored_backend_modules_are_importable(self):
         for module_name in (
             "src.core.aria_amt_transcriber",
+            "src.core.bytedance_piano_transcriber",
             "src.core.transkun_transcriber",
             "src.core.multi_stem_separator",
         ):
@@ -39,6 +40,7 @@ class TestRestoredProcessingModes(unittest.TestCase):
         pipeline = MusicToMidiPipeline(Config())
 
         self.assertTrue(hasattr(pipeline, "aria_amt_transcriber"))
+        self.assertTrue(hasattr(pipeline, "bytedance_piano_transcriber"))
         self.assertTrue(hasattr(pipeline, "transkun_transcriber"))
 
     def test_restored_modes_dispatch_to_their_specific_paths(self):
@@ -46,6 +48,7 @@ class TestRestoredProcessingModes(unittest.TestCase):
             ("six_stem_split", "_process_six_stem_split"),
             ("piano_transkun", "_process_piano_transkun"),
             ("piano_aria_amt", "_process_piano_aria_amt"),
+            ("piano_bytedance_pedal", "_process_piano_bytedance_pedal"),
         )
         for restored_mode, method_name in cases:
             with self.subTest(restored_mode=restored_mode):
@@ -66,11 +69,18 @@ class TestRestoredProcessingModes(unittest.TestCase):
                 self.assertEqual(calls, [("input.wav", "output")])
 
     def test_aria_piano_stem_preference_fails_when_backend_is_unavailable(self):
-        pipeline = MusicToMidiPipeline(Config())
+        pipeline = MusicToMidiPipeline(Config(transcription_backend="aria_amt"))
         pipeline.aria_amt_transcriber.is_available = lambda: False
 
         with self.assertRaisesRegex(RuntimeError, "Aria-AMT"):
             pipeline._maybe_transcribe_piano_stem_with_aria("piano.wav", "output")
+
+    def test_aria_preference_uses_yourmt3_multi_backend_when_saved_miros_is_stale(self):
+        config = Config(transcription_backend="aria_amt", multi_instrument_model="miros")
+        pipeline = MusicToMidiPipeline(config)
+
+        self.assertIs(pipeline._get_multi_instrument_transcriber(), pipeline.yourmt3_transcriber)
+        self.assertEqual(pipeline._get_multi_instrument_label(), "YourMT3+")
 
     def test_requested_vocal_harmony_split_fails_when_model_is_missing(self):
         config = Config(processing_mode="six_stem_split")
@@ -107,6 +117,9 @@ class TestVocalSplitMode(unittest.TestCase):
             out_dir = tmp_path / "out"
 
             class FakeVocalSeparator:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
                 @staticmethod
                 def is_available():
                     return True

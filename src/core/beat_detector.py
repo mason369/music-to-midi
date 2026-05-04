@@ -8,11 +8,21 @@
 """
 import logging
 from typing import Optional, Callable, List, Tuple
+import math
 import numpy as np
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config, BeatInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _librosa_tempo(librosa_module, **kwargs):
+    rhythm = getattr(getattr(librosa_module, "feature", None), "rhythm", None)
+    tempo_fn = getattr(rhythm, "tempo", None)
+    if tempo_fn is None:
+        tempo_fn = librosa_module.beat.tempo
+    return tempo_fn(**kwargs)
 
 
 class BeatDetector:
@@ -34,6 +44,10 @@ class BeatDetector:
             config: 应用配置
         """
         self.config = config
+        self._translator = Translator(getattr(config, "language", Translator.DEFAULT_LANGUAGE))
+
+    def _pt(self, key: str, **kwargs) -> str:
+        return self._translator.t(key, **kwargs)
 
     def detect(
         self,
@@ -53,7 +67,7 @@ class BeatDetector:
         import librosa
 
         if progress_callback:
-            progress_callback(0.0, "正在加载音频进行节拍检测...")
+            progress_callback(0.0, self._pt("progress.loading_audio_for_beat"))
 
         logger.info(f"正在检测节拍: {audio_path}")
 
@@ -63,7 +77,7 @@ class BeatDetector:
         logger.info(f"音频加载完成: {len(y)/sr:.1f}秒, {len(y)} 采样点")
 
         if progress_callback:
-            progress_callback(0.2, "正在使用多算法分析速度...")
+            progress_callback(0.2, self._pt("progress.analyzing_tempo"))
 
         # 使用多算法检测 BPM
         logger.info("开始多算法 BPM 检测...")
@@ -71,7 +85,7 @@ class BeatDetector:
         logger.info(f"多算法 BPM 检测完成: {tempo:.1f} BPM, 候选值: {all_tempos}")
 
         if progress_callback:
-            progress_callback(0.5, "正在查找节拍位置...")
+            progress_callback(0.5, self._pt("progress.finding_beats"))
 
         # 使用检测到的 BPM 重新计算节拍位置
         _, beat_frames = librosa.beat.beat_track(y=y, sr=sr, bpm=tempo)
@@ -80,7 +94,7 @@ class BeatDetector:
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
 
         if progress_callback:
-            progress_callback(0.8, "正在检测下拍...")
+            progress_callback(0.8, self._pt("progress.detecting_downbeats"))
 
         # 尝试检测下拍并推断拍号
         downbeats, beats_per_bar = self._detect_downbeats(y, sr, beat_times)
@@ -117,7 +131,10 @@ class BeatDetector:
         返回:
             (最佳 BPM, 所有候选值列表)
         """
-        import librosa
+        try:
+            import librosa
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("所有 BPM 检测方法均失败，无法加载 librosa。") from exc
 
         all_tempos = []
 
@@ -125,9 +142,13 @@ class BeatDetector:
         try:
             tempo1, _ = librosa.beat.beat_track(y=y, sr=sr)
             if hasattr(tempo1, '__len__'):
-                tempo1 = float(tempo1[0]) if len(tempo1) > 0 else 120.0
+                if len(tempo1) == 0:
+                    raise RuntimeError("beat_track 未返回 BPM")
+                tempo1 = float(tempo1[0])
             else:
                 tempo1 = float(tempo1)
+            if not math.isfinite(tempo1) or tempo1 <= 0:
+                raise RuntimeError(f"beat_track 返回无效 BPM: {tempo1}")
             all_tempos.append(tempo1)
             logger.debug(f"方法1 (beat_track): {tempo1:.1f} BPM")
         except Exception as e:
@@ -138,11 +159,18 @@ class BeatDetector:
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
             # 使用 aggregate=None 获取所有候选值，然后手动计算中位数
             # 这样可以避免某些 librosa 版本中 aggregate 参数的兼容性问题
-            tempo_candidates = librosa.beat.tempo(onset_envelope=onset_env, sr=sr, aggregate=None)
+            tempo_candidates = _librosa_tempo(
+                librosa,
+                onset_envelope=onset_env,
+                sr=sr,
+                aggregate=None,
+            )
             if hasattr(tempo_candidates, '__len__') and len(tempo_candidates) > 0:
                 tempo2 = float(np.median(tempo_candidates))
             else:
                 tempo2 = float(tempo_candidates)
+            if not math.isfinite(tempo2) or tempo2 <= 0:
+                raise RuntimeError(f"tempo median 返回无效 BPM: {tempo2}")
             all_tempos.append(tempo2)
             logger.debug(f"方法2 (onset median): {tempo2:.1f} BPM")
         except Exception as e:
@@ -151,11 +179,13 @@ class BeatDetector:
         # 方法3: tempo (mean aggregate)
         try:
             # 使用 aggregate=None 获取所有候选值，然后手动计算平均值
-            tempo_candidates = librosa.beat.tempo(y=y, sr=sr, aggregate=None)
+            tempo_candidates = _librosa_tempo(librosa, y=y, sr=sr, aggregate=None)
             if hasattr(tempo_candidates, '__len__') and len(tempo_candidates) > 0:
                 tempo3 = float(np.mean(tempo_candidates))
             else:
                 tempo3 = float(tempo_candidates)
+            if not math.isfinite(tempo3) or tempo3 <= 0:
+                raise RuntimeError(f"tempo mean 返回无效 BPM: {tempo3}")
             all_tempos.append(tempo3)
             logger.debug(f"方法3 (tempo mean): {tempo3:.1f} BPM")
         except Exception as e:
@@ -174,14 +204,15 @@ class BeatDetector:
                 valid_indices = np.where(valid_mask)[0]
                 best_idx = valid_indices[np.argmax(tempogram_mean[valid_indices])]
                 tempo4 = float(tempo_freqs[best_idx])
+                if not math.isfinite(tempo4) or tempo4 <= 0:
+                    raise RuntimeError(f"tempogram 返回无效 BPM: {tempo4}")
                 all_tempos.append(tempo4)
                 logger.debug(f"方法4 (tempogram): {tempo4:.1f} BPM")
         except Exception as e:
             logger.warning(f"方法4失败: {e}")
 
         if not all_tempos:
-            logger.warning("所有BPM检测方法均失败，使用默认 120 BPM（结果可能不准确）")
-            return 120.0, [120.0]
+            raise RuntimeError("所有 BPM 检测方法均失败，无法生成可靠 tempo。")
 
         # 生成倍频候选（2x 和 0.5x）
         candidates = []
@@ -220,8 +251,8 @@ class BeatDetector:
         """
         min_bpm, max_bpm = valid_range
 
-        if tempo <= 0:
-            return (min_bpm + max_bpm) / 2
+        if not math.isfinite(float(tempo)) or tempo <= 0:
+            raise RuntimeError(f"检测到无效 BPM: {tempo}")
 
         while tempo < min_bpm:
             tempo *= 2
@@ -251,7 +282,7 @@ class BeatDetector:
             最佳 BPM
         """
         if not candidates:
-            return 120.0
+            raise RuntimeError("BPM 候选列表为空，无法生成可靠 tempo。")
 
         # 聚类阈值（BPM 差值在此范围内视为同一组）
         cluster_threshold = 8.0

@@ -87,9 +87,12 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.config = config or Config()
+        set_language(self.config.language)
         self.worker = None
         self.current_file = None
         self._last_memory_update = 0.0  # 内存标签节流时间戳
+        self._last_memory_info = None
+        self._raw_device_label = ""
         self._stopping = False  # 防止停止后信号竞争
 
         self._setup_ui()
@@ -184,16 +187,16 @@ class MainWindow(QMainWindow):
         title_layout = QVBoxLayout()
         title_layout.setSpacing(2)
 
-        title_label = QLabel(t("app.name"))
-        title_label.setFont(get_ui_font(13, bold=True))
-        title_label.setStyleSheet("color: #e0e0e0;")
+        self.title_label = QLabel(t("app.name"))
+        self.title_label.setFont(get_ui_font(13, bold=True))
+        self.title_label.setStyleSheet("color: #e0e0e0;")
 
-        subtitle_label = QLabel(t("app.subtitle"))
-        subtitle_label.setFont(get_ui_font(8))
-        subtitle_label.setStyleSheet("color: #8892a0;")
+        self.subtitle_label = QLabel(t("app.subtitle"))
+        self.subtitle_label.setFont(get_ui_font(8))
+        self.subtitle_label.setStyleSheet("color: #8892a0;")
 
-        title_layout.addWidget(title_label)
-        title_layout.addWidget(subtitle_label)
+        title_layout.addWidget(self.title_label)
+        title_layout.addWidget(self.subtitle_label)
 
         layout.addWidget(icon_label)
         layout.addSpacing(8)
@@ -458,38 +461,38 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # 文件菜单
-        file_menu = menubar.addMenu(t("menu.file"))
+        self.file_menu = menubar.addMenu(t("menu.file"))
 
         self.open_action = QAction(t("menu.open"), self)
         self.open_action.setShortcut("Ctrl+O")
         self.open_action.triggered.connect(self._open_file)
-        file_menu.addAction(self.open_action)
+        self.file_menu.addAction(self.open_action)
 
         self.save_action = QAction(t("menu.save"), self)
         self.save_action.setShortcut("Ctrl+S")
         self.save_action.setEnabled(False)
-        file_menu.addAction(self.save_action)
+        self.file_menu.addAction(self.save_action)
 
-        file_menu.addSeparator()
+        self.file_menu.addSeparator()
 
         self.exit_action = QAction(t("menu.exit"), self)
         self.exit_action.setShortcut("Ctrl+Q")
         self.exit_action.triggered.connect(self.close)
-        file_menu.addAction(self.exit_action)
+        self.file_menu.addAction(self.exit_action)
 
         # 编辑菜单
-        edit_menu = menubar.addMenu(t("menu.edit"))
+        self.edit_menu = menubar.addMenu(t("menu.edit"))
 
         self.settings_action = QAction(t("menu.settings"), self)
         self.settings_action.triggered.connect(self._open_settings)
-        edit_menu.addAction(self.settings_action)
+        self.edit_menu.addAction(self.settings_action)
 
         # 视图菜单
-        view_menu = menubar.addMenu(t("menu.view"))
+        self.view_menu = menubar.addMenu(t("menu.view"))
 
         # 语言子菜单
         self.lang_menu = QMenu(t("settings.general.language"), self)
-        view_menu.addMenu(self.lang_menu)
+        self.view_menu.addMenu(self.lang_menu)
 
         for code, name in get_translator().AVAILABLE_LANGUAGES.items():
             action = QAction(name, self)
@@ -498,11 +501,11 @@ class MainWindow(QMainWindow):
             self.lang_menu.addAction(action)
 
         # 帮助菜单
-        help_menu = menubar.addMenu(t("menu.help"))
+        self.help_menu = menubar.addMenu(t("menu.help"))
 
         self.about_action = QAction(t("menu.about"), self)
         self.about_action.triggered.connect(self._show_about)
-        help_menu.addAction(self.about_action)
+        self.help_menu.addAction(self.about_action)
 
     def _setup_toolbar(self):
         """设置工具栏"""
@@ -554,7 +557,7 @@ class MainWindow(QMainWindow):
     def _start_gpu_detection(self):
         """启动后台 GPU 检测线程"""
         class _GpuDetector(QThread):
-            detected = pyqtSignal(str, str)  # (device_label, memory_text)
+            detected = pyqtSignal(str, object)  # (device_label, memory_info)
 
             def run(self):
                 try:
@@ -565,21 +568,35 @@ class MainWindow(QMainWindow):
                     mem_info = get_memory_info()
                     if mem_info:
                         used, total = mem_info
-                        mem_text = f"显存: {used:.1f}/{total:.1f}GB"
+                        memory_info = (used, total)
                     else:
-                        mem_text = ""
-                    self.detected.emit(device_text, mem_text)
+                        memory_info = None
+                    self.detected.emit(device_text, memory_info)
                 except Exception:
-                    self.detected.emit("CPU", "")
+                    self.detected.emit("CPU", None)
 
         self._gpu_detector = _GpuDetector()
         self._gpu_detector.detected.connect(self._on_gpu_detected)
         self._gpu_detector.start()
 
-    def _on_gpu_detected(self, dev: str, mem: str):
+    def _format_device_label(self, dev: str) -> str:
+        return t("status.cpu") if dev == "CPU" else dev
+
+    def _render_memory_label(self):
+        if self._last_memory_info:
+            used, total = self._last_memory_info
+            self.memory_label.setText(
+                f"{t('status.video_memory')}: {used:.1f}/{total:.1f}GB"
+            )
+        else:
+            self.memory_label.setText("")
+
+    def _on_gpu_detected(self, dev: str, mem_info):
         """处理 GPU 检测结果"""
-        self.device_label.setText(dev)
-        self.memory_label.setText(mem)
+        self._raw_device_label = dev
+        self._last_memory_info = mem_info
+        self.device_label.setText(self._format_device_label(dev))
+        self._render_memory_label()
 
     def _connect_signals(self):
         """连接信号与槽"""
@@ -726,7 +743,8 @@ class MainWindow(QMainWindow):
         self.save_action.setEnabled(True)
 
         self.status_label.setText(
-            f"{t('status.complete')} - {result.processing_time:.1f}秒"
+            f"{t('status.complete')} - {result.processing_time:.1f}"
+            f"{t('dialogs.complete.seconds_suffix')}"
         )
 
         # 创建自定义完成对话框
@@ -779,7 +797,7 @@ class MainWindow(QMainWindow):
             <b>{t('dialogs.complete.accompaniment_midi')}:</b> {result.accompaniment_midi_path}<br>
             <b>{t('dialogs.complete.vocal_midi')}:</b> {result.vocal_midi_path}<br>
             {merged_line}
-            <b>处理时间:</b> {result.processing_time:.1f}秒
+            <b>{t('dialogs.complete.processing_time')}:</b> {result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}
             </p>
             """
         elif is_six_stem:
@@ -794,16 +812,16 @@ class MainWindow(QMainWindow):
             <b>{t('dialogs.complete.stem_midi_count')}:</b> {len(result.stem_midi_paths)}<br>
             <b>{t('dialogs.complete.stem_audio_count')}:</b> {stem_audio_count}<br>
             <b>{t('dialogs.complete.stem_midis')}:</b><br>{stem_midi_lines}<br>
-            <b>处理时间:</b> {result.processing_time:.1f}秒
+            <b>{t('dialogs.complete.processing_time')}:</b> {result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}
             </p>
             """
         else:
             info_text = f"""
             <p style="color: #b0b8c8; line-height: 1.6;">
-            <b>MIDI文件:</b> {result.midi_path}<br>
-            <b>轨道数:</b> {len(result.tracks)}<br>
-            <b>音符数:</b> {result.total_notes}<br>
-            <b>处理时间:</b> {result.processing_time:.1f}秒
+            <b>{t('dialogs.complete.midi_file')}:</b> {result.midi_path}<br>
+            <b>{t('dialogs.complete.track_count')}:</b> {len(result.tracks)}<br>
+            <b>{t('dialogs.complete.note_count')}:</b> {result.total_notes}<br>
+            <b>{t('dialogs.complete.processing_time')}:</b> {result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}
             </p>
             """
         info_label = QLabel(info_text)
@@ -992,8 +1010,7 @@ class MainWindow(QMainWindow):
         btn_layout.setSpacing(12)
 
         # 复制按钮
-        copy_text = t("dialogs.error.copy")
-        copy_btn = QPushButton(copy_text if copy_text != "dialogs.error.copy" else "复制错误信息")
+        copy_btn = QPushButton(t("dialogs.error.copy"))
         copy_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 16px;
@@ -1010,8 +1027,7 @@ class MainWindow(QMainWindow):
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(error_msg))
 
         # 确定按钮
-        ok_text = t("dialogs.error.ok")
-        ok_btn = QPushButton(ok_text if ok_text != "dialogs.error.ok" else "确定")
+        ok_btn = QPushButton(t("dialogs.error.ok"))
         ok_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 20px;
@@ -1040,10 +1056,10 @@ class MainWindow(QMainWindow):
         """更新内存使用显示"""
         mem_info = get_memory_info()
         if mem_info:
-            used, total = mem_info
-            self.memory_label.setText(f"{t('status.memory')}: {used:.1f}/{total:.1f}GB")
+            self._last_memory_info = mem_info
         else:
-            self.memory_label.setText("")
+            self._last_memory_info = None
+        self._render_memory_label()
 
     def _open_settings(self):
         """打开设置对话框"""
@@ -1076,13 +1092,25 @@ class MainWindow(QMainWindow):
     def _update_translations(self):
         """更新当前语言的所有UI文本"""
         self.setWindowTitle(t("app.name"))
+        app = QApplication.instance()
+        if app:
+            app.setApplicationName(t("app.name"))
+        self.config.language = get_translator().get_language()
 
         # 菜单
+        self.file_menu.menuAction().setText(t("menu.file"))
+        self.edit_menu.menuAction().setText(t("menu.edit"))
+        self.view_menu.menuAction().setText(t("menu.view"))
+        self.help_menu.menuAction().setText(t("menu.help"))
+        self.lang_menu.setTitle(t("settings.general.language"))
         self.open_action.setText(t("menu.open"))
         self.save_action.setText(t("menu.save"))
         self.exit_action.setText(t("menu.exit"))
         self.settings_action.setText(t("menu.settings"))
         self.about_action.setText(t("menu.about"))
+
+        self.title_label.setText(t("app.name"))
+        self.subtitle_label.setText(t("app.subtitle"))
 
         # 输出设置
         self.output_group.setTitle(t("main.output.title"))
@@ -1092,11 +1120,13 @@ class MainWindow(QMainWindow):
         self.tracks_check.setText(t("main.output.options.saveTracks"))
 
         # 按钮
-        self.start_btn.setText(t("toolbar.start"))
-        self.stop_btn.setText(t("toolbar.stop"))
+        self.start_btn.setText("▶  " + t("toolbar.start"))
+        self.stop_btn.setText("■  " + t("toolbar.stop"))
 
         # 状态
         self.status_label.setText(t("status.ready"))
+        self.device_label.setText(self._format_device_label(self._raw_device_label))
+        self._render_memory_label()
 
         # 组件
         self.dropzone.update_translations()

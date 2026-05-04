@@ -1,4 +1,7 @@
+import os
+import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -45,6 +48,69 @@ class _FakePrettyMIDI:
 
 
 class MirosTranscriberTests(unittest.TestCase):
+    def test_source_without_weights_is_not_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+
+            with patch.object(MirosTranscriber, "_repo_dir", return_value=repo), patch.object(
+                MirosTranscriber,
+                "_missing_modules",
+                return_value=[],
+            ):
+                reason = MirosTranscriber.get_unavailable_reason()
+                available = MirosTranscriber.is_available()
+
+        self.assertIn("模型权重缺失", reason)
+        self.assertFalse(available)
+
+    def test_transcribe_to_midi_passes_absolute_paths_to_repo_subprocess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "external" / "ai4m-miros"
+            repo.mkdir(parents=True)
+            entrypoint = repo / "main.py"
+            entrypoint.write_text("print('miros')", encoding="utf-8")
+            audio_path = root / "relative" / "song.wav"
+            audio_path.parent.mkdir()
+            audio_path.write_bytes(b"wav")
+            captured = {}
+
+            class FakeProcess:
+                returncode = 0
+
+                def __init__(self, command, **kwargs):
+                    captured["command"] = command
+                    captured["cwd"] = kwargs.get("cwd")
+
+                def communicate(self):
+                    Path(captured["command"][captured["command"].index("-o") + 1]).write_bytes(b"mid")
+                    return "", ""
+
+            transcriber = MirosTranscriber(Config())
+
+            previous_cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with patch.object(MirosTranscriber, "_repo_dir", return_value=repo), patch.object(
+                    MirosTranscriber, "_entrypoint_path", return_value=entrypoint
+                ), patch.object(MirosTranscriber, "get_unavailable_reason", return_value=""), patch.object(
+                    subprocess, "Popen", side_effect=lambda command, **kwargs: FakeProcess(command, **kwargs)
+                ):
+                    result = transcriber.transcribe_to_midi("relative/song.wav", "out/song.mid")
+            finally:
+                os.chdir(previous_cwd)
+
+        command = captured["command"]
+        input_arg = Path(command[command.index("-i") + 1])
+        output_arg = Path(command[command.index("-o") + 1])
+
+        self.assertTrue(input_arg.is_absolute())
+        self.assertTrue(output_arg.is_absolute())
+        self.assertEqual(str(repo), captured["cwd"])
+        self.assertEqual(str(output_arg), result)
+
     def test_transcribe_precise_reads_seconds_from_pretty_midi(self):
         pretty_midi_stub = types.ModuleType("pretty_midi")
         pretty_midi_stub.PrettyMIDI = _FakePrettyMIDI

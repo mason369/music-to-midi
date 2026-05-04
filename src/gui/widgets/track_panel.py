@@ -106,6 +106,10 @@ class TrackPanel(QGroupBox):
         self.mode_combo.addItem(t("main.mode.six_stem_split"), ProcessingMode.SIX_STEM_SPLIT.value)
         self.mode_combo.addItem(t("main.mode.piano_transkun"), ProcessingMode.PIANO_TRANSKUN.value)
         self.mode_combo.addItem(t("main.mode.piano_aria_amt"), ProcessingMode.PIANO_ARIA_AMT.value)
+        self.mode_combo.addItem(
+            t("main.mode.piano_bytedance_pedal"),
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
+        )
         self.mode_combo.setStyleSheet(self._combo_style())
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
@@ -121,15 +125,13 @@ class TrackPanel(QGroupBox):
         model_row.setContentsMargins(0, 0, 0, 0)
         model_row.setSpacing(10)
 
-        self._model_label = QLabel(t("main.engine.label") + ":")
+        self._model_label = QLabel(t("main.engine.active_label") + ":")
         self._model_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
 
         self.model_combo = QComboBox()
-        self.model_combo.addItem(t("main.engine.aria_amt"), TranscriptionBackend.ARIA_AMT.value)
-        self.model_combo.addItem(t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value)
-        self.model_combo.addItem(t("main.engine.miros"), MultiInstrumentModel.MIROS.value)
         self.model_combo.setStyleSheet(self._combo_style(240))
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self._sync_model_options(MultiInstrumentModel.YOURMT3.value)
 
         model_row.addWidget(self._model_label)
         model_row.addWidget(self.model_combo)
@@ -256,13 +258,14 @@ class TrackPanel(QGroupBox):
         main_layout.addWidget(self._six_stem_options)
 
         self.set_processing_mode(ProcessingMode.SMART.value)
-        self.set_transcription_backend(TranscriptionBackend.ARIA_AMT.value)
+        self.set_transcription_backend(MultiInstrumentModel.YOURMT3.value)
         self.set_multi_instrument_model(MultiInstrumentModel.YOURMT3.value)
         self.set_midi_track_mode(MidiTrackMode.MULTI_TRACK.value)
         self._refresh_labels()
         self._update_mode_option_widgets()
 
     def _on_mode_changed(self, _index: int):
+        self._sync_model_options(self.get_transcription_backend())
         self._refresh_labels()
         self._update_mode_option_widgets()
         self.mode_changed.emit(self.get_processing_mode())
@@ -284,6 +287,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_transkun_tooltip")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_tooltip")
+        if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
+            return t("main.mode.piano_bytedance_pedal_tooltip")
         return t("main.mode.smart_tooltip")
 
     def _model_tooltip(self) -> str:
@@ -304,6 +309,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_transkun_desc")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_desc")
+        if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
+            return t("main.mode.piano_bytedance_pedal_desc")
         return t("main.mode.smart_desc")
 
     def _hint_text(self) -> str:
@@ -316,6 +323,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_transkun_hint")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_hint")
+        if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
+            return t("main.mode.piano_bytedance_pedal_hint")
         return t("main.mode.smart_hint")
 
     def _model_hint_text(self) -> str:
@@ -323,7 +332,11 @@ class TrackPanel(QGroupBox):
         backend = self.get_transcription_backend()
         multi_model = self.get_multi_instrument_model()
 
-        if mode in {ProcessingMode.PIANO_TRANSKUN.value, ProcessingMode.PIANO_ARIA_AMT.value}:
+        if mode in {
+            ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_ARIA_AMT.value,
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
+        }:
             return t("main.engine.dedicated_mode_hint")
         if backend == TranscriptionBackend.ARIA_AMT.value and mode == ProcessingMode.SIX_STEM_SPLIT.value:
             return t("main.engine.aria_amt_six_stem_hint")
@@ -353,6 +366,38 @@ class TrackPanel(QGroupBox):
             return t("main.engine.quality_fixed_hint")
         return t("main.engine.quality_configurable_hint")
 
+    def _model_options(self, mode: str | None = None) -> list[tuple[str, str]]:
+        mode = mode or self.get_processing_mode()
+        if mode == ProcessingMode.SIX_STEM_SPLIT.value:
+            return [
+                (t("main.engine.aria_amt"), TranscriptionBackend.ARIA_AMT.value),
+                (t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
+                (t("main.engine.miros"), MultiInstrumentModel.MIROS.value),
+            ]
+        return [
+            (t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
+            (t("main.engine.miros"), MultiInstrumentModel.MIROS.value),
+        ]
+
+    def _sync_model_options(self, preferred_backend: str | None = None) -> None:
+        options = self._model_options()
+        values = [value for _label, value in options]
+        preferred = str(preferred_backend or "").strip().lower()
+        if preferred not in values:
+            preferred = MultiInstrumentModel.YOURMT3.value
+
+        previous_blocked = self.model_combo.blockSignals(True)
+        try:
+            self.model_combo.clear()
+            for label, value in options:
+                self.model_combo.addItem(label, value)
+            index = self.model_combo.findData(preferred)
+            if index < 0:
+                index = 0
+            self.model_combo.setCurrentIndex(index)
+        finally:
+            self.model_combo.blockSignals(previous_blocked)
+
     def _refresh_labels(self):
         self.mode_combo.setToolTip(self._mode_tooltip())
         self.model_combo.setToolTip(self._model_tooltip())
@@ -373,19 +418,17 @@ class TrackPanel(QGroupBox):
         self.mode_combo.setCurrentIndex(index)
 
     def get_transcription_backend(self) -> str:
-        return self.model_combo.currentData() or TranscriptionBackend.ARIA_AMT.value
+        return self.model_combo.currentData() or MultiInstrumentModel.YOURMT3.value
 
     def set_transcription_backend(self, backend: str):
-        index = self.model_combo.findData(backend)
-        if index < 0:
-            index = self.model_combo.findData(TranscriptionBackend.ARIA_AMT.value)
-        self.model_combo.setCurrentIndex(index)
+        self._sync_model_options(backend)
+        self._update_mode_option_widgets()
 
     def get_multi_instrument_model(self) -> str:
         preferred = self.get_transcription_backend()
         if preferred in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
             return preferred
-        return getattr(self, "_selected_multi_instrument_model", MultiInstrumentModel.YOURMT3.value)
+        return MultiInstrumentModel.YOURMT3.value
 
     def set_multi_instrument_model(self, model_name: str):
         if model_name not in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
@@ -502,16 +545,15 @@ class TrackPanel(QGroupBox):
     def update_translations(self):
         self.setTitle(t("main.tracks.title"))
         self._mode_label.setText(t("main.mode.label") + ":")
-        self._model_label.setText(t("main.engine.label") + ":")
+        self._model_label.setText(t("main.engine.active_label") + ":")
         self._midi_track_mode_label.setText(t("main.engine.track_mode_label") + ":")
         self.mode_combo.setItemText(0, t("main.mode.smart"))
         self.mode_combo.setItemText(1, t("main.mode.vocal_split"))
         self.mode_combo.setItemText(2, t("main.mode.six_stem_split"))
         self.mode_combo.setItemText(3, t("main.mode.piano_transkun"))
         self.mode_combo.setItemText(4, t("main.mode.piano_aria_amt"))
-        self.model_combo.setItemText(0, t("main.engine.aria_amt"))
-        self.model_combo.setItemText(1, t("main.engine.yourmt3"))
-        self.model_combo.setItemText(2, t("main.engine.miros"))
+        self.mode_combo.setItemText(5, t("main.mode.piano_bytedance_pedal"))
+        self._sync_model_options(self.get_transcription_backend())
         self.midi_track_mode_combo.setItemText(0, t("main.engine.track_mode_multi"))
         self.midi_track_mode_combo.setItemText(1, t("main.engine.track_mode_single"))
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))

@@ -148,7 +148,7 @@ def _get_torch():
                         "可能原因：\n"
                         "  1. 未安装 Visual C++ Redistributable 2022: "
                         "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                        "  2. 没有 NVIDIA 显卡或未安装驱动，将自动回退到 CPU 推理"
+                        "  2. 没有 NVIDIA 显卡或未安装驱动，GPU 路径将不可用"
                     )
                 else:
                     logger.warning(

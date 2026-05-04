@@ -168,6 +168,18 @@ def get_aria_amt_dir() -> Path:
     return ensure_dir(Path.home() / ".cache" / "music_ai_models" / "aria_amt")
 
 
+def get_bytedance_piano_dir() -> Path:
+    bundled = _find_existing_relative_path(
+        [
+            "models/bytedance_piano",
+            "assets/models/bytedance_piano",
+        ]
+    )
+    if bundled is not None:
+        return bundled
+    return ensure_dir(Path.home() / ".cache" / "music_ai_models" / "bytedance_piano")
+
+
 def get_yourmt3_search_roots() -> List[Path]:
     roots: List[Path] = []
 

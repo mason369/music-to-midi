@@ -126,7 +126,37 @@ except ImportError:
 
 import gradio as gr
 
+from src.i18n.translator import Translator
 from src.models.data_models import Config, ProcessingStage
+
+SPACE_LANGUAGE = os.environ.get("MUSIC_TO_MIDI_LANGUAGE", "zh_CN")
+if SPACE_LANGUAGE not in Translator.AVAILABLE_LANGUAGES:
+    raise RuntimeError(f"Unsupported MUSIC_TO_MIDI_LANGUAGE: {SPACE_LANGUAGE}")
+SPACE_TRANSLATOR = Translator(SPACE_LANGUAGE)
+
+
+def st(key: str, **kwargs) -> str:
+    return SPACE_TRANSLATOR.t(key, **kwargs)
+
+
+MODE_IDS = (
+    "smart",
+    "vocal_split",
+    "six_stem_split",
+    "piano_transkun",
+    "piano_aria_amt",
+    "piano_bytedance_pedal",
+)
+MODE_LABELS = {mode_id: st(f"space.mode.{mode_id}") for mode_id in MODE_IDS}
+MODE_CHOICES = [(MODE_LABELS[mode_id], mode_id) for mode_id in MODE_IDS]
+STAGE_LABEL_KEYS = {
+    ProcessingStage.PREPROCESSING: "preprocessing",
+    ProcessingStage.SEPARATION: "separation",
+    ProcessingStage.TRANSCRIPTION: "transcription",
+    ProcessingStage.VOCAL_TRANSCRIPTION: "vocal_transcription",
+    ProcessingStage.SYNTHESIS: "synthesis",
+    ProcessingStage.COMPLETE: "complete",
+}
 
 
 def ensure_model_weights():
@@ -176,6 +206,29 @@ def ensure_aria_amt_weights():
     except Exception as exc:
         logger.warning("Aria-AMT checkpoint download failed: %s", exc)
 
+
+def ensure_bytedance_piano_weights():
+    """确保 ByteDance Piano 带踏板 checkpoint 已下载。"""
+    try:
+        from download_bytedance_piano_model import (
+            download_bytedance_piano_model,
+            is_bytedance_piano_model_available,
+        )
+    except Exception as exc:
+        logger.warning("ByteDance Piano downloader unavailable: %s", exc)
+        return
+
+    if is_bytedance_piano_model_available():
+        logger.info("ByteDance Piano checkpoint found")
+        return
+
+    logger.info("ByteDance Piano checkpoint not found, downloading...")
+    try:
+        download_bytedance_piano_model()
+        logger.info("ByteDance Piano checkpoint downloaded")
+    except Exception as exc:
+        logger.warning("ByteDance Piano checkpoint download failed: %s", exc)
+
 clear_logs()
 
 
@@ -206,7 +259,7 @@ def _convert_impl(
     from src.utils.gpu_utils import clear_gpu_memory
 
     if audio_path is None:
-        raise gr.Error("请先上传音频文件")
+        raise gr.Error(st("space.error.upload_required"))
 
     def _write_log(msg):
         try:
@@ -218,21 +271,17 @@ def _convert_impl(
 
     clear_logs()
     _write_log("=" * 40)
-    _write_log("开始音频转 MIDI 处理")
-    _write_log(f"音频文件: {Path(audio_path).name}")
-    _write_log(f"处理模式: {mode}")
-    _write_log(f"转写质量: {quality}")
+    _write_log(st("space.log.start"))
+    _write_log(f"{st('space.log.audio_file')}: {Path(audio_path).name}")
+    _write_log(f"{st('space.log.processing_mode')}: {MODE_LABELS.get(mode, mode)}")
+    _write_log(f"{st('space.log.quality')}: {quality}")
     _write_log("=" * 40)
 
     config = Config()
-    mode_mapping = {
-        "YourMT3+ 多乐器转写": "smart",
-        "人声分离 + 分别转写": "vocal_split",
-        "六声部分离 + 分别转写": "six_stem_split",
-        "钢琴专用转写 (Transkun)": "piano_transkun",
-        "钢琴专用转写 (Aria-AMT)": "piano_aria_amt",
-    }
-    config.processing_mode = mode_mapping.get(mode, "smart")
+    if mode not in MODE_IDS:
+        raise RuntimeError(f"Unsupported processing mode: {mode}")
+    config.processing_mode = mode
+    config.language = SPACE_LANGUAGE
     config.transcription_quality = quality
     config.vocal_split_merge_midi = bool(
         config.processing_mode == "vocal_split" and vocal_split_merge_midi
@@ -247,6 +296,8 @@ def _convert_impl(
 
     if config.processing_mode == "piano_aria_amt":
         ensure_aria_amt_weights()
+    elif config.processing_mode == "piano_bytedance_pedal":
+        ensure_bytedance_piano_weights()
     elif config.processing_mode != "piano_transkun":
         ensure_model_weights()
 
@@ -254,14 +305,10 @@ def _convert_impl(
     output_dir = tempfile.mkdtemp(prefix="midi_output_")
 
     def on_progress(p):
-        stage_name = {
-            ProcessingStage.PREPROCESSING: "预处理",
-            ProcessingStage.SEPARATION: "音源分离",
-            ProcessingStage.TRANSCRIPTION: "音频转写",
-            ProcessingStage.VOCAL_TRANSCRIPTION: "人声转写",
-            ProcessingStage.SYNTHESIS: "MIDI合成",
-            ProcessingStage.COMPLETE: "完成",
-        }.get(p.stage, str(p.stage))
+        stage_key = STAGE_LABEL_KEYS.get(p.stage)
+        stage_name = (
+            st(f"main.progress.stages.{stage_key}") if stage_key else str(p.stage)
+        )
         progress(p.overall_progress, desc=f"[{stage_name}] {p.message}")
 
     try:
@@ -272,7 +319,7 @@ def _convert_impl(
         )
     except Exception as exc:
         logger.error("转换失败: %s", exc)
-        raise gr.Error(f"转换失败: {exc}") from exc
+        raise gr.Error(st("space.error.conversion_failed", error=exc)) from exc
     finally:
         try:
             clear_gpu_memory()
@@ -303,24 +350,29 @@ def _convert_impl(
     device_label = get_device_label()
     bpm_str = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
     status_lines = [
-        "--- 转换完成 ---",
-        f"耗时: {result.processing_time:.1f} 秒",
-        f"总音符数: {result.total_notes}",
+        st("space.status.complete_header"),
+        f"{st('space.status.elapsed')}: {result.processing_time:.1f} {st('space.status.seconds')}",
+        f"{st('space.status.total_notes')}: {result.total_notes}",
         f"BPM: {bpm_str}",
-        f"设备: {device_label}",
+        f"{st('space.status.device')}: {device_label}",
     ]
     if result.stem_midi_paths:
-        status_lines.append(f"合并 MIDI: {Path(result.midi_path).name}")
-        status_lines.append(f"分 stem MIDI: {len(result.stem_midi_paths)} 个")
+        status_lines.append(f"{st('space.status.merged_midi')}: {Path(result.midi_path).name}")
+        status_lines.append(
+            f"{st('space.status.stem_midi_count')}: "
+            f"{len(result.stem_midi_paths)}{st('space.status.stem_midi_count_suffix')}"
+        )
     elif result.vocal_midi_path:
-        status_lines.append(f"伴奏 MIDI: {Path(result.accompaniment_midi_path).name}")
-        status_lines.append(f"人声 MIDI: {Path(result.vocal_midi_path).name}")
+        status_lines.append(
+            f"{st('space.status.accompaniment_midi')}: {Path(result.accompaniment_midi_path).name}"
+        )
+        status_lines.append(f"{st('space.status.vocal_midi')}: {Path(result.vocal_midi_path).name}")
         if result.merged_midi_path:
-            status_lines.append(f"合并 MIDI: {Path(result.merged_midi_path).name}")
+            status_lines.append(f"{st('space.status.merged_midi')}: {Path(result.merged_midi_path).name}")
     else:
-        status_lines.append(f"MIDI 文件: {Path(result.midi_path).name}")
+        status_lines.append(f"{st('space.status.midi_file')}: {Path(result.midi_path).name}")
 
-    logger.info("转换完成!")
+    logger.info(st("space.log.complete"))
     return output_files, "\n".join(status_lines)
 
 
@@ -370,35 +422,14 @@ else:
 
 
 def update_mode_info(mode):
-    if mode == "人声分离 + 分别转写":
-        return (
-            "**BS-RoFormer + YourMT3+** — 先用 BS-RoFormer 分离人声与伴奏，"
-            "再分别用 YourMT3+ 转写；默认输出两个独立 MIDI，可选额外输出 1 个合并 MIDI。"
-        )
-    if mode == "六声部分离 + 分别转写":
-        return (
-            "**BS-RoFormer SW + YourMT3+ / Aria-AMT** — 分离 bass/drums/guitar/piano/vocals/other "
-            "六个 stem，默认转写全部 stem，可切换为只转写选中 stem，并输出合并 MIDI。"
-        )
-    if mode == "钢琴专用转写 (Transkun)":
-        return (
-            "**Transkun (Piano)** — 针对独奏钢琴的专用转写模型，"
-            "适合纯钢琴音频，直接输出钢琴 MIDI。"
-        )
-    if mode == "钢琴专用转写 (Aria-AMT)":
-        return (
-            "**Aria-AMT (Piano)** — 针对独奏钢琴场景的专用转写模型，"
-            "首次使用会准备 Aria-AMT checkpoint。"
-        )
-    return (
-        "**YourMT3+ MoE** — 直接对完整音频进行多乐器转写，"
-        "精确识别 128 种 GM 乐器，轨道数量由模型自动决定。"
-    )
+    if mode not in MODE_IDS:
+        raise RuntimeError(f"Unsupported processing mode: {mode}")
+    return st(f"space.mode.{mode}_info")
 
 
 def update_mode_controls(mode, only_selected):
-    is_vocal = mode == "人声分离 + 分别转写"
-    is_six = mode == "六声部分离 + 分别转写"
+    is_vocal = mode == "vocal_split"
+    is_six = mode == "six_stem_split"
     return (
         update_mode_info(mode),
         gr.update(visible=is_vocal),
@@ -409,7 +440,7 @@ def update_mode_controls(mode, only_selected):
 
 
 def update_six_stem_targets_visibility(mode, only_selected):
-    return gr.update(visible=(mode == "六声部分离 + 分别转写" and bool(only_selected)))
+    return gr.update(visible=(mode == "six_stem_split" and bool(only_selected)))
 
 
 CUSTOM_CSS = """
@@ -530,9 +561,10 @@ LOG_POLL_HEAD = """<script>
 </script>"""
 
 DEVICE_LABEL = get_device_label()
+ZERO_GPU_NOTE = st("space.ui.zerogpu_note") if ZERO_GPU else ""
 
 with gr.Blocks(
-    title="Music to MIDI",
+    title=st("space.app.title"),
     css=CUSTOM_CSS,
     head=LOG_POLL_HEAD,
     theme=gr.themes.Base(
@@ -555,55 +587,49 @@ with gr.Blocks(
 ) as demo:
     with gr.Group(elem_classes="app-header"):
         gr.Markdown(
-            "# 🎵 音乐转MIDI\n"
-            "将音乐智能转换为多轨道 MIDI 文件 — 基于 YourMT3+ MoE 深度学习模型"
+            f"# 🎵 {st('space.app.title')}\n"
+            f"{st('space.app.subtitle')}"
         )
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=5):
-            gr.Markdown("**音频输入**", elem_classes="section-title")
+            gr.Markdown(f"**{st('space.ui.audio_section')}**", elem_classes="section-title")
             audio_input = gr.Audio(
-                label="拖拽音频文件到此处，或点击选择",
+                label=st("space.ui.audio_input"),
                 type="filepath",
                 elem_classes="upload-zone",
             )
             gr.Markdown(
-                "<small style='color:#6a7a8a'>支持 MP3, WAV, FLAC, OGG, M4A（自动转换为 WAV 处理）</small>"
+                f"<small style='color:#6a7a8a'>{st('space.ui.audio_hint')}</small>"
             )
 
-            gr.Markdown("**轨道设置**", elem_classes="section-title")
+            gr.Markdown(f"**{st('space.ui.track_section')}**", elem_classes="section-title")
             mode_radio = gr.Radio(
-                choices=[
-                    "YourMT3+ 多乐器转写",
-                    "人声分离 + 分别转写",
-                    "六声部分离 + 分别转写",
-                    "钢琴专用转写 (Transkun)",
-                    "钢琴专用转写 (Aria-AMT)",
-                ],
-                value="YourMT3+ 多乐器转写",
-                label="处理模式",
+                choices=MODE_CHOICES,
+                value="smart",
+                label=st("space.ui.mode_label"),
             )
-            mode_info = gr.Markdown(update_mode_info("YourMT3+ 多乐器转写"), elem_classes="mode-info")
+            mode_info = gr.Markdown(update_mode_info("smart"), elem_classes="mode-info")
             vocal_split_merge_midi = gr.Checkbox(
                 value=False,
-                label="输出 1 个人声+伴奏合并 MIDI（人声分离模式）",
+                label=st("space.ui.vocal_split_merge_midi"),
                 visible=False,
             )
             six_stem_only_selected = gr.Checkbox(
                 value=False,
-                label="仅转写选中的 stem（六声部模式）",
+                label=st("space.ui.six_stem_only_selected"),
                 visible=False,
             )
             six_stem_targets = gr.CheckboxGroup(
                 choices=["bass", "drums", "guitar", "piano", "vocals", "other"],
                 value=["bass", "drums", "guitar", "piano", "vocals", "other"],
-                label="六声部转写目标",
-                info="仅在勾选“仅转写选中的 stem”且模式为六声部分离时生效",
+                label=st("space.ui.six_stem_targets"),
+                info=st("space.ui.six_stem_targets_info"),
                 visible=False,
             )
             six_stem_vocal_harmony = gr.Checkbox(
                 value=False,
-                label="将 vocals 进一步分离为主唱 + 和声（实验近似）",
+                label=st("space.ui.six_stem_vocal_harmony"),
                 visible=False,
             )
             mode_radio.change(
@@ -628,43 +654,42 @@ with gr.Blocks(
             quality_radio = gr.Radio(
                 choices=["fast", "balanced", "best"],
                 value="balanced",
-                label="转写质量",
-                info="fast = 快速  |  balanced = 均衡  |  best = 最佳",
+                label=st("space.ui.quality_label"),
+                info=st("space.ui.quality_info"),
             )
 
             convert_btn = gr.Button(
-                "▶  开始转换",
+                st("space.ui.convert_button"),
                 variant="primary",
                 elem_classes="convert-btn",
                 size="lg",
             )
 
-            gpu_note = " (ZeroGPU: 转换时自动分配)" if ZERO_GPU else ""
             gr.Markdown(
-                f"当前设备: **{DEVICE_LABEL}**{gpu_note}",
+                f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
                 elem_classes="device-badge",
             )
 
         with gr.Column(scale=5):
-            gr.Markdown("**处理结果**", elem_classes="section-title")
+            gr.Markdown(f"**{st('space.ui.result_section')}**", elem_classes="section-title")
             status_output = gr.Textbox(
-                label="状态",
+                label=st("space.ui.status_label"),
                 interactive=False,
                 lines=7,
-                placeholder="等待转换...",
+                placeholder=st("space.ui.status_placeholder"),
                 elem_classes="result-box",
             )
 
-            gr.Markdown("**下载 MIDI 文件**", elem_classes="section-title")
-            file_output = gr.File(label="转换完成后点击下载", file_count="multiple")
+            gr.Markdown(f"**{st('space.ui.download_section')}**", elem_classes="section-title")
+            file_output = gr.File(label=st("space.ui.download_label"), file_count="multiple")
 
-            gr.Markdown("**控制台日志**", elem_classes="section-title")
+            gr.Markdown(f"**{st('space.ui.logs_section')}**", elem_classes="section-title")
             log_output = gr.Textbox(
-                label="实时处理日志",
+                label=st("space.ui.logs_label"),
                 interactive=False,
                 lines=12,
                 max_lines=20,
-                placeholder="日志输出将在此处显示...",
+                placeholder=st("space.ui.logs_placeholder"),
                 elem_classes="log-box",
             )
 
@@ -694,7 +719,8 @@ with gr.Blocks(
 
     gr.Markdown(
         '<div class="footer-info">'
-        "基于 <a href='https://github.com/mimbres/YourMT3'>YourMT3+</a> MoE 模型 | "
+        f"{st('space.ui.footer_powered_by')} "
+        "<a href='https://github.com/mimbres/YourMT3'>YourMT3+</a> MoE | "
         "<a href='https://github.com/mason369/music-to-midi'>GitHub</a> | "
         "MIT License"
         "</div>"
