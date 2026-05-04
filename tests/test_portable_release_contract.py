@@ -82,6 +82,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("upload_asset_with_retry", workflow)
         self.assertIn("timeout 30m gh release upload", workflow)
 
+    def test_release_workflow_cleans_build_cache_before_compressing_large_bundles(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("rm -rf build", workflow)
+        self.assertIn('"$HOME/.cache/music_ai_models"', workflow)
+        self.assertIn('tar -czf - -C dist "${NAME}" | split -b 1900M -', workflow)
+        self.assertNotIn('tar -czf "${NAME}-Portable.tar.gz" -C dist "${NAME}"', workflow)
+
     def test_release_workflow_uses_python_311_for_portable_builds(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
