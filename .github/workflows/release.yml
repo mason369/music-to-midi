@@ -124,6 +124,7 @@ jobs:
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Windows: 确保 choco 安装的 FFmpeg 在 PATH 中（bash shell 可能未继承）
           if [ -d "/c/ProgramData/chocolatey/bin" ]; then
@@ -185,8 +186,6 @@ jobs:
               raise RuntimeError("MIROS model files are not available")
           print("MIROS available")
           PY
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 修复 Torch OpenMP 运行时 (Windows)
         if: runner.os == 'Windows'
