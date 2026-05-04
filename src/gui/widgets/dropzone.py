@@ -1,7 +1,6 @@
 """
 文件拖放区域组件 - 用于文件输入
 """
-from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog
 )
@@ -10,6 +9,12 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 
 from src.i18n.translator import t
 from src.utils.audio_utils import get_supported_formats, is_supported_format
+
+
+def _display_file_name(file_path: str) -> str:
+    """Return the final path component for Windows or POSIX-style paths."""
+    normalized = str(file_path).replace("\\", "/").rstrip("/")
+    return normalized.rsplit("/", 1)[-1] if normalized else ""
 
 
 class DropZoneWidget(QWidget):
@@ -167,7 +172,7 @@ class DropZoneWidget(QWidget):
     def _set_file(self, file_path: str):
         """设置已选文件"""
         self._selected_file_path = file_path
-        self.file_label.setText(f"{t('main.dropzone.selected')}: {Path(file_path).name}")
+        self.file_label.setText(f"{t('main.dropzone.selected')}: {_display_file_name(file_path)}")
         self.file_label.show()
         self.file_selected.emit(file_path)
 
@@ -210,5 +215,5 @@ class DropZoneWidget(QWidget):
         self.browse_btn.setText("📂  " + t("main.output.browse"))
         if self._selected_file_path:
             self.file_label.setText(
-                f"{t('main.dropzone.selected')}: {Path(self._selected_file_path).name}"
+                f"{t('main.dropzone.selected')}: {_display_file_name(self._selected_file_path)}"
             )
