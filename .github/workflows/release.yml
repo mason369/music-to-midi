@@ -74,6 +74,7 @@ jobs:
             libxcb-shape0 \
             libxcb-util1 \
             libgl1 \
+            libegl1 \
             fonts-ubuntu \
             fonts-dejavu-core
 

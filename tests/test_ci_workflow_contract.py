@@ -42,6 +42,13 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("pytest tests/ -v --tb=short", workflow)
         self.assertNotIn("pytest tests/ -v --tb=short || true", workflow)
 
+    def test_linux_ci_installs_egl_for_pyqt_qtgui_imports(self):
+        build_workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+        release_workflow = (WORKFLOWS_DIR / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("libegl1", build_workflow)
+        self.assertIn("libegl1", release_workflow)
+
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 
