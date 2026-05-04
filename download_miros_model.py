@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ MIROS_FINETUNED_FILE_ID = "1hp-6D1yYvPxXCXDQyXRQRJArle8R-VfB"
 MIROS_PRETRAINED_FILE_ID = "1FqqMfcdqeiRr1v7sdrfkqPpr0Vs7e9nZ"
 MIROS_MIN_CHECKPOINT_BYTES = 4_000_000_000
 MIROS_MIN_PRETRAINED_BYTES = 1_000_000_000
+MIROS_MIRROR_DIR_ENV = "MUSIC_TO_MIDI_MIROS_MIRROR_DIR"
 
 
 def _log(printer: Optional[Callable[[str], None]], message: str) -> None:
@@ -35,6 +37,63 @@ def _google_drive_url(file_id: str) -> str:
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 
+def _copy_verified_file(source: Path, destination: Path, min_size: int) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(destination.suffix + ".download")
+    if partial.exists():
+        partial.unlink()
+
+    shutil.copyfile(source, partial)
+    size = partial.stat().st_size
+    if size < min_size:
+        partial.unlink()
+        raise RuntimeError(
+            f"Mirrored MIROS weight is incomplete: {source.name} {size} bytes < {min_size} bytes"
+        )
+    partial.replace(destination)
+
+
+def _restore_from_mirror(
+    mirror_dir: Path,
+    destination: Path,
+    min_size: int,
+    printer: Optional[Callable[[str], None]],
+) -> bool:
+    for direct in (mirror_dir / destination.name, mirror_dir / f"miros-{destination.name}"):
+        if direct.is_file():
+            _log(printer, f"Restoring MIROS weight from mirror: {direct}")
+            _copy_verified_file(direct, destination, min_size)
+            return True
+
+    parts = sorted(mirror_dir.glob(f"{destination.name}.part*"))
+    if not parts:
+        parts = sorted(mirror_dir.glob(f"miros-{destination.name}.part*"))
+    if not parts:
+        return False
+
+    _log(printer, f"Restoring MIROS weight from mirror parts: {destination.name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(destination.suffix + ".download")
+    if partial.exists():
+        partial.unlink()
+
+    with partial.open("wb") as output:
+        for part in parts:
+            with part.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output)
+
+    size = partial.stat().st_size
+    if size < min_size:
+        partial.unlink()
+        raise RuntimeError(
+            f"Mirrored MIROS weight is incomplete: {destination.name} "
+            f"{size} bytes < {min_size} bytes"
+        )
+
+    partial.replace(destination)
+    return True
+
+
 def _download_google_drive_file(
     file_id: str,
     destination: Path,
@@ -44,6 +103,19 @@ def _download_google_drive_file(
     if destination.exists() and destination.stat().st_size >= min_size:
         _log(printer, f"MIROS weight already exists: {destination}")
         return
+
+    mirror_dir = os.environ.get(MIROS_MIRROR_DIR_ENV)
+    if mirror_dir:
+        mirror = Path(mirror_dir)
+        if not mirror.is_dir():
+            raise RuntimeError(f"MIROS mirror directory does not exist: {mirror}")
+        if _restore_from_mirror(mirror, destination, min_size, printer):
+            _log(printer, f"MIROS weight restored: {destination}")
+            return
+        raise RuntimeError(
+            f"MIROS mirror does not contain {destination.name}; "
+            f"expected {destination.name} or {destination.name}.part* in {mirror}"
+        )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + ".download")

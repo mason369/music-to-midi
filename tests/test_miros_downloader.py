@@ -65,6 +65,60 @@ class MirosDownloaderTests(unittest.TestCase):
 
         self.assertIn("incomplete", str(error.exception))
 
+    def test_prepare_restores_weights_from_explicit_release_mirror(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "ai4m-miros"
+            mirror = root / "mirror"
+            repo.mkdir()
+            mirror.mkdir()
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (mirror / "miros-last.ckpt.part00").write_bytes(b"a" * 8)
+            (mirror / "miros-last.ckpt.part01").write_bytes(b"b" * 8)
+            (mirror / "miros-pretrained_msd.pt").write_bytes(b"c" * 16)
+
+            def fail_run(command, **_kwargs):
+                raise AssertionError(f"unexpected command: {command}")
+
+            with patch.dict(
+                download_miros_model.os.environ,
+                {download_miros_model.MIROS_MIRROR_DIR_ENV: str(mirror)},
+            ), patch.object(download_miros_model, "MIROS_MIN_CHECKPOINT_BYTES", 16), patch.object(
+                download_miros_model,
+                "MIROS_MIN_PRETRAINED_BYTES",
+                16,
+            ), patch.object(download_miros_model.subprocess, "run", side_effect=fail_run):
+                download_miros_model.prepare_miros_model(repo)
+
+            self.assertEqual(
+                b"a" * 8 + b"b" * 8,
+                (repo / MirosTranscriber.CHECKPOINT_REL_PATH).read_bytes(),
+            )
+            self.assertEqual(
+                b"c" * 16,
+                (repo / MirosTranscriber.PRETRAINED_REL_PATH).read_bytes(),
+            )
+
+    def test_prepare_fails_when_explicit_release_mirror_is_missing_weight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "ai4m-miros"
+            mirror = root / "mirror"
+            repo.mkdir()
+            mirror.mkdir()
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+
+            with patch.dict(
+                download_miros_model.os.environ,
+                {download_miros_model.MIROS_MIRROR_DIR_ENV: str(mirror)},
+            ), patch.object(download_miros_model, "MIROS_MIN_CHECKPOINT_BYTES", 16):
+                with self.assertRaises(RuntimeError) as error:
+                    download_miros_model.prepare_miros_model(repo)
+
+        self.assertIn("mirror does not contain", str(error.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
