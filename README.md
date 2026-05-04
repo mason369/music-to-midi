@@ -4,7 +4,7 @@
   中文 | <a href="./docs/README.md">English</a>
 </p>
 
-一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本专注两条稳定流程：完整混音多乐器转写，以及人声/伴奏分离后分别转写。
+一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本恢复并同步五种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT 两条钢琴专用转写流程。
 
 ## 截图
 
@@ -16,20 +16,22 @@
 
 - **完整混音转写**：`SMART` 模式直接读取整首音频，用多乐器后端生成 MIDI。
 - **人声/伴奏分离转写**：`VOCAL_SPLIT` 模式先分离人声与伴奏，再分别生成 MIDI；可选额外输出一个合并 MIDI。
-- **YourMT3+ 默认后端**：默认使用 YourMT3+ MoE，多乐器、GM 程序号、鼓轨和多轨 MIDI 输出均由该链路承担。
+- **六声部分离转写**：`SIX_STEM_SPLIT` 模式先分离 `bass / drums / guitar / piano / vocals / other` 六个 stem，再输出各 stem MIDI 和合并 MIDI。
+- **钢琴专用转写**：`PIANO_TRANSKUN` 与 `PIANO_ARIA_AMT` 面向纯钢琴音频，分别调用 Transkun 和 Aria-AMT。
+- **默认后端语义**：配置默认偏好为 `Aria-AMT` 钢琴后端；`SMART`、`VOCAL_SPLIT` 和非钢琴 stem 仍由 YourMT3+ 或 MIROS 这类多乐器后端承担。
 - **MIROS 可选后端**：桌面版可切换到本地 `ai4m-miros` 仓库作为实验性多乐器后端。
 - **MIDI 输出布局**：YourMT3+ 支持“按 GM 乐器分轨”和“非鼓合并单轨、鼓独立”两种布局。
 - **节拍与后处理**：自动检测 BPM，生成带速度信息的 MIDI；支持量化、去重、力度平滑、复音限制等后处理。
 - **多格式输入**：支持 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A`。非 WAV 会优先通过 FFmpeg 转为 44.1 kHz PCM WAV。
-- **多平台入口**：桌面版、Space、Colab 均只暴露当前保留的两种处理模式。
+- **多平台入口**：桌面版、Space、Colab 均同步暴露五种处理模式。
 
 ## 不同入口的功能范围
 
 | 入口 | 处理模式 | 后端选择 | 适合场景 |
 |------|----------|----------|----------|
-| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT` | `YourMT3+`、`MIROS` | 本地长期使用、GPU 推理、批量输出文件 |
-| Gradio Space | `SMART`、`VOCAL_SPLIT` | 默认 `YourMT3+` | 浏览器中快速试用或部署 |
-| Google Colab | `SMART`、`VOCAL_SPLIT` | 默认 `YourMT3+` | 临时使用 Colab GPU |
+| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_ARIA_AMT` | `Aria-AMT`、`YourMT3+`、`MIROS` | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
+| Gradio Space | 同桌面五种模式 | 默认 `Aria-AMT` 钢琴后端 + `YourMT3+` 多乐器后端 | 浏览器中快速试用或部署 |
+| Google Colab | 同桌面五种模式 | 默认 `Aria-AMT` 钢琴后端 + `YourMT3+` 多乐器后端 | 临时使用 Colab GPU |
 
 ## 处理模式
 
@@ -37,6 +39,9 @@
 |------|----------|----------|------|
 | `SMART` | 音频 -> 多乐器后端 -> MIDI 生成 | `<歌曲名>.mid` | 不做音源分离，适合大多数混音歌曲、纯音乐和多乐器片段。 |
 | `VOCAL_SPLIT` | 音频 -> 人声/伴奏分离 -> 伴奏转写 -> 人声转写 -> MIDI 生成 | `<歌曲名>_accompaniment.mid`、`<歌曲名>_vocal.mid`，可选 `<歌曲名>_vocal_accompaniment_merged.mid` | 分离后会把人声 MIDI 尽量收敛到旋律轨，减少伴奏乐器幻觉。 |
+| `SIX_STEM_SPLIT` | 音频 -> 六声部分离 -> stem 转写 -> stem MIDI 合并 | `<歌曲名>_<stem>.mid`、`<歌曲名>_all_stems_merged.mid` 或 `<歌曲名>_selected_stems_merged.mid` | 可只转写选中的 stem；piano stem 在偏好 Aria-AMT 且权重可用时会优先走 Aria-AMT。 |
+| `PIANO_TRANSKUN` | 音频 -> Transkun 钢琴模型 -> MIDI | `<歌曲名>_piano_transkun.mid` | 适合纯钢琴音频；质量档位不改变 Transkun checkpoint 推理。 |
+| `PIANO_ARIA_AMT` | 音频 -> Aria-AMT 钢琴模型 -> MIDI | `<歌曲名>_piano_aria_amt.mid` | 适合纯钢琴音频；需要先准备 Aria-AMT checkpoint。 |
 
 ## 输出文件
 
@@ -55,6 +60,15 @@ song.mid
 song_accompaniment.mid
 song_vocal.mid
 song_vocal_accompaniment_merged.mid
+song_bass.mid
+song_drums.mid
+song_guitar.mid
+song_piano.mid
+song_vocals.mid
+song_other.mid
+song_all_stems_merged.mid
+song_piano_transkun.mid
+song_piano_aria_amt.mid
 song_(Vocals).wav
 song_(Instrumental).wav
 ```
@@ -119,6 +133,188 @@ logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
 
 MIROS 还需要其上游运行依赖。`requirements.txt` 保证本项目运行，不保证完整安装 MIROS 上游环境。
 
+### Transkun
+
+Transkun 是钢琴专用转写后端，适合纯钢琴或以钢琴为主的音频。项目通过 `src/core/transkun_transcriber.py` 调用 `transkun` PyPI 包随附的预训练资源：
+
+```bash
+pip install transkun>=2.0.1
+```
+
+可用性检查会确认 `transkun.transcribe`、`pretrained/2.0.pt` 和 `pretrained/2.0.conf` 是否存在。缺失时请重新安装：
+
+```bash
+python -m pip install --force-reinstall transkun
+```
+
+### Aria-AMT
+
+Aria-AMT 是另一条钢琴专用后端。项目通过 `src/core/aria_amt_transcriber.py` 调用 `amt.run transcribe`，默认 checkpoint 为：
+
+```text
+piano-medium-double-1.0.safetensors
+```
+
+安装依赖：
+
+```bash
+python -m pip install git+https://github.com/EleutherAI/aria-amt.git
+```
+
+下载模型：
+
+```bash
+python download_aria_amt_model.py
+```
+
+默认搜索模型位置包括：
+
+```text
+~/.cache/music_ai_models/aria_amt
+runtime/models/aria_amt
+models/aria_amt
+```
+
+## 模型与公开对比
+
+本节恢复自历史 README 中的模型对比内容，并按当前版本的实际能力重新标注：当前已发布入口同步开放 `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN` 与 `PIANO_ARIA_AMT` 五种模式。下列表格把“公开 benchmark”和“项目内入口状态”分开写，避免把研究指标误写成产品能力。
+
+### 当前默认转写模型：YourMT3+
+
+本项目默认使用 **YPTF.MoE+Multi (PS)**，它是 YourMT3+ 系列中的高性能多乐器变体。
+
+| 项目 | 详情 |
+|------|------|
+| 模型全称 | YPTF.MoE+Multi (PS) |
+| 检查点 | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2` |
+| 来源 | [KAIST - YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3)（[arXiv:2407.04822](https://arxiv.org/abs/2407.04822)） |
+| 架构 | Perceiver Transformer 编码器 + Multi-T5 解码器 |
+| MoE | 8 专家，Top-2 路由，SiLU 激活 |
+| 位置编码 | RoPE（部分旋转位置编码） |
+| 归一化 | RMSNorm |
+| 训练增强 | Pitch Shift 音高偏移增强（PS） |
+| 模型大小 | ~724 MB（本地 checkpoint 约 723.8 MiB） |
+| 任务类型 | `mt3_full_plus`（128 种 GM 乐器 + 鼓） |
+
+#### 性能基准（Slakh2100 数据集）
+
+下表只保留可在 YourMT3+ 论文中核到的同口径总分。README 历史版本里的 Frame / Onset / Offset / Drum Onset 单项数值没有在已核验来源中逐项定位到，因此不再写入文档。
+
+| 指标 | YPTF.MoE+Multi (PS) | MT3 (Google 基线) | 来源口径 |
+|------|---------------------|-------------------|----------|
+| Multi (Onset-Offset) F1 | **74.84** | 62.0 | YourMT3+ 论文 Slakh2100 对比表 |
+
+#### YourMT3+ 可用模型变体
+
+| 模型 | MoE | Pitch Shift | 说明 |
+|------|-----|-------------|------|
+| YPTF.MoE+Multi (PS) | 8 专家 | 有 | 默认模型，综合表现最好；本地 checkpoint 约 723.8 MiB |
+| YPTF.MoE+Multi (noPS) | 8 专家 | 无 | 无音高偏移增强 |
+| YPTF+Multi (PS) | 无 | 有 | 标准 Perceiver |
+| YPTF+Multi (noPS) | 无 | 无 | 标准 Perceiver，无增强 |
+| YourMT3+ 传统版 | 无 | 无 | 旧版兼容 |
+
+### 当前可选后端：MIROS
+
+| 后端 | 类型 | 集成方式 | 当前语义 | 说明 |
+|------|------|----------|----------|------|
+| MIROS (MusicFM) | 多乐器 | 本地 `ai4m-miros` 仓库 + 当前工程包装器 | 固定 checkpoint 质量 | 官方仓库标注为 Music Transcription Challenge winning model，可作为桌面版 `SMART` 与 `VOCAL_SPLIT` 的多乐器后端 |
+
+质量语义：
+
+- `YourMT3+` 支持 `fast / balanced / best`，当前主要影响项目后处理策略。
+- `MIROS` 当前为固定 checkpoint 质量，不响应这三档推理切换。
+
+### 当前人声分离模型：BS-RoFormer
+
+`VOCAL_SPLIT` 模式使用 **BS-RoFormer**（Band-Split Rotary Transformer）进行人声/伴奏分离。
+
+| 项目 | 详情 |
+|------|------|
+| 模型全称 | Band-Split RoFormer |
+| 论文 | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
+| 检查点 | `model_bs_roformer_ep_368_sdr_12.9628.ckpt` (epoch 368) |
+| 训练者 | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
+| 许可证 | MIT |
+| 指标说明 | checkpoint 文件名包含 `sdr_12.9628`（训练过程分数标签，不是统一评测口径） |
+| 公开对比说明 | 人声分离指标来源混杂，常见口径包括 Multisong、MUSDB18-HQ、MVSEP 与 audio-separator 内置分数；这些分数不能直接合并成一张排行榜。 |
+| 模型大小 | ~610 MB（本地 checkpoint 约 609.7 MiB） |
+| 调用方式 | 通过 [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 库封装 |
+| 首次使用 | 自动从 HuggingFace 下载到 `~/.music-to-midi/models/audio-separator/` |
+| 输出选项 | 默认 2 个 MIDI（伴奏 + 人声）；可勾选额外输出 1 个合并 MIDI |
+
+核心思想：将频谱按频段（band）拆分后独立建模，用 RoPE 增强时序建模，通过 Band-level 和 Temporal Self-Attention 交替捕获跨频段谐波关系和时序依赖。
+
+#### 人声分离模型对比
+
+> 注：本表只保留这次重新核验时能找到公开来源支撑的结论。若写明“未写入数值”，表示没有找到与当前 checkpoint 明确绑定、且口径足够清晰的公开数值。
+
+| 模型/方向 | 来源 | 类型 | 状态 | 说明 |
+|-----------|------|------|------|------|
+| BS-RoFormer ep368（当前） | [TRvlvr download_checks](https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json) / [TRvlvr model_repo](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) / [audio-separator models-scores](https://raw.githubusercontent.com/nomadkaraoke/python-audio-separator/main/audio_separator/models-scores.json) | 本地直替（audio-separator） | 使用中 | 当前工程默认 checkpoint：`model_bs_roformer_ep_368_sdr_12.9628.ckpt`；文件名自带 `sdr_12.9628`，但这不是统一公开 benchmark，README 不再把它当作横向对比分数。 |
+| BS-RoFormer ep317（公开可下载） | [MVSEP News](https://www.mvsep.com/news) / [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | 可替换（权衡） | 公开页面能确认其为可下载 BS-RoFormer 系列模型；具体 SDR 数值因榜单与 checkpoint 映射不够清晰，未写入 README。 |
+| MelBand-RoFormer (KimberleyJensen) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [Hugging Face](https://huggingface.co/KimberleyJSN/melbandroformer) / [MVSEP Full API](https://mvsep.ru/full_api) | 本地可用（vocals/other） | 可用（偏人声） | 公开权重 `MelBandRoformer.ckpt` 可核；MVSEP/API 分数未找到与该公开 checkpoint 的一一对应说明，未写入具体数值。 |
+| SCNet XL IHF（开源权重） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [ZFTurbo Release v1.0.15](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.15) | 开源可下载（4-stem） | 需改造接入 | 公开权重是 4-stem 模型，不是本项目现有 2-stem 直替；README 不写入未能绑定到当前用法的具体分数。 |
+| MVSEP Ensemble / BS Roformer 服务模型 | [MVSEP News](https://www.mvsep.com/news) / [MVSEP Full API](https://mvsep.ru/full_api) | API 调用（权重未公开） | 非本地直替 | 榜单服务可用，但公开下载清单未见对应 checkpoint；不作为本地可复现模型写入具体数值。 |
+| Mel-RoFormer (ISMIR 2024) | [arXiv:2409.04702](https://arxiv.org/abs/2409.04702) / [ar5iv 表2](https://ar5iv.org/html/2409.04702v1) | 论文阶段（研究模型） | 论文已发表 | MUSDB18-HQ（论文表2，场景 b，含额外数据）仅报告 Vocals SDR；这是论文特定协议，不与 Multisong / MVSEP 数字混排。 |
+| Mamba2 Meets Silence (v2, 2025) | [arXiv:2508.14556](https://arxiv.org/abs/2508.14556) | 论文阶段（研究模型） | 论文 | 摘要报告 cSDR 11.03 dB（作者称 best reported），强调稀疏人声段鲁棒性 |
+| Windowed Sink Attention (2025) | [arXiv:2510.25745](https://arxiv.org/abs/2510.25745) | 论文阶段（效率优化方向） | 论文 + 开源代码 | 在微调设定下恢复原模型约 92% SDR，同时 FLOPs 降低约 44.5x（偏效率收益） |
+
+结论（按口径）：
+
+- 当前 README 不再把不同来源的人声分离分数混成排行榜。
+- 若来源是 API/服务模型、没有公开 checkpoint 映射，文档只标注“非本地直替”，不写成可直接替换的本地模型。
+- 若来源是论文特定协议，文档只说明协议，不与工程默认 checkpoint 的文件名分数横比。
+- **口径提醒**：不同榜单/数据集/评测协议（Multisong、MUSDB、MVSEP、cSDR/uSDR）不可直接横比。
+
+### 已恢复流程对比
+
+下表覆盖已恢复到桌面版、Space 和 Colab 的额外流程。注意：公开数据通常只覆盖“分离”或“钢琴 AMT”单项任务，不等于本项目端到端音频转 MIDI 的统一评分。
+
+| 流程 | 当前仓库状态 | 上游模型/实现 | 可核验公开数据 | 与当前 `SMART` / `VOCAL_SPLIT` 的关系 |
+|------|--------------|---------------|----------------|---------------------------------------|
+| 六声部分离 + 分别转写 | `six_stem_split` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | BS Roformer SW（vocals, bass, drums, guitar, piano, other）+ 后续 AMT 转写 | MVSEP Algorithms #77 给出 6-stem SDR：vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71 | 这些是音源分离 SDR，不是最终 MIDI 转写 F1；“分离后分别转写”的端到端 MIDI 质量没有找到公开统一 benchmark。 |
+| 钢琴专用转写（Transkun） | `piano_transkun` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | `pip install transkun`，命令行支持 `transkun input.mp3 output.mid` | 官方 model cards：Transkun V2 在 MAESTRO V3 上 Note Onset / Onset+Offset / Onset+Offset+Velocity F1 为 0.9832 / 0.9349 / 0.9296；pip 随包 No Ext checkpoint 为 0.9833 / 0.8149 / 0.8109 | 这是钢琴专精协议，适合纯钢琴；不能与 YourMT3+ 的 Slakh2100 多乐器 F1 直接横比。 |
+| 钢琴专用转写（Aria-AMT） | `piano_aria_amt` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | EleutherAI `aria-amt`，公开 preliminary piano v1 checkpoint `piano-medium-double-1.0.safetensors` | 官方 README 提供安装、checkpoint 下载和 CLI 用法；未给出与 Transkun 同口径的 MAESTRO/MAPS benchmark。本地打包资源中的 checkpoint 约 425.9 MiB。 | 可作为钢琴转写候选，但 README 不写入不存在的统一分数；如需比较，建议使用同一批本地音频做 A/B 评测。 |
+
+### 未来可关注的转写模型
+
+下列对比只保留历史 README 中“公开可核实”的数据。`Slakh2100 Multi (Onset-Offset) F1`、`MAESTRO onset F1`、官方挑战名次、以及主观听感/下游任务增益并不是同一协议，不能当成同一张排行榜直接横比。
+
+#### 多乐器模型（公开可核实）
+
+| 模型 | 公开来源 | Benchmark / 协议 | 公开结果 | 状态 | 说明 |
+|------|----------|------------------|----------|------|------|
+| YPTF.MoE+Multi (PS)（当前） | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**；同表 `MT3 = 62.0` | 使用中 | 当前项目主线后端，且这是 README 中与 MT3 最同口径的一组公开数字 |
+| [MT3](https://github.com/magenta/mt3) | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [Magenta 仓库](https://github.com/magenta/mt3) | Slakh2100 `Multi (Onset-Offset) F1` | **62.0** | 开源基线 | YourMT3+ 继承并扩展的 token-based 多乐器基线 |
+| 2025 AI4Musician 冠军路线（[ai4m-miros](https://github.com/amt-os/ai4m-miros)） | [ICME 2025 Workshop](https://ai4musicians.org/2025icme.html) / [Challenge 页](https://ai4musicians.org/transcription/2025transcription.html) / [代码仓库](https://github.com/amt-os/ai4m-miros) | 官方仓库描述 | winning model | 冠军路线 / 代码可见 | 这是赛事/仓库描述，不是与 Slakh Multi F1 同口径的数值榜；公开资料显示该路线基于 MusicFM 编码器与多解码器思路 |
+
+#### 钢琴专精模型（公开可核实）
+
+| 模型 | 公开来源 | Benchmark / 协议 | 公开结果 | 状态 | 说明 |
+|------|----------|------------------|----------|------|------|
+| [Transkun V2（论文 checkpoint）](https://github.com/Yujia-Yan/Transkun) | [Transkun 官方仓库 / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 `note onset F1 / onset+offset F1 / onset+offset+velocity F1` | **0.9832 / 0.9349 / 0.9296** | 开源 | 这是论文公开 checkpoint 的模型卡结果，不是当前项目入口后端 |
+| [Transkun pip 随包 checkpoint（No Ext）](https://github.com/Yujia-Yan/Transkun) | [Transkun 官方仓库 / model cards](https://github.com/Yujia-Yan/Transkun) | MAESTRO V3 No Ext 同口径三项指标 | **0.9833 / 0.8149 / 0.8109** | 开源 | 仓库明确写明随 pip 包 checkpoint 为 `without pedal extension of notes`；适合作为后续钢琴后端候选 |
+| [Aria-AMT](https://github.com/EleutherAI/aria-amt) | [EleutherAI 官方仓库](https://github.com/EleutherAI/aria-amt) | 公开 checkpoint 发布 | 仓库公开 `piano-medium-double-1.0.safetensors`；但仓库页未给出与上表完全同口径的统一 MAESTRO/MAPS 榜单 | 开源 | 可作为钢琴后端候选，但这里不伪造不存在的统一 benchmark 行 |
+| [High-Resolution Piano Transcription with Pedals by Regressing Onset and Offset Times](https://arxiv.org/abs/2010.01815) | [论文](https://arxiv.org/abs/2010.01815) / [ByteDance 仓库](https://github.com/bytedance/piano_transcription) | MAESTRO `onset F1 / pedal onset F1` | **96.72% / 91.86%** | 论文 + 代码 | 代表性踏板感知钢琴论文；协议是钢琴专精口径，不应与多乐器 Slakh 分数混排 |
+
+#### 论文阶段 / 协议不一致的研究方向
+
+| 模型/方向 | 公开来源 | 公开协议 / 任务 | 可核实的公开信息 | 为什么不与上表混成同一分数榜 |
+|-----------|----------|-----------------|------------------|------------------------------|
+| [MR-MT3](https://arxiv.org/abs/2403.10024) | [论文](https://arxiv.org/abs/2403.10024) / [代码](https://github.com/gudgud96/MR-MT3) | Slakh2100；重点看 `onset F1`、`instrument leakage ratio`、`instrument detection F1` | 摘要明确写的是“improved onset F1 scores and reduced instrument leakage” | 它主打 leakage 抑制，并引入了新指标；不等于上面的 Slakh `Multi (Onset-Offset) F1` |
+| [Jointist](https://arxiv.org/abs/2302.00286) | [论文](https://arxiv.org/abs/2302.00286) | 流行音乐联合转写 + 分离 | 摘要给出的公开结果是：转写提升 `>1 ppt`、分离提升 `+5 SDR`、downbeat `+1.8 ppt`、和弦/调性各 `+1.4 ppt` | 它是 joint transcription + separation 路线，公开协议与 Slakh / MAESTRO 完全不同 |
+| MusicFM 编码器 + AMT 解码器 | [MusicFM 论文](https://arxiv.org/abs/2311.03318) / [仓库](https://github.com/minzwon/musicfm) / [HF 权重](https://huggingface.co/minzwon/MusicFM) | 预训练编码器迁移 | 公开的是基础编码器权重；通用可复现的完整 AMT decoder / 微调流水线并未作为现成后端发布 | 它更像 MIROS 这类路线背后的表示学习部件，不是拿来就能切换的通用后端 |
+| [CountEM / Count The Notes](https://arxiv.org/abs/2511.14250) | [论文](https://arxiv.org/abs/2511.14250) / [项目页](https://yoni-yaffe.github.io/count-the-notes) / [代码](https://github.com/Yoni-Yaffe/count-the-notes) | 弱监督 AMT 训练方法 | 公开论文、代码和模型，核心贡献是“用音符直方图 + EM”替代精确对齐监督 | 这是训练范式创新，不是固定 checkpoint 的 turnkey 后端 |
+| [PerceiverTF](https://arxiv.org/abs/2306.10785) | [论文](https://arxiv.org/abs/2306.10785) | 多乐器公开数据集（论文自有协议） | 摘要只明确说其在多个公开数据集上优于 MT3 / SpecTNT | 它更适合作为 YourMT3+ 的架构祖先来理解，不应和上表的统一数值行硬拼 |
+
+补充说明：
+
+- [Basic Pitch](https://github.com/spotify/basic-pitch) 依然是很有价值的轻量方案，但它不发布与上表同口径的 Slakh/MAESTRO 综合榜单。
+- [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) 仍是有参考价值的多任务工具链，但其 GitHub latest release 仍为 `0.5.0`（2021-12-09），与当前多乐器/钢琴专精 SOTA 的公开比较协议并不一致。
+
+趋势总结：截至 2026 年初，多乐器 AMT 的公开强路线主要沿两条线发展：一条是 `MT3 / YourMT3+ / MR-MT3` 这种 token-based 专用模型演进，另一条是 `MusicFM` 这类预训练编码器增强路线。钢琴 AMT 的公开成熟度仍然更高，但 `Transkun pip 权重`、`论文 checkpoint`、`pedal-aware 论文系统` 之间的协议差异必须写清楚，不能简单合并成一个“钢琴榜单”。
+
 ## MIDI 轨道布局
 
 YourMT3+ 后端提供两个输出布局：
@@ -142,6 +338,8 @@ best
 
 - 对 `YourMT3+`：质量档位会影响后处理策略。
 - 对 `MIROS`：当前包装路径使用固定 checkpoint 质量，档位不会改变 MIROS 推理本身。
+- 对 `Transkun` / `Aria-AMT`：钢琴专用模式使用固定 checkpoint 质量。
+- 对 `SIX_STEM_SPLIT`：多乐器 stem 受多乐器后端质量语义影响；piano stem 若走 Aria-AMT，则该 stem 使用固定 checkpoint 质量。
 
 ## 环境要求
 
@@ -250,17 +448,22 @@ python download_sota_models.py
 
 如果 `YourMT3/` 已经存在，可以只执行模型下载。
 
-### 5. 准备人声分离模型
+### 5. 准备分离与钢琴模型
 
 ```bash
 python download_vocal_model.py
+python download_multistem_model.py
+python download_aria_amt_model.py
 ```
 
 模型默认缓存到：
 
 ```text
 ~/.music-to-midi/models/audio-separator
+~/.cache/music_ai_models/aria_amt
 ```
+
+Transkun 的模型资源随 `transkun` 包安装；若钢琴专用 Transkun 模式提示资源缺失，请执行 `python -m pip install --force-reinstall transkun`。
 
 ### 6. 启动
 
@@ -300,7 +503,7 @@ cd space
 python app.py
 ```
 
-Space 版会尝试从 Hugging Face Space 仓库同步 YourMT3 源码，并自动检查默认模型权重。
+Space 版会尝试从 Hugging Face Space 仓库同步 YourMT3 源码，并自动检查默认 YourMT3+ 与 Aria-AMT 模型权重。
 
 ## 便携版打包
 
@@ -324,6 +527,7 @@ powershell -ExecutionPolicy Bypass -File .\build_portable.ps1 `
 YourMT3/amt/src
 YourMT3 模型缓存
 audio-separator 模型缓存
+Aria-AMT 模型缓存
 可选 MIROS 本地仓库
 ffmpeg.exe / ffprobe.exe
 ```
@@ -344,7 +548,11 @@ src/
     pipeline.py              # 主处理流水线
     yourmt3_transcriber.py   # YourMT3+ 后端
     miros_transcriber.py     # MIROS 本地包装器
+    transkun_transcriber.py  # Transkun 钢琴专用后端
+    aria_amt_transcriber.py  # Aria-AMT 钢琴专用后端
     vocal_separator.py       # 人声/伴奏分离
+    multi_stem_separator.py  # 六声部分离
+    vocal_harmony_separator.py # 主唱/和声实验分离
     midi_generator.py        # MIDI 生成与后处理
     beat_detector.py         # BPM/节拍检测
   gui/
@@ -362,6 +570,9 @@ space/app.py                 # Gradio Web 界面
 colab_notebook.ipynb         # Colab 运行入口
 download_sota_models.py      # YourMT3+ 默认模型下载
 download_vocal_model.py      # 人声分离模型下载
+download_multistem_model.py  # 六声部分离模型下载
+download_aria_amt_model.py   # Aria-AMT 模型下载
+download_vocal_harmony_model.py # 主唱/和声实验模型下载
 MusicToMidi.spec             # PyInstaller 配置
 ```
 
@@ -438,6 +649,29 @@ python download_sota_models.py
 ```bash
 pip install "audio-separator>=0.38.0" "onnxruntime>=1.16.0,<2"
 python download_vocal_model.py
+```
+
+### 六声部分离不可用
+
+确认 `audio-separator>=0.38.0` 已安装，并下载 BS-RoFormer SW 资源：
+
+```bash
+python download_multistem_model.py
+```
+
+### 钢琴专用转写不可用
+
+Transkun 模式需要 `transkun` 包和其随包预训练资源：
+
+```bash
+python -m pip install --force-reinstall transkun
+```
+
+Aria-AMT 模式需要 `aria-amt` 包和 checkpoint：
+
+```bash
+python -m pip install git+https://github.com/EleutherAI/aria-amt.git
+python download_aria_amt_model.py
 ```
 
 ### MIROS 不可用

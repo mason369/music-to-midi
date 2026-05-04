@@ -41,6 +41,10 @@ audio_separator_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR"),
     os.path.join(USER_HOME, ".music-to-midi", "models", "audio-separator"),
 )
+aria_amt_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "aria_amt"),
+)
 yourmt3_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "yourmt3_all"),
@@ -70,6 +74,7 @@ datas = [
 ]
 datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3/amt/src")
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
+datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
@@ -97,6 +102,11 @@ hiddenimports = [
     'pydub',
     'samplerate',
     'mir_eval',
+    # 钢琴专用转写
+    'transkun',
+    'transkun.transcribe',
+    'amt',
+    'amt.run',
     # 数值计算
     'numpy',
     'scipy',
@@ -121,6 +131,8 @@ torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all('onnxruntime')
 pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
+transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
+aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
@@ -134,6 +146,8 @@ datas += (
     + onnxruntime_datas
     + pil_datas
     + mir_eval_datas
+    + transkun_datas
+    + aria_amt_datas
     + wandb_datas
     + lightning_datas
     + fabric_datas
@@ -148,6 +162,8 @@ hiddenimports += (
     + onnxruntime_hiddenimports
     + pil_hiddenimports
     + mir_eval_hiddenimports
+    + transkun_hiddenimports
+    + aria_amt_hiddenimports
     + wandb_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
@@ -163,6 +179,8 @@ all_binaries = (
     + onnxruntime_binaries
     + pil_binaries
     + mir_eval_binaries
+    + transkun_binaries
+    + aria_amt_binaries
     + wandb_binaries
     + lightning_binaries
     + fabric_binaries

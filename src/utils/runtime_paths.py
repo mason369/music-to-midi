@@ -156,6 +156,18 @@ def get_miros_source_dir() -> Optional[Path]:
     return None
 
 
+def get_aria_amt_dir() -> Path:
+    bundled = _find_existing_relative_path(
+        [
+            "models/aria_amt",
+            "assets/models/aria_amt",
+        ]
+    )
+    if bundled is not None:
+        return bundled
+    return ensure_dir(Path.home() / ".cache" / "music_ai_models" / "aria_amt")
+
+
 def get_yourmt3_search_roots() -> List[Path]:
     roots: List[Path] = []
 

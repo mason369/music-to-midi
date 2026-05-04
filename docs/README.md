@@ -4,7 +4,7 @@
   <a href="./README_zh.md">中文</a> | English
 </p>
 
-Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop app, a Gradio Web interface, and a Google Colab notebook. The current product surface intentionally focuses on two supported workflows: full-mix multi-instrument transcription, and vocal/accompaniment split transcription.
+Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop app, a Gradio Web interface, and a Google Colab notebook. The current product surface restores and syncs five processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and dedicated Transkun / Aria-AMT piano transcription.
 
 ## Screenshots
 
@@ -16,20 +16,22 @@ Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop a
 
 - **Full-mix transcription**: `SMART` mode sends the whole audio file to the selected multi-instrument backend.
 - **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` separates vocals and accompaniment, transcribes both, and can optionally export one merged MIDI.
-- **YourMT3+ default backend**: YourMT3+ MoE is the default path for multi-instrument notes, GM programs, drums, and multi-track MIDI output.
+- **Six-stem split transcription**: `SIX_STEM_SPLIT` separates `bass / drums / guitar / piano / vocals / other`, then exports stem MIDI files and one merged MIDI.
+- **Dedicated piano transcription**: `PIANO_TRANSKUN` and `PIANO_ARIA_AMT` target pure piano audio through Transkun and Aria-AMT.
+- **Default backend semantics**: the config default prefers the `Aria-AMT` piano backend; `SMART`, `VOCAL_SPLIT`, and non-piano stems still use YourMT3+ or MIROS as multi-instrument backends.
 - **Optional MIROS backend**: the desktop app can route transcription through a local `ai4m-miros` checkout as an experimental backend.
 - **MIDI layout control**: YourMT3+ can export by GM instrument, or merge non-drum notes into one melodic track while keeping drums separate.
 - **Beat and post-processing**: BPM is detected automatically; MIDI generation includes tempo metadata, quantization, duplicate removal, velocity smoothing, and polyphony limiting.
 - **Common audio formats**: `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted. Non-WAV input is converted to 44.1 kHz PCM WAV, preferably with FFmpeg.
-- **Consistent mode set**: desktop, Space, and Colab expose only the two supported processing modes.
+- **Consistent mode set**: desktop, Space, and Colab expose the same five processing modes.
 
 ## Interface Matrix
 
 | Interface | Modes | Backend Selection | Best For |
 |-----------|-------|-------------------|----------|
-| PyQt6 desktop | `SMART`, `VOCAL_SPLIT` | `YourMT3+`, `MIROS` | Local GPU use and persistent output folders |
-| Gradio Space | `SMART`, `VOCAL_SPLIT` | Default `YourMT3+` | Browser-based use or hosted demos |
-| Google Colab | `SMART`, `VOCAL_SPLIT` | Default `YourMT3+` | Temporary Colab GPU sessions |
+| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_ARIA_AMT` | `Aria-AMT`, `YourMT3+`, `MIROS` | Local GPU use, persistent output folders, and dedicated piano transcription |
+| Gradio Space | Same five modes as desktop | Default `Aria-AMT` piano backend + `YourMT3+` multi-instrument backend | Browser-based use or hosted demos |
+| Google Colab | Same five modes as desktop | Default `Aria-AMT` piano backend + `YourMT3+` multi-instrument backend | Temporary Colab GPU sessions |
 
 ## Processing Modes
 
@@ -37,6 +39,9 @@ Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop a
 |------|-------------------|-------------|-------|
 | `SMART` | Audio -> multi-instrument backend -> MIDI generation | `<song>.mid` | No source separation. Suitable for most full mixes, instrumentals, and short multi-instrument clips. |
 | `VOCAL_SPLIT` | Audio -> vocal/accompaniment separation -> accompaniment transcription -> vocal transcription -> MIDI generation | `<song>_accompaniment.mid`, `<song>_vocal.mid`, optional `<song>_vocal_accompaniment_merged.mid` | The vocal MIDI path filters the backend output toward a vocal melody track to reduce accompaniment hallucinations. |
+| `SIX_STEM_SPLIT` | Audio -> six-stem separation -> stem transcription -> stem MIDI merge | `<song>_<stem>.mid`, `<song>_all_stems_merged.mid` or `<song>_selected_stems_merged.mid` | Can transcribe only selected stems; the piano stem prefers Aria-AMT when that backend and checkpoint are available. |
+| `PIANO_TRANSKUN` | Audio -> Transkun piano model -> MIDI | `<song>_piano_transkun.mid` | Best for pure piano audio; quality presets do not change Transkun checkpoint inference. |
+| `PIANO_ARIA_AMT` | Audio -> Aria-AMT piano model -> MIDI | `<song>_piano_aria_amt.mid` | Best for pure piano audio; requires the Aria-AMT checkpoint. |
 
 ## Output Files
 
@@ -55,6 +60,15 @@ song.mid
 song_accompaniment.mid
 song_vocal.mid
 song_vocal_accompaniment_merged.mid
+song_bass.mid
+song_drums.mid
+song_guitar.mid
+song_piano.mid
+song_vocals.mid
+song_other.mid
+song_all_stems_merged.mid
+song_piano_transkun.mid
+song_piano_aria_amt.mid
 song_(Vocals).wav
 song_(Instrumental).wav
 ```
@@ -119,6 +133,48 @@ logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
 
 MIROS also needs its upstream runtime dependencies. `requirements.txt` installs this project; it does not guarantee a complete MIROS environment.
 
+### Transkun
+
+Transkun is a dedicated piano transcription backend for pure or piano-forward audio. The project calls the pretrained resources bundled with the `transkun` PyPI package through `src/core/transkun_transcriber.py`:
+
+```bash
+pip install transkun>=2.0.1
+```
+
+Availability checks confirm that `transkun.transcribe`, `pretrained/2.0.pt`, and `pretrained/2.0.conf` exist. If the packaged resources are missing, reinstall:
+
+```bash
+python -m pip install --force-reinstall transkun
+```
+
+### Aria-AMT
+
+Aria-AMT is another dedicated piano backend. The project calls `amt.run transcribe` through `src/core/aria_amt_transcriber.py`. The default checkpoint is:
+
+```text
+piano-medium-double-1.0.safetensors
+```
+
+Install the backend:
+
+```bash
+python -m pip install git+https://github.com/EleutherAI/aria-amt.git
+```
+
+Download the checkpoint:
+
+```bash
+python download_aria_amt_model.py
+```
+
+Default search roots include:
+
+```text
+~/.cache/music_ai_models/aria_amt
+runtime/models/aria_amt
+models/aria_amt
+```
+
 ## MIDI Track Layout
 
 YourMT3+ provides two output layouts:
@@ -142,6 +198,8 @@ best
 
 - For `YourMT3+`, the preset affects post-processing.
 - For `MIROS`, the current wrapper uses fixed checkpoint quality; the preset does not change MIROS inference.
+- For `Transkun` / `Aria-AMT`, dedicated piano modes use fixed checkpoint quality.
+- For `SIX_STEM_SPLIT`, multi-instrument stems follow the active multi-instrument backend; the piano stem uses fixed checkpoint quality when routed through Aria-AMT.
 
 ## Requirements
 
@@ -242,17 +300,22 @@ python download_sota_models.py
 
 If `YourMT3/` already exists, you only need the model download step.
 
-### 5. Prepare the Vocal Separation Model
+### 5. Prepare Separation and Piano Models
 
 ```bash
 python download_vocal_model.py
+python download_multistem_model.py
+python download_aria_amt_model.py
 ```
 
 The default cache location is:
 
 ```text
 ~/.music-to-midi/models/audio-separator
+~/.cache/music_ai_models/aria_amt
 ```
+
+Transkun resources are bundled with the `transkun` package. If Transkun mode reports missing resources, run `python -m pip install --force-reinstall transkun`.
 
 ### 6. Launch
 
@@ -292,7 +355,7 @@ cd space
 python app.py
 ```
 
-The Space app tries to sync YourMT3 source from the Hugging Face Space repository and checks the default model weights automatically.
+The Space app tries to sync YourMT3 source from the Hugging Face Space repository and checks default YourMT3+ and Aria-AMT model weights automatically.
 
 ## Portable Build
 
@@ -316,6 +379,7 @@ The build script attempts to collect:
 YourMT3/amt/src
 YourMT3 model cache
 audio-separator model cache
+Aria-AMT model cache
 optional local MIROS checkout
 ffmpeg.exe / ffprobe.exe
 ```
@@ -336,7 +400,11 @@ src/
     pipeline.py              # Main processing pipeline
     yourmt3_transcriber.py   # YourMT3+ backend
     miros_transcriber.py     # Local MIROS wrapper
+    transkun_transcriber.py  # Transkun piano backend
+    aria_amt_transcriber.py  # Aria-AMT piano backend
     vocal_separator.py       # Vocal/accompaniment separation
+    multi_stem_separator.py  # Six-stem separation
+    vocal_harmony_separator.py # Experimental lead/harmony vocal separation
     midi_generator.py        # MIDI generation and post-processing
     beat_detector.py         # BPM/beat detection
   gui/
@@ -354,6 +422,9 @@ space/app.py                 # Gradio Web UI
 colab_notebook.ipynb         # Colab entry
 download_sota_models.py      # Default YourMT3+ model download
 download_vocal_model.py      # Vocal separation model download
+download_multistem_model.py  # Six-stem separation model download
+download_aria_amt_model.py   # Aria-AMT model download
+download_vocal_harmony_model.py # Experimental lead/harmony model download
 MusicToMidi.spec             # PyInstaller configuration
 ```
 
@@ -430,6 +501,29 @@ Confirm dependency and model:
 ```bash
 pip install "audio-separator>=0.38.0" "onnxruntime>=1.16.0,<2"
 python download_vocal_model.py
+```
+
+### Six-Stem Separation Is Unavailable
+
+Confirm `audio-separator>=0.38.0` is installed and download the BS-RoFormer SW resources:
+
+```bash
+python download_multistem_model.py
+```
+
+### Dedicated Piano Transcription Is Unavailable
+
+Transkun mode needs the `transkun` package and its bundled pretrained resources:
+
+```bash
+python -m pip install --force-reinstall transkun
+```
+
+Aria-AMT mode needs the `aria-amt` package and checkpoint:
+
+```bash
+python -m pip install git+https://github.com/EleutherAI/aria-amt.git
+python download_aria_amt_model.py
 ```
 
 ### MIROS Is Unavailable

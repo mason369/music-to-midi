@@ -26,10 +26,10 @@ class TestColabNotebookDependencies(unittest.TestCase):
             sources.append("".join(cell.get("source", [])))
         return "\n".join(sources)
 
-    def test_removed_modes_and_dependencies_are_absent(self):
+    def test_restored_modes_and_dependencies_are_present(self):
         source_text = self._load_notebook_source_text()
 
-        for removed_text in (
+        for restored_text in (
             "aria-amt",
             "Aria-AMT",
             "Transkun",
@@ -38,8 +38,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "download_multistem_model.py",
             "download_aria_amt_model.py",
         ):
-            with self.subTest(removed_text=removed_text):
-                self.assertNotIn(removed_text, source_text)
+            with self.subTest(restored_text=restored_text):
+                self.assertIn(restored_text, source_text)
 
     def test_notebook_preserves_preinstalled_torch_and_avoids_reinstall(self):
         source_text = self._load_notebook_source_text()
@@ -96,15 +96,17 @@ class TestColabNotebookDependencies(unittest.TestCase):
             source_text,
         )
 
-    def test_colab_intro_and_ui_match_current_two_mode_surface(self):
+    def test_colab_intro_and_ui_match_restored_mode_surface(self):
         all_source_text = self._load_notebook_all_source_text()
         code_source_text = self._load_notebook_source_text()
 
         for expected_text in (
-            "当前 Colab 版提供两种处理模式",
+            "当前 Colab 版提供五种处理模式",
             "完整混音多乐器转写（SMART）",
             "人声/伴奏分离后分别转写（VOCAL_SPLIT）",
-            "Colab 版固定使用 YourMT3+ 后端",
+            "六声部分离 + 分别转写",
+            "钢琴专用转写 (Transkun)",
+            "钢琴专用转写 (Aria-AMT)",
         ):
             with self.subTest(expected_text=expected_text):
                 self.assertIn(expected_text, all_source_text)

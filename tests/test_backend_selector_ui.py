@@ -35,27 +35,26 @@ class TestBackendSelectorUi(unittest.TestCase):
         cls._app = QApplication.instance() or QApplication([])
         set_language("en_US")
 
-    def test_track_panel_only_lists_supported_modes_and_backends(self):
+    def test_track_panel_lists_restored_modes_and_backends(self):
         panel = TrackPanel()
 
         modes = [panel.mode_combo.itemData(index) for index in range(panel.mode_combo.count())]
         backends = [panel.model_combo.itemData(index) for index in range(panel.model_combo.count())]
 
-        self.assertEqual(modes, ["smart", "vocal_split"])
-        self.assertEqual(backends, ["yourmt3", "miros"])
-        self.assertNotIn("six_stem_split", modes)
-        self.assertNotIn("piano_transkun", modes)
-        self.assertNotIn("piano_aria_amt", modes)
-        self.assertNotIn("aria_amt", backends)
+        self.assertEqual(
+            modes,
+            ["smart", "vocal_split", "six_stem_split", "piano_transkun", "piano_aria_amt"],
+        )
+        self.assertEqual(backends, ["aria_amt", "yourmt3", "miros"])
 
-    def test_removed_mode_and_backend_fall_back_to_supported_defaults(self):
+    def test_restored_mode_and_backend_are_preserved(self):
         panel = TrackPanel()
 
         panel.set_processing_mode("six_stem_split")
         panel.set_transcription_backend("aria_amt")
 
-        self.assertEqual(panel.get_processing_mode(), "smart")
-        self.assertEqual(panel.get_transcription_backend(), "yourmt3")
+        self.assertEqual(panel.get_processing_mode(), "six_stem_split")
+        self.assertEqual(panel.get_transcription_backend(), "aria_amt")
 
     def test_processing_controls_disable_mode_specific_checkboxes(self):
         panel = TrackPanel()
@@ -63,13 +62,13 @@ class TestBackendSelectorUi(unittest.TestCase):
         panel.set_processing_controls_enabled(False)
         self.assertFalse(panel._vocal_split_merge_check.isEnabled())
 
-    def test_main_window_replaces_saved_aria_backend_with_saved_multi_backend(self):
+    def test_main_window_preserves_saved_aria_backend(self):
         config = Config(transcription_backend="aria_amt", multi_instrument_model="miros")
 
         with mock.patch.object(MainWindow, "_start_gpu_detection", return_value=None):
             window = MainWindow(config)
 
-        self.assertEqual(window.track_panel.get_transcription_backend(), "miros")
+        self.assertEqual(window.track_panel.get_transcription_backend(), "aria_amt")
         self.assertEqual(window.track_panel.get_multi_instrument_model(), "miros")
         window.close()
 
@@ -107,12 +106,12 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel.yourmt3_arch_hint_label.isHidden())
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
 
-    def test_removed_dedicated_piano_mode_uses_smart_quality_behavior(self):
+    def test_restored_dedicated_piano_mode_uses_fixed_quality_behavior(self):
         panel = TrackPanel()
         panel.set_processing_mode("piano_transkun")
 
-        self.assertEqual(panel.get_processing_mode(), "smart")
-        self.assertEqual(panel.get_quality_behavior(), QualityBehavior.CONFIGURABLE)
+        self.assertEqual(panel.get_processing_mode(), "piano_transkun")
+        self.assertEqual(panel.get_quality_behavior(), QualityBehavior.FIXED)
 
 
 if __name__ == "__main__":
