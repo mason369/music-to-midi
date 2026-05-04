@@ -24,6 +24,7 @@ except ImportError:
 from PyQt6.QtWidgets import QApplication, QLabel
 
 from src.gui.main_window import MainWindow
+from src.gui.widgets.dropzone import _display_file_name
 from src.i18n.translator import set_language, t
 from src.models.data_models import Config
 
@@ -80,6 +81,10 @@ class TestDesktopI18nIntegration(unittest.TestCase):
             self.assertEqual(window.dropzone.file_label.text(), "Selected file: song.wav")
         finally:
             window.close()
+
+    def test_selected_file_display_name_handles_windows_and_posix_paths(self):
+        self.assertEqual(_display_file_name(r"C:\tmp\song.wav"), "song.wav")
+        self.assertEqual(_display_file_name("/tmp/song.wav"), "song.wav")
 
     def test_completion_dialog_summary_keys_are_translated(self):
         set_language("en_US")
