@@ -22,6 +22,11 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/setup-python@v6", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)
 
+    def test_build_workflow_installs_audio_separator_for_pyinstaller_metadata(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 
