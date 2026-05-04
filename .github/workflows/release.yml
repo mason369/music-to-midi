@@ -148,6 +148,20 @@ jobs:
           python download_bytedance_piano_model.py
 
           echo "=== Download MIROS MusicFM model ==="
+          MIROS_MIRROR_DIR="$GITHUB_WORKSPACE/.tmp/miros-mirror"
+          mkdir -p "$MIROS_MIRROR_DIR"
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            MIROS_RELEASE_TAG="${{ github.event.inputs.tag }}"
+          else
+            MIROS_RELEASE_TAG="$(gh release list --repo ${{ github.repository }} --limit 1 --json tagName -q '.[0].tagName')"
+          fi
+          echo "Downloading MIROS release mirror assets from ${MIROS_RELEASE_TAG}"
+          gh release download "${MIROS_RELEASE_TAG}" \
+            --repo ${{ github.repository }} \
+            --pattern "miros-*" \
+            --dir "$MIROS_MIRROR_DIR" \
+            --clobber
+          export MUSIC_TO_MIDI_MIROS_MIRROR_DIR="$MIROS_MIRROR_DIR"
           python download_miros_model.py
 
           echo "=== Verify downloaded models ==="
@@ -171,6 +185,8 @@ jobs:
               raise RuntimeError("MIROS model files are not available")
           print("MIROS available")
           PY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 修复 Torch OpenMP 运行时 (Windows)
         if: runner.os == 'Windows'
