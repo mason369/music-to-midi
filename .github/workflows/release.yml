@@ -250,6 +250,32 @@ jobs:
           if ($logText -notmatch '便携包自检通过') {
             throw "Portable self-test failed. ExitCode=$($proc.ExitCode)`n$logText"
           }
+          $mirosDir = Join-Path $smokeDir '_internal\external\ai4m-miros'
+          $statusJson = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.json'
+          $probeMidi = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.mid'
+          Remove-Item -LiteralPath $statusJson, $probeMidi -ErrorAction SilentlyContinue
+          Push-Location $mirosDir
+          try {
+            $args = @(
+              '--miros-worker',
+              '-i', (Join-Path $env:RUNNER_TEMP 'missing-miros-probe.wav'),
+              '-o', $probeMidi,
+              '--status-json', $statusJson
+            )
+            $worker = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList $args -Wait -PassThru
+          } finally {
+            Pop-Location
+          }
+          if (-not (Test-Path $statusJson)) {
+            throw "MIROS worker import smoke did not write a status file. ExitCode=$($worker.ExitCode)"
+          }
+          $mirosStatus = Get-Content -LiteralPath $statusJson -Raw
+          if ($mirosStatus -match 'onnxruntime_pybind11_state|DLL load failed') {
+            throw "MIROS worker imported broken onnxruntime during smoke test:`n$mirosStatus"
+          }
+          if ($mirosStatus -notmatch '"ok": false') {
+            throw "MIROS worker import smoke returned an unexpected status:`n$mirosStatus"
+          }
 
       - name: 烟测便携产物 (Linux)
         if: runner.os == 'Linux'
@@ -258,6 +284,33 @@ jobs:
           cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"
           chmod +x "$SMOKE_DIR/MusicToMidi"
           "$SMOKE_DIR/MusicToMidi" --self-test
+          STATUS_JSON="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.json"
+          PROBE_MIDI="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.mid"
+          rm -f "$STATUS_JSON" "$PROBE_MIDI"
+          pushd "$SMOKE_DIR/_internal/external/ai4m-miros"
+          set +e
+          timeout 120s "$SMOKE_DIR/MusicToMidi" \
+            --miros-worker \
+            -i "${RUNNER_TEMP:-/tmp}/missing-miros-probe.wav" \
+            -o "$PROBE_MIDI" \
+            --status-json "$STATUS_JSON"
+          WORKER_EXIT=$?
+          set -e
+          popd
+          if [ "$WORKER_EXIT" -eq 124 ]; then
+            echo "MIROS worker import smoke timed out" >&2
+            exit 1
+          fi
+          if [ ! -f "$STATUS_JSON" ]; then
+            echo "MIROS worker import smoke did not write a status file. ExitCode=${WORKER_EXIT}" >&2
+            exit 1
+          fi
+          if grep -Eq 'onnxruntime_pybind11_state|DLL load failed' "$STATUS_JSON"; then
+            echo "MIROS worker imported broken onnxruntime during smoke test:" >&2
+            cat "$STATUS_JSON" >&2
+            exit 1
+          fi
+          grep -q '"ok": false' "$STATUS_JSON"
 
       - name: 创建便携包 (Windows)
         if: runner.os == 'Windows'
@@ -419,7 +472,16 @@ jobs:
             gh release create "${TAG}" \
               --repo ${{ github.repository }} \
               --title "${TAG}" \
-              --notes "## 音乐转MIDI转换器 ${TAG}
+              --notes "正在准备发布说明..."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 更新 Release 说明
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          cat > release-notes.md << NOTES
+          ## 音乐转MIDI转换器 ${TAG}
 
           ### 便携版下载
 
@@ -445,8 +507,12 @@ jobs:
           - **Windows**：Windows 10/11 (x64)
           - **Linux**：Ubuntu 20.04+ / Debian 11+ (x64)
           - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡
-          - **内存**：建议 8GB+"
-          fi
+          - **内存**：建议 8GB+
+          NOTES
+          gh release edit "${TAG}" \
+            --repo ${{ github.repository }} \
+            --title "${TAG}" \
+            --notes-file release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
