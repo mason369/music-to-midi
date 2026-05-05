@@ -193,6 +193,17 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertNotIn("MusicToMidi-Windows-CPU", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU", workflow)
 
+    def test_release_workflow_removes_stale_cpu_assets_before_upload(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("删除旧 CPU 发布资产", workflow)
+        self.assertIn('select(test("^MusicToMidi-.*-CPU-Portable"))', workflow)
+        self.assertIn("gh release delete-asset", workflow)
+        self.assertLess(
+            workflow.index("删除旧 CPU 发布资产"),
+            workflow.index("上传资源到 Release"),
+        )
+
     def test_release_workflow_filters_pinned_runtime_packages_from_requirements_build(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 

@@ -450,6 +450,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 删除旧 CPU 发布资产
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "清理 Release 中的旧 CPU 资产: ${TAG}"
+          mapfile -t CPU_ASSETS < <(
+            gh release view "${TAG}" \
+              --repo ${{ github.repository }} \
+              --json assets \
+              -q '.assets[].name | select(test("^MusicToMidi-.*-CPU-Portable"))'
+          )
+          if [ "${#CPU_ASSETS[@]}" -eq 0 ]; then
+            echo "未发现旧 CPU 资产"
+            exit 0
+          fi
+          for asset in "${CPU_ASSETS[@]}"; do
+            echo "删除旧 CPU 资产: ${asset}"
+            gh release delete-asset "${TAG}" "${asset}" \
+              --repo ${{ github.repository }} \
+              --yes
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 上传资源到 Release
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
