@@ -31,7 +31,7 @@
     },
     "mode": {
       "label": "处理模式",
-      "smart": "YourMT3+ MoE 多乐器转写",
+      "smart": "YourMT3+ 多乐器转写",
       "smart_tooltip": "直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，无需音源分离",
       "vocal_split": "人声分离 + 分别转写",
       "vocal_split_tooltip": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写；默认输出两个独立 MIDI，可选额外输出 1 个合并 MIDI",
@@ -43,7 +43,7 @@
       "piano_aria_amt_tooltip": "使用 Aria-AMT 钢琴专用模型直接转写纯钢琴音频",
       "piano_bytedance_pedal": "钢琴专用转写 (ByteDance Pedal)",
       "piano_bytedance_pedal_tooltip": "使用 ByteDance 带延音踏板的钢琴模型直接转写纯钢琴音频",
-      "smart_desc": "🎵  YourMT3+ MoE  —  多乐器智能转写",
+      "smart_desc": "🎵  YourMT3+  —  多乐器智能转写",
       "smart_hint": "直接对完整音频进行转写，精确识别 128 种 GM 乐器。\n轨道数量由模型自动决定，无需手动配置。",
       "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  人声分离 + 分别转写",
       "vocal_split_hint": "先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写。\n默认输出两个独立 MIDI，可勾选“输出 1 个人声+伴奏合并 MIDI”。",
@@ -68,9 +68,9 @@
       "aria_amt_six_stem_hint": "六声部模式中，piano stem 会优先尝试 Aria-AMT，其余 stem 使用多乐器后端。",
       "aria_amt_with_miros_hint": "piano stem 优先 Aria-AMT，多乐器部分使用 MIROS。",
       "dedicated_mode_hint": "专用钢琴模式会直接使用所选钢琴模型，不使用多乐器后端。",
-      "yourmt3": "YourMT3+ MoE",
-      "yourmt3_tooltip": "默认的完整多乐器后端，基于 YourMT3+ MoE。",
-      "yourmt3_general_hint": "使用 YourMT3+ MoE 完成完整混音的多乐器转写。",
+      "yourmt3": "YourMT3+",
+      "yourmt3_tooltip": "默认的完整多乐器后端；具体 checkpoint / 架构由 YourMT3+ 模型模式决定。",
+      "yourmt3_general_hint": "使用当前选择的 YourMT3+ 模型模式完成完整混音的多乐器转写。",
       "yourmt3_six_stem_hint": "六声部模式中使用 YourMT3+ 对完整混音转写，再按乐器族拆分到 stem MIDI。",
       "miros": "MIROS (MusicFM)",
       "miros_tooltip": "2025 AI4Musician 自动音乐转写挑战赛第一名方案。需要本地存在 ai4m-miros 仓库及其依赖环境。",
@@ -235,7 +235,7 @@
   "space": {
     "app": {
       "title": "音乐转MIDI",
-      "subtitle": "将音乐智能转换为多轨道 MIDI 文件 — 基于 YourMT3+ MoE 深度学习模型"
+      "subtitle": "将音乐智能转换为多轨道 MIDI 文件 — 基于 YourMT3+ 深度学习模型"
     },
     "ui": {
       "audio_section": "音频输入",
@@ -268,7 +268,7 @@
       "piano_transkun": "钢琴专用转写 (Transkun)",
       "piano_aria_amt": "钢琴专用转写 (Aria-AMT)",
       "piano_bytedance_pedal": "钢琴专用转写 (ByteDance Pedal)",
-      "smart_info": "**YourMT3+ MoE** — 直接对完整音频进行多乐器转写，精确识别 128 种 GM 乐器，轨道数量由模型自动决定。",
+      "smart_info": "**YourMT3+** — 直接对完整音频进行多乐器转写，具体 checkpoint / 架构可在模型模式中选择，轨道数量由模型自动决定。",
       "vocal_split_info": "**BS-RoFormer + YourMT3+** — 先用 BS-RoFormer 分离人声与伴奏，再分别用 YourMT3+ 转写；默认输出两个独立 MIDI，可选额外输出 1 个合并 MIDI。",
       "six_stem_split_info": "**BS-RoFormer SW + YourMT3+ / Aria-AMT** — 分离 bass/drums/guitar/piano/vocals/other 六个 stem，默认转写全部 stem，可切换为只转写选中 stem，并输出合并 MIDI。",
       "piano_transkun_info": "**Transkun (Piano)** — 针对独奏钢琴的专用转写模型，适合纯钢琴音频，直接输出钢琴 MIDI。",

@@ -705,7 +705,7 @@ with gr.Blocks(
     gr.Markdown(
         '<div class="footer-info">'
         f"{st('space.ui.footer_powered_by')} "
-        "<a href='https://github.com/mimbres/YourMT3'>YourMT3+</a> MoE | "
+        "<a href='https://github.com/mimbres/YourMT3'>YourMT3+</a> | "
         "<a href='https://github.com/mason369/music-to-midi'>GitHub</a> | "
         "MIT License"
         "</div>"

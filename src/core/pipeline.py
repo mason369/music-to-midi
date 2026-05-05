@@ -65,7 +65,7 @@ class MusicToMidiPipeline:
     音乐转MIDI主处理流水线
 
     处理模式：
-        SMART: 使用 YourMT3+ MoE 直接对完整混音进行多乐器转写。
+        SMART: 使用所选多乐器后端直接对完整混音进行转写。
         VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写。
                      可选额外输出一个“人声+伴奏合并 MIDI”。
     """
