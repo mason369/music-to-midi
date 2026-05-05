@@ -37,7 +37,7 @@ short_description: 将音乐智能转换为多轨道 MIDI 文件
 
 ## 技术栈
 
-- **转写引擎**: YourMT3+ MoE、Transkun、Aria-AMT、ByteDance Pedal
+- **转写引擎**: YourMT3+、Transkun、Aria-AMT、ByteDance Pedal
 - **人声/伴奏/六声部分离**: `audio-separator`
 - **节拍检测**: librosa
 - **Web 框架**: Gradio

@@ -120,8 +120,8 @@ YOURMT3_MODELS = {
     "yptf_moe_multi_ps": {
         "name": "YPTF.MoE+Multi (PS)",
         "ui_label": "YPTF.MoE+Multi (PS)",
-        "description": "MoE + multi-t5 顶级性能模型，使用音高偏移增强。",
-        "ui_description": "Strongest MoE Multi checkpoint in this app: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
+        "description": "本项目默认的高性能 MoE + multi-t5 模型，使用音高偏移增强。",
+        "ui_description": "Default high-performance MoE Multi checkpoint in this app: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (PS)",
         "size_mb": 2500,
         "recommended": True,

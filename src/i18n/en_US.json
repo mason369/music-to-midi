@@ -31,7 +31,7 @@
     },
     "mode": {
       "label": "Processing Mode",
-      "smart": "YourMT3+ MoE Multi-Instrument",
+      "smart": "YourMT3+ Multi-Instrument",
       "smart_tooltip": "Direct multi-instrument transcription of full audio, recognizes 128 GM instruments, no source separation needed",
       "vocal_split": "Vocal Split + Separate Transcription",
       "vocal_split_tooltip": "Separate vocals and accompaniment with BS-RoFormer, then transcribe both with YourMT3+; outputs two MIDI files by default, with optional merged MIDI",
@@ -43,7 +43,7 @@
       "piano_aria_amt_tooltip": "Use the dedicated Aria-AMT piano model for pure piano audio",
       "piano_bytedance_pedal": "Piano Transcription (ByteDance Pedal)",
       "piano_bytedance_pedal_tooltip": "Use ByteDance's pedal-aware piano model for pure piano audio",
-      "smart_desc": "🎵  YourMT3+ MoE  —  Multi-Instrument Transcription",
+      "smart_desc": "🎵  YourMT3+  —  Multi-Instrument Transcription",
       "smart_hint": "Transcribe full audio directly, recognizes 128 GM instruments.\nTrack count is determined automatically by the model.",
       "vocal_split_desc": "🎤  BS-RoFormer + YourMT3+  —  Vocal Split + Separate Transcription",
       "vocal_split_hint": "Separate vocals and accompaniment with BS-RoFormer, then transcribe both\nwith YourMT3+ independently. Outputs two MIDI files by default; optionally add one merged MIDI.",
@@ -68,9 +68,9 @@
       "aria_amt_six_stem_hint": "In six-stem mode, the piano stem prefers Aria-AMT while other stems use the multi-instrument backend.",
       "aria_amt_with_miros_hint": "Piano stem prefers Aria-AMT; multi-instrument passes use MIROS.",
       "dedicated_mode_hint": "Dedicated piano modes use the selected piano model directly and skip the multi-instrument backend.",
-      "yourmt3": "YourMT3+ MoE",
-      "yourmt3_tooltip": "Default full multi-instrument backend based on YourMT3+ MoE.",
-      "yourmt3_general_hint": "Use YourMT3+ MoE for the full multi-instrument pass.",
+      "yourmt3": "YourMT3+",
+      "yourmt3_tooltip": "Default full multi-instrument backend; the concrete checkpoint / architecture is controlled by the YourMT3+ model mode.",
+      "yourmt3_general_hint": "Use the selected YourMT3+ model mode for the full multi-instrument pass.",
       "yourmt3_six_stem_hint": "Six-stem mode uses YourMT3+ on the full mix, then routes notes to stem MIDI files by GM family.",
       "miros": "MIROS (MusicFM)",
       "miros_tooltip": "First-place system in the 2025 AI4Musician Automatic Music Transcription Challenge. Requires a local ai4m-miros checkout and its runtime dependencies.",
@@ -235,7 +235,7 @@
   "space": {
     "app": {
       "title": "Music to MIDI",
-      "subtitle": "Intelligently convert music to multi-track MIDI files — powered by YourMT3+ MoE deep learning"
+      "subtitle": "Intelligently convert music to multi-track MIDI files — powered by YourMT3+ deep learning"
     },
     "ui": {
       "audio_section": "Audio Input",
@@ -268,7 +268,7 @@
       "piano_transkun": "Piano Transcription (Transkun)",
       "piano_aria_amt": "Piano Transcription (Aria-AMT)",
       "piano_bytedance_pedal": "Piano Transcription (ByteDance Pedal)",
-      "smart_info": "**YourMT3+ MoE** — Transcribe full audio directly, recognizes 128 GM instruments, and lets the model determine track count automatically.",
+      "smart_info": "**YourMT3+** — Transcribe full audio directly; choose the concrete checkpoint / architecture in the model-mode selector, and let the model determine track count automatically.",
       "vocal_split_info": "**BS-RoFormer + YourMT3+** — Separate vocals and accompaniment first, then transcribe both independently. Outputs two MIDI files by default; optionally adds one merged MIDI.",
       "six_stem_split_info": "**BS-RoFormer SW + YourMT3+ / Aria-AMT** — Separate bass/drums/guitar/piano/vocals/other stems, transcribe all stems by default or selected stems only, and output merged MIDI.",
       "piano_transkun_info": "**Transkun (Piano)** — Dedicated transcription model for solo piano audio, directly outputs piano MIDI.",
