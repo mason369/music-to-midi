@@ -39,7 +39,7 @@ from contextlib import contextmanager
 import numpy as np
 
 from src.i18n.translator import Translator
-from src.models.data_models import Config, NoteEvent, InstrumentType, PedalEvent, TranscriptionQuality
+from src.models.data_models import Config, FIXED_TRANSCRIPTION_QUALITY, NoteEvent, InstrumentType, PedalEvent
 from src.models.gm_instruments import get_instrument_name
 from src.utils.gpu_utils import (
     get_device,
@@ -974,7 +974,7 @@ class YourMT3Transcriber:
         input_frames = audio_cfg['input_frames']
 
         # 根据质量配置选择重叠策略
-        quality = getattr(self.config, 'transcription_quality', 'best')
+        quality = FIXED_TRANSCRIPTION_QUALITY
         ultra_quality = getattr(self.config, 'ultra_quality_mode', False)
 
         if quality == "best" or ultra_quality:
@@ -1574,7 +1574,7 @@ class YourMT3Transcriber:
     def transcribe_precise(
         self,
         audio_path: str,
-        quality: str = "best",
+        quality: str = FIXED_TRANSCRIPTION_QUALITY,
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> Tuple[Dict[int, List[NoteEvent]], Dict[int, List[NoteEvent]]]:
         """
@@ -1587,7 +1587,7 @@ class YourMT3Transcriber:
 
         参数:
             audio_path: 音频文件路径
-            quality: 质量模式 ("fast", "balanced", "best")
+            quality: 内部固定为最高质量策略，保留参数仅兼容旧调用
             progress_callback: 进度回调
 
         返回:
@@ -1595,7 +1595,8 @@ class YourMT3Transcriber:
             - instrument_notes: Dict[program 0-127, List[NoteEvent]]
             - drum_notes: Dict[drum_pitch 35-81, List[NoteEvent]]
         """
-        logger.info(f"YourMT3+ 极致精度转写: {audio_path} (质量模式: {quality})")
+        quality = FIXED_TRANSCRIPTION_QUALITY
+        logger.info(f"YourMT3+ 极致精度转写: {audio_path} (固定高质量策略)")
 
         self._check_cancelled()
 

@@ -21,20 +21,10 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            variant: CPU
-            platform: Windows
-            pytorch_url: https://download.pytorch.org/whl/cpu
-            sep: ";"
-          - os: windows-latest
             variant: GPU
             platform: Windows
             pytorch_url: https://download.pytorch.org/whl/cu121
             sep: ";"
-          - os: ubuntu-22.04
-            variant: CPU
-            platform: Linux
-            pytorch_url: https://download.pytorch.org/whl/cpu
-            sep: ":"
           - os: ubuntu-22.04
             variant: GPU
             platform: Linux
@@ -286,17 +276,10 @@ jobs:
             }
           }
 
-          if ('${{ matrix.variant }}' -eq 'GPU') {
-            $variantNote = @"
+          $variantNote = @"
           GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
-          如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理
+          需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版
           "@
-          } else {
-            $variantNote = @"
-          CPU 版，无需显卡即可运行
-          如需 GPU 加速，请下载 GPU 版本
-          "@
-          }
 
           $readme = @"
           音乐转MIDI转换器 ${{ matrix.platform }} 便携版（${{ matrix.variant }}）
@@ -321,13 +304,8 @@ jobs:
           # 重命名 dist/MusicToMidi 为带平台标识的名称
           mv dist/MusicToMidi "dist/${NAME}"
 
-          if [ "${{ matrix.variant }}" = "GPU" ]; then
-            VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
-          如果没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容，程序会自动回退到 CPU 推理"
-          else
-            VARIANT_NOTE="CPU 版，无需显卡即可运行
-          如需 GPU 加速，请下载 GPU 版本"
-          fi
+          VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
+          需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版"
 
           if [ "${{ matrix.platform }}" = "Windows" ]; then
             EXE="MusicToMidi.exe"
@@ -354,6 +332,7 @@ jobs:
         shell: bash
         run: |
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          SEVENZ_LOW_MEM_ARGS=(-t7z -mx=5 -md=64m -mmt=on)
           echo "压缩前磁盘空间:"
           df -h .
 
@@ -371,21 +350,28 @@ jobs:
             if [ "$DIR_SIZE" -gt 3000000000 ]; then
               # >3GB 目录直接用分卷 7z（跳过 zip 和单文件 7z）
               echo "目录较大，直接使用分卷 7z 压缩..."
-              cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+              cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
             else
               # 小包先试 zip
               cd dist && 7z a -tzip "../${NAME}-Portable.zip" "${NAME}" && cd ..
               FILE_SIZE=$(stat -c%s "${NAME}-Portable.zip" 2>/dev/null || wc -c < "${NAME}-Portable.zip" | tr -d ' ')
               if [ "$FILE_SIZE" -gt 1900000000 ]; then
                 rm "${NAME}-Portable.zip"
-                cd dist && 7z a "../${NAME}-Portable.7z" "${NAME}" && cd ..
+                cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" "../${NAME}-Portable.7z" "${NAME}" && cd ..
                 SEVENZ_SIZE=$(stat -c%s "${NAME}-Portable.7z" 2>/dev/null || wc -c < "${NAME}-Portable.7z" | tr -d ' ')
                 if [ "$SEVENZ_SIZE" -gt 1900000000 ]; then
                   rm "${NAME}-Portable.7z"
-                  cd dist && 7z a -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
+                  cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
                 fi
               fi
             fi
+
+            echo "校验 Windows 压缩包..."
+            for archive in "${NAME}-Portable.zip" "${NAME}-Portable.7z" "${NAME}-Portable.7z.001"; do
+              if [ -f "$archive" ]; then
+                7z t "$archive"
+              fi
+            done
           else
             # Linux GPU 包较大，直接流式写入分卷，避免先生成一个完整 tar.gz
             # 再 split 造成额外磁盘峰值。
@@ -440,12 +426,10 @@ jobs:
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
           | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Windows-CPU-Portable.*\` | Windows | CPU | 无显卡使用 |
           | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Linux-CPU-Portable.*\` | Linux | CPU | 无显卡使用 |
 
           ### 使用方法
-          1. 下载对应平台和推理方式的压缩包
+          1. 下载对应平台的 GPU 压缩包
           2. 如果是分卷压缩，请先下载同名前缀的全部分卷（如 \`.7z.001\` / \`.7z.002\` 或 \`.partaa\` / \`.partab\`）
           3. 解压到任意目录
           4. 运行 \`MusicToMidi\`（Windows 为 \`.exe\`）即可使用（AI 模型已内置）
@@ -453,14 +437,14 @@ jobs:
           ### 说明
           - 无需安装 Python，解压即用
           - GPU 版内含 CUDA 12.1 运行时，无需单独安装 CUDA
-          - GPU 版在没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会自动回退到 CPU
+          - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
           - 6 种处理模式：智能转写 / 人声分离 / 六声部分离 / Transkun 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)
           - **Linux**：Ubuntu 20.04+ / Debian 11+ (x64)
-          - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡（不兼容时会自动回退到 CPU）
+          - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡
           - **内存**：建议 8GB+"
           fi
         env:

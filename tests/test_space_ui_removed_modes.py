@@ -37,3 +37,13 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
 
     assert "aria-amt" in requirements_text
     assert "piano-transcription-inference" in requirements_text
+
+    for package_name in (
+        "einops",
+        "smart-open",
+        "pretty-midi",
+        "soxr",
+        "mido",
+        "soundfile",
+    ):
+        assert package_name in requirements_text

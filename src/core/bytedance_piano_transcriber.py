@@ -76,6 +76,32 @@ class ByteDancePianoTranscriber:
             f"检测到设备 {preferred}。请切换到 CPU 或 CUDA 后重试。"
         )
 
+    @staticmethod
+    def _format_missing_output_error(input_path: Path, out_path: Path, device: str) -> str:
+        lines = [
+            "ByteDance Piano 未生成 MIDI 输出",
+            f"输入音频: {input_path.resolve()}",
+            f"期望输出: {out_path.resolve()}",
+            f"输出目录: {out_path.parent.resolve()}",
+            f"运行设备: {device}",
+        ]
+        if out_path.parent.exists():
+            midi_candidates = sorted(
+                candidate.resolve()
+                for candidate in out_path.parent.glob("*.mid")
+                if candidate.is_file()
+            )
+            if midi_candidates:
+                lines.append("输出目录中的 MIDI 文件:")
+                lines.extend(f"  {candidate}" for candidate in midi_candidates[:12])
+                if len(midi_candidates) > 12:
+                    lines.append(f"  ... 另外 {len(midi_candidates) - 12} 个")
+            else:
+                lines.append("输出目录中未发现 .mid 文件")
+        else:
+            lines.append("输出目录不存在")
+        return "\n".join(lines)
+
     def transcribe(
         self,
         audio_path: str,
@@ -134,7 +160,7 @@ class ByteDancePianoTranscriber:
             clear_gpu_memory()
 
         if not out_path.exists() or out_path.stat().st_size == 0:
-            raise RuntimeError("ByteDance Piano 未生成 MIDI 输出")
+            raise RuntimeError(self._format_missing_output_error(input_path, out_path, device))
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.bytedance_piano_complete"))

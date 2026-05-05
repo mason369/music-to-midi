@@ -62,6 +62,26 @@ class AriaAmtTranscriber:
         return midis[0] if midis else None
 
     @staticmethod
+    def _format_missing_output_error(out_path: Path, temp_dir: Path) -> str:
+        lines = [
+            "Aria-AMT 未生成 MIDI 输出",
+            f"期望输出: {out_path.resolve()}",
+            f"临时输出目录: {temp_dir.resolve()}",
+        ]
+        if temp_dir.exists():
+            entries = sorted(path.resolve() for path in temp_dir.iterdir())
+            if entries:
+                lines.append("临时输出目录内容:")
+                lines.extend(f"  {entry}" for entry in entries[:20])
+                if len(entries) > 20:
+                    lines.append(f"  ... 另外 {len(entries) - 20} 个")
+            else:
+                lines.append("临时输出目录为空")
+        else:
+            lines.append("临时输出目录不存在")
+        return "\n".join(lines)
+
+    @staticmethod
     def _save_token_sequence_as_midi(tokenizer, sequence: list, save_path: Path) -> None:
         last_onset = None
         for token in reversed(sequence):
@@ -335,7 +355,7 @@ class AriaAmtTranscriber:
 
         midi_path = self._guess_output_midi(temp_dir, input_path)
         if midi_path is None or not midi_path.exists():
-            raise RuntimeError("Aria-AMT 未生成 MIDI 输出")
+            raise RuntimeError(self._format_missing_output_error(out_path, temp_dir))
 
         shutil.move(str(midi_path), str(out_path))
         shutil.rmtree(temp_dir, ignore_errors=True)

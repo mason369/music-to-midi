@@ -50,7 +50,8 @@ def test_cuda_preflight_reports_unsupported_gpu_architecture(monkeypatch):
     assert "NVIDIA GeForce GTX 780" in message
     assert "3.5" in message
     assert "sm_50, sm_60, sm_75, sm_86, sm_90" in message
-    assert "CPU 版发布包" in message
+    assert "兼容的 NVIDIA 显卡" in message
+    assert "CPU 版发布包" not in message
 
 
 def test_transcribe_precise_rewrites_no_kernel_image_error(monkeypatch):
@@ -70,5 +71,6 @@ def test_transcribe_precise_rewrites_no_kernel_image_error(monkeypatch):
 
     message = str(excinfo.value)
     assert "显卡架构" in message
-    assert "CPU 版发布包" in message
+    assert "兼容的 NVIDIA 显卡" in message
+    assert "CPU 版发布包" not in message
     assert "no kernel image is available for execution on the device" not in message

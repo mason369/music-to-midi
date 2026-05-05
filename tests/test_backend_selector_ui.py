@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import QApplication
 from src.gui.main_window import MainWindow
 from src.gui.widgets.track_panel import TrackPanel
 from src.i18n.translator import set_language
-from src.models.data_models import Config, QualityBehavior
+from src.models.data_models import Config
 
 
 class TestBackendSelectorUi(unittest.TestCase):
@@ -177,12 +177,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel.yourmt3_arch_hint_label.isHidden())
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
 
-    def test_restored_dedicated_piano_mode_uses_fixed_quality_behavior(self):
+    def test_restored_dedicated_piano_mode_remains_selectable(self):
         panel = TrackPanel()
         panel.set_processing_mode("piano_bytedance_pedal")
 
         self.assertEqual(panel.get_processing_mode(), "piano_bytedance_pedal")
-        self.assertEqual(panel.get_quality_behavior(), QualityBehavior.FIXED)
 
     def test_bytedance_pedal_mode_explains_pedal_scope_when_selected(self):
         panel = TrackPanel()

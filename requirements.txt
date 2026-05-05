@@ -24,6 +24,8 @@ scikit-learn>=1.3.0,<2
 torchmetrics>=0.11.0,<2
 h5py>=3.10,<4
 mirdata>=0.3.8,<1
+pretty-midi>=0.2.10,<1
+soxr>=0.3.7,<1
 
 # 模型下载
 huggingface_hub>=0.20.0,<2

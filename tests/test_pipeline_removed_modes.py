@@ -107,6 +107,24 @@ class TestRestoredProcessingModes(unittest.TestCase):
                     output_dir="output",
                 )
 
+    def test_backend_error_message_does_not_duplicate_existing_prefix(self):
+        message = MusicToMidiPipeline._format_backend_error(
+            "MIROS",
+            "转写失败",
+            RuntimeError("MIROS 转写失败:\nworker boom"),
+        )
+
+        self.assertEqual(message, "MIROS 转写失败:\nworker boom")
+
+    def test_backend_error_message_adds_prefix_to_plain_errors(self):
+        message = MusicToMidiPipeline._format_backend_error(
+            "MIROS",
+            "转写失败",
+            RuntimeError("worker boom"),
+        )
+
+        self.assertEqual(message, "MIROS 转写失败: worker boom")
+
 
 class TestVocalSplitMode(unittest.TestCase):
     def test_vocal_split_optionally_outputs_merged_midi(self):

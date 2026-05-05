@@ -17,7 +17,7 @@ from typing import Optional, Callable, Dict, List
 from src.models.data_models import (
     Config, ProcessingResult, ProcessingProgress,
     ProcessingStage, Track, TrackType, ProcessingMode,
-    MultiInstrumentModel, QualityBehavior, TranscriptionBackend,
+    FIXED_TRANSCRIPTION_QUALITY, MultiInstrumentModel, TranscriptionBackend,
     BeatInfo, NoteEvent,
 )
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
@@ -180,34 +180,6 @@ class MusicToMidiPipeline:
             self._get_multi_instrument_label(),
         )
 
-    def _report_quality_behavior(self, mode_label: str) -> None:
-        quality = getattr(self.config, "transcription_quality", "best")
-        behavior = self.config.get_quality_behavior()
-
-        if behavior == QualityBehavior.CONFIGURABLE or behavior.value == "configurable":
-            logger.info(
-                "Quality preset '%s' applies to the %s pass in %s mode.",
-                quality,
-                self._get_multi_instrument_label(),
-                mode_label,
-            )
-            return
-
-        if behavior == QualityBehavior.PARTIAL or behavior.value == "partial":
-            logger.info(
-                "Quality preset '%s' only affects the YourMT3+ full-mix pass in %s mode; "
-                "Aria-AMT keeps fixed checkpoint quality for the piano stem.",
-                quality,
-                mode_label,
-            )
-            return
-
-        logger.info(
-            "Quality preset '%s' does not change inference in %s mode because the active path uses fixed checkpoint quality.",
-            quality,
-            mode_label,
-        )
-
     def _can_use_aria_amt(self) -> bool:
         try:
             return (
@@ -274,6 +246,14 @@ class MusicToMidiPipeline:
             clear_gpu_memory()
         except Exception as exc:
             logger.warning("GPU内存清理失败: %s", exc)
+
+    @staticmethod
+    def _format_backend_error(model_label: str, action: str, exc: Exception) -> str:
+        prefix = f"{model_label} {action}"
+        message = str(exc)
+        if message.startswith(prefix):
+            return message
+        return f"{prefix}: {message}"
 
     @staticmethod
     def _ensure_wav(audio_path: str, output_dir: str) -> str:
@@ -554,7 +534,6 @@ class MusicToMidiPipeline:
         transcriber = self._get_multi_instrument_transcriber()
         model_label = self._get_multi_instrument_label()
         self._report_general_backend_routing("six_stem_split")
-        self._report_quality_behavior("six_stem_split")
 
         self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_audio"))
         self._check_cancelled()
@@ -595,7 +574,7 @@ class MusicToMidiPipeline:
         )
         logger.info("使用 %s 对完整混音进行一次性多乐器转写", model_label)
 
-        quality = self.config.transcription_quality
+        quality = FIXED_TRANSCRIPTION_QUALITY
 
         def _transcribe_cb(p: float, msg: str) -> None:
             overall = 0.30 + p * 0.45
@@ -611,7 +590,9 @@ class MusicToMidiPipeline:
             raise
         except Exception as e:
             logger.error("%s 转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(f"{model_label} 转写失败: {e}") from e
+            raise RuntimeError(
+                self._format_backend_error(model_label, "转写失败", e)
+            ) from e
         finally:
             self._cleanup_multi_instrument_backend()
 
@@ -778,7 +759,6 @@ class MusicToMidiPipeline:
         midi_path = str(Path(output_dir) / f"{stem}_{output_suffix}.mid")
 
         logger.info("开始处理 (%s 钢琴模式): %s", mode_label, audio_path)
-        self._report_quality_behavior(mode_label)
 
         if not transcriber.is_available():
             raise RuntimeError(install_hint)
@@ -900,7 +880,6 @@ class MusicToMidiPipeline:
         self._report_general_backend_routing("smart")
 
         logger.info(f"开始处理 (智能模式): {audio_path}")
-        self._report_quality_behavior("smart")
 
         # ── 检查多乐器后端是否可用 ──
         logger.info("正在检查 %s 可用性...", model_label)
@@ -926,7 +905,7 @@ class MusicToMidiPipeline:
         )
         logger.info("使用 %s 进行极致精度转写", model_label)
 
-        quality = self.config.transcription_quality
+        quality = FIXED_TRANSCRIPTION_QUALITY
 
         def _transcribe_cb(p: float, msg: str) -> None:
             overall = 0.1 + p * 0.75
@@ -942,7 +921,9 @@ class MusicToMidiPipeline:
             raise
         except Exception as e:
             logger.error("%s 转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(f"{model_label} 转写失败: {e}") from e
+            raise RuntimeError(
+                self._format_backend_error(model_label, "转写失败", e)
+            ) from e
         finally:
             self._cleanup_multi_instrument_backend()
 
@@ -1014,7 +995,6 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理 (人声分离模式): {audio_path}")
         transcriber = self._get_multi_instrument_transcriber()
         model_label = self._get_multi_instrument_label()
-        self._report_quality_behavior("vocal_split")
 
         # ── 检查依赖 ──
         logger.info("正在检查依赖: BS-RoFormer, %s...", model_label)
@@ -1086,7 +1066,7 @@ class MusicToMidiPipeline:
         )
         logger.info("使用 %s 转写伴奏", model_label)
 
-        quality = self.config.transcription_quality
+        quality = FIXED_TRANSCRIPTION_QUALITY
 
         def _transcribe_cb(p: float, msg: str) -> None:
             overall = 0.35 + p * 0.25
@@ -1102,7 +1082,9 @@ class MusicToMidiPipeline:
             raise
         except Exception as e:
             logger.error("%s 伴奏转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(f"{model_label} 伴奏转写失败: {e}") from e
+            raise RuntimeError(
+                self._format_backend_error(model_label, "伴奏转写失败", e)
+            ) from e
         finally:
             self._cleanup_multi_instrument_backend()
 
@@ -1142,7 +1124,9 @@ class MusicToMidiPipeline:
             raise
         except Exception as e:
             logger.error("%s 人声转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(f"{model_label} 人声转写失败: {e}") from e
+            raise RuntimeError(
+                self._format_backend_error(model_label, "人声转写失败", e)
+            ) from e
         finally:
             self._cleanup_multi_instrument_backend()
 

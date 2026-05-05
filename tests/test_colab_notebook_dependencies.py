@@ -54,6 +54,22 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('" --no-deps"', source_text)
         self.assertNotIn('"audio-separator>=0.38.0"', source_text)
 
+    def test_colab_installs_miros_runtime_dependency_surface(self):
+        source_text = self._load_notebook_source_text()
+
+        for package_name in (
+            '"einops"',
+            '"smart-open"',
+            '"pretty-midi>=0.2.10"',
+            '"soxr>=0.3.7"',
+            '"mido"',
+            '"soundfile"',
+            '"h5py>=3.10,<4"',
+            '"mirdata>=0.3.8,<1"',
+        ):
+            with self.subTest(package_name=package_name):
+                self.assertIn(package_name, source_text)
+
     def test_colab_downloads_all_official_yourmt3_model_modes(self):
         source_text = self._load_notebook_source_text()
 

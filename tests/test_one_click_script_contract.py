@@ -145,8 +145,14 @@ class OneClickScriptContractTests(unittest.TestCase):
     def test_requirements_include_miros_runtime_basics(self):
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
 
+        self.assertIn("einops>=0.7.0,<1", requirements)
+        self.assertIn("smart-open>=6.0.0,<8", requirements)
         self.assertIn("h5py", requirements)
         self.assertIn("mirdata", requirements)
+        self.assertIn("pretty-midi>=0.2.10,<1", requirements)
+        self.assertIn("soxr>=0.3.7,<1", requirements)
+        self.assertIn("mido>=1.3.0,<2", requirements)
+        self.assertIn("soundfile>=0.12.0,<1", requirements)
         self.assertIn("chardet>=5,<6", requirements)
         self.assertIn("onnxruntime==1.23.2", requirements)
 

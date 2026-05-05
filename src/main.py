@@ -6,6 +6,13 @@ import os
 import logging
 import multiprocessing
 import warnings
+import argparse
+import json
+import traceback
+import types
+from contextlib import contextmanager
+from importlib.machinery import ModuleSpec
+from pathlib import Path
 
 from src import __version__
 from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
@@ -21,65 +28,6 @@ ensure_standard_streams()
 
 # 预先注入 bundled ffmpeg/bin 到 PATH，供 librosa/audioread/subprocess 使用
 bootstrap_runtime_environment()
-
-# 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
-# 必须在任何 import torch 之前执行
-import platform as _plat
-if _plat.system() == "Windows":
-    try:
-        import importlib.util as _ilu
-        import re as _re
-        _spec = _ilu.find_spec("torch")
-        if _spec and _spec.origin:
-            _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
-            if os.path.isdir(_torch_lib) and _re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', _torch_lib):
-                import ctypes as _ct
-                import glob as _gl
-                # 获取 8.3 短路径名
-                _buf = _ct.create_unicode_buffer(512)
-                _ret = _ct.windll.kernel32.GetShortPathNameW(_torch_lib, _buf, 512)
-                _short = _buf.value if 0 < _ret < 512 else _torch_lib
-                # 注入 PATH
-                _path = os.environ.get("PATH", "")
-                if _short not in _path:
-                    os.environ["PATH"] = _short + os.pathsep + _path
-                os.add_dll_directory(_short)
-                # 预加载 VC++ 运行时
-                for _vcrt in ("vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"):
-                    try:
-                        _ct.CDLL(_vcrt)
-                    except OSError:
-                        pass
-                # 用短路径预加载所有 torch DLL
-                _k32 = _ct.WinDLL("kernel32.dll", use_last_error=True)
-                _k32.LoadLibraryW.restype = _ct.c_void_p
-                for _dll in sorted(_gl.glob(os.path.join(_short, "*.dll"))):
-                    try:
-                        _k32.LoadLibraryW(_dll)
-                    except Exception:
-                        pass
-    except Exception as e:
-        # DLL 预加载失败不阻塞启动，但记录诊断信息
-        import logging as _log
-        _log.getLogger(__name__).debug("Windows torch DLL 预加载失败: %s", e)
-del _plat
-
-# 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
-try:
-    import torch  # noqa: F401
-    # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
-    # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
-    import torchaudio
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=".*set_audio_backend has been deprecated.*",
-            category=UserWarning,
-        )
-        torchaudio.set_audio_backend("soundfile")
-except Exception as e:
-    import logging as _log
-    _log.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
 
 # 抑制 Python 警告
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -97,6 +45,68 @@ logging.getLogger().setLevel(logging.ERROR)  # 根 logger
 
 from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment
+
+
+def _prepare_torch_runtime_before_pyqt() -> None:
+    """Prepare torch DLLs before importing PyQt on GUI startup."""
+    # 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
+    # 必须在任何 import torch 之前执行
+    import platform as _plat
+
+    if _plat.system() == "Windows":
+        try:
+            import importlib.util as _ilu
+            import re as _re
+
+            _spec = _ilu.find_spec("torch")
+            if _spec and _spec.origin:
+                _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
+                if os.path.isdir(_torch_lib) and _re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', _torch_lib):
+                    import ctypes as _ct
+                    import glob as _gl
+
+                    # 获取 8.3 短路径名
+                    _buf = _ct.create_unicode_buffer(512)
+                    _ret = _ct.windll.kernel32.GetShortPathNameW(_torch_lib, _buf, 512)
+                    _short = _buf.value if 0 < _ret < 512 else _torch_lib
+                    # 注入 PATH
+                    _path = os.environ.get("PATH", "")
+                    if _short not in _path:
+                        os.environ["PATH"] = _short + os.pathsep + _path
+                    os.add_dll_directory(_short)
+                    # 预加载 VC++ 运行时
+                    for _vcrt in ("vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"):
+                        try:
+                            _ct.CDLL(_vcrt)
+                        except OSError:
+                            pass
+                    # 用短路径预加载所有 torch DLL
+                    _k32 = _ct.WinDLL("kernel32.dll", use_last_error=True)
+                    _k32.LoadLibraryW.restype = _ct.c_void_p
+                    for _dll in sorted(_gl.glob(os.path.join(_short, "*.dll"))):
+                        try:
+                            _k32.LoadLibraryW(_dll)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logging.getLogger(__name__).debug("Windows torch DLL 预加载失败: %s", e)
+
+    # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
+    try:
+        import torch  # noqa: F401
+        # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
+        # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
+        import torchaudio
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*set_audio_backend has been deprecated.*",
+                category=UserWarning,
+            )
+            torchaudio.set_audio_backend("soundfile")
+    except Exception as e:
+        logging.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
 
 
 def _is_4k_display() -> bool:
@@ -124,7 +134,11 @@ def _is_4k_display() -> bool:
     return False
 
 
-def _run_self_test(transcriber_cls=None) -> int:
+def _run_self_test(
+    transcriber_cls=None,
+    success_message: str = "SELF-TEST OK: YourMT3+ available",
+    load_model: bool = True,
+) -> int:
     """运行无界面自检，供发布烟测和终端诊断使用。"""
     setup_chinese_environment()
     logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
@@ -146,10 +160,10 @@ def _run_self_test(transcriber_cls=None) -> int:
             from src.models.data_models import Config
 
             transcriber = transcriber_cls(Config())
-            load_model = getattr(transcriber, "_load_model", None)
-            if callable(load_model):
+            load_model_fn = getattr(transcriber, "_load_model", None)
+            if load_model and callable(load_model_fn):
                 logger.info("Self-test: loading YourMT3 model")
-                load_model()
+                load_model_fn()
         finally:
             if transcriber is not None:
                 unload_model = getattr(transcriber, "unload_model", None)
@@ -157,7 +171,7 @@ def _run_self_test(transcriber_cls=None) -> int:
                     unload_model()
 
         logger.info("便携包自检通过")
-        print("SELF-TEST OK: YourMT3+ available")
+        print(success_message)
         return 0
     except Exception as e:
         logger.error("自检异常: %s", e, exc_info=True)
@@ -165,11 +179,123 @@ def _run_self_test(transcriber_cls=None) -> int:
         return 1
 
 
+@contextmanager
+def _temporary_onnxruntime_stub():
+    existing = sys.modules.get("onnxruntime")
+    if existing is not None:
+        yield
+        return
+
+    stub = types.ModuleType("onnxruntime")
+    stub.__dict__.update(
+        {
+            "__version__": "0.0",
+            "__path__": [],
+            "get_available_providers": lambda: [],
+            "SessionOptions": type("SessionOptions", (), {}),
+            "InferenceSession": type("InferenceSession", (), {}),
+        }
+    )
+    stub.__spec__ = ModuleSpec("onnxruntime", loader=None, is_package=True)
+    sys.modules["onnxruntime"] = stub
+    try:
+        yield
+    finally:
+        if sys.modules.get("onnxruntime") is stub:
+            sys.modules.pop("onnxruntime", None)
+
+
+def _run_miros_worker(argv=None) -> int:
+    """Run bundled MIROS transcription without opening the GUI."""
+    parser = argparse.ArgumentParser(description="Internal MIROS worker")
+    parser.add_argument("-i", "--input", required=True)
+    parser.add_argument("-o", "--output", required=True)
+    parser.add_argument("--status-json")
+    args = parser.parse_args(argv)
+
+    def write_status(payload) -> None:
+        if not args.status_json:
+            return
+        status_path = Path(args.status_json)
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    repo_path_added = False
+    repo_dir = os.getcwd()
+    try:
+        if repo_dir not in sys.path:
+            sys.path.insert(0, repo_dir)
+            repo_path_added = True
+
+        # torchmetrics imports optional DNSMOS audio metrics during Lightning import.
+        # MIROS inference does not use those metrics, so keep onnxruntime isolated
+        # while importing the upstream transcribe module.
+        with _temporary_onnxruntime_stub():
+            from transcribe import transcribe
+
+        transcribe(args.input, args.output)
+        output_path = Path(args.output)
+        write_status(
+            {
+                "ok": True,
+                "output": str(output_path),
+                "output_exists": output_path.exists(),
+                "output_size": output_path.stat().st_size if output_path.exists() else None,
+            }
+        )
+        return 0
+    except Exception as exc:
+        failure_status = {
+            "ok": False,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        try:
+            write_status(failure_status)
+        except Exception as status_exc:
+            print(
+                f"MIROS worker failed: {exc}; also failed to write status: {status_exc}",
+                file=sys.stderr,
+            )
+            logging.getLogger(__name__).error(
+                "MIROS worker failed and status write failed: %s",
+                status_exc,
+                exc_info=True,
+            )
+        print(f"MIROS worker failed: {exc}", file=sys.stderr)
+        logging.getLogger(__name__).error("MIROS worker failed: %s", exc, exc_info=True)
+        return 1
+    finally:
+        if repo_path_added:
+            try:
+                sys.path.remove(repo_dir)
+            except ValueError:
+                pass
+
+
 def main():
     """主入口函数"""
     multiprocessing.freeze_support()
+    if "--miros-worker" in sys.argv:
+        worker_index = sys.argv.index("--miros-worker")
+        sys.exit(_run_miros_worker(sys.argv[worker_index + 1:]))
     if "--self-test" in sys.argv:
         sys.exit(_run_self_test())
+    if "--self-test-miros" in sys.argv:
+        from src.core.miros_transcriber import MirosTranscriber
+
+        sys.exit(
+            _run_self_test(
+                transcriber_cls=MirosTranscriber,
+                success_message="SELF-TEST OK: MIROS available",
+                load_model=False,
+            )
+        )
+
+    _prepare_torch_runtime_before_pyqt()
 
     # 设置中文环境（抑制警告 + 修补输出）
     setup_chinese_environment()

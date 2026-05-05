@@ -177,6 +177,37 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                 ],
             )
 
+    def test_transcribe_reports_temp_dir_when_midi_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio_path = tmp_path / "song.wav"
+            output_path = tmp_path / "out" / "song.mid"
+            checkpoint_path = tmp_path / "piano-medium-double-1.0.safetensors"
+            audio_path.write_bytes(b"wav")
+            checkpoint_path.write_bytes(b"weights")
+
+            def fake_windows_transcribe(_input_path, temp_dir, progress_callback=None):
+                (temp_dir / "debug.txt").write_text("no midi here", encoding="utf-8")
+
+            transcriber = AriaAmtTranscriber(checkpoint_path=checkpoint_path)
+
+            with patch.object(AriaAmtTranscriber, "is_available", return_value=True), patch(
+                "src.core.aria_amt_transcriber.platform.system",
+                return_value="Windows",
+            ), patch.object(
+                transcriber,
+                "_run_transcription_windows_single_file",
+                side_effect=fake_windows_transcribe,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "临时输出目录") as cm:
+                    transcriber.transcribe(str(audio_path), str(output_path))
+
+        message = str(cm.exception)
+        self.assertIn("Aria-AMT 未生成 MIDI 输出", message)
+        self.assertIn(str(output_path.resolve()), message)
+        self.assertIn(str((output_path.parent / ".aria_amt_tmp").resolve()), message)
+        self.assertIn("debug.txt", message)
+
 
 if __name__ == "__main__":
     unittest.main()

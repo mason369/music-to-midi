@@ -150,14 +150,33 @@ def _get_fallback_stream():
 
 
 def _normalize_text_stream(stream, backup_name: str):
-    if stream is not None:
+    if _is_writable_stream(stream):
         return stream
 
     backup_stream = getattr(sys, backup_name, None)
-    if backup_stream is not None:
+    if _is_writable_stream(backup_stream):
         return backup_stream
 
     return _get_fallback_stream()
+
+
+def _is_writable_stream(stream) -> bool:
+    if stream is None:
+        return False
+    if not hasattr(stream, "write"):
+        return False
+    if getattr(sys, "frozen", False):
+        stream_name = getattr(stream, "name", "")
+        is_tty = getattr(stream, "isatty", lambda: False)
+        if stream_name in {"<stdout>", "<stderr>"} and not is_tty():
+            return False
+
+    try:
+        stream.write("")
+        stream.flush()
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def ensure_standard_streams():
