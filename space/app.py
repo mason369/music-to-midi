@@ -246,7 +246,6 @@ def get_device_label():
 def _convert_impl(
     audio_path,
     mode,
-    quality,
     vocal_split_merge_midi=False,
     six_stem_only_selected=False,
     six_stem_targets=None,
@@ -274,7 +273,6 @@ def _convert_impl(
     _write_log(st("space.log.start"))
     _write_log(f"{st('space.log.audio_file')}: {Path(audio_path).name}")
     _write_log(f"{st('space.log.processing_mode')}: {MODE_LABELS.get(mode, mode)}")
-    _write_log(f"{st('space.log.quality')}: {quality}")
     _write_log("=" * 40)
 
     config = Config()
@@ -282,7 +280,6 @@ def _convert_impl(
         raise RuntimeError(f"Unsupported processing mode: {mode}")
     config.processing_mode = mode
     config.language = SPACE_LANGUAGE
-    config.transcription_quality = quality
     config.vocal_split_merge_midi = bool(
         config.processing_mode == "vocal_split" and vocal_split_merge_midi
     )
@@ -381,7 +378,6 @@ if ZERO_GPU:
     def convert_audio_to_midi(
         audio_path,
         mode,
-        quality,
         vocal_split_merge_midi=False,
         six_stem_only_selected=False,
         six_stem_targets=None,
@@ -391,7 +387,6 @@ if ZERO_GPU:
         return _convert_impl(
             audio_path,
             mode,
-            quality,
             vocal_split_merge_midi,
             six_stem_only_selected,
             six_stem_targets,
@@ -402,7 +397,6 @@ else:
     def convert_audio_to_midi(
         audio_path,
         mode,
-        quality,
         vocal_split_merge_midi=False,
         six_stem_only_selected=False,
         six_stem_targets=None,
@@ -412,7 +406,6 @@ else:
         return _convert_impl(
             audio_path,
             mode,
-            quality,
             vocal_split_merge_midi,
             six_stem_only_selected,
             six_stem_targets,
@@ -651,13 +644,6 @@ with gr.Blocks(
                 api_name=False,
             )
 
-            quality_radio = gr.Radio(
-                choices=["fast", "balanced", "best"],
-                value="balanced",
-                label=st("space.ui.quality_label"),
-                info=st("space.ui.quality_info"),
-            )
-
             convert_btn = gr.Button(
                 st("space.ui.convert_button"),
                 variant="primary",
@@ -698,7 +684,6 @@ with gr.Blocks(
         inputs=[
             audio_input,
             mode_radio,
-            quality_radio,
             vocal_split_merge_midi,
             six_stem_only_selected,
             six_stem_targets,

@@ -162,6 +162,12 @@ aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
 torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
+smart_open_datas, smart_open_binaries, smart_open_hiddenimports = collect_all('smart_open')
+einops_datas, einops_binaries, einops_hiddenimports = collect_all('einops')
+soundfile_datas, soundfile_binaries, soundfile_hiddenimports = collect_all('soundfile')
+pretty_midi_datas, pretty_midi_binaries, pretty_midi_hiddenimports = collect_all('pretty_midi')
+soxr_datas, soxr_binaries, soxr_hiddenimports = collect_all('soxr')
+mido_datas, mido_binaries, mido_hiddenimports = collect_all('mido')
 lightning_datas, lightning_binaries, lightning_hiddenimports = collect_all('pytorch_lightning')
 fabric_datas, fabric_binaries, fabric_hiddenimports = collect_all('lightning_fabric')
 utilities_datas, utilities_binaries, utilities_hiddenimports = collect_all('lightning_utilities')
@@ -179,6 +185,12 @@ datas += (
     + bytedance_piano_datas
     + torchlibrosa_datas
     + wandb_datas
+    + smart_open_datas
+    + einops_datas
+    + soundfile_datas
+    + pretty_midi_datas
+    + soxr_datas
+    + mido_datas
     + lightning_datas
     + fabric_datas
     + utilities_datas
@@ -197,6 +209,12 @@ hiddenimports += (
     + bytedance_piano_hiddenimports
     + torchlibrosa_hiddenimports
     + wandb_hiddenimports
+    + smart_open_hiddenimports
+    + einops_hiddenimports
+    + soundfile_hiddenimports
+    + pretty_midi_hiddenimports
+    + soxr_hiddenimports
+    + mido_hiddenimports
     + lightning_hiddenimports
     + fabric_hiddenimports
     + utilities_hiddenimports
@@ -216,6 +234,12 @@ all_binaries = (
     + bytedance_piano_binaries
     + torchlibrosa_binaries
     + wandb_binaries
+    + smart_open_binaries
+    + einops_binaries
+    + soundfile_binaries
+    + pretty_midi_binaries
+    + soxr_binaries
+    + mido_binaries
     + lightning_binaries
     + fabric_binaries
     + utilities_binaries

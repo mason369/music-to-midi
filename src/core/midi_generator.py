@@ -817,12 +817,12 @@ class MidiGenerator:
         is_drum: bool = False
     ) -> List[NoteEvent]:
         """
-        根据质量模式选择后处理策略
+        根据内部质量标记选择后处理策略
 
         参数:
             notes: 音符列表
             tempo: BPM
-            quality: 质量模式 ("fast", "balanced", "best")
+            quality: 内部质量标记；应用入口固定使用最高质量策略
             instrument: 可选的乐器类型
             is_drum: 是否为鼓轨道（鼓不过滤短音符）
 
@@ -1264,7 +1264,7 @@ class MidiGenerator:
         从精确 GM 程序号分组的音符生成高质量 MIDI（v2）
 
         增强功能:
-        - 支持质量模式选择
+        - 使用固定高质量后处理策略
         - 智能通道分配（超过15种乐器时合并同族）
         - 人声特殊处理（program 100/101）
         - 保留所有音符，不会因通道限制丢失
@@ -1274,7 +1274,7 @@ class MidiGenerator:
             drum_notes: 鼓音高(35-81)到音符列表的字典
             tempo: BPM
             output_path: 输出 MIDI 文件路径
-            quality: 质量模式 ("fast", "balanced", "best")
+            quality: 内部质量标记；应用入口固定使用最高质量策略
 
         返回:
             输出 MIDI 文件路径

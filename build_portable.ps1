@@ -152,8 +152,57 @@ function Copy-Tree {
     return $true
 }
 
+function Remove-PathIfExists {
+    param(
+        [string]$Path,
+        [string]$Label
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+
+    if (Test-Path $Path) {
+        throw "Failed to remove $Label at $Path."
+    }
+}
+
+function Assert-CudaEnabledTorchRuntime {
+    param([string]$PythonPath)
+
+    $checkScript = @'
+import sys
+
+try:
+    import torch
+except Exception as exc:
+    print(f"Failed to import torch: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+cuda_version = torch.version.cuda
+torch_version = getattr(torch, "__version__", "unknown")
+if not cuda_version:
+    print(f"CPU-only PyTorch runtime detected: torch={torch_version}", file=sys.stderr)
+    sys.exit(3)
+
+print(f"CUDA-enabled PyTorch runtime detected: torch={torch_version}, cuda={cuda_version}")
+'@
+
+    $output = $checkScript | & $PythonPath - 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($output) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
+    if ($exitCode -ne 0) {
+        throw "GPU portable build requires CUDA-enabled PyTorch. Install torch/torchaudio/torchvision from https://download.pytorch.org/whl/cu121. CPU-only PyTorch runtime is not allowed."
+    }
+}
+
 $Python = Resolve-Python -Requested $PythonExe
 Write-Host "Using Python: $Python"
+Assert-CudaEnabledTorchRuntime -PythonPath $Python
 
 $TorchRuntimeRepair = Join-Path $Root "tools\repair_torch_openmp.py"
 if (Test-Path $TorchRuntimeRepair) {
@@ -170,8 +219,8 @@ if (Test-Path $TorchRuntimeRepair) {
 $BuildAssetRoot = Join-Path $Root "build\portable_assets"
 
 if ($Clean) {
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "build")
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist")
+    Remove-PathIfExists -Path (Join-Path $Root "build") -Label "build directory"
+    Remove-PathIfExists -Path (Join-Path $Root "dist") -Label "dist directory"
 }
 
 New-Item -ItemType Directory -Force -Path $BuildAssetRoot | Out-Null
@@ -253,8 +302,10 @@ $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
+$PyInstallerExitCode = 0
 try {
     & $Python -m PyInstaller --noconfirm MusicToMidi.spec
+    $PyInstallerExitCode = $LASTEXITCODE
 } finally {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
@@ -262,6 +313,10 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
+}
+
+if ($PyInstallerExitCode -ne 0) {
+    throw "PyInstaller build failed with exit code $PyInstallerExitCode."
 }
 
 $DistDir = Join-Path $Root "dist\MusicToMidi"

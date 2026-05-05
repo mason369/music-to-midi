@@ -1,6 +1,6 @@
 import unittest
 
-from src.models.data_models import Config, QualityBehavior
+from src.models.data_models import Config
 
 
 class ConfigBackendSemanticsTests(unittest.TestCase):
@@ -83,25 +83,12 @@ class ConfigBackendSemanticsTests(unittest.TestCase):
         self.assertEqual(config.transcription_backend, "yourmt3")
         self.assertEqual(config.multi_instrument_model, "yourmt3")
 
-    def test_quality_behavior_is_configurable_for_yourmt3_general_modes(self):
-        config = Config(
-            processing_mode="smart",
-            transcription_backend="yourmt3",
-            multi_instrument_model="miros",
-        )
-
-        self.assertEqual(config.get_quality_behavior(), QualityBehavior.CONFIGURABLE)
-
     def test_restored_processing_modes_are_valid(self):
         for restored_mode in ("six_stem_split", "piano_transkun", "piano_aria_amt"):
             with self.subTest(restored_mode=restored_mode):
                 config = Config(processing_mode=restored_mode)
 
                 self.assertEqual(config.processing_mode, restored_mode)
-        self.assertEqual(
-            Config(processing_mode="piano_transkun").get_quality_behavior(),
-            QualityBehavior.FIXED,
-        )
 
 
 if __name__ == "__main__":

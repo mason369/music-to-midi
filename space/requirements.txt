@@ -22,6 +22,8 @@ scipy>=1.0.0
 scikit-learn>=1.0.0
 torchmetrics>=0.11.0
 wandb
+pretty-midi>=0.2.10
+soxr>=0.3.7
 
 # 模型下载
 huggingface_hub>=0.20.0

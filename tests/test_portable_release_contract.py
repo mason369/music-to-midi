@@ -63,6 +63,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", spec)
         self.assertIn("ai4m-miros", spec)
 
+    def test_pyinstaller_spec_bundles_miros_dynamic_runtime_dependencies(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        for package_name in ("smart_open", "einops", "soundfile", "pretty_midi", "soxr", "mido"):
+            self.assertIn(f"collect_all('{package_name}')", spec)
+            self.assertIn(f"{package_name}_hiddenimports", spec)
+
     def test_pyinstaller_spec_bundles_audio_separator_metadata(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
@@ -89,6 +96,15 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('"$HOME/.cache/music_ai_models"', workflow)
         self.assertIn('tar -czf - -C dist "${NAME}" | split -b 1900M -', workflow)
         self.assertNotIn('tar -czf "${NAME}-Portable.tar.gz" -C dist "${NAME}"', workflow)
+
+    def test_release_workflow_uses_low_memory_7z_and_tests_archives(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("-mx=5", workflow)
+        self.assertIn("-md=64m", workflow)
+        self.assertIn("-mmt=on", workflow)
+        self.assertIn("7z t", workflow)
+        self.assertIn('"${NAME}-Portable.7z.001"', workflow)
 
     def test_release_workflow_uses_python_311_for_portable_builds(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -163,8 +179,19 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0", workflow)
         self.assertIn("https://download.pytorch.org/whl/cu121", workflow)
+        self.assertNotIn("https://download.pytorch.org/whl/cpu", workflow)
         self.assertNotIn("torch==2.7.0", workflow)
         self.assertNotIn("cu128", workflow)
+
+    def test_release_workflow_builds_only_gpu_portable_variants(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("variant: GPU", workflow)
+        self.assertIn("platform: Windows", workflow)
+        self.assertIn("platform: Linux", workflow)
+        self.assertNotIn("variant: CPU", workflow)
+        self.assertNotIn("MusicToMidi-Windows-CPU", workflow)
+        self.assertNotIn("MusicToMidi-Linux-CPU", workflow)
 
     def test_release_workflow_filters_pinned_runtime_packages_from_requirements_build(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -176,8 +203,10 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_notes_describe_split_archives_generically(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
-        self.assertIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Windows-GPU-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Linux-GPU-Portable.*", workflow)
+        self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
+        self.assertNotIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
         self.assertIn("同名前缀的全部分卷", workflow)
         self.assertIn("6 种处理模式", workflow)
         self.assertIn("ByteDance Pedal", workflow)
@@ -190,6 +219,16 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('external\\ai4m-miros', script)
         self.assertIn("Required asset missing", script)
         self.assertNotIn("[skip] $Label not found", script)
+
+    def test_build_portable_fails_when_clean_or_pyinstaller_fails(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Remove-PathIfExists", script)
+        self.assertIn("Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop", script)
+        self.assertIn("$PyInstallerExitCode = $LASTEXITCODE", script)
+        self.assertIn("PyInstaller build failed with exit code", script)
+        self.assertNotIn("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root \"build\")", script)
+        self.assertNotIn("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root \"dist\")", script)
 
     def test_pyinstaller_spec_collects_miros_from_external_checkout(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
@@ -215,6 +254,12 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn('Join-Path $FfmpegBundle "bin"', script)
         self.assertIn("lib\\ffmpeg\\tools\\ffmpeg\\bin", script)
+
+    def test_build_portable_requires_cuda_enabled_torch_runtime(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("torch.version.cuda", script)
+        self.assertIn("CPU-only PyTorch runtime", script)
 
     def test_build_portable_script_uses_ascii_only(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

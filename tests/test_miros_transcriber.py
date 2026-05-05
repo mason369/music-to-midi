@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -110,6 +111,125 @@ class MirosTranscriberTests(unittest.TestCase):
         self.assertTrue(output_arg.is_absolute())
         self.assertEqual(str(repo), captured["cwd"])
         self.assertEqual(str(output_arg), result)
+
+    def test_frozen_transcribe_to_midi_uses_hidden_worker_mode_not_repo_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "external" / "ai4m-miros"
+            repo.mkdir(parents=True)
+            entrypoint = repo / "main.py"
+            entrypoint.write_text("print('miros')", encoding="utf-8")
+            audio_path = root / "song.wav"
+            audio_path.write_bytes(b"wav")
+            captured = {}
+
+            class FakeProcess:
+                returncode = 0
+
+                def __init__(self, command, **kwargs):
+                    captured["command"] = command
+
+                def communicate(self):
+                    Path(captured["command"][captured["command"].index("-o") + 1]).write_bytes(b"mid")
+                    return "", ""
+
+            transcriber = MirosTranscriber(Config())
+
+            with patch.object(MirosTranscriber, "_repo_dir", return_value=repo), patch.object(
+                MirosTranscriber, "_entrypoint_path", return_value=entrypoint
+            ), patch.object(MirosTranscriber, "get_unavailable_reason", return_value=""), patch.object(
+                subprocess, "Popen", side_effect=lambda command, **kwargs: FakeProcess(command, **kwargs)
+            ), patch.object(
+                sys, "executable", str(root / "MusicToMidi.exe")
+            ), patch.object(
+                sys, "frozen", True, create=True
+            ):
+                transcriber.transcribe_to_midi(str(audio_path), str(root / "out" / "song.mid"))
+
+        command = captured["command"]
+        self.assertEqual(command[0], str(root / "MusicToMidi.exe"))
+        self.assertEqual(command[1], "--miros-worker")
+        self.assertIn("--status-json", command)
+        self.assertNotIn(str(entrypoint), command)
+
+    def test_frozen_transcribe_to_midi_reports_worker_status_when_stdio_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "external" / "ai4m-miros"
+            repo.mkdir(parents=True)
+            entrypoint = repo / "main.py"
+            entrypoint.write_text("print('miros')", encoding="utf-8")
+            audio_path = root / "song.wav"
+            audio_path.write_bytes(b"wav")
+
+            class FakeProcess:
+                returncode = 1
+
+                def __init__(self, command, **kwargs):
+                    self.command = command
+
+                def communicate(self):
+                    status_path = Path(self.command[self.command.index("--status-json") + 1])
+                    status_path.write_text(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": "worker boom",
+                                "traceback": "Traceback line",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return "", ""
+
+            transcriber = MirosTranscriber(Config())
+
+            with patch.object(MirosTranscriber, "_repo_dir", return_value=repo), patch.object(
+                MirosTranscriber, "_entrypoint_path", return_value=entrypoint
+            ), patch.object(MirosTranscriber, "get_unavailable_reason", return_value=""), patch.object(
+                subprocess, "Popen", side_effect=lambda command, **kwargs: FakeProcess(command, **kwargs)
+            ), patch.object(
+                sys, "executable", str(root / "MusicToMidi.exe")
+            ), patch.object(
+                sys, "frozen", True, create=True
+            ):
+                with self.assertRaisesRegex(RuntimeError, "worker boom") as cm:
+                    transcriber.transcribe_to_midi(str(audio_path), str(root / "out" / "song.mid"))
+
+        self.assertIn("Traceback line", str(cm.exception))
+
+    def test_transcribe_to_midi_reports_process_output_when_midi_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "external" / "ai4m-miros"
+            repo.mkdir(parents=True)
+            entrypoint = repo / "main.py"
+            entrypoint.write_text("print('miros')", encoding="utf-8")
+            output_path = root / "out" / "song.mid"
+            output_path.parent.mkdir()
+            (output_path.parent / "unexpected.mid").write_bytes(b"mid")
+
+            class FakeProcess:
+                returncode = 0
+
+                def communicate(self):
+                    return "Transcribing song.wav -> song.mid\nstdout clue", "stderr clue"
+
+            transcriber = MirosTranscriber(Config())
+
+            with patch.object(MirosTranscriber, "_repo_dir", return_value=repo), patch.object(
+                MirosTranscriber, "_entrypoint_path", return_value=entrypoint
+            ), patch.object(MirosTranscriber, "get_unavailable_reason", return_value=""), patch.object(
+                subprocess, "Popen", return_value=FakeProcess()
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stdout clue") as cm:
+                    transcriber.transcribe_to_midi(str(root / "song.wav"), str(output_path))
+
+        message = str(cm.exception)
+        self.assertIn("MIROS 未生成 MIDI 输出", message)
+        self.assertIn(str(output_path.resolve()), message)
+        self.assertIn("stderr clue", message)
+        self.assertIn("unexpected.mid", message)
 
     def test_transcribe_precise_reads_seconds_from_pretty_midi(self):
         pretty_midi_stub = types.ModuleType("pretty_midi")

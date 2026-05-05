@@ -16,11 +16,9 @@ from PyQt6.QtWidgets import (
 
 from src.i18n.translator import get_translator, t
 from src.models.data_models import (
-    Config,
     MidiTrackMode,
     MultiInstrumentModel,
     ProcessingMode,
-    QualityBehavior,
     TranscriptionBackend,
     TrackLayout,
     YourMT3Model,
@@ -214,12 +212,6 @@ class TrackPanel(QGroupBox):
         self.model_hint_label.setStyleSheet("font-size: 10px; color: #d2c07a; padding: 1px 0 2px 0;")
         main_layout.addWidget(self.model_hint_label)
 
-        self.quality_hint_label = QLabel()
-        self.quality_hint_label.setWordWrap(True)
-        self.quality_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.quality_hint_label.setStyleSheet("font-size: 10px; color: #9fb3d9; padding: 0 0 2px 0;")
-        main_layout.addWidget(self.quality_hint_label)
-
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("background: #3a4a6a; margin: 4px 0;")
@@ -399,20 +391,6 @@ class TrackPanel(QGroupBox):
             return f"{description}\nFeatures: {features}"
         return description
 
-    def get_quality_behavior(self) -> QualityBehavior:
-        config = Config(
-            processing_mode=self.get_processing_mode(),
-            transcription_backend=self.get_transcription_backend(),
-            multi_instrument_model=self.get_multi_instrument_model(),
-        )
-        return config.get_quality_behavior()
-
-    def _quality_hint_text(self) -> str:
-        behavior = self.get_quality_behavior()
-        if behavior == QualityBehavior.FIXED:
-            return t("main.engine.quality_fixed_hint")
-        return t("main.engine.quality_configurable_hint")
-
     def _model_options(self, mode: str | None = None) -> list[tuple[str, str]]:
         mode = mode or self.get_processing_mode()
         if mode == ProcessingMode.SIX_STEM_SPLIT.value:
@@ -480,7 +458,6 @@ class TrackPanel(QGroupBox):
         self.mode_desc_label.setText(self._mode_text())
         self.hint_label.setText(self._hint_text())
         self.model_hint_label.setText(self._model_hint_text())
-        self.quality_hint_label.setText(self._quality_hint_text())
 
     def get_processing_mode(self) -> str:
         return self.mode_combo.currentData() or ProcessingMode.SMART.value

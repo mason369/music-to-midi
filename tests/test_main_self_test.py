@@ -1,6 +1,12 @@
 import io
+import json
+import os
+import sys
+import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import src.main as main_module
@@ -56,6 +62,36 @@ class MainSelfTestTests(unittest.TestCase):
         self.assertEqual(calls, ["is_available", "init", "load_model", "unload_model"])
         self.assertIn("SELF-TEST OK", stdout.getvalue())
 
+    def test_self_test_can_check_miros_without_loading_model(self):
+        fake_logger = Mock()
+        calls = []
+
+        class FakeMirosTranscriber:
+            def __init__(self, _config):
+                calls.append("init")
+
+            @staticmethod
+            def is_available():
+                calls.append("is_available")
+                return True
+
+            def _load_model(self):
+                calls.append("load_model")
+
+        stdout = io.StringIO()
+        with patch.object(main_module, "setup_chinese_environment"), patch.object(
+            main_module, "get_logs_dir", return_value="logs"
+        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+            exit_code = main_module._run_self_test(
+                transcriber_cls=FakeMirosTranscriber,
+                success_message="SELF-TEST OK: MIROS available",
+                load_model=False,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls, ["is_available", "init"])
+        self.assertIn("SELF-TEST OK: MIROS available", stdout.getvalue())
+
     def test_self_test_returns_one_with_reason_when_yourmt3_unavailable(self):
         fake_logger = Mock()
 
@@ -76,6 +112,101 @@ class MainSelfTestTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("缺少打包依赖", stdout.getvalue())
+
+    def test_main_dispatches_miros_worker_before_gui_startup(self):
+        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
+            main_module,
+            "_run_miros_worker",
+            return_value=7,
+        ) as worker, patch(
+            "PyQt6.QtWidgets.QApplication",
+            create=True,
+        ) as qapplication:
+            with self.assertRaises(SystemExit) as cm:
+                main_module.main()
+
+        self.assertEqual(cm.exception.code, 7)
+        worker.assert_called_once_with(["-i", "in.wav", "-o", "out.mid"])
+        qapplication.assert_not_called()
+
+    def test_main_dispatches_miros_worker_before_torch_preload(self):
+        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
+            main_module,
+            "_run_miros_worker",
+            return_value=7,
+        ), patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch:
+            with self.assertRaises(SystemExit):
+                main_module.main()
+
+        prepare_torch.assert_not_called()
+
+    def test_miros_worker_writes_failure_status_json(self):
+        fake_transcribe = types.ModuleType("transcribe")
+
+        def boom(_input, _output):
+            raise RuntimeError("miros exploded")
+
+        fake_transcribe.transcribe = boom
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "miros-status.json"
+            with patch.dict(sys.modules, {"transcribe": fake_transcribe}):
+                exit_code = main_module._run_miros_worker(
+                    [
+                        "-i",
+                        "in.wav",
+                        "-o",
+                        "out.mid",
+                        "--status-json",
+                        str(status_path),
+                    ]
+                )
+
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertIn("miros exploded", payload["error"])
+        self.assertIn("RuntimeError: miros exploded", payload["traceback"])
+
+    def test_miros_worker_stubs_optional_onnxruntime_during_transcribe_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "transcribe.py").write_text(
+                "\n".join(
+                    [
+                        "from pathlib import Path",
+                        "import onnxruntime",
+                        "if getattr(onnxruntime, '__version__', None) != '0.0':",
+                        "    raise RuntimeError('onnxruntime was not isolated')",
+                        "def transcribe(input_path, output_path):",
+                        "    Path(output_path).write_bytes(b'mid')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            output_path = root / "out.mid"
+            old_cwd = os.getcwd()
+            old_transcribe = sys.modules.pop("transcribe", None)
+            old_onnxruntime = sys.modules.pop("onnxruntime", None)
+            os.chdir(root)
+            try:
+                exit_code = main_module._run_miros_worker(
+                    ["-i", "in.wav", "-o", str(output_path)]
+                )
+            finally:
+                os.chdir(old_cwd)
+                sys.modules.pop("transcribe", None)
+                if old_transcribe is not None:
+                    sys.modules["transcribe"] = old_transcribe
+                if old_onnxruntime is not None:
+                    sys.modules["onnxruntime"] = old_onnxruntime
+                else:
+                    sys.modules.pop("onnxruntime", None)
+            output_exists = output_path.exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(output_exists)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,14 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("samplerate==0.1.0", workflow)
         self.assertIn("six==1.17.0", workflow)
 
+    def test_build_workflow_uses_cuda_torch_for_gpu_artifacts(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("https://download.pytorch.org/whl/cu121", workflow)
+        self.assertIn("MusicToMidi-Linux-GPU", workflow)
+        self.assertIn("MusicToMidi-Windows-GPU", workflow)
+        self.assertNotIn("https://download.pytorch.org/whl/cpu", workflow)
+
     def test_build_workflow_does_not_mask_test_failures(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 

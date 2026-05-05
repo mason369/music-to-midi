@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
 import subprocess
@@ -16,7 +17,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from src.i18n.translator import Translator
 from src.models.data_models import Config, NoteEvent
 from src.utils.gpu_utils import clear_gpu_memory
-from src.utils.runtime_paths import get_miros_source_dir
+from src.utils.runtime_paths import get_miros_source_dir, is_frozen_app
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,131 @@ class MirosTranscriber:
             return ""
         return "\n".join(lines[-limit:])
 
+    @staticmethod
+    def _format_worker_status(status_path: Optional[Path]) -> str:
+        if status_path is None:
+            return ""
+        if not status_path.exists():
+            return f"MIROS worker 状态文件未生成: {status_path}"
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return f"MIROS worker 状态文件无法读取: {status_path}\n{exc}"
+
+        lines = [
+            "MIROS worker 状态:",
+            f"状态文件: {status_path}",
+        ]
+        if isinstance(payload, dict):
+            if "ok" in payload:
+                lines.append(f"ok: {payload['ok']}")
+            for key, label in (
+                ("error", "错误"),
+                ("traceback", "Traceback"),
+                ("output", "输出"),
+                ("output_exists", "输出是否存在"),
+                ("output_size", "输出大小"),
+            ):
+                value = payload.get(key)
+                if value not in (None, ""):
+                    lines.append(f"{label}: {value}")
+        else:
+            lines.append(str(payload))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_process_failure(
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        status_path: Optional[Path],
+    ) -> str:
+        lines = [f"MIROS 子进程退出码: {returncode}"]
+
+        worker_status = MirosTranscriber._format_worker_status(status_path)
+        if worker_status:
+            lines.append(worker_status)
+
+        tail = MirosTranscriber._tail_output(stdout, stderr)
+        if tail:
+            lines.append("MIROS 输出尾部:")
+            lines.append(tail)
+        else:
+            lines.append("MIROS 没有输出 stdout/stderr")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_missing_output_error(
+        out_path: Path,
+        stdout: str,
+        stderr: str,
+        status_path: Optional[Path] = None,
+    ) -> str:
+        lines = [
+            "MIROS 未生成 MIDI 输出",
+            f"期望输出: {out_path}",
+            f"输出目录: {out_path.parent}",
+        ]
+
+        if out_path.parent.exists():
+            midi_candidates = sorted(
+                {
+                    candidate.resolve()
+                    for pattern in ("*.mid", "*.midi")
+                    for candidate in out_path.parent.glob(pattern)
+                    if candidate.is_file()
+                }
+            )
+            if midi_candidates:
+                lines.append("输出目录中的 MIDI 文件:")
+                lines.extend(f"  {candidate}" for candidate in midi_candidates[:12])
+                if len(midi_candidates) > 12:
+                    lines.append(f"  ... 另外 {len(midi_candidates) - 12} 个")
+            else:
+                lines.append("输出目录中未发现 .mid/.midi 文件")
+        else:
+            lines.append("输出目录不存在")
+
+        worker_status = MirosTranscriber._format_worker_status(status_path)
+        if worker_status:
+            lines.append(worker_status)
+
+        tail = MirosTranscriber._tail_output(stdout, stderr)
+        if tail:
+            lines.append("MIROS 输出尾部:")
+            lines.append(tail)
+        else:
+            lines.append("MIROS 没有输出 stdout/stderr")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_command(
+        entrypoint: Path,
+        input_path: Path,
+        out_path: Path,
+        status_path: Optional[Path] = None,
+    ) -> List[str]:
+        if is_frozen_app():
+            command = [
+                sys.executable,
+                "--miros-worker",
+                "-i",
+                str(input_path),
+                "-o",
+                str(out_path),
+            ]
+            if status_path is not None:
+                command.extend(["--status-json", str(status_path)])
+            return command
+        return [
+            sys.executable,
+            str(entrypoint),
+            "-i",
+            str(input_path),
+            "-o",
+            str(out_path),
+        ]
+
     def transcribe_to_midi(
         self,
         audio_path: str,
@@ -196,14 +322,15 @@ class MirosTranscriber:
         out_path = Path(output_path).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        command = [
-            sys.executable,
-            str(entrypoint),
-            "-i",
-            str(input_path),
-            "-o",
-            str(out_path),
-        ]
+        status_path = (
+            out_path.parent / f".{out_path.stem}.miros_status.json"
+            if is_frozen_app()
+            else None
+        )
+        if status_path is not None and status_path.exists():
+            status_path.unlink()
+
+        command = self._build_command(entrypoint, input_path, out_path, status_path)
 
         if progress_callback:
             progress_callback(0.05, self._pt("progress.preparing_miros"))
@@ -231,10 +358,22 @@ class MirosTranscriber:
         self._check_cancelled()
 
         if process.returncode != 0:
-            tail = self._tail_output(stdout or "", stderr or "")
-            raise RuntimeError(f"MIROS 转写失败:\n{tail}")
+            detail = self._format_process_failure(
+                process.returncode,
+                stdout or "",
+                stderr or "",
+                status_path,
+            )
+            raise RuntimeError(f"MIROS 转写失败:\n{detail}")
         if not out_path.exists():
-            raise RuntimeError("MIROS 未生成 MIDI 输出")
+            raise RuntimeError(
+                self._format_missing_output_error(
+                    out_path,
+                    stdout or "",
+                    stderr or "",
+                    status_path,
+                )
+            )
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.miros_complete"))

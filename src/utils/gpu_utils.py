@@ -220,7 +220,7 @@ def rewrite_cuda_runtime_error(error: BaseException, device: Optional[str] = Non
         [
             f"内置支持架构: {supported_arches}",
             "这通常表示显卡架构过旧或过新，不在当前构建支持范围内。",
-            "请改用 CPU 版发布包，或使用与该显卡兼容的 PyTorch/CUDA 重新打包。",
+            "请改用兼容的 NVIDIA 显卡，或使用与该显卡兼容的 PyTorch/CUDA 重新打包。",
         ]
     )
     return "\n".join(details)
@@ -752,7 +752,7 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
 
     参数:
         n_segments: 音频分段数
-        quality: "fast" | "balanced" | "best"
+        quality: 内部质量标记；当前应用入口固定传入最高质量策略
         device: 设备字符串 (如 "cpu", "cuda:0")
         ultra_quality: 是否启用极致质量
 

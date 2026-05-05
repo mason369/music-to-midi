@@ -178,11 +178,7 @@ class TranscriptionBackend(Enum):
     MIROS = MultiInstrumentModel.MIROS.value
 
 
-class TranscriptionQuality(Enum):
-    """转写质量模式枚举"""
-    FAST = "fast"           # 快速模式：无后处理，最快速度
-    BALANCED = "balanced"   # 平衡模式：轻量后处理，平衡质量和速度
-    BEST = "best"           # 极致质量模式：最小后处理，保留最多细节
+FIXED_TRANSCRIPTION_QUALITY = "best"
 
 
 class MidiTrackMode(Enum):
@@ -201,14 +197,6 @@ class YourMT3Model(Enum):
     YPTF_MOE_MULTI_NOPS = "yptf_moe_multi_nops"
     YPTF_MOE_MULTI_PS = "yptf_moe_multi_ps"
     LEGACY_MC13 = "mc13_256_all_cross_v6"
-
-
-class QualityBehavior(Enum):
-    """How the current mode/backend interprets the quality preset."""
-
-    CONFIGURABLE = "configurable"
-    PARTIAL = "partial"
-    FIXED = "fixed"
 
 
 class ProcessingStage(Enum):
@@ -489,7 +477,6 @@ class Config:
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
-    transcription_quality: str = "best"      # "fast", "balanced", "best"
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
     preserve_all_notes: bool = True          # 保留所有音符
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
@@ -572,33 +559,6 @@ class Config:
 
         return MultiInstrumentModel.YOURMT3.value
 
-    def get_quality_behavior(self) -> QualityBehavior:
-        mode = str(getattr(self, "processing_mode", ProcessingMode.SMART.value) or "").strip().lower()
-        if mode == ProcessingMode.PIANO.value:
-            mode = ProcessingMode.SMART.value
-
-        if mode in {
-            ProcessingMode.PIANO_TRANSKUN.value,
-            ProcessingMode.PIANO_ARIA_AMT.value,
-            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
-        }:
-            return QualityBehavior.FIXED
-
-        effective_multi_model = self.get_effective_multi_instrument_model()
-        preferred_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
-
-        if (
-            mode == ProcessingMode.SIX_STEM_SPLIT.value
-            and preferred_backend == TranscriptionBackend.ARIA_AMT.value
-            and effective_multi_model == MultiInstrumentModel.YOURMT3.value
-        ):
-            return QualityBehavior.PARTIAL
-
-        if effective_multi_model == MultiInstrumentModel.YOURMT3.value:
-            return QualityBehavior.CONFIGURABLE
-
-        return QualityBehavior.FIXED
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "language": self.language,
@@ -611,7 +571,6 @@ class Config:
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
             "six_stem_targets": self.six_stem_targets,
             "six_stem_split_vocal_harmony": self.six_stem_split_vocal_harmony,
-            "transcription_quality": self.transcription_quality,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,
