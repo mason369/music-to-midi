@@ -19,6 +19,15 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("repair_torch_openmp.py", workflow)
 
+    def test_release_workflow_smoke_tests_miros_worker_import_without_onnxruntime_failure(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("--miros-worker", workflow)
+        self.assertIn("miros-worker-import-smoke.json", workflow)
+        self.assertIn("onnxruntime_pybind11_state|DLL load failed", workflow)
+        self.assertIn("_internal\\external\\ai4m-miros", workflow)
+        self.assertIn("_internal/external/ai4m-miros", workflow)
+
     def test_build_portable_invokes_torch_openmp_repair_helper(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
 
@@ -201,6 +210,17 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("gh release delete-asset", workflow)
         self.assertLess(
             workflow.index("删除旧 CPU 发布资产"),
+            workflow.index("上传资源到 Release"),
+        )
+
+    def test_release_workflow_updates_existing_release_notes(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("更新 Release 说明", workflow)
+        self.assertIn("gh release edit", workflow)
+        self.assertIn("--notes-file release-notes.md", workflow)
+        self.assertLess(
+            workflow.index("更新 Release 说明"),
             workflow.index("上传资源到 Release"),
         )
 
