@@ -386,7 +386,7 @@ print('ByteDance Piano model:', ByteDancePianoTranscriber().is_model_available()
 raise SystemExit(0 if ByteDancePianoTranscriber.is_available() else 1)
 PY
 then
-    error "ByteDance Piano 安装失败，请确认 piano-transcription-inference 与 torchlibrosa 已安装。"
+    error "ByteDance Piano 安装失败，请确认 piano-transcription-inference、torchlibrosa 与 matplotlib 已安装。"
 fi
 
 "$PYTHON" "${REPO_DIR}/download_bytedance_piano_model.py"

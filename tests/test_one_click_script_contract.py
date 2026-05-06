@@ -156,6 +156,13 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("chardet>=5,<6", requirements)
         self.assertIn("onnxruntime==1.23.2", requirements)
 
+    def test_requirements_include_bytedance_pedal_transitive_runtime_dependency(self):
+        requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("piano-transcription-inference>=0.0.6,<0.1", requirements)
+        self.assertIn("torchlibrosa>=0.1.0,<0.2", requirements)
+        self.assertIn("matplotlib", requirements)
+
     def test_requirements_match_miros_transformers_version(self):
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
 

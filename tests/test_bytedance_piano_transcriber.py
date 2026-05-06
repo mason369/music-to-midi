@@ -18,6 +18,18 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
         ):
             self.assertFalse(ByteDancePianoTranscriber.is_available())
 
+    def test_unavailable_when_inference_package_dependency_is_missing(self):
+        from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+
+        with patch(
+            "src.core.bytedance_piano_transcriber.importlib.util.find_spec",
+            return_value=object(),
+        ), patch(
+            "src.core.bytedance_piano_transcriber.importlib.import_module",
+            side_effect=ModuleNotFoundError("No module named 'matplotlib'"),
+        ):
+            self.assertFalse(ByteDancePianoTranscriber.is_available())
+
     def test_model_availability_requires_explicit_checkpoint_file(self):
         from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
 
@@ -29,6 +41,27 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
             )
 
             self.assertFalse(transcriber.is_model_available())
+
+    def test_missing_checkpoint_error_reports_expected_checkpoint_name(self):
+        from src.core.bytedance_piano_transcriber import (
+            BYTEDANCE_PIANO_CHECKPOINT_NAME,
+            ByteDancePianoTranscriber,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio_path = tmp_path / "piano.wav"
+            audio_path.write_bytes(b"audio")
+            output_path = tmp_path / "out.mid"
+            wrong_checkpoint_path = tmp_path / "matplotlib.pth"
+
+            with patch.object(ByteDancePianoTranscriber, "is_available", return_value=True):
+                transcriber = ByteDancePianoTranscriber(
+                    Config(),
+                    checkpoint_path=wrong_checkpoint_path,
+                )
+                with self.assertRaisesRegex(RuntimeError, BYTEDANCE_PIANO_CHECKPOINT_NAME):
+                    transcriber.transcribe(str(audio_path), str(output_path))
 
     def test_transcribe_uses_explicit_checkpoint_and_keeps_written_midi(self):
         from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber

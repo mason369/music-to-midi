@@ -638,7 +638,7 @@ sys.exit(0 if ByteDancePianoTranscriber.is_available() else 1)
 
 & "$PYTHON" -c $byteDanceCheckScript
 if ($LASTEXITCODE -ne 0) {
-    Write-Err "ByteDance Piano 安装失败，请确认 piano-transcription-inference 与 torchlibrosa 已安装。"
+    Write-Err "ByteDance Piano 安装失败，请确认 piano-transcription-inference、torchlibrosa 与 matplotlib 已安装。"
 }
 
 & "$PYTHON" (Join-Path $REPO_DIR "download_bytedance_piano_model.py")

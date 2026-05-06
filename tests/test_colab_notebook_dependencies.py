@@ -33,6 +33,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "aria-amt",
             "Aria-AMT",
             "ByteDance Pedal",
+            "matplotlib",
             "Transkun",
             "六声部分离 + 分别转写",
             "six_stem_split",
