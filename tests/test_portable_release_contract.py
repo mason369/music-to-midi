@@ -189,6 +189,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("torchmetrics==1.8.2", workflow)
         self.assertIn("onnxruntime==1.23.2", workflow)
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+        self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', workflow)
         self.assertIn("six==1.17.0", workflow)
 
     def test_release_workflow_matches_supported_torch_runtime(self):

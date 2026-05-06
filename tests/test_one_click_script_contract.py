@@ -41,7 +41,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("Python 3.11", script)
         self.assertIn("requirements-without-aria-amt.txt", script)
         self.assertIn("audio-separator==0.41.1", script)
-        self.assertIn("--no-deps", script)
+        self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', script)
 
     def test_windows_installer_downloads_bytedance_pedal_model(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
@@ -117,7 +117,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("Aria-AMT", script)
         self.assertIn("requirements-without-aria-amt.txt", script)
         self.assertIn("audio-separator==0.41.1", script)
-        self.assertIn("--no-deps", script)
+        self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', script)
 
     def test_linux_installer_downloads_bytedance_pedal_model(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
@@ -153,6 +153,17 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertNotIn("audio-separator", "\n".join(
             line for line in requirements.splitlines() if not line.lstrip().startswith("#")
         ))
+
+    def test_requirements_avoid_aria_amt_torchaudio_resolver_conflict(self):
+        requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+        active_requirements = "\n".join(
+            line for line in requirements.splitlines() if not line.lstrip().startswith("#")
+        )
+
+        self.assertNotIn("aria-amt @ git+https://github.com/EleutherAI/aria-amt.git", active_requirements)
+        self.assertIn("ariautils @ git+https://github.com/EleutherAI/aria-utils.git", active_requirements)
+        self.assertIn("safetensors>=0.4.0,<1", active_requirements)
+        self.assertIn("orjson>=3.9.0,<4", active_requirements)
 
     def test_requirements_include_miros_runtime_basics(self):
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")

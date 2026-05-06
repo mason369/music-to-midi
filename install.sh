@@ -363,7 +363,7 @@ raise SystemExit(0 if AriaAmtTranscriber.is_available() else 1)
 PY
 then
     info "Aria-AMT 未安装，正在从 GitHub 安装..."
-    "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git"
+    "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
     "$PYTHON" - <<'PY'
 import sys
 sys.path.insert(0, '.')
