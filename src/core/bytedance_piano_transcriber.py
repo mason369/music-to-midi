@@ -11,7 +11,12 @@ from typing import Callable, Optional
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config
-from src.utils.gpu_utils import clear_gpu_memory, get_device
+from src.utils.gpu_utils import (
+    clear_gpu_memory,
+    ensure_cuda_runtime_compatibility,
+    get_device,
+    rewrite_cuda_runtime_error,
+)
 from src.utils.runtime_paths import get_bytedance_piano_dir
 
 logger = logging.getLogger(__name__)
@@ -88,6 +93,7 @@ class ByteDancePianoTranscriber:
     def _resolve_runtime_device(self) -> str:
         preferred = get_device(self.config.use_gpu, self.config.gpu_device)
         if preferred.startswith("cuda"):
+            ensure_cuda_runtime_compatibility(preferred)
             return "cuda"
         if preferred == "cpu":
             return "cpu"
@@ -182,7 +188,11 @@ class ByteDancePianoTranscriber:
         except InterruptedError:
             raise
         except Exception as exc:
-            raise RuntimeError(f"ByteDance Piano 转写失败: {exc}") from exc
+            friendly_message = rewrite_cuda_runtime_error(
+                exc,
+                "cuda:0" if device == "cuda" else device,
+            )
+            raise RuntimeError(f"ByteDance Piano 转写失败: {friendly_message}") from exc
         finally:
             clear_gpu_memory()
 

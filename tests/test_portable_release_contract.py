@@ -194,11 +194,11 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_workflow_matches_supported_torch_runtime(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0", workflow)
-        self.assertIn("https://download.pytorch.org/whl/cu121", workflow)
+        self.assertIn("torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0", workflow)
+        self.assertIn("https://download.pytorch.org/whl/cu128", workflow)
         self.assertNotIn("https://download.pytorch.org/whl/cpu", workflow)
-        self.assertNotIn("torch==2.7.0", workflow)
-        self.assertNotIn("cu128", workflow)
+        self.assertNotIn("torch==2.4.0", workflow)
+        self.assertNotIn("cu121", workflow)
 
     def test_release_workflow_builds_only_gpu_portable_variants(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -299,6 +299,9 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("torch.version.cuda", script)
         self.assertIn("CPU-only PyTorch runtime", script)
+        self.assertIn("(2, 7, 0)", script)
+        self.assertIn("(12, 8)", script)
+        self.assertIn("https://download.pytorch.org/whl/cu128", script)
 
     def test_build_portable_script_uses_ascii_only(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

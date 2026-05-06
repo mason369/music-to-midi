@@ -385,7 +385,7 @@ $torchDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Direct
 if ($torchDistInfo -and $torchDistInfo.Name -match '^torch-([\d.]+)') {
     $torchVer = $Matches[1]
     $tvParts = $torchVer.Split('.')
-    if ([int]$tvParts[0] -ge 2 -and ([int]$tvParts[0] -gt 2 -or [int]$tvParts[1] -ge 4)) {
+    if ([int]$tvParts[0] -ge 2 -and ([int]$tvParts[0] -gt 2 -or [int]$tvParts[1] -ge 7)) {
         Write-Ok "PyTorch $torchVer 已安装（dist-info 验证，跳过重新安装）"
         $TORCH_INSTALLED = $true
         # 检查 torchvision 是否缺失，缺失则从 PyTorch 官方源补装（版本必须匹配 torch）
@@ -403,7 +403,7 @@ if ($torchDistInfo -and $torchDistInfo.Name -match '^torch-([\d.]+)') {
                     $cm = [regex]::Match($nvS, 'CUDA Version:\s*([\d.]+)')
                     if ($cm.Success) {
                         $cmaj = [int]($cm.Groups[1].Value -split '\.')[0]
-                        if ($cmaj -ge 12) { $TV_INDEX = "https://download.pytorch.org/whl/cu121" }
+                        if ($cmaj -ge 12) { $TV_INDEX = "https://download.pytorch.org/whl/cu128" }
                         elseif ($cmaj -ge 11) { $TV_INDEX = "https://download.pytorch.org/whl/cu118" }
                     }
                 }
@@ -426,8 +426,8 @@ if (-not $TORCH_INSTALLED) {
             if ($cudaMatch.Success) {
                 $cudaMajor = [int]($cudaMatch.Groups[1].Value -split '\.')[0]
                 if ($cudaMajor -ge 12) {
-                    $TORCH_INDEX = "https://download.pytorch.org/whl/cu121"
-                    $TORCH_LABEL = "CUDA 12.1 (NVIDIA)"
+                    $TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+                    $TORCH_LABEL = "CUDA 12.8 (NVIDIA)"
                 } elseif ($cudaMajor -ge 11) {
                     $TORCH_INDEX = "https://download.pytorch.org/whl/cu118"
                     $TORCH_LABEL = "CUDA 11.8 (NVIDIA)"
@@ -453,7 +453,7 @@ if (-not $TORCH_INSTALLED) {
     }
 
     Write-Info "正在安装 PyTorch ($TORCH_LABEL)..."
-    & "$PIP" install "torch==2.4.0" "torchaudio==2.4.0" "torchvision==0.19.0" --index-url "$TORCH_INDEX"
+    & "$PIP" install "torch==2.7.0" "torchaudio==2.7.0" "torchvision==0.22.0" --index-url "$TORCH_INDEX"
     if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 安装失败" }
     Write-Ok "PyTorch ($TORCH_LABEL) 安装成功"
 }
@@ -565,7 +565,7 @@ Get-Content (Join-Path $REPO_DIR "requirements.txt") |
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
-# audio-separator 0.41.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.4 在 Windows
+# audio-separator 0.41.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.7 在 Windows
 # 上需要 NumPy 1.26.x。按发布脚本的做法，先安装其运行依赖，再 no-deps 安装包本体。
 Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
 & "$PIP" install `

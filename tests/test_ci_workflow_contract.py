@@ -39,7 +39,8 @@ class CiWorkflowContractTests(unittest.TestCase):
     def test_build_workflow_uses_cuda_torch_for_gpu_artifacts(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
-        self.assertIn("https://download.pytorch.org/whl/cu121", workflow)
+        self.assertIn("torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0", workflow)
+        self.assertIn("https://download.pytorch.org/whl/cu128", workflow)
         self.assertIn("MusicToMidi-Linux-GPU", workflow)
         self.assertIn("MusicToMidi-Windows-GPU", workflow)
         self.assertNotIn("https://download.pytorch.org/whl/cpu", workflow)

@@ -12,7 +12,12 @@ from typing import Callable, Optional
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config
-from src.utils.gpu_utils import clear_gpu_memory, get_device
+from src.utils.gpu_utils import (
+    clear_gpu_memory,
+    ensure_cuda_runtime_compatibility,
+    get_device,
+    rewrite_cuda_runtime_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +130,7 @@ class TranskunTranscriber:
     def _resolve_runtime_device(self) -> str:
         preferred = get_device(self.config.use_gpu, self.config.gpu_device)
         if preferred.startswith("cuda"):
+            ensure_cuda_runtime_compatibility(preferred)
             return preferred
         if preferred != "cpu":
             raise RuntimeError(
@@ -203,7 +209,8 @@ class TranskunTranscriber:
         except InterruptedError:
             raise
         except Exception as exc:
-            raise RuntimeError(f"Transkun 转写失败: {exc}") from exc
+            friendly_message = rewrite_cuda_runtime_error(exc, device)
+            raise RuntimeError(f"Transkun 转写失败: {friendly_message}") from exc
         finally:
             process = self._process
             if process is not None and self._process_is_alive(process):
