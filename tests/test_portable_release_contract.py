@@ -151,8 +151,11 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("python download_miros_model.py", workflow)
         self.assertIn("MUSIC_TO_MIDI_MIROS_MIRROR_DIR", workflow)
+        self.assertIn("MIROS_MIRROR_COUNT", workflow)
         self.assertIn('gh release download "${MIROS_RELEASE_TAG}"', workflow)
         self.assertIn('--pattern "miros-*"', workflow)
+        self.assertIn("No MIROS release mirror assets found", workflow)
+        self.assertIn("canonical Google Drive source", workflow)
         self.assertIn("MirosTranscriber.is_model_available()", workflow)
         self.assertNotIn('if [ -d "$GITHUB_WORKSPACE/.tmp/ai4m-miros" ]', workflow)
 
