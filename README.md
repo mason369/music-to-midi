@@ -47,9 +47,9 @@
 |------|------------|------|
 | `download_sota_models.py` | 下载全部五种官方 YourMT3+ checkpoint 模式 | 使用 `OFFICIAL_YOURMT3_MODEL_KEYS`，下载后会校验 checkpoint 可解析。 |
 | `run.ps1` / `run.sh` | 启动前检查全部官方 YourMT3+ 模式、Aria-AMT、ByteDance Pedal、MIROS 与分离器可用性 | 缺少必需模型时显式报错，不把缺失资源当作可运行状态。 |
-| `install.ps1` / `install.sh` | 安装 PyTorch 2.4、NumPy 1.26、audio-separator 0.41.1 运行依赖，并下载必需模型 | `audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
+| `install.ps1` / `install.sh` | 安装 PyTorch 2.7、NumPy 1.26、audio-separator 0.41.1 运行依赖，并下载必需模型 | CUDA 12+ 的 NVIDIA 环境使用 `cu128` wheel；`audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
 | `.github/workflows/build.yml` | CI 构建和测试安装同一组 pinned runtime 依赖 | 测试失败不会用 `|| true` 掩盖。 |
-| `.github/workflows/release.yml` | 发布包下载并打包全部官方 YourMT3+ 模式、BS-RoFormer、Aria-AMT、ByteDance Pedal 和 MIROS | GPU 版使用 PyTorch 2.4 + CUDA 12.1 wheel。 |
+| `.github/workflows/release.yml` | 发布包下载并打包全部官方 YourMT3+ 模式、BS-RoFormer、Aria-AMT、ByteDance Pedal 和 MIROS | GPU 版使用 PyTorch 2.7 + CUDA 12.8 wheel。 |
 | `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，下载全部官方 YourMT3+ 模式 | Colab UI 提供 YourMT3 官方模型选择器，并在选择后显示说明。 |
 
 ## 处理模式
@@ -464,9 +464,9 @@ YourMT3+ 后端提供两个输出布局：
 | 项目 | 要求 |
 |------|------|
 | Python | 3.10+，Windows 安装脚本优先使用 3.10-3.12 |
-| PyTorch | 2.4.0 或更高，建议与 `torchaudio`、`torchvision` 版本匹配 |
+| PyTorch | 2.7.0 或更高，建议与 `torchaudio`、`torchvision` 版本匹配 |
 | FFmpeg | 必需；用于可靠处理 MP3/M4A/FLAC/OGG 等格式 |
-| GPU | 发布包要求 NVIDIA CUDA；CI/CD 和便携包只生成 CUDA 12.1 GPU 版本 |
+| GPU | 发布包要求 NVIDIA CUDA；CI/CD 和便携包只生成 CUDA 12.8 GPU 版本 |
 | 系统 | Windows 10/11、Linux、WSL2 |
 
 Windows 建议把项目放在纯英文且无空格的路径，例如：
@@ -533,16 +533,16 @@ python -m pip install --upgrade pip setuptools wheel
 
 ### 2. 安装 PyTorch
 
-CUDA 12.1:
+CUDA 12.8（推荐，RTX 50 系列 / sm_120 需要此类运行时）:
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 CUDA 11.8:
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu118
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 CI/CD 和便携发布包不再生成 CPU 版本；本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。

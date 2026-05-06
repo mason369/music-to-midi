@@ -49,6 +49,18 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_bytedance_piano_model.py", script)
         self.assertIn("ByteDance Piano", script)
 
+    def test_installers_use_blackwell_compatible_cuda_torch_for_cuda12(self):
+        for script_name in ("install.ps1", "install.sh"):
+            script = (REPO_ROOT / script_name).read_text(encoding="utf-8")
+
+            self.assertIn("torch==2.7.0", script)
+            self.assertIn("torchaudio==2.7.0", script)
+            self.assertIn("torchvision==0.22.0", script)
+            self.assertIn("https://download.pytorch.org/whl/cu128", script)
+            self.assertIn("CUDA 12.8", script)
+            self.assertNotIn("torch==2.4.0", script)
+            self.assertNotIn("https://download.pytorch.org/whl/cu121", script)
+
     def test_windows_installer_stops_when_required_model_downloads_fail(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
 

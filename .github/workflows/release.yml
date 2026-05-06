@@ -23,12 +23,12 @@ jobs:
           - os: windows-latest
             variant: GPU
             platform: Windows
-            pytorch_url: https://download.pytorch.org/whl/cu121
+            pytorch_url: https://download.pytorch.org/whl/cu128
             sep: ";"
           - os: ubuntu-22.04
             variant: GPU
             platform: Linux
-            pytorch_url: https://download.pytorch.org/whl/cu121
+            pytorch_url: https://download.pytorch.org/whl/cu128
             sep: ":"
 
     runs-on: ${{ matrix.os }}
@@ -100,7 +100,7 @@ jobs:
           PY
           pip install numpy==1.26.4
           pip install -r .tmp/requirements-build.txt
-          pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url ${{ matrix.pytorch_url }}
+          pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
@@ -330,7 +330,7 @@ jobs:
           }
 
           $variantNote = @"
-          GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
+          GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
           需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版
           "@
 
@@ -357,7 +357,7 @@ jobs:
           # 重命名 dist/MusicToMidi 为带平台标识的名称
           mv dist/MusicToMidi "dist/${NAME}"
 
-          VARIANT_NOTE="GPU 版（CUDA 12.1），支持 NVIDIA 显卡加速
+          VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
           需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版"
 
           if [ "${{ matrix.platform }}" = "Windows" ]; then
@@ -487,8 +487,8 @@ jobs:
 
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
-          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.1) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
 
           ### 使用方法
           1. 下载对应平台的 GPU 压缩包
@@ -498,7 +498,7 @@ jobs:
 
           ### 说明
           - 无需安装 Python，解压即用
-          - GPU 版内含 CUDA 12.1 运行时，无需单独安装 CUDA
+          - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
           - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
           - 6 种处理模式：智能转写 / 人声分离 / 六声部分离 / Transkun 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴

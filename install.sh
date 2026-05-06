@@ -207,7 +207,7 @@ info "检测 GPU / 加速器..."
 
 TORCH_INSTALLED=false
 info "检查 PyTorch 是否已安装（首次检查可能需要几秒）..."
-if "$PYTHON" -c "import torch; v=torch.__version__; assert tuple(int(x) for x in v.split('+')[0].split('.')[:2]) >= (2,4)" 2>/dev/null; then
+if "$PYTHON" -c "import torch; v=torch.__version__; assert tuple(int(x) for x in v.split('+')[0].split('.')[:2]) >= (2,7)" 2>/dev/null; then
     success "PyTorch 已安装且版本满足要求"
     TORCH_INSTALLED=true
     # 检查 torchvision 是否缺失
@@ -221,7 +221,7 @@ if "$PYTHON" -c "import torch; v=torch.__version__; assert tuple(int(x) for x in
         if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null 2>&1; then
             _CV=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[\d.]+' | head -1 || echo "")
             _CM=$(echo "$_CV" | cut -d. -f1)
-            if [ "$_CM" -ge 12 ] 2>/dev/null; then TV_INDEX="https://download.pytorch.org/whl/cu121"
+            if [ "$_CM" -ge 12 ] 2>/dev/null; then TV_INDEX="https://download.pytorch.org/whl/cu128"
             elif [ "$_CM" -ge 11 ] 2>/dev/null; then TV_INDEX="https://download.pytorch.org/whl/cu118"; fi
         fi
         "$PIP" install "torchvision>=0.${_TV_MINOR}.0,<0.${_TV_NEXT}.0" --index-url "$TV_INDEX"
@@ -237,8 +237,8 @@ if ! $TORCH_INSTALLED; then
         CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[\d.]+' | head -1 || echo "")
         CUDA_MAJOR="${CUDA_VER%%.*}"
         if [ "${CUDA_MAJOR:-0}" -ge 12 ]; then
-            TORCH_INDEX="https://download.pytorch.org/whl/cu121"
-            TORCH_LABEL="CUDA 12.1 (NVIDIA)"
+            TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+            TORCH_LABEL="CUDA 12.8 (NVIDIA)"
         elif [ "${CUDA_MAJOR:-0}" -ge 11 ]; then
             TORCH_INDEX="https://download.pytorch.org/whl/cu118"
             TORCH_LABEL="CUDA 11.8 (NVIDIA)"
@@ -252,7 +252,7 @@ if ! $TORCH_INSTALLED; then
     fi
 
     info "安装 PyTorch ($TORCH_LABEL)..."
-    "$PIP" install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 \
+    "$PIP" install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 \
         --index-url "$TORCH_INDEX"
     success "PyTorch ($TORCH_LABEL) 安装完成"
 fi

@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import torchaudio
 
 from src.i18n.translator import Translator
+from src.utils.gpu_utils import ensure_cuda_runtime_compatibility, rewrite_cuda_runtime_error
 from src.utils.runtime_paths import get_aria_amt_dir, is_frozen_app
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,7 @@ class AriaAmtTranscriber:
 
             if not cuda_is_available():
                 raise RuntimeError("CUDA device not found")
+            ensure_cuda_runtime_compatibility("cuda:0")
 
             model, tokenizer = self._load_aria_model()
             model.decoder.setup_cache(
@@ -212,38 +214,25 @@ class AriaAmtTranscriber:
 
                 init_index = len(sequence)
                 silent_intervals = transcribe_module._get_silent_intervals(audio_segment)
-                input_sequence = list(sequence)
-                try:
-                    (sequence,) = transcribe_module.process_segments(
-                        tasks=[((audio_segment, sequence), 0)],
-                        model=model,
-                        audio_transform=audio_transform,
-                        tokenizer=tokenizer,
-                        logger=logger,
-                    )
-                    adjusted_sequence = transcribe_module._process_silent_intervals(
-                        sequence,
-                        intervals=silent_intervals,
-                        tokenizer=tokenizer,
-                    )
-                    if len(adjusted_sequence) < len(sequence) - 15:
-                        sequence = adjusted_sequence
-                    next_sequence = transcribe_module._truncate_seq(
-                        sequence,
-                        transcribe_module.CHUNK_LEN_MS,
-                        transcribe_module.LEN_MS - transcribe_module.CHUNK_LEN_MS,
-                    )
-                except Exception:
-                    logger.info("Aria-AMT chunk reconciliation failed for %s", input_path, exc_info=True)
-                    try:
-                        sequence = transcribe_module._truncate_seq(
-                            input_sequence,
-                            transcribe_module.CHUNK_LEN_MS - 2,
-                            transcribe_module.CHUNK_LEN_MS,
-                        )
-                    except Exception:
-                        sequence = [tokenizer.bos_tok]
-                    continue
+                (sequence,) = transcribe_module.process_segments(
+                    tasks=[((audio_segment, sequence), 0)],
+                    model=model,
+                    audio_transform=audio_transform,
+                    tokenizer=tokenizer,
+                    logger=logger,
+                )
+                adjusted_sequence = transcribe_module._process_silent_intervals(
+                    sequence,
+                    intervals=silent_intervals,
+                    tokenizer=tokenizer,
+                )
+                if len(adjusted_sequence) < len(sequence) - 15:
+                    sequence = adjusted_sequence
+                next_sequence = transcribe_module._truncate_seq(
+                    sequence,
+                    transcribe_module.CHUNK_LEN_MS,
+                    transcribe_module.LEN_MS - transcribe_module.CHUNK_LEN_MS,
+                )
 
                 if sequence[-1] == tokenizer.eos_tok:
                     sequence = sequence[:-1]
@@ -264,7 +253,8 @@ class AriaAmtTranscriber:
         except InterruptedError:
             raise
         except Exception as exc:
-            raise RuntimeError(f"Aria-AMT 转写失败:\n{exc}") from exc
+            friendly_message = rewrite_cuda_runtime_error(exc, "cuda:0")
+            raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from exc
 
     def _run_transcription_in_process(self, input_path: Path, temp_dir: Path) -> None:
         try:
@@ -278,7 +268,8 @@ class AriaAmtTranscriber:
                 batch_size=1,
             )
         except Exception as exc:
-            raise RuntimeError(f"Aria-AMT 转写失败:\n{exc}") from exc
+            friendly_message = rewrite_cuda_runtime_error(exc, "cuda:0")
+            raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from exc
 
     def _run_transcription_subprocess(self, input_path: Path, temp_dir: Path) -> None:
         command = [
@@ -310,10 +301,14 @@ class AriaAmtTranscriber:
             self._process = None
 
         if process.returncode != 0:
-            raise RuntimeError(
+            error = RuntimeError(
                 "Aria-AMT 转写失败:\n"
                 f"{stdout}\n{stderr}"
             )
+            friendly_message = rewrite_cuda_runtime_error(error, "cuda:0")
+            if friendly_message != str(error):
+                raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from error
+            raise error
 
     def transcribe(
         self,

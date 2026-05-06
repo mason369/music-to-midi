@@ -187,6 +187,25 @@ if not cuda_version:
     print(f"CPU-only PyTorch runtime detected: torch={torch_version}", file=sys.stderr)
     sys.exit(3)
 
+def parse_version(value):
+    parts = []
+    for part in str(value).split("+", 1)[0].split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        if digits:
+            parts.append(int(digits))
+    return tuple(parts)
+
+torch_tuple = parse_version(torch_version)
+cuda_tuple = parse_version(cuda_version)
+if torch_tuple < (2, 7, 0) or cuda_tuple < (12, 8):
+    print(
+        "Unsupported PyTorch/CUDA runtime for GPU portable build: "
+        f"torch={torch_version}, cuda={cuda_version}. "
+        "Use torch 2.7.0+ built with CUDA 12.8+ for RTX 50-series (sm_120).",
+        file=sys.stderr,
+    )
+    sys.exit(4)
+
 print(f"CUDA-enabled PyTorch runtime detected: torch={torch_version}, cuda={cuda_version}")
 '@
 
@@ -196,7 +215,7 @@ print(f"CUDA-enabled PyTorch runtime detected: torch={torch_version}, cuda={cuda
         $output | ForEach-Object { Write-Host $_ }
     }
     if ($exitCode -ne 0) {
-        throw "GPU portable build requires CUDA-enabled PyTorch. Install torch/torchaudio/torchvision from https://download.pytorch.org/whl/cu121. CPU-only PyTorch runtime is not allowed."
+        throw "GPU portable build requires PyTorch 2.7.0+ with CUDA 12.8+. Install torch/torchaudio/torchvision from https://download.pytorch.org/whl/cu128. CPU-only or older CUDA runtimes are not allowed."
     }
 }
 
