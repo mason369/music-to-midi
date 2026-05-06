@@ -106,6 +106,8 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
             ), patch(
                 "src.core.bytedance_piano_transcriber.get_device",
                 return_value="cuda:0",
+            ), patch(
+                "src.core.bytedance_piano_transcriber.ensure_cuda_runtime_compatibility",
             ):
                 transcriber = ByteDancePianoTranscriber(
                     Config(use_gpu=True),
