@@ -44,6 +44,7 @@ transkun>=2.0.1
 aria-amt @ git+https://github.com/EleutherAI/aria-amt.git
 piano-transcription-inference>=0.0.6,<0.1
 torchlibrosa>=0.1.0,<0.2
+matplotlib>=3.7.0,<4
 
 # Web UI（锁定版本避免 API schema bug）
 gradio==4.44.1

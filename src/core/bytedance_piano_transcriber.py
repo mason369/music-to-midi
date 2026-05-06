@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -47,10 +48,29 @@ class ByteDancePianoTranscriber:
 
     @staticmethod
     def is_available() -> bool:
+        return ByteDancePianoTranscriber.get_unavailable_reason() == ""
+
+    @staticmethod
+    def get_unavailable_reason() -> str:
         try:
-            return importlib.util.find_spec("piano_transcription_inference") is not None
-        except (ImportError, ModuleNotFoundError, ValueError):
-            return False
+            if importlib.util.find_spec("piano_transcription_inference") is None:
+                return (
+                    "ByteDance Piano 未安装。请执行: "
+                    "python -m pip install piano-transcription-inference torchlibrosa matplotlib"
+                )
+
+            # The upstream package imports matplotlib.pyplot at module import time.
+            # Use a non-interactive backend so PyInstaller builds do not need a GUI backend.
+            os.environ.setdefault("MPLBACKEND", "Agg")
+            importlib.import_module("piano_transcription_inference")
+            return ""
+        except (ImportError, ModuleNotFoundError) as exc:
+            return (
+                f"ByteDance Piano 运行依赖缺失: {exc}。请执行: "
+                "python -m pip install piano-transcription-inference torchlibrosa matplotlib"
+            )
+        except Exception as exc:
+            return f"ByteDance Piano 后端导入失败: {exc}"
 
     def is_model_available(self) -> bool:
         return (
@@ -102,6 +122,18 @@ class ByteDancePianoTranscriber:
             lines.append("输出目录不存在")
         return "\n".join(lines)
 
+    def _format_missing_checkpoint_error(self) -> str:
+        return "\n".join(
+            [
+                "ByteDance Piano checkpoint 缺失或不完整。",
+                f"期望文件名: {BYTEDANCE_PIANO_CHECKPOINT_NAME}",
+                f"当前检查路径: {self.checkpoint_path.resolve()}",
+                "如果曾将 checkpoint 改名为 matplotlib.pth，请改回上面的原始文件名。",
+                "matplotlib 是 Python 依赖，需要通过 pip 安装，不能通过重命名模型文件提供。",
+                "请执行: python download_bytedance_piano_model.py",
+            ]
+        )
+
     def transcribe(
         self,
         audio_path: str,
@@ -113,15 +145,9 @@ class ByteDancePianoTranscriber:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not self.is_available():
-            raise RuntimeError(
-                "ByteDance Piano 未安装。请执行: "
-                "python -m pip install piano-transcription-inference torchlibrosa"
-            )
+            raise RuntimeError(self.get_unavailable_reason())
         if not self.is_model_available():
-            raise RuntimeError(
-                "ByteDance Piano checkpoint 缺失或不完整。请执行: "
-                "python download_bytedance_piano_model.py"
-            )
+            raise RuntimeError(self._format_missing_checkpoint_error())
 
         self._cancelled = False
         self._check_cancelled()
@@ -132,6 +158,7 @@ class ByteDancePianoTranscriber:
             progress_callback(0.05, self._pt("progress.loading_bytedance_piano", device=device))
 
         try:
+            os.environ.setdefault("MPLBACKEND", "Agg")
             module = importlib.import_module("piano_transcription_inference")
             import librosa
 

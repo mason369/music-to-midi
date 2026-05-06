@@ -133,6 +133,8 @@ hiddenimports = [
     'amt.run',
     'piano_transcription_inference',
     'torchlibrosa',
+    'matplotlib',
+    'matplotlib.pyplot',
     # 数值计算
     'numpy',
     'scipy',
@@ -161,6 +163,7 @@ transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transku
 aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
 torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
+matplotlib_datas, matplotlib_binaries, matplotlib_hiddenimports = collect_all('matplotlib')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 smart_open_datas, smart_open_binaries, smart_open_hiddenimports = collect_all('smart_open')
 einops_datas, einops_binaries, einops_hiddenimports = collect_all('einops')
@@ -184,6 +187,7 @@ datas += (
     + aria_amt_datas
     + bytedance_piano_datas
     + torchlibrosa_datas
+    + matplotlib_datas
     + wandb_datas
     + smart_open_datas
     + einops_datas
@@ -208,6 +212,7 @@ hiddenimports += (
     + aria_amt_hiddenimports
     + bytedance_piano_hiddenimports
     + torchlibrosa_hiddenimports
+    + matplotlib_hiddenimports
     + wandb_hiddenimports
     + smart_open_hiddenimports
     + einops_hiddenimports
@@ -233,6 +238,7 @@ all_binaries = (
     + aria_amt_binaries
     + bytedance_piano_binaries
     + torchlibrosa_binaries
+    + matplotlib_binaries
     + wandb_binaries
     + smart_open_binaries
     + einops_binaries
@@ -262,7 +268,6 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # 排除不需要的大型模块以减小体积
-        'matplotlib',
         'tkinter',
         'cv2',
         'tensorflow',

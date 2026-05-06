@@ -60,6 +60,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("collect_all('piano_transcription_inference')", spec)
         self.assertIn("collect_all('torchlibrosa')", spec)
 
+    def test_pyinstaller_spec_bundles_bytedance_pedal_matplotlib_dependency(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+        excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]
+
+        self.assertIn("collect_all('matplotlib')", spec)
+        self.assertIn("matplotlib_hiddenimports", spec)
+        self.assertNotIn("'matplotlib'", excludes_section)
+
     def test_pyinstaller_spec_does_not_exclude_pillow(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
         excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]

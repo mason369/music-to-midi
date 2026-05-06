@@ -3,5 +3,5 @@ Music to MIDI Converter
 A cross-platform application to convert audio files to multi-track MIDI with lyrics embedding.
 """
 
-__version__ = "1.0.14"
+__version__ = "1.0.15"
 __author__ = "mason369"
