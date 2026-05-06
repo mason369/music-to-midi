@@ -52,6 +52,7 @@ jobs:
             --index-url https://download.pytorch.org/whl/cu128
           pip install numpy==1.26.4
           pip install -r requirements.txt
+          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
           pip install pyinstaller
@@ -89,6 +90,7 @@ jobs:
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
           pip install numpy==1.26.4
           pip install -r requirements.txt
+          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
           pip install pyinstaller
@@ -144,6 +146,7 @@ jobs:
           pip install numpy==1.26.4
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.41.1 --no-deps
 

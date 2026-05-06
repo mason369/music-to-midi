@@ -27,6 +27,11 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
 
+    def test_build_workflow_installs_aria_amt_without_resolver_conflict(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', workflow)
+
     def test_build_workflow_installs_audio_separator_runtime_pins(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 

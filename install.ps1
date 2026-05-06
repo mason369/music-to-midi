@@ -607,7 +607,7 @@ sys.exit(0 if AriaAmtTranscriber.is_available() else 1)
 & "$PYTHON" -c $ariaCheckScript
 if ($LASTEXITCODE -ne 0) {
     Write-Info "Aria-AMT 未安装，正在从 GitHub 安装..."
-    & "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git"
+    & "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Aria-AMT 安装失败，请确认 Python 3.11+ 且能访问 GitHub 仓库。"
     }
