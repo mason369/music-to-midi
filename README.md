@@ -6,6 +6,8 @@
 
 一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本同步六种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT / ByteDance Pedal 三条钢琴专用转写流程。
 
+> 在线体验：[https://telknet.cc/](https://telknet.cc/)
+
 ## 截图
 
 | Windows | Linux |
