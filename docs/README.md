@@ -1,12 +1,12 @@
-# Music to MIDI Converter
+# Music to MIDI Converter (AI Audio to MIDI)
 
 <p align="center">
-  <a href="./README_zh.md">中文</a> | English
+  <a href="../README.md">中文</a> | English
 </p>
 
-Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop app, a Gradio Web interface, and a Google Colab notebook. The current product surface syncs six processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and dedicated Transkun / Aria-AMT / ByteDance Pedal piano transcription.
+Music to MIDI is a local-first AI audio-to-MIDI converter for music producers, transcription hobbyists, piano learners, sampling workflows, and automatic music transcription (AMT) experiments. Drop in an `MP3`, `WAV`, `FLAC`, `OGG`, or `M4A` file, then generate editable MIDI from the PyQt6 desktop app, the Gradio Web interface, or the Google Colab notebook.
 
-> Online demo: [https://telknet.cc/](https://telknet.cc/)
+The current product surface syncs six processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and dedicated Transkun / Aria-AMT / ByteDance Pedal piano transcription. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, BPM detection, and MIDI post-processing into one workflow.
 
 ## Screenshots
 
@@ -14,11 +14,15 @@ Music to MIDI is an AI-assisted audio-to-MIDI application with a PyQt6 desktop a
 |---------|-------|
 | ![Windows demo](../resources/icons/Windows演示.png) | ![Linux demo](../resources/icons/Linux演示.png) |
 
+## Use Cases
+
+Use it when you want to turn a vocal line, piano recording, full mix, or separated stem into MIDI you can edit in a DAW. It is designed for users who want more control than a simple upload-and-download converter, while still keeping the common audio-to-MIDI path approachable.
+
 ## Current Capabilities
 
-- **Full-mix transcription**: `SMART` mode sends the whole audio file to the selected multi-instrument backend.
-- **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` separates vocals and accompaniment, transcribes both, and can optionally export one merged MIDI.
-- **Six-stem split transcription**: `SIX_STEM_SPLIT` separates `bass / drums / guitar / piano / vocals / other`, then exports stem MIDI files and one merged MIDI.
+- **Full-mix transcription**: `SMART` mode sends the whole song to the selected multi-instrument backend and exports MIDI with notes, drums, and GM instrument tracks.
+- **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` separates vocals and accompaniment, transcribes both, and can optionally export one merged MIDI for a fuller arrangement sketch.
+- **Six-stem split transcription**: `SIX_STEM_SPLIT` separates `bass / drums / guitar / piano / vocals / other`, then exports stem MIDI files and one merged MIDI for DAW cleanup or re-arrangement.
 - **Dedicated piano transcription**: `PIANO_TRANSKUN`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` target pure piano audio through Transkun, Aria-AMT, and ByteDance's pedal-aware piano model.
 - **Default backend semantics**: the config default prefers the `Aria-AMT` piano backend; `SMART`, `VOCAL_SPLIT`, and non-piano stems still use YourMT3+ or MIROS as multi-instrument backends.
 - **Optional MIROS backend**: the desktop app can route transcription through a local `ai4m-miros` checkout as an experimental backend.

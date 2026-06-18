@@ -1,12 +1,12 @@
-# 音乐转 MIDI 转换器
+# 音乐转 MIDI 转换器 (AI Audio to MIDI)
 
 <p align="center">
   中文 | <a href="./docs/README.md">English</a>
 </p>
 
-一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本同步六种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT / ByteDance Pedal 三条钢琴专用转写流程。
+一个本地优先的 AI 音频转 MIDI / Audio to MIDI 转换器，面向编曲、扒谱、采样拆解、钢琴练习和自动音乐转写 (AMT) 实验。你可以把 `MP3`、`WAV`、`FLAC`、`OGG` 或 `M4A` 音频丢进来，在 PyQt6 桌面版、Gradio Web 版或 Google Colab 中生成可编辑的 MIDI 文件。
 
-> 在线体验：[https://telknet.cc/](https://telknet.cc/)
+当前版本同步六种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT / ByteDance Pedal 三条钢琴专用转写流程。它不是只抓单音旋律的小工具，而是把多乐器 AI music transcription、stem separation、钢琴转 MIDI、BPM 检测和 MIDI 后处理放进同一条工作流里。
 
 ## 截图
 
@@ -14,11 +14,15 @@
 |---------|-------|
 | ![Windows 演示](resources/icons/Windows演示.png) | ![Linux 演示](resources/icons/Linux演示.png) |
 
+## 适合场景
+
+如果你想把一段人声旋律、钢琴录音、完整混音或分轨 stem 变成可继续编辑的 MIDI，这个项目会比“上传一个文件、下载一个结果”的在线转换器更可控。它适合音乐制作人、扒谱爱好者、钢琴学习者、MIDI 编曲用户，也适合需要在本地 GPU 上验证自动音乐转写模型的开发者。
+
 ## 当前能力
 
-- **完整混音转写**：`SMART` 模式直接读取整首音频，用多乐器后端生成 MIDI。
-- **人声/伴奏分离转写**：`VOCAL_SPLIT` 模式先分离人声与伴奏，再分别生成 MIDI；可选额外输出一个合并 MIDI。
-- **六声部分离转写**：`SIX_STEM_SPLIT` 模式先分离 `bass / drums / guitar / piano / vocals / other` 六个 stem，再输出各 stem MIDI 和合并 MIDI。
+- **完整混音转写**：`SMART` 模式直接读取整首歌，用多乐器后端把音符、鼓点和 GM 乐器轨道转成 MIDI。
+- **人声/伴奏分离转写**：`VOCAL_SPLIT` 模式先拆出人声与伴奏，再分别转写；想保留整体编曲时，也可以额外输出一个合并 MIDI。
+- **六声部分离转写**：`SIX_STEM_SPLIT` 模式先分离 `bass / drums / guitar / piano / vocals / other` 六个 stem，再输出各 stem MIDI 和合并 MIDI，方便后续进 DAW 清理或重编。
 - **钢琴专用转写**：`PIANO_TRANSKUN`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 面向纯钢琴音频，分别调用 Transkun、Aria-AMT 和 ByteDance 带踏板模型。
 - **默认后端语义**：配置默认偏好为 `Aria-AMT` 钢琴后端；`SMART`、`VOCAL_SPLIT` 和非钢琴 stem 仍由 YourMT3+ 或 MIROS 这类多乐器后端承担。
 - **MIROS 可选后端**：桌面版可切换到本地 `ai4m-miros` 仓库作为实验性多乐器后端。
@@ -91,6 +95,7 @@ song_other.mid
 song_all_stems_merged.mid
 song_piano_transkun.mid
 song_piano_aria_amt.mid
+song_piano_bytedance_pedal.mid
 song_(Vocals).wav
 song_(Instrumental).wav
 ```
