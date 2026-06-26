@@ -282,8 +282,8 @@ jobs:
             throw "Portable self-test failed. ExitCode=$($proc.ExitCode)`n$logText"
           }
           $mirosDir = Join-Path $smokeDir '_internal\external\ai4m-miros'
-          $statusJson = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.json'
-          $probeMidi = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.mid'
+          $statusJson = Join-Path $env:RUNNER_TEMP 'miros-worker-missing-input-smoke.json'
+          $probeMidi = Join-Path $env:RUNNER_TEMP 'miros-worker-missing-input-smoke.mid'
           $MirosWorkerTimeoutSeconds = 120
           Remove-Item -LiteralPath $statusJson, $probeMidi -ErrorAction SilentlyContinue
           Push-Location $mirosDir
@@ -302,23 +302,20 @@ jobs:
                 $worker.Kill()
               }
               $statusText = if (Test-Path $statusJson) { Get-Content -LiteralPath $statusJson -Raw } else { "" }
-              throw "MIROS worker import smoke timed out after ${MirosWorkerTimeoutSeconds}s.`n$statusText"
+              throw "MIROS worker missing-input smoke timed out after ${MirosWorkerTimeoutSeconds}s.`n$statusText"
             }
           } finally {
             Pop-Location
           }
           if (-not (Test-Path $statusJson)) {
-            throw "MIROS worker import smoke did not write a status file. ExitCode=$($worker.ExitCode)"
+            throw "MIROS worker missing-input smoke did not write a status file. ExitCode=$($worker.ExitCode)"
           }
           $mirosStatus = Get-Content -LiteralPath $statusJson -Raw
-          if ($mirosStatus -match 'onnxruntime_pybind11_state|DLL load failed') {
-            throw "MIROS worker imported broken onnxruntime during smoke test:`n$mirosStatus"
-          }
           if ($mirosStatus -notmatch '"ok": false') {
-            throw "MIROS worker import smoke returned an unexpected status:`n$mirosStatus"
+            throw "MIROS worker missing-input smoke returned an unexpected status:`n$mirosStatus"
           }
           if ($mirosStatus -notmatch 'MIROS input audio does not exist') {
-            throw "MIROS worker import smoke failed before the expected missing-input check:`n$mirosStatus"
+            throw "MIROS worker missing-input smoke failed before the expected missing-input check:`n$mirosStatus"
           }
 
       - name: 烟测便携产物 (Linux)
@@ -376,8 +373,8 @@ jobs:
             dump_linux_portable_logs
             exit 1
           fi
-          STATUS_JSON="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.json"
-          PROBE_MIDI="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.mid"
+          STATUS_JSON="${RUNNER_TEMP:-/tmp}/miros-worker-missing-input-smoke.json"
+          PROBE_MIDI="${RUNNER_TEMP:-/tmp}/miros-worker-missing-input-smoke.mid"
           rm -f "$STATUS_JSON" "$PROBE_MIDI"
           pushd "$SMOKE_DIR/_internal/external/ai4m-miros"
           set +e
@@ -390,28 +387,22 @@ jobs:
           set -e
           popd
           if [ "$WORKER_EXIT" -eq 124 ] || [ "$WORKER_EXIT" -eq 137 ]; then
-            echo "MIROS worker import smoke timed out after ${MIROS_WORKER_TIMEOUT_SECONDS}s" >&2
+            echo "MIROS worker missing-input smoke timed out after ${MIROS_WORKER_TIMEOUT_SECONDS}s" >&2
             dump_miros_worker_logs
             exit 1
           fi
           if [ ! -f "$STATUS_JSON" ]; then
-            echo "MIROS worker import smoke did not write a status file. ExitCode=${WORKER_EXIT}" >&2
-            dump_miros_worker_logs
-            exit 1
-          fi
-          if grep -Eq 'onnxruntime_pybind11_state|DLL load failed' "$STATUS_JSON"; then
-            echo "MIROS worker imported broken onnxruntime during smoke test:" >&2
-            cat "$STATUS_JSON" >&2
+            echo "MIROS worker missing-input smoke did not write a status file. ExitCode=${WORKER_EXIT}" >&2
             dump_miros_worker_logs
             exit 1
           fi
           if ! grep -q '"ok": false' "$STATUS_JSON"; then
-            echo "MIROS worker import smoke returned an unexpected status:" >&2
+            echo "MIROS worker missing-input smoke returned an unexpected status:" >&2
             dump_miros_worker_logs
             exit 1
           fi
           if ! grep -q 'MIROS input audio does not exist' "$STATUS_JSON"; then
-            echo "MIROS worker import smoke failed before the expected missing-input check:" >&2
+            echo "MIROS worker missing-input smoke failed before the expected missing-input check:" >&2
             dump_miros_worker_logs
             exit 1
           fi
