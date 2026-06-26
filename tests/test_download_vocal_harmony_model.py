@@ -50,12 +50,13 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
                 def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
                     seen["model_file_dir"] = model_file_dir
                     seen["ensemble_preset"] = ensemble_preset
+                    seen["downloaded"] = []
 
-                def load_model(self):
+                def download_model_and_data(self, model_name):
+                    seen["downloaded"].append(model_name)
                     nested = Path(seen["model_file_dir"]) / "nested"
                     nested.mkdir(parents=True, exist_ok=True)
-                    for model_name in CHORUS_MODELS:
-                        (nested / model_name).write_bytes(b"x" * 16)
+                    (nested / model_name).write_bytes(b"x" * 16)
 
             result = download_chorus_model(
                 cache_dir=cache_dir,
@@ -66,6 +67,7 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
             self.assertTrue(result.exists())
             self.assertEqual(result.name, CHORUS_MODELS[0])
             self.assertEqual(seen["ensemble_preset"], CHORUS_PRESET)
+            self.assertEqual(seen["downloaded"], list(CHORUS_MODELS))
 
     def test_download_rejects_old_separator_without_ensemble_support(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -94,15 +96,34 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
                 def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
                     self.model_file_dir = model_file_dir
 
-                def load_model(self):
+                def download_model_and_data(self, model_name):
                     nested = Path(self.model_file_dir) / "nested"
                     nested.mkdir(parents=True, exist_ok=True)
-                    (nested / CHORUS_MODELS[0]).write_bytes(b"x")
+                    if model_name == CHORUS_MODELS[0]:
+                        (nested / model_name).write_bytes(b"x")
 
             with self.assertRaisesRegex(RuntimeError, CHORUS_MODELS[1]):
                 download_chorus_model(
                     cache_dir=cache_dir,
                     separator_cls=BrokenSeparator,
+                    printer=lambda *_: None,
+                )
+
+    def test_download_rejects_separator_without_download_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+
+            class LoadOnlySeparator:
+                def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
+                    pass
+
+                def load_model(self):
+                    raise AssertionError("load_model must not be used for downloads")
+
+            with self.assertRaisesRegex(RuntimeError, "download_model_and_data"):
+                download_chorus_model(
+                    cache_dir=cache_dir,
+                    separator_cls=LoadOnlySeparator,
                     printer=lambda *_: None,
                 )
 
