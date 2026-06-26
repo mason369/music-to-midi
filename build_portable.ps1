@@ -6,6 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$env:PYTHONIOENCODING = "utf-8"
+
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
