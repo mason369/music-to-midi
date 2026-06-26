@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 import logging
-import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlencode, urljoin, urlparse
 
 from src.core.miros_transcriber import MirosTranscriber
 
@@ -19,7 +20,6 @@ MIROS_FINETUNED_FILE_ID = "1hp-6D1yYvPxXCXDQyXRQRJArle8R-VfB"
 MIROS_PRETRAINED_FILE_ID = "1FqqMfcdqeiRr1v7sdrfkqPpr0Vs7e9nZ"
 MIROS_MIN_CHECKPOINT_BYTES = 4_000_000_000
 MIROS_MIN_PRETRAINED_BYTES = 1_000_000_000
-MIROS_MIRROR_DIR_ENV = "MUSIC_TO_MIDI_MIROS_MIRROR_DIR"
 
 
 def _log(printer: Optional[Callable[[str], None]], message: str) -> None:
@@ -37,61 +37,46 @@ def _google_drive_url(file_id: str) -> str:
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 
-def _copy_verified_file(source: Path, destination: Path, min_size: int) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_suffix(destination.suffix + ".download")
-    if partial.exists():
-        partial.unlink()
+class _GoogleDriveConfirmParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._in_download_form = False
+        self.action: Optional[str] = None
+        self.fields: dict[str, str] = {}
 
-    shutil.copyfile(source, partial)
-    size = partial.stat().st_size
-    if size < min_size:
-        partial.unlink()
-        raise RuntimeError(
-            f"Mirrored MIROS weight is incomplete: {source.name} {size} bytes < {min_size} bytes"
-        )
-    partial.replace(destination)
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        attributes = {key: value for key, value in attrs}
+        if tag == "form" and attributes.get("id") == "download-form":
+            self._in_download_form = True
+            self.action = attributes.get("action")
+            return
+        if self._in_download_form and tag == "input":
+            name = attributes.get("name")
+            value = attributes.get("value")
+            if name and value is not None:
+                self.fields[name] = value
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form" and self._in_download_form:
+            self._in_download_form = False
 
 
-def _restore_from_mirror(
-    mirror_dir: Path,
-    destination: Path,
-    min_size: int,
-    printer: Optional[Callable[[str], None]],
-) -> bool:
-    for direct in (mirror_dir / destination.name, mirror_dir / f"miros-{destination.name}"):
-        if direct.is_file():
-            _log(printer, f"Restoring MIROS weight from mirror: {direct}")
-            _copy_verified_file(direct, destination, min_size)
-            return True
+def _confirmed_google_drive_url(download_page: Path) -> Optional[str]:
+    text = download_page.read_text(encoding="utf-8", errors="ignore")
+    if "download-form" not in text:
+        return None
 
-    parts = sorted(mirror_dir.glob(f"{destination.name}.part*"))
-    if not parts:
-        parts = sorted(mirror_dir.glob(f"miros-{destination.name}.part*"))
-    if not parts:
-        return False
+    parser = _GoogleDriveConfirmParser()
+    parser.feed(text)
+    if not parser.action or not parser.fields:
+        return None
 
-    _log(printer, f"Restoring MIROS weight from mirror parts: {destination.name}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_suffix(destination.suffix + ".download")
-    if partial.exists():
-        partial.unlink()
+    action = urljoin("https://drive.google.com/", parser.action)
+    parsed = urlparse(action)
+    if parsed.netloc not in {"drive.usercontent.google.com", "drive.google.com"}:
+        raise RuntimeError(f"Unexpected Google Drive confirmation host: {parsed.netloc}")
 
-    with partial.open("wb") as output:
-        for part in parts:
-            with part.open("rb") as input_file:
-                shutil.copyfileobj(input_file, output)
-
-    size = partial.stat().st_size
-    if size < min_size:
-        partial.unlink()
-        raise RuntimeError(
-            f"Mirrored MIROS weight is incomplete: {destination.name} "
-            f"{size} bytes < {min_size} bytes"
-        )
-
-    partial.replace(destination)
-    return True
+    return f"{action}?{urlencode(parser.fields)}"
 
 
 def _download_google_drive_file(
@@ -104,19 +89,6 @@ def _download_google_drive_file(
         _log(printer, f"MIROS weight already exists: {destination}")
         return
 
-    mirror_dir = os.environ.get(MIROS_MIRROR_DIR_ENV)
-    if mirror_dir:
-        mirror = Path(mirror_dir)
-        if not mirror.is_dir():
-            raise RuntimeError(f"MIROS mirror directory does not exist: {mirror}")
-        if _restore_from_mirror(mirror, destination, min_size, printer):
-            _log(printer, f"MIROS weight restored: {destination}")
-            return
-        raise RuntimeError(
-            f"MIROS mirror does not contain {destination.name}; "
-            f"expected {destination.name} or {destination.name}.part* in {mirror}"
-        )
-
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + ".download")
     if partial.exists():
@@ -125,6 +97,12 @@ def _download_google_drive_file(
     _log(printer, f"Downloading MIROS weight: {destination.name}")
     try:
         _run(["curl", "-L", "--fail", "-o", str(partial), _google_drive_url(file_id)])
+        if partial.stat().st_size < min_size:
+            confirmed_url = _confirmed_google_drive_url(partial)
+            if confirmed_url:
+                _log(printer, f"Confirming Google Drive download: {destination.name}")
+                partial.unlink()
+                _run(["curl", "-L", "--fail", "-o", str(partial), confirmed_url])
     except Exception:
         if partial.exists():
             partial.unlink()
