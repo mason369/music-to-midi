@@ -180,7 +180,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("$proc.Kill($true)", workflow)
         self.assertIn("Portable self-test timed out after ${SelfTestTimeoutSeconds}s", workflow)
         self.assertIn("SELF_TEST_TIMEOUT_SECONDS=900", workflow)
-        self.assertIn('timeout "$SELF_TEST_TIMEOUT_SECONDS" "$SMOKE_DIR/MusicToMidi" --self-test', workflow)
+        self.assertIn("timeout-minutes: 20", workflow)
+        self.assertIn('timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s"', workflow)
+        self.assertIn('>"$SELF_TEST_OUTPUT" 2>&1', workflow)
+        self.assertIn('[ "$SELF_TEST_EXIT" -eq 137 ]', workflow)
         self.assertIn("dump_linux_portable_logs", workflow)
         self.assertIn("Portable self-test did not write the success marker to runtime logs", workflow)
 

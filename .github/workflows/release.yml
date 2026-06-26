@@ -310,12 +310,18 @@ jobs:
 
       - name: 烟测便携产物 (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 20
         run: |
           SMOKE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX")"
           cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"
           chmod +x "$SMOKE_DIR/MusicToMidi"
           SELF_TEST_TIMEOUT_SECONDS=900
+          SELF_TEST_OUTPUT="$SMOKE_DIR/self-test-output.log"
           dump_linux_portable_logs() {
+            if [ -f "$SELF_TEST_OUTPUT" ]; then
+              echo "=== Portable self-test output: $SELF_TEST_OUTPUT ===" >&2
+              tail -n 200 "$SELF_TEST_OUTPUT" >&2 || true
+            fi
             local log_dir="$SMOKE_DIR/runtime/logs"
             if [ -d "$log_dir" ]; then
               echo "=== Portable runtime logs: $log_dir ===" >&2
@@ -325,10 +331,11 @@ jobs:
             fi
           }
           set +e
-          timeout "$SELF_TEST_TIMEOUT_SECONDS" "$SMOKE_DIR/MusicToMidi" --self-test
+          timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s" \
+            "$SMOKE_DIR/MusicToMidi" --self-test >"$SELF_TEST_OUTPUT" 2>&1
           SELF_TEST_EXIT=$?
           set -e
-          if [ "$SELF_TEST_EXIT" -eq 124 ]; then
+          if [ "$SELF_TEST_EXIT" -eq 124 ] || [ "$SELF_TEST_EXIT" -eq 137 ]; then
             echo "Portable self-test timed out after ${SELF_TEST_TIMEOUT_SECONDS}s" >&2
             dump_linux_portable_logs
             exit 1
