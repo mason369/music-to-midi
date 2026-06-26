@@ -200,6 +200,9 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Portable self-test did not write the success marker to runtime logs", workflow)
         self.assertIn("MIROS_WORKER_TIMEOUT_SECONDS=120", workflow)
         self.assertIn("MIROS_WORKER_OUTPUT=", workflow)
+        self.assertIn("$MirosWorkerTimeoutSeconds = 120", workflow)
+        self.assertIn("$worker.WaitForExit($MirosWorkerTimeoutSeconds * 1000)", workflow)
+        self.assertIn("MIROS worker import smoke timed out after ${MirosWorkerTimeoutSeconds}s", workflow)
         self.assertIn('timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s"', workflow)
         self.assertIn('"$SMOKE_EXE" \\', workflow)
         self.assertIn('2>&1 | tee "$MIROS_WORKER_OUTPUT"', workflow)
@@ -207,6 +210,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('[ "$WORKER_EXIT" -eq 137 ]', workflow)
         self.assertIn("dump_miros_worker_logs", workflow)
         self.assertIn("MIROS worker import smoke returned an unexpected status", workflow)
+        self.assertIn("MIROS input audio does not exist", workflow)
+        self.assertIn("MIROS worker import smoke failed before the expected missing-input check", workflow)
 
     def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

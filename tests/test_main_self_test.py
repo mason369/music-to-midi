@@ -173,6 +173,22 @@ class MainSelfTestTests(unittest.TestCase):
 
         prepare_torch.assert_not_called()
 
+    def test_main_uses_hard_exit_for_frozen_miros_worker(self):
+        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
+            sys,
+            "frozen",
+            True,
+            create=True,
+        ), patch.object(
+            main_module,
+            "_run_miros_worker",
+            return_value=7,
+        ) as worker, patch.object(main_module.os, "_exit") as hard_exit:
+            main_module.main()
+
+        worker.assert_called_once_with(["-i", "in.wav", "-o", "out.mid"])
+        hard_exit.assert_called_once_with(7)
+
     def test_main_help_exits_before_gui_startup_and_torch_preload(self):
         stdout = io.StringIO()
         with patch.object(sys, "argv", ["MusicToMidi.exe", "--help"]), patch.object(

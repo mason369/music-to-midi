@@ -29,6 +29,11 @@ class MirosDownloaderTests(unittest.TestCase):
                     repo.mkdir(parents=True)
                     (repo / "main.py").write_text("print('miros')", encoding="utf-8")
                     (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+                    (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+                    (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text(
+                        "print('decoder')\n",
+                        encoding="utf-8",
+                    )
                     return subprocess.CompletedProcess(command, 0)
                 if command[0] == "curl":
                     output = Path(command[command.index("-o") + 1])
@@ -61,6 +66,8 @@ class MirosDownloaderTests(unittest.TestCase):
             repo.mkdir()
             (repo / "main.py").write_text("print('miros')", encoding="utf-8")
             (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text("print('decoder')\n", encoding="utf-8")
 
             archive = root / "last.ckpt"
             with zipfile.ZipFile(archive, "w") as checkpoint:
@@ -105,6 +112,8 @@ class MirosDownloaderTests(unittest.TestCase):
             repo.mkdir()
             (repo / "main.py").write_text("print('miros')", encoding="utf-8")
             (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text("print('decoder')\n", encoding="utf-8")
             (mirror / "miros-last.ckpt.partaa").write_bytes(b"PK\x03\x04" + b"x" * 32)
 
             with patch.dict(
@@ -122,6 +131,8 @@ class MirosDownloaderTests(unittest.TestCase):
             repo.mkdir()
             (repo / "main.py").write_text("print('miros')", encoding="utf-8")
             (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text("print('decoder')\n", encoding="utf-8")
 
             def fake_run(command, **_kwargs):
                 output = Path(command[command.index("-o") + 1])
@@ -145,6 +156,8 @@ class MirosDownloaderTests(unittest.TestCase):
             repo.mkdir()
             (repo / "main.py").write_text("print('miros')", encoding="utf-8")
             (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text("print('decoder')\n", encoding="utf-8")
             calls = []
 
             warning_page = """
@@ -186,6 +199,8 @@ class MirosDownloaderTests(unittest.TestCase):
             repo.mkdir()
             (repo / "main.py").write_text("print('miros')", encoding="utf-8")
             (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).parent.mkdir(parents=True)
+            (repo / download_miros_model.MIROS_DECMOD_REL_PATH).write_text("print('decoder')\n", encoding="utf-8")
 
             quota_page = """
             <!DOCTYPE html>
@@ -215,6 +230,44 @@ class MirosDownloaderTests(unittest.TestCase):
         message = str(error.exception)
         self.assertIn("Google Drive quota exceeded", message)
         self.assertIn("Too many users", message)
+
+    def test_prepare_patches_unused_miros_flex_attention_relative_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "ai4m-miros"
+            repo.mkdir()
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            decmod = repo / download_miros_model.MIROS_DECMOD_REL_PATH
+            decmod.parent.mkdir(parents=True)
+            decmod.write_text(
+                "\n".join(
+                    [
+                        "if is_torch_flex_attn_available():",
+                        "    from torch.nn.attention.flex_attention import BlockMask",
+                        download_miros_model.MIROS_FLEX_ATTENTION_BAD_IMPORT,
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run(command, **_kwargs):
+                output = Path(command[command.index("-o") + 1])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"x" * 16)
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(download_miros_model, "MIROS_MIN_CHECKPOINT_BYTES", 8), patch.object(
+                download_miros_model,
+                "MIROS_MIN_PRETRAINED_BYTES",
+                8,
+            ), patch.object(download_miros_model.subprocess, "run", side_effect=fake_run):
+                download_miros_model.prepare_miros_model(repo)
+
+            patched = decmod.read_text(encoding="utf-8")
+
+        self.assertNotIn(download_miros_model.MIROS_FLEX_ATTENTION_BAD_IMPORT, patched)
+        self.assertIn("from torch.nn.attention.flex_attention import BlockMask", patched)
 
 
 if __name__ == "__main__":
