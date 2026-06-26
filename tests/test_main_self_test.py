@@ -165,14 +165,16 @@ class MainSelfTestTests(unittest.TestCase):
         fake_transcribe.transcribe = boom
 
         with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "in.wav"
+            input_path.write_bytes(b"wav")
             status_path = Path(tmp) / "miros-status.json"
             with patch.dict(sys.modules, {"transcribe": fake_transcribe}):
                 exit_code = main_module._run_miros_worker(
                     [
                         "-i",
-                        "in.wav",
+                        str(input_path),
                         "-o",
-                        "out.mid",
+                        str(Path(tmp) / "out.mid"),
                         "--status-json",
                         str(status_path),
                     ]
@@ -184,6 +186,38 @@ class MainSelfTestTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertIn("miros exploded", payload["error"])
         self.assertIn("RuntimeError: miros exploded", payload["traceback"])
+
+    def test_miros_worker_imports_transcribe_then_fails_fast_for_missing_input(self):
+        fake_transcribe = types.ModuleType("transcribe")
+        calls = []
+
+        def should_not_run(_input, _output):
+            calls.append("called")
+            raise AssertionError("transcribe should not load a model for missing input")
+
+        fake_transcribe.transcribe = should_not_run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "miros-status.json"
+            missing_input = Path(tmp) / "missing.wav"
+            with patch.dict(sys.modules, {"transcribe": fake_transcribe}):
+                exit_code = main_module._run_miros_worker(
+                    [
+                        "-i",
+                        str(missing_input),
+                        "-o",
+                        str(Path(tmp) / "out.mid"),
+                        "--status-json",
+                        str(status_path),
+                    ]
+                )
+
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(calls, [])
+        self.assertFalse(payload["ok"])
+        self.assertIn("MIROS input audio does not exist", payload["error"])
 
     def test_miros_worker_stubs_optional_onnxruntime_during_transcribe_import(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,6 +235,8 @@ class MainSelfTestTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            input_path = root / "in.wav"
+            input_path.write_bytes(b"wav")
             output_path = root / "out.mid"
             old_cwd = os.getcwd()
             old_transcribe = sys.modules.pop("transcribe", None)
@@ -208,7 +244,7 @@ class MainSelfTestTests(unittest.TestCase):
             os.chdir(root)
             try:
                 exit_code = main_module._run_miros_worker(
-                    ["-i", "in.wav", "-o", str(output_path)]
+                    ["-i", str(input_path), "-o", str(output_path)]
                 )
             finally:
                 os.chdir(old_cwd)
