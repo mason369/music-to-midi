@@ -317,6 +317,8 @@ jobs:
           chmod +x "$SMOKE_DIR/MusicToMidi"
           SELF_TEST_TIMEOUT_SECONDS=900
           SELF_TEST_OUTPUT="$SMOKE_DIR/self-test-output.log"
+          MIROS_WORKER_TIMEOUT_SECONDS=120
+          MIROS_WORKER_OUTPUT="$SMOKE_DIR/miros-worker-output.log"
           dump_linux_portable_logs() {
             if [ -f "$SELF_TEST_OUTPUT" ]; then
               echo "=== Portable self-test output: $SELF_TEST_OUTPUT ===" >&2
@@ -330,10 +332,20 @@ jobs:
               echo "No portable runtime log directory found: $log_dir" >&2
             fi
           }
+          dump_miros_worker_logs() {
+            if [ -f "$MIROS_WORKER_OUTPUT" ]; then
+              echo "=== MIROS worker output: $MIROS_WORKER_OUTPUT ===" >&2
+              tail -n 200 "$MIROS_WORKER_OUTPUT" >&2 || true
+            fi
+            if [ -f "$STATUS_JSON" ]; then
+              echo "=== MIROS worker status: $STATUS_JSON ===" >&2
+              cat "$STATUS_JSON" >&2 || true
+            fi
+          }
           set +e
           timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s" \
-            "$SMOKE_DIR/MusicToMidi" --self-test >"$SELF_TEST_OUTPUT" 2>&1
-          SELF_TEST_EXIT=$?
+            "$SMOKE_DIR/MusicToMidi" --self-test 2>&1 | tee "$SELF_TEST_OUTPUT"
+          SELF_TEST_EXIT=${PIPESTATUS[0]}
           set -e
           if [ "$SELF_TEST_EXIT" -eq 124 ] || [ "$SELF_TEST_EXIT" -eq 137 ]; then
             echo "Portable self-test timed out after ${SELF_TEST_TIMEOUT_SECONDS}s" >&2
@@ -355,28 +367,35 @@ jobs:
           rm -f "$STATUS_JSON" "$PROBE_MIDI"
           pushd "$SMOKE_DIR/_internal/external/ai4m-miros"
           set +e
-          timeout 120s "$SMOKE_DIR/MusicToMidi" \
+          timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s" "$SMOKE_DIR/MusicToMidi" \
             --miros-worker \
             -i "${RUNNER_TEMP:-/tmp}/missing-miros-probe.wav" \
             -o "$PROBE_MIDI" \
-            --status-json "$STATUS_JSON"
-          WORKER_EXIT=$?
+            --status-json "$STATUS_JSON" 2>&1 | tee "$MIROS_WORKER_OUTPUT"
+          WORKER_EXIT=${PIPESTATUS[0]}
           set -e
           popd
-          if [ "$WORKER_EXIT" -eq 124 ]; then
-            echo "MIROS worker import smoke timed out" >&2
+          if [ "$WORKER_EXIT" -eq 124 ] || [ "$WORKER_EXIT" -eq 137 ]; then
+            echo "MIROS worker import smoke timed out after ${MIROS_WORKER_TIMEOUT_SECONDS}s" >&2
+            dump_miros_worker_logs
             exit 1
           fi
           if [ ! -f "$STATUS_JSON" ]; then
             echo "MIROS worker import smoke did not write a status file. ExitCode=${WORKER_EXIT}" >&2
+            dump_miros_worker_logs
             exit 1
           fi
           if grep -Eq 'onnxruntime_pybind11_state|DLL load failed' "$STATUS_JSON"; then
             echo "MIROS worker imported broken onnxruntime during smoke test:" >&2
             cat "$STATUS_JSON" >&2
+            dump_miros_worker_logs
             exit 1
           fi
-          grep -q '"ok": false' "$STATUS_JSON"
+          if ! grep -q '"ok": false' "$STATUS_JSON"; then
+            echo "MIROS worker import smoke returned an unexpected status:" >&2
+            dump_miros_worker_logs
+            exit 1
+          fi
 
       - name: 创建便携包 (Windows)
         if: runner.os == 'Windows'
