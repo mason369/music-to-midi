@@ -312,8 +312,10 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 20
         run: |
-          SMOKE_DIR="./dist/MusicToMidi"
-          chmod +x "$SMOKE_DIR/MusicToMidi"
+          SMOKE_DIR="$(pwd)/dist/MusicToMidi"
+          SMOKE_EXE="$SMOKE_DIR/MusicToMidi"
+          export QT_QPA_PLATFORM=offscreen
+          chmod +x "$SMOKE_EXE"
           SELF_TEST_TIMEOUT_SECONDS=900
           SELF_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-self-test-output.log"
           MIROS_WORKER_TIMEOUT_SECONDS=120
@@ -343,7 +345,7 @@ jobs:
           }
           set +e
           timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s" \
-            "$SMOKE_DIR/MusicToMidi" --self-test 2>&1 | tee "$SELF_TEST_OUTPUT"
+            "$SMOKE_EXE" --self-test 2>&1 | tee "$SELF_TEST_OUTPUT"
           SELF_TEST_EXIT=${PIPESTATUS[0]}
           set -e
           if [ "$SELF_TEST_EXIT" -eq 124 ] || [ "$SELF_TEST_EXIT" -eq 137 ]; then
@@ -366,7 +368,7 @@ jobs:
           rm -f "$STATUS_JSON" "$PROBE_MIDI"
           pushd "$SMOKE_DIR/_internal/external/ai4m-miros"
           set +e
-          timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s" "$SMOKE_DIR/MusicToMidi" \
+          timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s" "$SMOKE_EXE" \
             --miros-worker \
             -i "${RUNNER_TEMP:-/tmp}/missing-miros-probe.wav" \
             -o "$PROBE_MIDI" \
