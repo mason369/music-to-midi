@@ -174,6 +174,8 @@ class T5BlockYMT3(nn.Module):
         )
         hidden_states, present_key_value_state = self_attention_outputs[:2]
         attention_outputs = self_attention_outputs[2:]  # Keep self-attention outputs and relative position weights
+        if not attention_outputs:
+            attention_outputs = (position_bias,)
 
         # clamp inf values to enable fp16 training
         if hidden_states.dtype == torch.float16:
@@ -208,6 +210,9 @@ class T5BlockYMT3(nn.Module):
                 cache_position=cache_position,
             )
             hidden_states, cross_present_key_value_state = cross_attention_outputs[:2]
+            cross_attention_tail = cross_attention_outputs[2:]
+            if not cross_attention_tail:
+                cross_attention_tail = (encoder_decoder_position_bias,)
 
             # clamp inf values to enable fp16 training
             if hidden_states.dtype == torch.float16:
@@ -225,7 +230,7 @@ class T5BlockYMT3(nn.Module):
                 present_key_value_state = present_key_value_state + cross_attention_outputs[1]
 
             # Keep cross-attention outputs and relative position weights
-            attention_outputs = attention_outputs + cross_attention_outputs[2:]
+            attention_outputs = attention_outputs + cross_attention_tail
 
         # Apply Feed Forward layer - Modified for MoE
         if self.ff_layer_type == 't5_gmlp':

@@ -565,7 +565,7 @@ Get-Content (Join-Path $REPO_DIR "requirements.txt") |
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
-# audio-separator 0.41.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.7 在 Windows
+# audio-separator 0.44.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.7 在 Windows
 # 上需要 NumPy 1.26.x。按发布脚本的做法，先安装其运行依赖，再 no-deps 安装包本体。
 Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
 & "$PIP" install `
@@ -588,7 +588,7 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "six==1.17.0"
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 运行依赖安装失败" }
 
-& "$PIP" install "audio-separator==0.41.1" --no-deps
+& "$PIP" install "audio-separator==0.44.1" --no-deps
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
 
@@ -738,26 +738,33 @@ if ($FFMPEG_OK) {
     Write-Warn "  ffmpeg 未安装（已在第 3 步提示）"
 }
 
-# --- 第 11 步/共 12 步：下载 YourMT3+ 官方模式模型权重 ---
-Write-Info "第 11 步/共 12 步  下载 YourMT3+ 官方模式模型权重..."
+# --- 第 11 步/共 12 步：下载 YourMT3+ 官方模式、六轨与人声 ensemble 模型权重 ---
+Write-Info "第 11 步/共 12 步  下载 YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_sota_models.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "YourMT3+ 官方模式模型权重下载成功"
+    Write-Ok "YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重下载成功"
 } else {
-    Write-Err "YourMT3+ 官方模式模型下载失败"
+    Write-Err "YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败"
 }
 
-# --- 第 12 步/共 12 步：下载 BS-RoFormer 人声分离模型 ---
-Write-Info "第 12 步/共 12 步  下载 BS-RoFormer ep368 模型（约 600 MB）..."
+# --- 第 12 步/共 12 步：验证/补下载 RoFormer 人声 ensemble 模型 ---
+Write-Info "第 12 步/共 12 步  验证/补下载 RoFormer vocal_rvc 与 karaoke ensemble 模型..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_vocal_model.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "BS-RoFormer 模型下载成功"
+    Write-Ok "RoFormer vocal_rvc ensemble 模型准备完成"
 } else {
-    Write-Err "BS-RoFormer 模型下载失败"
+    Write-Err "RoFormer vocal_rvc ensemble 模型下载失败"
+}
+
+& "$PYTHON" (Join-Path $REPO_DIR "download_vocal_harmony_model.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "RoFormer karaoke ensemble 模型准备完成"
+} else {
+    Write-Err "RoFormer karaoke ensemble 模型下载失败"
 }
 
 # --- 完成 ---
@@ -772,6 +779,8 @@ Write-Host "  .\run.ps1" -ForegroundColor Green
 Write-Host ""
 Write-Host "  模型维护命令：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
+Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
+Write-Host "  venv\Scripts\python.exe download_vocal_harmony_model.py" -ForegroundColor Yellow
 Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
 Write-Host ""

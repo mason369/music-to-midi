@@ -31,9 +31,11 @@ class TestYourMT3PathResolution(unittest.TestCase):
             "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2"
         )
 
-    def test_default_model_is_moe(self):
-        """测试默认模型已切换为 MoE"""
-        self.assertEqual(DEFAULT_MODEL, "yptf_moe_multi_ps")
+    def test_default_model_is_official_space_moe_nops(self):
+        """测试默认模型对齐官方 Hugging Face Space 的 noPS MoE"""
+        self.assertEqual(DEFAULT_MODEL, "yptf_moe_multi_nops")
+        self.assertTrue(YOURMT3_MODELS["yptf_moe_multi_nops"].get("recommended"))
+        self.assertFalse(YOURMT3_MODELS["yptf_moe_multi_ps"].get("recommended", False))
 
     def test_official_colab_model_modes_are_registered_with_descriptions(self):
         """测试官方 Colab 风格模型模式都已注册并带用户说明"""
@@ -47,34 +49,34 @@ class TestYourMT3PathResolution(unittest.TestCase):
             self.assertTrue(model_info.get("ui_label"))
             self.assertTrue(model_info.get("ui_description"))
 
-    def test_resolve_moe_checkpoint_path(self):
-        """测试解析 MoE checkpoint 路径"""
-        path = resolve_model_checkpoint_path("YPTF.MoE+Multi (PS)")
+    def test_resolve_default_moe_checkpoint_path(self):
+        """测试解析默认 noPS MoE checkpoint 路径"""
+        path = resolve_model_checkpoint_path("YPTF.MoE+Multi (noPS)")
 
         if path is None:
-            self.skipTest("MoE 模型未下载，跳过路径验证")
+            self.skipTest("默认 MoE noPS 模型未下载，跳过路径验证")
 
         # 验证路径存在
         self.assertIsNotNone(path)
         self.assertTrue(path.exists(), f"路径不存在: {path}")
 
         # 验证文件名
-        self.assertEqual(path.name, "model.ckpt")
+        self.assertIn(path.name, {"model.ckpt", "last.ckpt"})
 
         # 验证目录结构包含 MoE 标识
         self.assertIn("moe", str(path).lower())
 
-        # 验证文件大小（MoE PS 版本约 724MB）
+        # 验证文件大小（官方 noPS last.ckpt 本地约 535 MiB，PS model.ckpt 约 724 MiB）
         size_mb = path.stat().st_size / (1024 * 1024)
-        self.assertGreater(size_mb, 700)
-        self.assertLess(size_mb, 750)
+        self.assertGreater(size_mb, 500)
+        self.assertLess(size_mb, 3000)
 
     def test_get_model_path_short_name(self):
         """测试通过短名称获取模型路径"""
-        path = get_model_path("yptf_moe_multi_ps")
+        path = get_model_path("yptf_moe_multi_nops")
 
         if path is None:
-            self.skipTest("MoE 模型未下载")
+            self.skipTest("默认 MoE noPS 模型未下载")
 
         self.assertIsNotNone(path)
         self.assertTrue(path.exists())

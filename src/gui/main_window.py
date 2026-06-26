@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
             getattr(self.config, "midi_track_mode", "multi_track")
         )
         self.track_panel.set_yourmt3_model(
-            getattr(self.config, "yourmt3_model", "yptf_moe_multi_ps")
+            getattr(self.config, "yourmt3_model", "yptf_moe_multi_nops")
         )
         self._add_shadow(self.track_panel)
 
@@ -664,8 +664,6 @@ class MainWindow(QMainWindow):
         self.config.midi_track_mode = self.track_panel.get_midi_track_mode()
         self.config.yourmt3_model = self.track_panel.get_yourmt3_model()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
-        self.config.six_stem_targets = self.track_panel.get_selected_six_stem_targets()
-        self.config.six_stem_split_vocal_harmony = self.track_panel.get_six_stem_vocal_harmony()
 
         # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem

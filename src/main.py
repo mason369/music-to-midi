@@ -112,25 +112,64 @@ def _prepare_torch_runtime_before_pyqt() -> None:
 def _is_4k_display() -> bool:
     """检测主显示器是否为 4K（>= 3840x2160）。
 
-    在 QApplication 创建之前调用，使用平台原生 API 获取物理分辨率。
+    在 QApplication 创建之前调用。Windows 上使用 EnumDisplaySettingsW
+    读取当前显示模式，避免提前设置进程 DPI awareness，防止 Qt 初始化时
+    再设置 DPI awareness 触发 Access denied 警告。
     """
     import platform
     try:
         if platform.system() == "Windows":
             import ctypes
-            # 设置 DPI 感知以获取真实物理分辨率（而非缩放后的逻辑分辨率）
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-            except Exception:
-                try:
-                    ctypes.windll.user32.SetProcessDPIAware()
-                except Exception:
-                    pass
-            w = ctypes.windll.user32.GetSystemMetrics(0)  # SM_CXSCREEN
-            h = ctypes.windll.user32.GetSystemMetrics(1)  # SM_CYSCREEN
-            return w >= 3840 and h >= 2160
-    except Exception:
-        pass
+            from ctypes import wintypes
+
+            CCHDEVICENAME = 32
+            CCHFORMNAME = 32
+            ENUM_CURRENT_SETTINGS = -1
+
+            class DEVMODEW(ctypes.Structure):
+                _fields_ = [
+                    ("dmDeviceName", wintypes.WCHAR * CCHDEVICENAME),
+                    ("dmSpecVersion", wintypes.WORD),
+                    ("dmDriverVersion", wintypes.WORD),
+                    ("dmSize", wintypes.WORD),
+                    ("dmDriverExtra", wintypes.WORD),
+                    ("dmFields", wintypes.DWORD),
+                    ("dmOrientation", wintypes.SHORT),
+                    ("dmPaperSize", wintypes.SHORT),
+                    ("dmPaperLength", wintypes.SHORT),
+                    ("dmPaperWidth", wintypes.SHORT),
+                    ("dmScale", wintypes.SHORT),
+                    ("dmCopies", wintypes.SHORT),
+                    ("dmDefaultSource", wintypes.SHORT),
+                    ("dmPrintQuality", wintypes.SHORT),
+                    ("dmColor", wintypes.SHORT),
+                    ("dmDuplex", wintypes.SHORT),
+                    ("dmYResolution", wintypes.SHORT),
+                    ("dmTTOption", wintypes.SHORT),
+                    ("dmCollate", wintypes.SHORT),
+                    ("dmFormName", wintypes.WCHAR * CCHFORMNAME),
+                    ("dmLogPixels", wintypes.WORD),
+                    ("dmBitsPerPel", wintypes.DWORD),
+                    ("dmPelsWidth", wintypes.DWORD),
+                    ("dmPelsHeight", wintypes.DWORD),
+                    ("dmDisplayFlags", wintypes.DWORD),
+                    ("dmDisplayFrequency", wintypes.DWORD),
+                    ("dmICMMethod", wintypes.DWORD),
+                    ("dmICMIntent", wintypes.DWORD),
+                    ("dmMediaType", wintypes.DWORD),
+                    ("dmDitherType", wintypes.DWORD),
+                    ("dmReserved1", wintypes.DWORD),
+                    ("dmReserved2", wintypes.DWORD),
+                    ("dmPanningWidth", wintypes.DWORD),
+                    ("dmPanningHeight", wintypes.DWORD),
+                ]
+
+            devmode = DEVMODEW()
+            devmode.dmSize = ctypes.sizeof(DEVMODEW)
+            if ctypes.windll.user32.EnumDisplaySettingsW(None, ENUM_CURRENT_SETTINGS, ctypes.byref(devmode)):
+                return devmode.dmPelsWidth >= 3840 and devmode.dmPelsHeight >= 2160
+    except Exception as exc:
+        logging.getLogger(__name__).debug("4K 显示器检测失败: %s", exc)
     return False
 
 
@@ -142,16 +181,17 @@ def _run_self_test(
     """运行无界面自检，供发布烟测和终端诊断使用。"""
     setup_chinese_environment()
     logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
+    from src.i18n.translator import t
 
     try:
         if transcriber_cls is None:
             from src.core.yourmt3_transcriber import YourMT3Transcriber as transcriber_cls
 
-        logger.info("开始执行便携包自检")
+        logger.info(t("startup.portable_self_test_starting"))
         if not transcriber_cls.is_available():
             reason_getter = getattr(transcriber_cls, "get_unavailable_reason", None)
-            reason = reason_getter() if callable(reason_getter) else "YourMT3+ 不可用"
-            logger.error("自检失败: %s", reason)
+            reason = reason_getter() if callable(reason_getter) else t("startup.yourmt3_unavailable")
+            logger.error(t("startup.portable_self_test_failed", reason=reason))
             print(reason)
             return 1
 
@@ -162,7 +202,7 @@ def _run_self_test(
             transcriber = transcriber_cls(Config())
             load_model_fn = getattr(transcriber, "_load_model", None)
             if load_model and callable(load_model_fn):
-                logger.info("Self-test: loading YourMT3 model")
+                logger.info(t("startup.self_test_loading_yourmt3_model"))
                 load_model_fn()
         finally:
             if transcriber is not None:
@@ -170,11 +210,11 @@ def _run_self_test(
                 if callable(unload_model):
                     unload_model()
 
-        logger.info("便携包自检通过")
+        logger.info(t("startup.portable_self_test_passed"))
         print(success_message)
         return 0
     except Exception as e:
-        logger.error("自检异常: %s", e, exc_info=True)
+        logger.error(t("startup.portable_self_test_exception", error=e), exc_info=True)
         print(f"SELF-TEST FAILED: {e}")
         return 1
 
@@ -282,6 +322,23 @@ def main():
     if "--miros-worker" in sys.argv:
         worker_index = sys.argv.index("--miros-worker")
         sys.exit(_run_miros_worker(sys.argv[worker_index + 1:]))
+
+    # Set console encoding before any localized CLI output.
+    setup_chinese_environment()
+
+    if "-h" in sys.argv or "--help" in sys.argv:
+        from src.i18n.translator import t
+
+        print(
+            f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-miros]\n"
+            "\n"
+            f"{t('cli.options')}:\n"
+            f"  -h, --help          {t('cli.help')}\n"
+            f"  --self-test         {t('cli.self_test')}\n"
+            f"  --self-test-miros   {t('cli.self_test_miros')}\n"
+            f"  --miros-worker      {t('cli.miros_worker')}"
+        )
+        sys.exit(0)
     if "--self-test" in sys.argv:
         sys.exit(_run_self_test())
     if "--self-test-miros" in sys.argv:
@@ -297,9 +354,6 @@ def main():
 
     _prepare_torch_runtime_before_pyqt()
 
-    # 设置中文环境（抑制警告 + 修补输出）
-    setup_chinese_environment()
-
     # 设置日志
     logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
 
@@ -313,7 +367,9 @@ def main():
         if handler not in src_logger.handlers:
             src_logger.addHandler(handler)
 
-    logger.info("正在启动音乐转MIDI应用程序")
+    from src.i18n.translator import t
+
+    logger.info(t("startup.application_starting"))
 
     try:
         from PyQt6.QtWidgets import QApplication
@@ -327,7 +383,7 @@ def main():
         #   4K 屏幕使用 PassThrough 保留精确缩放比例，避免 Floor 将 1.5x 截断为 1x 导致界面过小
         #   非 4K 屏幕使用 Floor 避免界面过大导致文字被遮挡
         if _is_4k_display():
-            logger.info("检测到 4K 显示器，使用 PassThrough DPI 策略")
+            logger.info(t("startup.detected_4k_passthrough"))
             QApplication.setHighDpiScaleFactorRoundingPolicy(
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
@@ -338,7 +394,7 @@ def main():
 
         # 创建应用程序
         app = QApplication(sys.argv)
-        app.setApplicationName("音乐转MIDI")
+        app.setApplicationName(t("app.name"))
         app.setApplicationVersion(__version__)
         app.setOrganizationName("mason369")
 
@@ -355,7 +411,7 @@ def main():
                            "WenQuanYi Zen Hei", "Ubuntu"):
                 if family in available:
                     ui_font_family = family
-                    logger.info(f"已设置应用字体: {family}")
+                    logger.info(t("startup.app_font_selected", font=family))
                     break
             ui_font = QFont(ui_font_family, 10)
             app.setFont(ui_font)
@@ -365,7 +421,7 @@ def main():
                 if emoji_font in available:
                     QFont.insertSubstitutions(ui_font_family, [emoji_font])
                     QFont.insertSubstitutions("sans-serif", [emoji_font])
-                    logger.info(f"已设置Emoji回退字体: {emoji_font}")
+                    logger.info(t("startup.emoji_fallback_selected", font=emoji_font))
                     break
 
         # 创建并显示主窗口
@@ -373,18 +429,18 @@ def main():
         window = MainWindow(config)
         window.show()
 
-        logger.info("应用程序窗口已显示")
+        logger.info(t("startup.window_shown"))
 
         # 运行事件循环
         sys.exit(app.exec())
 
     except ImportError as e:
-        logger.error(f"导入PyQt6失败: {e}")
-        print("错误: 需要PyQt6。请使用以下命令安装: pip install PyQt6")
+        logger.error(t("startup.import_pyqt_failed", error=e))
+        print(t("startup.install_pyqt_hint"))
         sys.exit(1)
 
     except Exception as e:
-        logger.error(f"应用程序错误: {e}", exc_info=True)
+        logger.error(t("startup.application_error", error=e), exc_info=True)
         sys.exit(1)
 
 

@@ -63,15 +63,31 @@ fi
 
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
-from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
-from src.core.vocal_separator import VocalSeparator
-target = resolve_vocal_model_path()
-print('BS-RoFormer model:', target)
-print('audio-separator package:', VocalSeparator.is_available())
-print('BS-RoFormer model available:', VocalSeparator.is_model_available())
-exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
+from download_multistem_model import validate_multistem_assets
+model_path, config_path = validate_multistem_assets()
+print('BS-RoFormer SW checkpoint:', model_path)
+print('BS-RoFormer SW config:', config_path)
+exit(0)
 "; then
-    warn "BS-RoFormer model weights missing"
+    warn "BS-RoFormer SW six-stem model missing or checksum validation failed"
+    warn "  先运行: python download_multistem_model.py"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_vocal_harmony_model import is_chorus_model_available, resolve_chorus_model_paths
+from download_vocal_model import is_vocal_model_available, resolve_vocal_model_paths
+from src.core.vocal_separator import VocalSeparator
+print('RoFormer vocal_rvc models:', [str(path) for path in resolve_vocal_model_paths()])
+print('RoFormer karaoke models:', [str(path) for path in resolve_chorus_model_paths()])
+print('audio-separator package:', VocalSeparator.is_available())
+print('RoFormer vocal_rvc available:', is_vocal_model_available())
+print('RoFormer karaoke available:', is_chorus_model_available())
+print('RoFormer full vocal split available:', VocalSeparator.is_model_available())
+exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_chorus_model_available() and VocalSeparator.is_model_available() else 1)
+"; then
+    warn "RoFormer vocal_rvc/karaoke ensemble weights missing"
     NEED_INSTALL=true
 fi
 

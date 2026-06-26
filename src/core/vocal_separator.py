@@ -1,12 +1,11 @@
-"""
-人声分离模块 - 使用 audio-separator + BS-RoFormer 模型分离人声与伴奏
-"""
+"""人声分离模块 - 使用 audio-separator RoFormer ensembles 分离人声与伴奏。"""
+
+from __future__ import annotations
+
 import logging
-import os
-import time
-import threading
+import shutil
 from pathlib import Path
-from typing import Optional, Callable, Dict
+from typing import Callable, Dict, Iterable, Optional
 
 from src.i18n.translator import Translator
 from src.utils.audio_separator_compat import (
@@ -14,6 +13,7 @@ from src.utils.audio_separator_compat import (
     get_separator_cls,
 )
 from src.utils.gpu_utils import (
+    clear_gpu_memory,
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
 )
@@ -21,25 +21,209 @@ from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
 
-# 默认 BS-RoFormer 模型文件名（检查点名含训练分数标签）
-_ROFORMER_MODEL = "model_bs_roformer_ep_368_sdr_12.9628.ckpt"
+ROFORMER_MODEL = "ensemble:vocal_rvc"
+ROFORMER_REQUIRED_MODELS = (
+    "melband_roformer_big_beta6x.ckpt",
+    "mel_band_roformer_vocals_fv4_gabox.ckpt",
+)
+
+KARAOKE_MODEL = "ensemble:karaoke"
+KARAOKE_REQUIRED_MODELS = (
+    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+    "mel_band_roformer_karaoke_gabox_v2.ckpt",
+    "mel_band_roformer_karaoke_becruily.ckpt",
+)
+
+MDXC_QUALITY_PARAMS = {
+    "segment_size": 256,
+    "override_model_segment_size": False,
+    "batch_size": 1,
+    "overlap": 50,
+    "pitch_shift": 0,
+}
+
+
+def _find_existing_model(cache_dir: Path, model_name: str) -> Optional[Path]:
+    direct = cache_dir / model_name
+    if direct.is_file() and direct.stat().st_size > 0:
+        return direct
+    for path in cache_dir.rglob(model_name):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _resolve_output_files(output_files: Iterable[object], output_dir: Path) -> list[Path]:
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for item in output_files:
+        path = Path(str(item))
+        if not path.is_absolute():
+            path = output_dir / path
+        if path.exists():
+            key = str(path.resolve()).lower()
+            if key not in seen:
+                seen.add(key)
+                resolved.append(path)
+
+    if resolved:
+        return resolved
+
+    for path in sorted(output_dir.glob("*.wav"), key=lambda candidate: candidate.stat().st_mtime):
+        key = str(path.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            resolved.append(path)
+    return resolved
+
+
+def _classify_vocal_rvc_output(file_name: str) -> Optional[str]:
+    lower_name = file_name.lower()
+    if any(marker in lower_name for marker in ("(instrumental)", "(other)", "(no_vocal", "(no vocal")):
+        return "accompaniment"
+    if any(marker in lower_name for marker in ("(vocals)", "(vocal)", "(primary)", "(lead)")):
+        return "vocals"
+    if "instrumental" in lower_name or "no_vocal" in lower_name:
+        return "accompaniment"
+    if "vocal" in lower_name or "primary" in lower_name:
+        return "vocals"
+    return None
+
+
+def _classify_karaoke_output(file_name: str) -> Optional[str]:
+    lower_name = file_name.lower()
+    if any(marker in lower_name for marker in ("(instrumental)", "(other)", "(backing)", "(no_vocal", "(no vocal")):
+        return "backing"
+    if any(marker in lower_name for marker in ("(vocals)", "(vocal)", "(lead)", "(main_vocal)", "(main vocals)")):
+        return "lead"
+    if "instrumental" in lower_name or "other" in lower_name or "backing" in lower_name:
+        return "backing"
+    if "vocal" in lower_name or "lead" in lower_name:
+        return "lead"
+    return None
+
+
+def _move_role_output(
+    output_files: Iterable[object],
+    output_dir: Path,
+    classifier: Callable[[str], Optional[str]],
+    expected_roles: dict[str, Path],
+) -> dict[str, Path]:
+    resolved_files = _resolve_output_files(output_files, output_dir)
+    role_paths: dict[str, Path] = {}
+
+    for path in resolved_files:
+        role = classifier(path.name)
+        if role in expected_roles and role not in role_paths:
+            role_paths[role] = path
+
+    missing = [role for role in expected_roles if role not in role_paths]
+    if missing:
+        raise RuntimeError(
+            "audio-separator 输出角色识别失败；"
+            f"缺少={missing}, files={[path.name for path in resolved_files]}"
+        )
+
+    final_paths: dict[str, Path] = {}
+    for role, source_path in role_paths.items():
+        final_path = expected_roles[role]
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.resolve() != final_path.resolve():
+            if final_path.exists():
+                final_path.unlink()
+            shutil.move(str(source_path), str(final_path))
+        final_paths[role] = final_path
+
+    return final_paths
+
+
+def _match_channels(audio, channels: int):
+    import numpy as np
+
+    current = audio.shape[1]
+    if current == channels:
+        return audio
+    if current == 1:
+        return np.repeat(audio, channels, axis=1)
+    if channels == 1:
+        return np.mean(audio, axis=1, keepdims=True)
+    if current > channels:
+        return audio[:, :channels]
+    repeats = channels - current
+    return np.concatenate([audio, np.repeat(audio[:, -1:], repeats, axis=1)], axis=1)
+
+
+def _resample_audio(audio, orig_sr: int, target_sr: int):
+    if orig_sr == target_sr:
+        return audio
+    import librosa
+    import numpy as np
+
+    channels = [
+        librosa.resample(audio[:, channel], orig_sr=orig_sr, target_sr=target_sr)
+        for channel in range(audio.shape[1])
+    ]
+    return np.stack(channels, axis=1)
+
+
+def _mix_backing_into_accompaniment(
+    *,
+    backing_vocals_path: Path,
+    accompaniment_path: Path,
+    output_path: Path,
+) -> Path:
+    import numpy as np
+    import soundfile as sf
+
+    accompaniment, accompaniment_sr = sf.read(
+        str(accompaniment_path),
+        dtype="float32",
+        always_2d=True,
+    )
+    backing, backing_sr = sf.read(
+        str(backing_vocals_path),
+        dtype="float32",
+        always_2d=True,
+    )
+
+    backing = _resample_audio(backing, backing_sr, accompaniment_sr)
+    backing = _match_channels(backing, accompaniment.shape[1])
+
+    max_len = max(accompaniment.shape[0], backing.shape[0])
+    if accompaniment.shape[0] < max_len:
+        accompaniment = np.pad(
+            accompaniment,
+            ((0, max_len - accompaniment.shape[0]), (0, 0)),
+            mode="constant",
+        )
+    if backing.shape[0] < max_len:
+        backing = np.pad(backing, ((0, max_len - backing.shape[0]), (0, 0)), mode="constant")
+
+    mixed = accompaniment + backing
+    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
+    if peak > 0.98:
+        mixed = mixed * (0.98 / peak)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(output_path), mixed, accompaniment_sr)
+    return output_path
 
 
 class VocalSeparator:
-    """
-    使用 audio-separator + BS-RoFormer 模型将音频分离为人声和伴奏。
+    """使用 AI-RVC 风格 RoFormer ensembles 做高质量人声/伴奏分离。"""
 
-    输出两个 WAV 文件：vocals.wav 和 accompaniment.wav
-
-    注意：audio-separator 的 Separator 类自行检测 GPU 设备，
-    不接受外部 device 参数。separator.separate() 是阻塞调用，
-    分离过程中无法响应取消，仅在调用前后检查取消状态。
-    """
-
-    def __init__(self, language: str = Translator.DEFAULT_LANGUAGE):
+    def __init__(
+        self,
+        language: str = Translator.DEFAULT_LANGUAGE,
+        *,
+        primary_device: Optional[str] = None,
+        karaoke_device: Optional[str] = None,
+    ):
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._translator = Translator(language)
+        self.primary_device = primary_device
+        self.karaoke_device = karaoke_device
 
     def _pt(self, key: str, **kwargs) -> str:
         return self._translator.t(key, **kwargs)
@@ -58,7 +242,7 @@ class VocalSeparator:
 
     @staticmethod
     def is_available() -> bool:
-        """检查 audio-separator 是否可用"""
+        """检查 audio-separator 是否可用。"""
         try:
             get_separator_cls()
             return True
@@ -68,19 +252,71 @@ class VocalSeparator:
     @staticmethod
     def is_model_available() -> bool:
         cache_dir = get_audio_separator_model_dir()
-        direct = cache_dir / _ROFORMER_MODEL
-        if direct.exists() and direct.stat().st_size > 0:
-            return True
-        for path in cache_dir.rglob(_ROFORMER_MODEL):
-            if path.is_file() and path.stat().st_size > 0:
-                return True
-        return False
+        required = ROFORMER_REQUIRED_MODELS + KARAOKE_REQUIRED_MODELS
+        return all(_find_existing_model(cache_dir, model_name) is not None for model_name in required)
 
     @staticmethod
     def _get_model_cache_dir() -> str:
-        """返回模型缓存目录"""
-        cache_dir = get_audio_separator_model_dir()
-        return str(cache_dir)
+        return str(get_audio_separator_model_dir())
+
+    def _run_separator(
+        self,
+        *,
+        model_name: str,
+        audio_path: str,
+        output_dir: Path,
+        progress_callback: Optional[Callable[[float, str], None]],
+        progress_start: float,
+        progress_span: float,
+        target_device: Optional[str] = None,
+    ) -> list[object]:
+        Separator = get_separator_cls()
+        separator = None
+
+        def _progress(local: float, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(progress_start + local * progress_span, message)
+
+        def _after_load(active_separator) -> None:
+            device = getattr(active_separator, "torch_device", "unknown")
+            logger.info("Loaded audio-separator model %s on %s", model_name, device)
+            _progress(0.15, f"loaded {model_name}")
+
+        def _action(active_separator):
+            self._check_cancelled()
+            _progress(0.25, f"separating with {model_name}")
+            return active_separator.separate(audio_path)
+
+        try:
+            separator, output_files, _used_cpu, _reason = execute_audio_separator_job(
+                Separator,
+                separator_kwargs={
+                    "output_dir": str(output_dir),
+                    "model_file_dir": self._get_model_cache_dir(),
+                    "output_format": "WAV",
+                    "use_soundfile": True,
+                    "mdxc_params": dict(MDXC_QUALITY_PARAMS),
+                },
+                model_name=model_name,
+                action=_action,
+                logger=logger,
+                progress_callback=progress_callback,
+                fallback_progress=(
+                    progress_start,
+                    self._pt("progress.cpu_retry"),
+                ),
+                target_device=target_device,
+                after_load=_after_load,
+            )
+            _progress(1.0, f"finished {model_name}")
+            return list(output_files or [])
+        finally:
+            if separator is not None:
+                try:
+                    del separator
+                except Exception:
+                    logger.debug("Failed to release audio-separator instance", exc_info=True)
+            clear_gpu_memory()
 
     def separate(
         self,
@@ -88,277 +324,122 @@ class VocalSeparator:
         output_dir: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, str]:
-        """
-        分离音频为人声和伴奏。
-
-        参数:
-            audio_path: 输入音频路径
-            output_dir: 输出目录
-            progress_callback: 进度回调 (progress 0-1, message)
-
-        返回:
-            {"vocals": vocals_path, "no_vocals": accompaniment_path}
-        """
-        from src.utils.gpu_utils import clear_gpu_memory
-        Separator = get_separator_cls()
-
+        """分离音频为人声、伴奏，并额外输出主唱/和声感知 stem。"""
         self._cancelled = False
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
         stem = Path(Path(audio_path).name).stem
 
         if progress_callback:
             progress_callback(0.0, self._pt("progress.loading_vocal_separator"))
 
-        separator = None
+        primary_dir = output_path / "_vocal_rvc"
+        karaoke_dir = output_path / "_karaoke"
+        primary_dir.mkdir(parents=True, exist_ok=True)
+        karaoke_dir.mkdir(parents=True, exist_ok=True)
+
+        vocals_with_harmony_path = output_path / f"{stem}_vocals_with_harmony.wav"
+        accompaniment_path = output_path / f"{stem}_accompaniment.wav"
+        original_vocals_path = output_path / f"{stem}_original_vocals.wav"
+        backing_vocals_path = output_path / f"{stem}_backing_vocals.wav"
+        accompaniment_with_harmony_path = output_path / f"{stem}_accompaniment_with_harmony.wav"
 
         try:
-            # 创建 Separator 实例
-            load_start = time.time()
-            logger.info("正在下载/加载 BS-RoFormer 预训练模型...")
-
-            # 通过 soundfile 获取音频时长用于估算进度
-            try:
-                import soundfile as sf
-                info = sf.info(audio_path)
-                duration_sec = info.duration
-            except Exception:
-                duration_sec = 180.0  # 默认估算 3 分钟
-
-            actual_device = "unknown"
-            sep_elapsed = 0.0
-
-            def _progress_ticker(done_event: threading.Event, start_time: float, is_cpu: bool):
-                """基于已用时间估算进度，每 3 秒更新一次"""
-                if is_cpu:
-                    speed_est = 0.15
-                else:
-                    speed_est = 3.0
-                estimated_total = duration_sec / speed_est
-                while not done_event.wait(3.0):
-                    try:
-                        elapsed = time.time() - start_time
-                        pct = min(
-                            0.95,
-                            elapsed / max(estimated_total, 1)
-                        )
-                        # 映射到 0.2 ~ 0.8 范围（与其他回调点一致）
-                        local_progress = 0.2 + pct * 0.6
-                        remaining = max(0, estimated_total - elapsed)
-                        if progress_callback:
-                            progress_callback(
-                                local_progress,
-                                f"{self._pt('progress.separating_vocals_accompaniment_detail')} "
-                                f"{self._pt('progress.elapsed_remaining', elapsed=f'{elapsed:.0f}', remaining=f'{remaining:.0f}')}"
-                            )
-                        logger.debug(
-                            f"BS-RoFormer 推理中: {elapsed:.0f}s / "
-                            f"~{estimated_total:.0f}s 估计"
-                        )
-                    except Exception as e:
-                        logger.warning(f"进度更新失败: {e}")
-
-            def _after_load(active_separator):
-                nonlocal actual_device
-                actual_device = getattr(active_separator, 'torch_device', 'unknown')
-                logger.info(
-                    f"BS-RoFormer 模型加载完成: "
-                    f"耗时={time.time() - load_start:.1f}s, "
-                    f"设备={actual_device}"
-                )
-
-            def _run_separation(active_separator):
-                nonlocal sep_elapsed
-                self._check_cancelled()
-
-                if progress_callback:
-                    progress_callback(0.2, self._pt("progress.separating_vocals_accompaniment_detail"))
-
-                logger.info(f"开始分离: {audio_path}")
-                sep_start = time.time()
-                done_event = threading.Event()
-                ticker = None
-                is_cpu = str(getattr(active_separator, 'torch_device', 'unknown')) == "cpu"
-
-                if progress_callback:
-                    ticker = threading.Thread(
-                        target=_progress_ticker,
-                        args=(done_event, sep_start, is_cpu),
-                        daemon=True,
-                    )
-                    ticker.start()
-
-                try:
-                    return active_separator.separate(audio_path)
-                finally:
-                    sep_elapsed = time.time() - sep_start
-                    done_event.set()
-                    if ticker is not None:
-                        ticker.join(timeout=2)
-
-            separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
-                Separator,
-                separator_kwargs={
-                    "output_dir": output_dir,
-                    "model_file_dir": self._get_model_cache_dir(),
-                    "output_format": "WAV",
-                },
-                model_name=_ROFORMER_MODEL,
-                action=_run_separation,
-                logger=logger,
-                progress_callback=progress_callback,
-                fallback_progress=(0.05, self._pt("progress.cpu_retry")),
-                after_load=_after_load,
-            )
-
-            speed_ratio = (
-                duration_sec / sep_elapsed if sep_elapsed > 0 else 0
-            )
             logger.info(
-                f"BS-RoFormer 推理完成: 耗时={sep_elapsed:.1f}s, "
-                f"速度={speed_ratio:.2f}x 实时"
+                "Starting quality-first vocal split: primary=%s primary_device=%s karaoke=%s karaoke_device=%s mdxc=%s",
+                ROFORMER_MODEL,
+                self.primary_device or "auto",
+                KARAOKE_MODEL,
+                self.karaoke_device or "auto",
+                MDXC_QUALITY_PARAMS,
             )
 
+            primary_outputs = self._run_separator(
+                model_name=ROFORMER_MODEL,
+                audio_path=audio_path,
+                output_dir=primary_dir,
+                progress_callback=progress_callback,
+                progress_start=0.02,
+                progress_span=0.50,
+                target_device=self.primary_device,
+            )
+            primary_paths = _move_role_output(
+                primary_outputs,
+                primary_dir,
+                _classify_vocal_rvc_output,
+                {
+                    "vocals": vocals_with_harmony_path,
+                    "accompaniment": accompaniment_path,
+                },
+            )
             self._check_cancelled()
 
-            # 检查 separator 是否返回了有效输出
-            if not output_files:
-                raise RuntimeError(
-                    "audio-separator 未返回任何输出文件，"
-                    "分离可能已静默失败，请检查日志"
-                )
+            karaoke_outputs = self._run_separator(
+                model_name=KARAOKE_MODEL,
+                audio_path=str(primary_paths["vocals"]),
+                output_dir=karaoke_dir,
+                progress_callback=progress_callback,
+                progress_start=0.52,
+                progress_span=0.34,
+                target_device=self.karaoke_device,
+            )
+            _move_role_output(
+                karaoke_outputs,
+                karaoke_dir,
+                _classify_karaoke_output,
+                {
+                    "lead": original_vocals_path,
+                    "backing": backing_vocals_path,
+                },
+            )
+            self._check_cancelled()
 
             if progress_callback:
-                progress_callback(0.8, self._pt("progress.saving_separation_results"))
-
-            # audio-separator 输出文件名含 (Vocals) / (Instrumental) 后缀
-            # 需要重命名为统一格式
-            vocals_path = os.path.join(
-                output_dir, f"{stem}_vocals.wav"
-            )
-            accompaniment_path = os.path.join(
-                output_dir, f"{stem}_accompaniment.wav"
+                progress_callback(0.90, self._pt("progress.saving_separation_results"))
+            _mix_backing_into_accompaniment(
+                backing_vocals_path=backing_vocals_path,
+                accompaniment_path=accompaniment_path,
+                output_path=accompaniment_with_harmony_path,
             )
 
-            # 解析 output_files 返回值为完整路径
-            resolved_files = []
-            for fpath in output_files:
-                fpath_str = os.path.normpath(str(fpath))
-                if not os.path.isabs(fpath_str):
-                    fpath_str = os.path.join(output_dir, fpath_str)
-                resolved_files.append(fpath_str)
+            for path in (
+                vocals_with_harmony_path,
+                accompaniment_path,
+                original_vocals_path,
+                accompaniment_with_harmony_path,
+            ):
+                if not path.exists() or path.stat().st_size <= 0:
+                    raise RuntimeError(f"separator did not create a valid output file: {path}")
 
-            # 如果 output_files 中的路径不存在，回退扫描 output_dir
-            # （应对 Windows 路径编码/特殊字符导致的不一致）
-            any_exists = any(os.path.exists(f) for f in resolved_files)
-            if not any_exists:
-                logger.warning(
-                    "output_files 中的路径均不存在，回退扫描 output_dir"
-                )
-                resolved_files = []
-                try:
-                    for fname in os.listdir(output_dir):
-                        if fname.lower().endswith(".wav"):
-                            resolved_files.append(
-                                os.path.join(output_dir, fname)
-                            )
-                except OSError as e:
-                    logger.error(f"扫描 output_dir 失败: {e}")
-                logger.info(
-                    f"output_dir 中发现的 WAV 文件: {resolved_files}"
-                )
-
-            vocals_found = False
-            instrumental_found = False
-
-            for fpath_str in resolved_files:
-                if not os.path.exists(fpath_str):
-                    logger.debug(f"文件不存在，跳过: {fpath_str}")
-                    continue
-                fname_lower = os.path.basename(fpath_str).lower()
-                if (
-                    "vocal" in fname_lower
-                    and "instrumental" not in fname_lower
-                    and not vocals_found
-                ):
-                    vocals_found = True
-                    if os.path.abspath(fpath_str).lower() != os.path.abspath(vocals_path).lower():
-                        os.replace(fpath_str, vocals_path)
-                elif (
-                    "instrumental" in fname_lower
-                    and not instrumental_found
-                ):
-                    instrumental_found = True
-                    if os.path.abspath(fpath_str).lower() != os.path.abspath(accompaniment_path).lower():
-                        os.replace(fpath_str, accompaniment_path)
-
-            if not vocals_found or not instrumental_found:
-                logger.warning(
-                    f"audio-separator 输出文件匹配异常: "
-                    f"resolved={resolved_files}, "
-                    f"vocals_found={vocals_found}, "
-                    f"instrumental_found={instrumental_found}"
-                )
-                # 回退：将未匹配的文件按顺序分配
-                for fpath_str in resolved_files:
-                    if not os.path.exists(fpath_str):
-                        continue
-                    if os.path.abspath(fpath_str).lower() in (
-                        os.path.abspath(vocals_path).lower(),
-                        os.path.abspath(accompaniment_path).lower(),
-                    ):
-                        continue
-                    if (
-                        not instrumental_found
-                        and not os.path.exists(accompaniment_path)
-                    ):
-                        os.replace(fpath_str, accompaniment_path)
-                        instrumental_found = True
-                    elif (
-                        not vocals_found
-                        and not os.path.exists(vocals_path)
-                    ):
-                        os.replace(fpath_str, vocals_path)
-                        vocals_found = True
-
-            if not os.path.exists(vocals_path):
-                raise RuntimeError(
-                    f"人声文件未找到: {vocals_path}, "
-                    f"audio-separator 输出: {output_files}"
-                )
-            if not os.path.exists(accompaniment_path):
-                raise RuntimeError(
-                    f"伴奏文件未找到: {accompaniment_path}, "
-                    f"audio-separator 输出: {output_files}"
-                )
-
-            logger.info(f"人声已保存: {vocals_path}")
-            logger.info(f"伴奏已保存: {accompaniment_path}")
+            logger.info("Vocal split complete: vocals_with_harmony=%s", vocals_with_harmony_path)
+            logger.info("Vocal split complete: accompaniment=%s", accompaniment_path)
+            logger.info("Vocal split complete: original_vocals=%s", original_vocals_path)
+            logger.info(
+                "Vocal split complete: accompaniment_with_harmony=%s",
+                accompaniment_with_harmony_path,
+            )
         except InterruptedError:
             raise
-        except RuntimeError as e:
-            if is_unsupported_cuda_architecture_error(e):
-                friendly = rewrite_cuda_runtime_error(e)
-                logger.error(f"人声分离 CUDA 架构不兼容:\n{friendly}")
-                raise RuntimeError(f"人声分离失败（GPU 不兼容）:\n{friendly}") from e
-            logger.error(f"音频分离失败: {e}")
-            raise RuntimeError(f"音频分离失败: {e}") from e
-        except Exception as e:
-            logger.error(f"音频分离失败: {e}")
-            raise RuntimeError(f"音频分离失败: {e}") from e
+        except RuntimeError as exc:
+            if is_unsupported_cuda_architecture_error(exc):
+                friendly = rewrite_cuda_runtime_error(exc)
+                logger.error("人声分离 CUDA 架构不兼容:\n%s", friendly)
+                raise RuntimeError(f"人声分离失败（GPU 不兼容）:\n{friendly}") from exc
+            logger.error("音频分离失败: %s", exc)
+            raise RuntimeError(f"音频分离失败: {exc}") from exc
+        except Exception as exc:
+            logger.error("音频分离失败: %s", exc)
+            raise RuntimeError(f"音频分离失败: {exc}") from exc
         finally:
-            # 无论成功或失败都释放资源
-            try:
-                if separator is not None:
-                    del separator
-            except Exception as e:
-                logger.debug("释放 separator 失败: %s", e)
             clear_gpu_memory()
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.separation_complete"))
 
         return {
-            "vocals": vocals_path,
-            "no_vocals": accompaniment_path,
+            "vocals": str(vocals_with_harmony_path),
+            "no_vocals": str(accompaniment_path),
+            "original_vocals": str(original_vocals_path),
+            "vocals_with_harmony": str(vocals_with_harmony_path),
+            "accompaniment_with_harmony": str(accompaniment_with_harmony_path),
         }

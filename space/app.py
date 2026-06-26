@@ -6,19 +6,21 @@ import logging
 import os
 import sys
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 sys.setrecursionlimit(3000)
 
+APP_TEMP_DIR = tempfile.gettempdir()
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["ABSL_MIN_LOG_LEVEL"] = "3"
-os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
-os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
+os.environ["NUMBA_CACHE_DIR"] = os.path.join(APP_TEMP_DIR, "numba_cache")
+os.environ["MPLCONFIGDIR"] = os.path.join(APP_TEMP_DIR, "matplotlib")
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, APP_DIR)
 
-LOG_FILE = "/tmp/midi_process.log"
+LOG_FILE = os.path.join(APP_TEMP_DIR, "midi_process.log")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,6 +127,7 @@ except ImportError:
 
 
 import gradio as gr
+from gradio.components.base import Component
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config, ProcessingStage
@@ -137,6 +140,29 @@ SPACE_TRANSLATOR = Translator(SPACE_LANGUAGE)
 
 def st(key: str, **kwargs) -> str:
     return SPACE_TRANSLATOR.t(key, **kwargs)
+
+
+def _normalize_json_schema_bool_nodes(schema):
+    if isinstance(schema, dict):
+        for key, value in list(schema.items()):
+            if key == "additionalProperties" and isinstance(value, bool):
+                schema[key] = {}
+            else:
+                _normalize_json_schema_bool_nodes(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _normalize_json_schema_bool_nodes(item)
+    return schema
+
+
+_original_component_api_info = Component.api_info
+
+
+def _patched_component_api_info(self):
+    return _normalize_json_schema_bool_nodes(deepcopy(_original_component_api_info(self)))
+
+
+Component.api_info = _patched_component_api_info
 
 
 MODE_IDS = (
@@ -160,25 +186,47 @@ STAGE_LABEL_KEYS = {
 
 
 def ensure_model_weights():
-    """确保 YourMT3+ 权重已下载。"""
-    try:
-        from src.utils.yourmt3_downloader import DEFAULT_MODEL, get_model_path
+    """确保 YourMT3+ 官方模式权重已下载。"""
+    ensure_yourmt3_code()
 
-        model_path = get_model_path(DEFAULT_MODEL)
+    from src.utils.yourmt3_downloader import OFFICIAL_YOURMT3_MODEL_KEYS, get_model_path
+
+    missing = []
+    for model_key in OFFICIAL_YOURMT3_MODEL_KEYS:
+        model_path = get_model_path(model_key)
         if model_path and model_path.exists():
-            logger.info("Model weights found: %s", model_path)
-            return
-    except Exception:
-        pass
+            logger.info("YourMT3+ model found: %s", model_path)
+        else:
+            missing.append(model_key)
 
-    logger.info("Model weights not found, downloading...")
-    try:
-        from download_sota_models import download_ultimate_moe
+    if not missing:
+        return
 
-        download_ultimate_moe()
-        logger.info("Model weights downloaded")
-    except Exception as exc:
-        logger.warning("Model download failed (will retry on first use): %s", exc)
+    logger.info("YourMT3+ model weights missing, downloading: %s", ", ".join(missing))
+    from download_sota_models import download_official_yourmt3_models
+
+    download_official_yourmt3_models()
+    logger.info("YourMT3+ model weights downloaded")
+
+
+def ensure_multistem_weights():
+    """确保 BS-RoFormer SW 六轨资源已下载并通过校验。"""
+    from download_multistem_model import download_multistem_model
+
+    model_path, config_path = download_multistem_model(printer=logger.info)
+    logger.info("BS-RoFormer SW checkpoint ready: %s", model_path)
+    logger.info("BS-RoFormer SW config ready: %s", config_path)
+
+
+def ensure_vocal_split_weights():
+    """确保 RoFormer vocal_rvc/karaoke 人声分离 ensemble 已下载。"""
+    from download_vocal_harmony_model import download_chorus_model
+    from download_vocal_model import download_vocal_model
+
+    vocal_model = download_vocal_model(printer=logger.info)
+    karaoke_model = download_chorus_model(printer=logger.info)
+    logger.info("RoFormer vocal_rvc ensemble ready: %s", vocal_model)
+    logger.info("RoFormer karaoke ensemble ready: %s", karaoke_model)
 
 
 try:
@@ -189,45 +237,31 @@ except Exception as exc:
 
 def ensure_aria_amt_weights():
     """确保 Aria-AMT 钢琴 checkpoint 已下载。"""
-    try:
-        from download_aria_amt_model import download_aria_model, is_aria_model_available
-    except Exception as exc:
-        logger.warning("Aria-AMT downloader unavailable: %s", exc)
-        return
+    from download_aria_amt_model import download_aria_model, is_aria_model_available
 
     if is_aria_model_available():
         logger.info("Aria-AMT checkpoint found")
         return
 
     logger.info("Aria-AMT checkpoint not found, downloading...")
-    try:
-        download_aria_model()
-        logger.info("Aria-AMT checkpoint downloaded")
-    except Exception as exc:
-        logger.warning("Aria-AMT checkpoint download failed: %s", exc)
+    download_aria_model()
+    logger.info("Aria-AMT checkpoint downloaded")
 
 
 def ensure_bytedance_piano_weights():
     """确保 ByteDance Piano 带踏板 checkpoint 已下载。"""
-    try:
-        from download_bytedance_piano_model import (
-            download_bytedance_piano_model,
-            is_bytedance_piano_model_available,
-        )
-    except Exception as exc:
-        logger.warning("ByteDance Piano downloader unavailable: %s", exc)
-        return
+    from download_bytedance_piano_model import (
+        download_bytedance_piano_model,
+        is_bytedance_piano_model_available,
+    )
 
     if is_bytedance_piano_model_available():
         logger.info("ByteDance Piano checkpoint found")
         return
 
     logger.info("ByteDance Piano checkpoint not found, downloading...")
-    try:
-        download_bytedance_piano_model()
-        logger.info("ByteDance Piano checkpoint downloaded")
-    except Exception as exc:
-        logger.warning("ByteDance Piano checkpoint download failed: %s", exc)
+    download_bytedance_piano_model()
+    logger.info("ByteDance Piano checkpoint downloaded")
 
 clear_logs()
 
@@ -247,9 +281,6 @@ def _convert_impl(
     audio_path,
     mode,
     vocal_split_merge_midi=False,
-    six_stem_only_selected=False,
-    six_stem_targets=None,
-    six_stem_vocal_harmony=False,
     progress=gr.Progress(),
 ):
     import datetime
@@ -283,13 +314,6 @@ def _convert_impl(
     config.vocal_split_merge_midi = bool(
         config.processing_mode == "vocal_split" and vocal_split_merge_midi
     )
-    if config.processing_mode == "six_stem_split" and six_stem_only_selected:
-        config.six_stem_targets = [str(stem).lower() for stem in (six_stem_targets or [])]
-    else:
-        config.six_stem_targets = []
-    config.six_stem_split_vocal_harmony = bool(
-        config.processing_mode == "six_stem_split" and six_stem_vocal_harmony
-    )
 
     if config.processing_mode == "piano_aria_amt":
         ensure_aria_amt_weights()
@@ -297,6 +321,10 @@ def _convert_impl(
         ensure_bytedance_piano_weights()
     elif config.processing_mode != "piano_transkun":
         ensure_model_weights()
+        if config.processing_mode == "six_stem_split":
+            ensure_multistem_weights()
+        elif config.processing_mode == "vocal_split":
+            ensure_vocal_split_weights()
 
     pipeline = MusicToMidiPipeline(config)
     output_dir = tempfile.mkdtemp(prefix="midi_output_")
@@ -379,18 +407,12 @@ if ZERO_GPU:
         audio_path,
         mode,
         vocal_split_merge_midi=False,
-        six_stem_only_selected=False,
-        six_stem_targets=None,
-        six_stem_vocal_harmony=False,
         progress=gr.Progress(),
     ):
         return _convert_impl(
             audio_path,
             mode,
             vocal_split_merge_midi,
-            six_stem_only_selected,
-            six_stem_targets,
-            six_stem_vocal_harmony,
             progress,
         )
 else:
@@ -398,18 +420,12 @@ else:
         audio_path,
         mode,
         vocal_split_merge_midi=False,
-        six_stem_only_selected=False,
-        six_stem_targets=None,
-        six_stem_vocal_harmony=False,
         progress=gr.Progress(),
     ):
         return _convert_impl(
             audio_path,
             mode,
             vocal_split_merge_midi,
-            six_stem_only_selected,
-            six_stem_targets,
-            six_stem_vocal_harmony,
             progress,
         )
 
@@ -420,20 +436,12 @@ def update_mode_info(mode):
     return st(f"space.mode.{mode}_info")
 
 
-def update_mode_controls(mode, only_selected):
+def update_mode_controls(mode):
     is_vocal = mode == "vocal_split"
-    is_six = mode == "six_stem_split"
     return (
         update_mode_info(mode),
         gr.update(visible=is_vocal),
-        gr.update(visible=is_six),
-        gr.update(visible=(is_six and bool(only_selected))),
-        gr.update(visible=is_six),
     )
-
-
-def update_six_stem_targets_visibility(mode, only_selected):
-    return gr.update(visible=(mode == "six_stem_split" and bool(only_selected)))
 
 
 CUSTOM_CSS = """
@@ -608,39 +616,13 @@ with gr.Blocks(
                 label=st("space.ui.vocal_split_merge_midi"),
                 visible=False,
             )
-            six_stem_only_selected = gr.Checkbox(
-                value=False,
-                label=st("space.ui.six_stem_only_selected"),
-                visible=False,
-            )
-            six_stem_targets = gr.CheckboxGroup(
-                choices=["bass", "drums", "guitar", "piano", "vocals", "other"],
-                value=["bass", "drums", "guitar", "piano", "vocals", "other"],
-                label=st("space.ui.six_stem_targets"),
-                info=st("space.ui.six_stem_targets_info"),
-                visible=False,
-            )
-            six_stem_vocal_harmony = gr.Checkbox(
-                value=False,
-                label=st("space.ui.six_stem_vocal_harmony"),
-                visible=False,
-            )
             mode_radio.change(
                 fn=update_mode_controls,
-                inputs=[mode_radio, six_stem_only_selected],
+                inputs=[mode_radio],
                 outputs=[
                     mode_info,
                     vocal_split_merge_midi,
-                    six_stem_only_selected,
-                    six_stem_targets,
-                    six_stem_vocal_harmony,
                 ],
-                api_name=False,
-            )
-            six_stem_only_selected.change(
-                fn=update_six_stem_targets_visibility,
-                inputs=[mode_radio, six_stem_only_selected],
-                outputs=[six_stem_targets],
                 api_name=False,
             )
 
@@ -685,9 +667,6 @@ with gr.Blocks(
             audio_input,
             mode_radio,
             vocal_split_merge_midi,
-            six_stem_only_selected,
-            six_stem_targets,
-            six_stem_vocal_harmony,
         ],
         outputs=[file_output, status_output],
         api_name="convert",
@@ -711,4 +690,5 @@ with gr.Blocks(
         "</div>"
     )
 
-demo.launch(server_name="0.0.0.0")
+if __name__ == "__main__":
+    demo.launch(server_name="0.0.0.0")

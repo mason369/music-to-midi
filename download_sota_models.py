@@ -1,5 +1,8 @@
 from pathlib import Path
 
+from download_multistem_model import download_multistem_model
+from download_vocal_harmony_model import download_chorus_model
+from download_vocal_model import download_vocal_model
 from src.utils.yourmt3_downloader import (
     OFFICIAL_YOURMT3_MODEL_KEYS,
     YOURMT3_MODELS,
@@ -35,5 +38,40 @@ def download_official_yourmt3_models() -> dict[str, Path]:
     return downloaded
 
 
+def download_sota_models() -> dict[str, object]:
+    """Prepare the full SOTA model set used by the app's public workflows."""
+    yourmt3_models = download_official_yourmt3_models()
+
+    print("")
+    print("Preparing BS-RoFormer SW Fixed six-stem separation assets...")
+    six_stem_model, six_stem_config = download_multistem_model()
+    print(f"ready: {six_stem_model}")
+    print(f"ready: {six_stem_config}")
+
+    print("")
+    print("Preparing RoFormer vocal_rvc ensemble models...")
+    vocal_model = download_vocal_model()
+    print(f"ready: {vocal_model}")
+
+    print("")
+    print("Preparing RoFormer karaoke ensemble models...")
+    karaoke_model = download_chorus_model()
+    print(f"ready: {karaoke_model}")
+
+    return {
+        "yourmt3": yourmt3_models,
+        "six_stem": {
+            "model": six_stem_model,
+            "config": six_stem_config,
+        },
+        "vocal_rvc": {
+            "primary_model": vocal_model,
+        },
+        "karaoke": {
+            "primary_model": karaoke_model,
+        },
+    }
+
+
 if __name__ == "__main__":
-    download_official_yourmt3_models()
+    download_sota_models()

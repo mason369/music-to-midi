@@ -3,8 +3,8 @@
 
 处理模式：
 1. SMART: YourMT3+ 直接对完整混音进行极致精度转写
-2. VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏后分别转写（可选合并 MIDI）
-3. SIX_STEM_SPLIT: BS-RoFormer SW 六声部分离后分别转写并合并 MIDI
+2. VOCAL_SPLIT: RoFormer vocal_rvc/karaoke ensembles 分离人声与伴奏后分别转写（可选合并 MIDI）
+3. SIX_STEM_SPLIT: BS-RoFormer SW 六声部分离后，用后续 MIDI 后端生成并路由 stem MIDI
 4. PIANO_TRANSKUN / PIANO_ARIA_AMT: 钢琴专用转写
 """
 import logging
@@ -64,10 +64,11 @@ class MusicToMidiPipeline:
     """
     音乐转MIDI主处理流水线
 
-    处理模式：
+        处理模式：
         SMART: 使用所选多乐器后端直接对完整混音进行转写。
-        VOCAL_SPLIT: BS-RoFormer 分离人声与伴奏，均使用 YourMT3+ 分别转写。
+        VOCAL_SPLIT: RoFormer vocal_rvc/karaoke ensembles 分离人声与伴奏，均使用多乐器后端分别转写。
                      可选额外输出一个“人声+伴奏合并 MIDI”。
+        SIX_STEM_SPLIT: BS-RoFormer SW 分离六个 stem，后续 MIDI 后端生成并路由 stem MIDI。
     """
 
     def __init__(self, config: Config):
@@ -463,58 +464,11 @@ class MusicToMidiPipeline:
         except Exception:
             return 0
 
-    def _apply_vocal_harmony_split(
-        self,
-        separated: Dict[str, str],
-        selected_stems: List[str],
-        output_dir: str,
-    ) -> tuple[Dict[str, str], List[str]]:
-        if not getattr(self.config, "six_stem_split_vocal_harmony", False):
-            return separated, selected_stems
-
-        if "vocals" not in separated or "vocals" not in selected_stems:
-            return separated, selected_stems
-
-        from src.core.vocal_harmony_separator import VocalHarmonySeparator
-
-        if not VocalHarmonySeparator.is_available():
-            raise RuntimeError(
-                "已启用主唱/和声分离，但 audio-separator 不可用。"
-                "请安装 audio-separator 后重试。"
-            )
-
-        if not VocalHarmonySeparator.is_model_available():
-            raise RuntimeError(
-                "已启用主唱/和声分离，但模型未下载。"
-                "请运行 python download_vocal_harmony_model.py 后重试。"
-            )
-
-        self._report(ProcessingStage.SEPARATION, 0.85, 0.27, self._pt("progress.separating_lead_harmony"))
-        harmony_separator = VocalHarmonySeparator(
-            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE)
-        )
-        vocal_split = harmony_separator.separate(
-            audio_path=separated["vocals"],
-            output_dir=output_dir,
-        )
-
-        merged_separated = dict(separated)
-        merged_separated.update(vocal_split)
-
-        expanded_stems: List[str] = []
-        for stem in selected_stems:
-            if stem == "vocals":
-                expanded_stems.extend(["lead_vocals", "harmony_vocals"])
-            else:
-                expanded_stems.append(stem)
-
-        return merged_separated, expanded_stems
-
     def _process_six_stem_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
         """
         六声部分离模式：
         1. BS-RoFormer SW 分离六个 stem（用于 WAV 输出）
-        2. 当前多乐器后端对完整混音做一次推理
+        2. 后续 MIDI 后端对完整混音做一次推理
         3. 按 GM 乐器族将转写结果拆分到对应 stem MIDI
         """
         from src.core.multi_stem_separator import SixStemSeparator, STEM_KEYS
@@ -529,7 +483,7 @@ class MusicToMidiPipeline:
         logger.info(f"开始处理(六声部分离模式): {audio_path}")
 
         if not SixStemSeparator.is_available():
-            raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator>=0.38.0")
+            raise RuntimeError("六声部分离不可用，请安装: pip install audio-separator==0.44.1 --no-deps")
         self._require_multi_instrument_available()
         transcriber = self._get_multi_instrument_transcriber()
         model_label = self._get_multi_instrument_label()
@@ -641,30 +595,12 @@ class MusicToMidiPipeline:
             stem_instrument[stem][program] = notes
         stem_drums["drums"] = drum_notes
 
-        requested_stems = [
-            str(stem).lower()
-            for stem in (getattr(self.config, "six_stem_targets", []) or [])
-        ]
-        selected_stems = [
-            stem for stem in STEM_KEYS if not requested_stems or stem in requested_stems
-        ] or list(STEM_KEYS)
-
-        separated, selected_stems = self._apply_vocal_harmony_split(
-            separated=separated,
-            selected_stems=selected_stems,
-            output_dir=output_dir,
-        )
-        self._check_cancelled()
-
-        for expanded_key in ("lead_vocals", "harmony_vocals"):
-            if expanded_key in selected_stems and expanded_key not in stem_instrument:
-                stem_instrument[expanded_key] = dict(stem_instrument.get("vocals", {}))
-                stem_drums[expanded_key] = dict(stem_drums.get("vocals", {}))
+        stem_names = list(STEM_KEYS)
 
         stem_midi_paths: Dict[str, str] = {}
-        total_selected = len(selected_stems)
+        total_stems = len(stem_names)
 
-        for stem_index, stem_name in enumerate(selected_stems):
+        for stem_index, stem_name in enumerate(stem_names):
             self._check_cancelled()
 
             if stem_name == "piano":
@@ -684,14 +620,13 @@ class MusicToMidiPipeline:
             )
 
             if stem_note_count == 0:
-                logger.info(f"[{stem_name}] 无音符，跳过 MIDI 生成")
-                continue
+                logger.info(f"[{stem_name}] 无音符，生成空 stem MIDI")
 
             stem_midi_path = str(Path(output_dir) / f"{input_stem}_{stem_name}.mid")
-            progress = 0.75 + (stem_index / total_selected) * 0.18
+            progress = 0.75 + (stem_index / total_stems) * 0.18
             self._report(
                 ProcessingStage.SYNTHESIS,
-                stem_index / total_selected,
+                stem_index / total_stems,
                 progress,
                 self._pt(
                     "progress.generating_stem_midi",
@@ -710,12 +645,7 @@ class MusicToMidiPipeline:
             stem_midi_paths[stem_name] = stem_midi_path
 
         self._check_cancelled()
-        merged_suffix = (
-            "all_stems_merged"
-            if not requested_stems and not getattr(self.config, "six_stem_split_vocal_harmony", False)
-            else "selected_stems_merged"
-        )
-        merged_midi_path = str(Path(output_dir) / f"{input_stem}_{merged_suffix}.mid")
+        merged_midi_path = str(Path(output_dir) / f"{input_stem}_all_stems_merged.mid")
         self._report(ProcessingStage.SYNTHESIS, 0.95, 0.93, self._pt("progress.merging_stem_midi"))
         merged_midi_path = self._merge_stem_midis(stem_midi_paths, merged_midi_path, tempo)
         self._report(ProcessingStage.SYNTHESIS, 1.0, 0.97, self._pt("progress.six_stem_midi_complete"))
@@ -865,6 +795,124 @@ class MusicToMidiPipeline:
             ),
         )
 
+    def _process_yourmt3_official(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Run the official YourMT3 Space path and keep its generated MIDI output."""
+        start_time = time.time()
+        audio_path = str(audio_path)
+        output_dir = str(output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        stem = Path(Path(audio_path).name).stem
+        midi_path = str(Path(output_dir) / f"{stem}.mid")
+        self._require_multi_instrument_available()
+
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.1,
+            self._pt("progress.loading_model", model="YourMT3+"),
+        )
+        self._check_cancelled()
+
+        def _yourmt3_cb(p: float, msg: str) -> None:
+            overall = 0.1 + p * 0.85
+            self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
+
+        try:
+            midi_path = self.yourmt3_transcriber.transcribe_to_midi(
+                audio_path=audio_path,
+                output_path=midi_path,
+                progress_callback=_yourmt3_cb,
+            )
+        except InterruptedError:
+            raise
+        except Exception as e:
+            logger.error("YourMT3+ transcription failed: %s", e, exc_info=True)
+            raise RuntimeError(
+                self._format_backend_error("YourMT3+", "转写失败", e)
+            ) from e
+        finally:
+            self._cleanup_multi_instrument_backend()
+
+        self._check_cancelled()
+        total_notes = self._count_midi_notes(midi_path)
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
+
+        processing_time = time.time() - start_time
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
+        )
+
+        return ProcessingResult(
+            midi_path=midi_path,
+            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
+            beat_info=None,
+            processing_time=processing_time,
+            total_notes=total_notes,
+        )
+
+    def _process_miros_official(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Run the official MIROS entrypoint and keep its generated MIDI output."""
+        start_time = time.time()
+        audio_path = str(audio_path)
+        output_dir = str(output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        stem = Path(Path(audio_path).name).stem
+        midi_path = str(Path(output_dir) / f"{stem}.mid")
+        self._require_multi_instrument_available()
+
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.1,
+            self._pt("progress.loading_model", model="MIROS"),
+        )
+        self._check_cancelled()
+
+        def _miros_cb(p: float, msg: str) -> None:
+            overall = 0.1 + p * 0.85
+            self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
+
+        try:
+            midi_path = self.miros_transcriber.transcribe_to_midi(
+                audio_path=audio_path,
+                output_path=midi_path,
+                progress_callback=_miros_cb,
+            )
+        except InterruptedError:
+            raise
+        except Exception as e:
+            logger.error("MIROS 转写失败: %s", e, exc_info=True)
+            raise RuntimeError(
+                self._format_backend_error("MIROS", "转写失败", e)
+            ) from e
+        finally:
+            self._cleanup_multi_instrument_backend()
+
+        self._check_cancelled()
+        total_notes = self._count_midi_notes(midi_path)
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
+
+        processing_time = time.time() - start_time
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
+        )
+
+        return ProcessingResult(
+            midi_path=midi_path,
+            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
+            beat_info=None,
+            processing_time=processing_time,
+            total_notes=total_notes,
+        )
+
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
         """智能模式：直接对完整混音进行多乐器转写。"""
         start_time = time.time()
@@ -875,9 +923,16 @@ class MusicToMidiPipeline:
 
         stem = Path(Path(audio_path).name).stem
         midi_path = str(Path(output_dir) / f"{stem}.mid")
-        transcriber = self._get_multi_instrument_transcriber()
         model_label = self._get_multi_instrument_label()
         self._report_general_backend_routing("smart")
+
+        model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MIROS.value:
+            return self._process_miros_official(audio_path, output_dir)
+        if model_name == MultiInstrumentModel.YOURMT3.value:
+            return self._process_yourmt3_official(audio_path, output_dir)
+
+        transcriber = self._get_multi_instrument_transcriber()
 
         logger.info(f"开始处理 (智能模式): {audio_path}")
 
@@ -981,7 +1036,7 @@ class MusicToMidiPipeline:
         )
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """人声分离模式：BS-RoFormer 分离 → 多乐器后端分别转写伴奏和人声"""
+        """人声分离模式：RoFormer ensembles 分离 → 多乐器后端分别转写伴奏和人声"""
         from src.core.vocal_separator import VocalSeparator
 
         start_time = time.time()
@@ -997,10 +1052,15 @@ class MusicToMidiPipeline:
         model_label = self._get_multi_instrument_label()
 
         # ── 检查依赖 ──
-        logger.info("正在检查依赖: BS-RoFormer, %s...", model_label)
+        logger.info("正在检查依赖: RoFormer vocal_rvc/karaoke ensembles, %s...", model_label)
         if not VocalSeparator.is_available():
             raise RuntimeError(
-                "人声分离不可用。请安装: pip install audio-separator>=0.38.0"
+                "人声分离不可用。请安装: pip install audio-separator==0.44.1 --no-deps"
+            )
+        if not VocalSeparator.is_model_available():
+            raise RuntimeError(
+                "人声分离模型未下载。请运行 python download_sota_models.py，"
+                "或分别运行 python download_vocal_model.py 和 python download_vocal_harmony_model.py 后重试。"
             )
         self._require_multi_instrument_available()
         logger.info("所有依赖检查通过")
@@ -1015,7 +1075,7 @@ class MusicToMidiPipeline:
         self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
         self._check_cancelled()
 
-        # ── 阶段2：BS-RoFormer 人声分离 (5-35%) ──
+        # ── 阶段2：RoFormer vocal_rvc/karaoke 人声分离 (5-35%) ──
         self._report(ProcessingStage.SEPARATION, 0.0, 0.05, self._pt("progress.separating_vocals_accompaniment"))
 
         separator = VocalSeparator(

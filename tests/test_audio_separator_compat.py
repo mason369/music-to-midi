@@ -3,7 +3,11 @@ from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.utils.audio_separator_compat import get_separator_cls, patch_separator_package_metadata
+from src.utils.audio_separator_compat import (
+    execute_audio_separator_job,
+    get_separator_cls,
+    patch_separator_package_metadata,
+)
 
 
 class _FakeSeparator:
@@ -58,6 +62,61 @@ class AudioSeparatorCompatTests(unittest.TestCase):
 
         activate_runtime.assert_called_once()
         self.assertIs(separator_cls, separator_module.Separator)
+
+    def test_execute_audio_separator_job_loads_ensemble_with_preset_constructor_kwarg(self):
+        seen = {}
+
+        class FakeSeparator:
+            def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
+                seen["ensemble_preset"] = ensemble_preset
+                seen["output_dir"] = output_dir
+                self.loaded = False
+
+            def load_model(self):
+                self.loaded = True
+                seen["load_model_args"] = ()
+
+        with patch("src.utils.audio_separator_compat.get_device", return_value="cpu"):
+            separator, result, used_cpu, reason = execute_audio_separator_job(
+                FakeSeparator,
+                separator_kwargs={
+                    "output_dir": "out",
+                    "model_file_dir": "models",
+                    "output_format": "WAV",
+                },
+                model_name="ensemble:vocal_rvc",
+                action=lambda active_separator: active_separator.loaded,
+                logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+            )
+
+        self.assertTrue(result)
+        self.assertFalse(used_cpu)
+        self.assertIsNone(reason)
+        self.assertTrue(separator.loaded)
+        self.assertEqual(seen["ensemble_preset"], "vocal_rvc")
+        self.assertEqual(seen["load_model_args"], ())
+
+    def test_execute_audio_separator_job_rejects_ensemble_when_runtime_lacks_kwarg(self):
+        class OldSeparator:
+            def __init__(self, output_dir, model_file_dir, output_format):
+                pass
+
+            def load_model(self, model_name):
+                raise AssertionError(model_name)
+
+        with patch("src.utils.audio_separator_compat.get_device", return_value="cpu"):
+            with self.assertRaisesRegex(RuntimeError, "ensemble_preset"):
+                execute_audio_separator_job(
+                    OldSeparator,
+                    separator_kwargs={
+                        "output_dir": "out",
+                        "model_file_dir": "models",
+                        "output_format": "WAV",
+                    },
+                    model_name="ensemble:karaoke",
+                    action=lambda active_separator: active_separator,
+                    logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+                )
 
 
 if __name__ == "__main__":

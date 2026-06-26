@@ -152,6 +152,23 @@ function Copy-Tree {
     return $true
 }
 
+function Assert-SixStemAssets {
+    param(
+        [string]$ModelDir,
+        [string]$PythonPath,
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ModelDir)) {
+        throw "Required BS-RoFormer SW six-stem assets missing: $Label directory was not resolved."
+    }
+
+    & $PythonPath (Join-Path $Root "download_multistem_model.py") --cache-dir $ModelDir --check-only
+    if ($LASTEXITCODE -ne 0) {
+        throw "Invalid BS-RoFormer SW six-stem assets in $Label: $ModelDir"
+    }
+}
+
 function Remove-PathIfExists {
     param(
         [string]$Path,
@@ -294,7 +311,9 @@ $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
+Assert-SixStemAssets -ModelDir $AudioSeparatorSource -PythonPath $Python -Label "audio-separator source"
 Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" -Required | Out-Null
+Assert-SixStemAssets -ModelDir $AudioSeparatorBundle -PythonPath $Python -Label "audio-separator bundle"
 Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required | Out-Null
 Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required | Out-Null
 Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required | Out-Null

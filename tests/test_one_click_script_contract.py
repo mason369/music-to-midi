@@ -33,6 +33,13 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("OFFICIAL_YOURMT3_MODEL_KEYS", script)
         self.assertIn("missing YourMT3+ official model modes", script)
 
+    def test_windows_launcher_checks_six_stem_assets(self):
+        script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("validate_multistem_assets", script)
+        self.assertIn("download_multistem_model.py", script)
+        self.assertIn("BS-RoFormer SW 六轨", script)
+
     def test_windows_installer_downloads_aria_amt_model(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
 
@@ -40,7 +47,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("Aria-AMT", script)
         self.assertIn("Python 3.11", script)
         self.assertIn("requirements-without-aria-amt.txt", script)
-        self.assertIn("audio-separator==0.41.1", script)
+        self.assertIn("audio-separator==0.44.1", script)
         self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', script)
 
     def test_windows_installer_downloads_bytedance_pedal_model(self):
@@ -64,8 +71,11 @@ class OneClickScriptContractTests(unittest.TestCase):
     def test_windows_installer_stops_when_required_model_downloads_fail(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("Write-Err \"YourMT3+ 官方模式模型下载失败\"", script)
-        self.assertIn("Write-Err \"BS-RoFormer 模型下载失败\"", script)
+        self.assertIn("Write-Err \"YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败\"", script)
+        self.assertIn("Write-Err \"RoFormer vocal_rvc ensemble 模型下载失败\"", script)
+        self.assertIn("Write-Err \"RoFormer karaoke ensemble 模型下载失败\"", script)
+        self.assertIn("download_multistem_model.py", script)
+        self.assertIn("download_vocal_harmony_model.py", script)
         self.assertNotIn("按 Ctrl+C 可跳过", script)
         self.assertNotIn("稍后手动执行", script)
 
@@ -109,6 +119,13 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("OFFICIAL_YOURMT3_MODEL_KEYS", script)
         self.assertIn("missing YourMT3+ official model modes", script)
 
+    def test_linux_launcher_checks_six_stem_assets(self):
+        script = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
+
+        self.assertIn("validate_multistem_assets", script)
+        self.assertIn("download_multistem_model.py", script)
+        self.assertIn("BS-RoFormer SW six-stem", script)
+
     def test_linux_installer_downloads_aria_amt_model_and_requires_python_311(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
 
@@ -116,7 +133,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("python3.11", script)
         self.assertIn("Aria-AMT", script)
         self.assertIn("requirements-without-aria-amt.txt", script)
-        self.assertIn("audio-separator==0.41.1", script)
+        self.assertIn("audio-separator==0.44.1", script)
         self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', script)
 
     def test_linux_installer_downloads_bytedance_pedal_model(self):
@@ -128,8 +145,11 @@ class OneClickScriptContractTests(unittest.TestCase):
     def test_linux_installer_stops_when_required_model_downloads_fail(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
 
-        self.assertIn('error "YourMT3+ 官方模式模型下载失败"', script)
-        self.assertIn('error "BS-RoFormer model download failed"', script)
+        self.assertIn('error "YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败"', script)
+        self.assertIn('error "RoFormer vocal_rvc ensemble model download failed"', script)
+        self.assertIn('error "RoFormer karaoke ensemble model download failed"', script)
+        self.assertIn("download_multistem_model.py", script)
+        self.assertIn("download_vocal_harmony_model.py", script)
         self.assertNotIn("Press Ctrl+C to skip", script)
         self.assertNotIn("可稍后手动运行", script)
 

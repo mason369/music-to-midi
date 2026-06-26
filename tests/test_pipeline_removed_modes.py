@@ -82,30 +82,11 @@ class TestRestoredProcessingModes(unittest.TestCase):
         self.assertIs(pipeline._get_multi_instrument_transcriber(), pipeline.yourmt3_transcriber)
         self.assertEqual(pipeline._get_multi_instrument_label(), "YourMT3+")
 
-    def test_requested_vocal_harmony_split_fails_when_model_is_missing(self):
-        config = Config(processing_mode="six_stem_split")
-        config.six_stem_split_vocal_harmony = True
-        pipeline = MusicToMidiPipeline(config)
+    def test_six_stem_experimental_vocal_harmony_branch_is_removed(self):
+        pipeline = MusicToMidiPipeline(Config(processing_mode="six_stem_split"))
 
-        class FakeVocalHarmonySeparator:
-            @staticmethod
-            def is_available():
-                return True
-
-            @staticmethod
-            def is_model_available():
-                return False
-
-        with patch(
-            "src.core.vocal_harmony_separator.VocalHarmonySeparator",
-            FakeVocalHarmonySeparator,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "download_vocal_harmony_model.py"):
-                pipeline._apply_vocal_harmony_split(
-                    separated={"vocals": "vocals.wav"},
-                    selected_stems=["vocals"],
-                    output_dir="output",
-                )
+        self.assertFalse(hasattr(pipeline, "_apply_vocal_harmony_split"))
+        self.assertIsNone(importlib.util.find_spec("src.core.vocal_harmony_separator"))
 
     def test_backend_error_message_does_not_duplicate_existing_prefix(self):
         message = MusicToMidiPipeline._format_backend_error(
@@ -140,6 +121,10 @@ class TestVocalSplitMode(unittest.TestCase):
 
                 @staticmethod
                 def is_available():
+                    return True
+
+                @staticmethod
+                def is_model_available():
                     return True
 
                 def set_cancel_check(self, _cancel_check):

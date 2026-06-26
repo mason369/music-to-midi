@@ -53,9 +53,15 @@ class Translator:
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         self.translations[lang_code] = json.load(f)
-                    logger.info(f"已加载翻译: {lang_code}")
+                    logger.info(self.t("startup.translation_loaded", language=lang_code))
                 except Exception as e:
-                    logger.error(f"加载 {lang_code} 失败: {e}")
+                    logger.error(
+                        self.t(
+                            "startup.translation_load_failed",
+                            language=lang_code,
+                            error=e,
+                        )
+                    )
                     self.translations[lang_code] = {}
 
     def set_language(self, language: str) -> bool:
@@ -70,10 +76,10 @@ class Translator:
         """
         if language in self.AVAILABLE_LANGUAGES:
             self.current_language = language
-            logger.info(f"语言已设置为: {language}")
+            logger.info(self.t("startup.language_set", language=language))
             return True
         else:
-            logger.warning(f"未知语言: {language}")
+            logger.warning(self.t("startup.unknown_language", language=language))
             return False
 
     def get_language(self) -> str:

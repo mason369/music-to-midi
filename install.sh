@@ -349,7 +349,7 @@ info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "rotary-embedding-torch==0.6.5" \
     "samplerate==0.1.0" \
     "six==1.17.0"
-"$PIP" install "audio-separator==0.41.1" --no-deps
+"$PIP" install "audio-separator==0.44.1" --no-deps
 success "audio-separator 安装完成"
 
 info "验证 Aria-AMT 钢琴后端..."
@@ -440,20 +440,27 @@ else
     success "  ffmpeg $FFMPEG_VER OK"
 fi
 
-# ───────────────────────── 下载 YourMT3+ 官方模式模型权重 ─────────────────────────
-info "下载 YourMT3+ 官方模式模型权重..."
+# ───────────────────────── 下载 YourMT3+ 官方模式、六轨与人声 ensemble 模型权重 ─────────────────────────
+info "下载 YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_sota_models.py"; then
-    error "YourMT3+ 官方模式模型下载失败"
+    error "YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败"
 fi
-success "YourMT3+ 官方模式模型权重下载完成"
+success "YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重下载完成"
 
-info "Downloading BS-RoFormer ep368 vocal model (~600MB)..."
+info "Verifying/downloading RoFormer vocal_rvc ensemble models..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_vocal_model.py"; then
-    error "BS-RoFormer model download failed"
+    error "RoFormer vocal_rvc ensemble model download failed"
 fi
-success "BS-RoFormer model download completed"
+success "RoFormer vocal_rvc ensemble models ready"
+
+info "Verifying/downloading RoFormer karaoke ensemble models..."
+
+if ! "$PYTHON" "${REPO_DIR}/download_vocal_harmony_model.py"; then
+    error "RoFormer karaoke ensemble model download failed"
+fi
+success "RoFormer karaoke ensemble models ready"
 
 # ───────────────────────── 创建启动脚本 ─────────────────────────
 info "创建启动脚本..."
@@ -522,15 +529,31 @@ fi
 
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
-from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
-from src.core.vocal_separator import VocalSeparator
-target = resolve_vocal_model_path()
-print('BS-RoFormer model:', target)
-print('audio-separator package:', VocalSeparator.is_available())
-print('BS-RoFormer model available:', VocalSeparator.is_model_available())
-exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
+from download_multistem_model import validate_multistem_assets
+model_path, config_path = validate_multistem_assets()
+print('BS-RoFormer SW checkpoint:', model_path)
+print('BS-RoFormer SW config:', config_path)
+exit(0)
 "; then
-    warn "BS-RoFormer model weights missing"; NEED_INSTALL=true
+    warn "BS-RoFormer SW six-stem model missing or checksum validation failed"
+    warn "  先运行: python download_multistem_model.py"
+    NEED_INSTALL=true
+fi
+
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from download_vocal_harmony_model import is_chorus_model_available, resolve_chorus_model_paths
+from download_vocal_model import is_vocal_model_available, resolve_vocal_model_paths
+from src.core.vocal_separator import VocalSeparator
+print('RoFormer vocal_rvc models:', [str(path) for path in resolve_vocal_model_paths()])
+print('RoFormer karaoke models:', [str(path) for path in resolve_chorus_model_paths()])
+print('audio-separator package:', VocalSeparator.is_available())
+print('RoFormer vocal_rvc available:', is_vocal_model_available())
+print('RoFormer karaoke available:', is_chorus_model_available())
+print('RoFormer full vocal split available:', VocalSeparator.is_model_available())
+exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_chorus_model_available() and VocalSeparator.is_model_available() else 1)
+"; then
+    warn "RoFormer vocal_rvc/karaoke ensemble weights missing"; NEED_INSTALL=true
 fi
 
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
@@ -613,12 +636,15 @@ echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YourMT3+ 官方模式模型权重"
-echo -e "  ${GREEN}✔${NC} BS-RoFormer ep368 人声模型"
+echo -e "  ${GREEN}✔${NC} BS-RoFormer SW 六轨模型"
+echo -e "  ${GREEN}✔${NC} RoFormer vocal_rvc/karaoke 人声 ensemble 模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
 echo ""
 echo -e "  ${BOLD}模型维护命令：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_multistem_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_vocal_harmony_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
 echo ""
 if $IS_WSL; then

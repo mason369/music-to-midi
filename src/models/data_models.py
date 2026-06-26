@@ -469,18 +469,13 @@ class Config:
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
-    # six_stem_split 模式：仅转写指定 stem（为空表示转写全部 six stems）
-    six_stem_targets: List[str] = field(default_factory=list)
-    # six_stem_split 模式：是否将 vocals 进一步分离为主唱/和声（实验近似）
-    six_stem_split_vocal_harmony: bool = False
-
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
     use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
     preserve_all_notes: bool = True          # 保留所有音符
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
-    yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_PS.value
+    yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
 
     # MIDI设置
     ticks_per_beat: int = 480
@@ -569,8 +564,6 @@ class Config:
             "multi_instrument_model": self.multi_instrument_model,
             "transcription_backend": self.transcription_backend,
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
-            "six_stem_targets": self.six_stem_targets,
-            "six_stem_split_vocal_harmony": self.six_stem_split_vocal_harmony,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,

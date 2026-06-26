@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import unittest
@@ -39,6 +40,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "six_stem_split",
             "piano_bytedance_pedal",
             "download_multistem_model.py",
+            "download_vocal_model.py",
+            "download_vocal_harmony_model.py",
             "download_aria_amt_model.py",
             "download_bytedance_piano_model.py",
         ):
@@ -51,9 +54,13 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn("audio_separator_runtime_packages = [", source_text)
         self.assertIn('"numpy==1.26.4"', source_text)
         self.assertIn('"onnxruntime==1.23.2"', source_text)
-        self.assertIn('"audio-separator==0.41.1"', source_text)
+        self.assertIn('"audio-separator==0.44.1"', source_text)
+        self.assertIn('"gradio==4.44.1"', source_text)
+        self.assertIn('"fastapi==0.115.2"', source_text)
+        self.assertIn('"starlette==0.40.0"', source_text)
         self.assertIn('" --no-deps"', source_text)
         self.assertNotIn('"audio-separator>=0.38.0"', source_text)
+        self.assertNotIn('"gradio>=4.44.0"', source_text)
 
     def test_colab_installs_miros_runtime_dependency_surface(self):
         source_text = self._load_notebook_source_text()
@@ -88,11 +95,80 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn("def update_yourmt3_model_info", source_text)
         self.assertIn("config.yourmt3_model = yourmt3_model_key", source_text)
         self.assertIn("logger.info(f\"YourMT3 model mode: {yourmt3_model_label} ({yourmt3_model_key})\")", source_text)
+        self.assertIn('model_info.get("features_zh")', source_text)
+        self.assertIn("COLAB_I18N", source_text)
+        self.assertIn('COLAB_LANGUAGE.startswith("zh")', source_text)
+        self.assertIn("ct('yourmt3.model_title')", source_text)
+        self.assertIn("ct('yourmt3.checkpoint')", source_text)
+        self.assertIn("ct('yourmt3.traits')", source_text)
+        self.assertIn('model_info.get("features_en")', source_text)
+        self.assertNotIn("**Checkpoint**", source_text)
+        self.assertNotIn("**Features**", source_text)
+
+    def test_colab_ui_labels_are_localized_without_model_descriptions_in_text_table(self):
+        source_text = self._load_notebook_source_text()
+
+        self.assertIn("COLAB_MODE_CHOICES", source_text)
+        self.assertIn('audio_input = gr.Audio(label=ct("ui.audio_input")', source_text)
+        self.assertIn('label=ct("ui.mode_label")', source_text)
+        self.assertIn('convert_btn = gr.Button(ct("ui.start")', source_text)
+        self.assertIn('status_output = gr.Textbox(label=ct("ui.status")', source_text)
+        self.assertIn('return mode in YOURMT3_PROCESSING_MODES', source_text)
+        self.assertIn("COLAB_MODE_INFO_TERMS", source_text)
+        self.assertIn('return ct(f"mode_info.{mode}", **COLAB_MODE_INFO_TERMS[mode])', source_text)
+        self.assertNotIn('return "**VOCAL_SPLIT**', source_text)
+        self.assertNotIn('return "**六声部分离 + 分别转写**', source_text)
+        self.assertNotIn('mode_mapping = {', source_text)
+
+        text_table_match = re.search(
+            r"COLAB_I18N = \{\n(?P<table>.*?)\n\}\n\n\n"
+            r"def ct",
+            source_text,
+            flags=re.S,
+        )
+        self.assertIsNotNone(text_table_match)
+        text_table = text_table_match.group("table")
+        colab_i18n = ast.literal_eval("{\n" + text_table + "\n}")
+        self.assertIn("zh_CN", colab_i18n)
+        self.assertIn("en_US", colab_i18n)
+        self.assertEqual(
+            set(colab_i18n["zh_CN"]),
+            set(colab_i18n["en_US"]),
+        )
+        for professional_phrase in (
+            "RoFormer vocal_rvc/karaoke ensemble",
+            "BS-RoFormer SW",
+            "bass/drums/guitar/piano/vocals/other",
+            "CC64",
+            "Perceiver-TF",
+            "multi-channel decoding",
+            "pitch-shift augmentation",
+            "MAESTRO",
+        ):
+            with self.subTest(professional_phrase=professional_phrase):
+                self.assertNotIn(professional_phrase, text_table)
+                if professional_phrase in {
+                    "RoFormer vocal_rvc/karaoke ensemble",
+                    "BS-RoFormer SW",
+                    "bass/drums/guitar/piano/vocals/other",
+                    "CC64",
+                }:
+                    self.assertIn(professional_phrase, source_text)
 
     def test_colab_model_preparation_does_not_mask_required_resource_failures(self):
         source_text = self._load_notebook_source_text()
 
         self.assertNotIn("资源准备失败，可稍后手动运行", source_text)
+
+    def test_colab_rejects_unknown_processing_mode_instead_of_falling_back(self):
+        source_text = self._load_notebook_source_text()
+
+        self.assertIn('"error.unknown_mode": "未知处理模式: {mode}"', source_text)
+        self.assertIn('"error.unknown_mode": "Unknown processing mode: {mode}"', source_text)
+        self.assertIn("if mode not in COLAB_MODE_IDS:", source_text)
+        self.assertIn('raise gr.Error(ct("error.unknown_mode", mode=mode))', source_text)
+        self.assertIn("config.processing_mode = mode", source_text)
+        self.assertNotIn('config.processing_mode = mode if mode in COLAB_MODE_IDS else "smart"', source_text)
 
     def test_notebook_preserves_preinstalled_torch_and_avoids_reinstall(self):
         source_text = self._load_notebook_source_text()

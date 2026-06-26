@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -37,8 +36,6 @@ class TrackPanel(QGroupBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_layout = TrackLayout(mode=ProcessingMode.SMART, tracks=[])
-        self._six_stem_order = ("bass", "drums", "guitar", "piano", "vocals", "other")
-        self._six_stem_checks = {}
         self._controls_enabled = True
         self._setup_ui()
 
@@ -149,12 +146,39 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_combo = QComboBox()
         self.yourmt3_model_combo.setStyleSheet(self._combo_style(260))
         self.yourmt3_model_combo.currentIndexChanged.connect(self._on_yourmt3_model_changed)
-        self._sync_yourmt3_model_options(YourMT3Model.YPTF_MOE_MULTI_PS.value)
+        self._sync_yourmt3_model_options(YourMT3Model.YPTF_MOE_MULTI_NOPS.value)
 
         yourmt3_model_row.addWidget(self._yourmt3_model_label)
         yourmt3_model_row.addWidget(self.yourmt3_model_combo)
         yourmt3_model_row.addStretch()
         main_layout.addWidget(self._yourmt3_model_row)
+
+        self.yourmt3_model_card = QFrame()
+        self.yourmt3_model_card.setObjectName("yourmt3ModelCard")
+        self.yourmt3_model_card.setStyleSheet("""
+            QFrame#yourmt3ModelCard {
+                border: 1px solid #2c4f7c;
+                border-radius: 6px;
+                background: #17243d;
+                margin: 1px 0 2px 0;
+            }
+        """)
+        yourmt3_model_card_layout = QVBoxLayout(self.yourmt3_model_card)
+        yourmt3_model_card_layout.setContentsMargins(10, 7, 10, 8)
+        yourmt3_model_card_layout.setSpacing(3)
+
+        self.yourmt3_model_title_label = QLabel()
+        self.yourmt3_model_title_label.setWordWrap(True)
+        self.yourmt3_model_title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.yourmt3_model_title_label.setStyleSheet("""
+            QLabel {
+                font-size: 11px;
+                color: #4a9eff;
+                font-weight: bold;
+                line-height: 135%;
+            }
+        """)
+        yourmt3_model_card_layout.addWidget(self.yourmt3_model_title_label)
 
         self.yourmt3_model_hint_label = QLabel()
         self.yourmt3_model_hint_label.setWordWrap(True)
@@ -163,53 +187,23 @@ class TrackPanel(QGroupBox):
             QLabel {
                 font-size: 10px;
                 color: #9fb3d9;
-                padding: 1px 6px 2px 6px;
                 line-height: 135%;
             }
         """)
-        main_layout.addWidget(self.yourmt3_model_hint_label)
+        yourmt3_model_card_layout.addWidget(self.yourmt3_model_hint_label)
+        main_layout.addWidget(self.yourmt3_model_card)
 
-        self._midi_track_mode_row = QWidget()
-        midi_mode_row = QHBoxLayout(self._midi_track_mode_row)
-        midi_mode_row.setContentsMargins(0, 0, 0, 0)
-        midi_mode_row.setSpacing(10)
-
-        self._midi_track_mode_label = QLabel(t("main.engine.track_mode_label") + ":")
-        self._midi_track_mode_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
-
-        self.midi_track_mode_combo = QComboBox()
-        self.midi_track_mode_combo.addItem(
-            t("main.engine.track_mode_multi"),
-            MidiTrackMode.MULTI_TRACK.value,
-        )
-        self.midi_track_mode_combo.addItem(
-            t("main.engine.track_mode_single"),
-            MidiTrackMode.SINGLE_TRACK.value,
-        )
-        self.midi_track_mode_combo.setStyleSheet(self._combo_style(240))
-
-        midi_mode_row.addWidget(self._midi_track_mode_label)
-        midi_mode_row.addWidget(self.midi_track_mode_combo)
-        midi_mode_row.addStretch()
-        main_layout.addWidget(self._midi_track_mode_row)
-
-        self.yourmt3_arch_hint_label = QLabel()
-        self.yourmt3_arch_hint_label.setWordWrap(True)
-        self.yourmt3_arch_hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.yourmt3_arch_hint_label.setStyleSheet("""
+        self.model_hint_label = QLabel()
+        self.model_hint_label.setWordWrap(True)
+        self.model_hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.model_hint_label.setStyleSheet("""
             QLabel {
                 font-size: 10px;
-                color: #d6c98a;
+                color: #d2c07a;
                 padding: 2px 6px 4px 6px;
                 line-height: 135%;
             }
         """)
-        main_layout.addWidget(self.yourmt3_arch_hint_label)
-
-        self.model_hint_label = QLabel()
-        self.model_hint_label.setWordWrap(True)
-        self.model_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.model_hint_label.setStyleSheet("font-size: 10px; color: #d2c07a; padding: 1px 0 2px 0;")
         main_layout.addWidget(self.model_hint_label)
 
         sep = QFrame()
@@ -217,31 +211,46 @@ class TrackPanel(QGroupBox):
         sep.setStyleSheet("background: #3a4a6a; margin: 4px 0;")
         main_layout.addWidget(sep)
 
+        self.model_info_card = QFrame()
+        self.model_info_card.setObjectName("modelInfoCard")
+        self.model_info_card.setStyleSheet("""
+            QFrame#modelInfoCard {
+                border: 1px solid #2f4567;
+                border-radius: 6px;
+                background: #18243a;
+                margin: 2px 0 2px 0;
+            }
+        """)
+        model_info_layout = QVBoxLayout(self.model_info_card)
+        model_info_layout.setContentsMargins(10, 7, 10, 8)
+        model_info_layout.setSpacing(3)
+
         self.mode_desc_label = QLabel()
-        self.mode_desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mode_desc_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.mode_desc_label.setWordWrap(True)
         self.mode_desc_label.setStyleSheet("""
             QLabel {
                 font-size: 11px;
                 color: #4a9eff;
                 font-weight: bold;
-                padding: 2px 0;
+                line-height: 135%;
             }
         """)
 
         self.hint_label = QLabel()
-        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.hint_label.setWordWrap(True)
         self.hint_label.setStyleSheet("""
             QLabel {
                 font-size: 10px;
-                color: #8892a0;
-                padding: 1px 0;
+                color: #9aa6bc;
+                line-height: 135%;
             }
         """)
 
-        main_layout.addWidget(self.mode_desc_label)
-        main_layout.addWidget(self.hint_label)
+        model_info_layout.addWidget(self.mode_desc_label)
+        model_info_layout.addWidget(self.hint_label)
+        main_layout.addWidget(self.model_info_card)
 
         self._vocal_split_options = QWidget()
         vocal_layout = QVBoxLayout(self._vocal_split_options)
@@ -253,39 +262,9 @@ class TrackPanel(QGroupBox):
         vocal_layout.addWidget(self._vocal_split_merge_check)
         main_layout.addWidget(self._vocal_split_options)
 
-        self._six_stem_options = QWidget()
-        six_layout = QVBoxLayout(self._six_stem_options)
-        six_layout.setContentsMargins(6, 4, 6, 2)
-        six_layout.setSpacing(4)
-
-        self._six_stem_only_selected_check = QCheckBox(t("main.mode.six_stem_only_selected"))
-        self._six_stem_only_selected_check.setChecked(False)
-        self._six_stem_only_selected_check.setStyleSheet("font-size: 10px; color: #b0b8c8; spacing: 4px;")
-        self._six_stem_only_selected_check.toggled.connect(self._update_mode_option_widgets)
-        six_layout.addWidget(self._six_stem_only_selected_check)
-
-        self._six_stem_vocal_harmony_check = QCheckBox(t("main.mode.six_stem_vocal_harmony"))
-        self._six_stem_vocal_harmony_check.setChecked(False)
-        self._six_stem_vocal_harmony_check.setStyleSheet("font-size: 10px; color: #b0b8c8; spacing: 4px;")
-        six_layout.addWidget(self._six_stem_vocal_harmony_check)
-
-        stem_grid = QGridLayout()
-        stem_grid.setContentsMargins(0, 0, 0, 0)
-        stem_grid.setSpacing(8)
-        for index, stem in enumerate(self._six_stem_order):
-            checkbox = QCheckBox(self._stem_label(stem))
-            checkbox.setChecked(True)
-            checkbox.setStyleSheet("font-size: 10px; color: #9aa6bc; spacing: 4px;")
-            checkbox.toggled.connect(self._ensure_at_least_one_stem_checked)
-            stem_grid.addWidget(checkbox, index // 3, index % 3)
-            self._six_stem_checks[stem] = checkbox
-        six_layout.addLayout(stem_grid)
-        main_layout.addWidget(self._six_stem_options)
-
         self.set_processing_mode(ProcessingMode.SMART.value)
         self.set_transcription_backend(MultiInstrumentModel.YOURMT3.value)
         self.set_multi_instrument_model(MultiInstrumentModel.YOURMT3.value)
-        self.set_midi_track_mode(MidiTrackMode.MULTI_TRACK.value)
         self._refresh_labels()
         self._update_mode_option_widgets()
 
@@ -320,12 +299,23 @@ class TrackPanel(QGroupBox):
         return t("main.mode.smart_tooltip")
 
     def _model_tooltip(self) -> str:
+        mode = self.get_processing_mode()
         backend = self.get_transcription_backend()
         if backend == TranscriptionBackend.ARIA_AMT.value:
             return t("main.engine.aria_amt_tooltip")
         if backend == MultiInstrumentModel.MIROS.value:
             return t("main.engine.miros_tooltip")
+        if mode in {ProcessingMode.VOCAL_SPLIT.value, ProcessingMode.SIX_STEM_SPLIT.value}:
+            return t("main.engine.yourmt3_midi_tooltip")
         return t("main.engine.yourmt3_tooltip")
+
+    def _model_label_text(self) -> str:
+        mode = self.get_processing_mode()
+        if mode == ProcessingMode.VOCAL_SPLIT.value:
+            return t("main.engine.midi_backend_label")
+        if mode == ProcessingMode.SIX_STEM_SPLIT.value:
+            return t("main.engine.stem_midi_backend_label")
+        return t("main.engine.active_label")
 
     def _mode_text(self) -> str:
         mode = self.get_processing_mode()
@@ -339,6 +329,10 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_aria_amt_desc")
         if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
             return t("main.mode.piano_bytedance_pedal_desc")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.MIROS.value:
+            return t("main.mode.smart_miros_desc")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value:
+            return t("main.mode.smart_yourmt3_desc")
         return t("main.mode.smart_desc")
 
     def _hint_text(self) -> str:
@@ -353,6 +347,10 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_aria_amt_hint")
         if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
             return t("main.mode.piano_bytedance_pedal_hint")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.MIROS.value:
+            return t("main.mode.smart_miros_hint")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value:
+            return t("main.mode.smart_yourmt3_hint")
         return t("main.mode.smart_hint")
 
     def _model_hint_text(self) -> str:
@@ -366,6 +364,10 @@ class TrackPanel(QGroupBox):
             ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         }:
             return t("main.engine.dedicated_mode_hint")
+        if mode == ProcessingMode.VOCAL_SPLIT.value:
+            if multi_model == MultiInstrumentModel.MIROS.value:
+                return t("main.engine.vocal_split_miros_midi_hint")
+            return t("main.engine.vocal_split_yourmt3_midi_hint")
         if backend == TranscriptionBackend.ARIA_AMT.value and mode == ProcessingMode.SIX_STEM_SPLIT.value:
             return t("main.engine.aria_amt_six_stem_hint")
         if backend == TranscriptionBackend.ARIA_AMT.value and multi_model == MultiInstrumentModel.MIROS.value:
@@ -382,22 +384,43 @@ class TrackPanel(QGroupBox):
 
     def _yourmt3_model_hint_text(self) -> str:
         model_info = YOURMT3_MODELS.get(self.get_yourmt3_model(), {})
-        if get_translator().get_language().startswith("zh"):
+        is_zh = get_translator().get_language().startswith("zh")
+        if is_zh:
             description = model_info.get("description") or model_info.get("ui_description") or ""
+            feature_items = model_info.get("features_zh") or model_info.get("features") or []
         else:
             description = model_info.get("ui_description") or model_info.get("description") or ""
-        features = ", ".join(model_info.get("features", []))
+            feature_items = model_info.get("features_en") or model_info.get("features") or []
+        features = "，".join(feature_items) if is_zh else ", ".join(feature_items)
+        checkpoint = model_info.get("checkpoint", "")
+        if checkpoint:
+            separator = "：" if is_zh else ": "
+            checkpoint_line = f"{t('main.engine.checkpoint_label')}{separator}{checkpoint}"
+        else:
+            checkpoint_line = ""
         if features:
-            return f"{description}\nFeatures: {features}"
-        return description
+            separator = "：" if is_zh else ": "
+            feature_line = f"{t('main.engine.model_traits_label')}{separator}{features}"
+            return "\n".join(part for part in [description, checkpoint_line, feature_line] if part)
+        return "\n".join(part for part in [description, checkpoint_line] if part)
+
+    def _yourmt3_model_title_text(self) -> str:
+        model_info = YOURMT3_MODELS.get(self.get_yourmt3_model(), {})
+        model_label = model_info.get("ui_label") or model_info.get("name") or self.get_yourmt3_model()
+        return f"♪ YourMT3+ — {model_label}"
 
     def _model_options(self, mode: str | None = None) -> list[tuple[str, str]]:
         mode = mode or self.get_processing_mode()
         if mode == ProcessingMode.SIX_STEM_SPLIT.value:
             return [
-                (t("main.engine.aria_amt"), TranscriptionBackend.ARIA_AMT.value),
-                (t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
-                (t("main.engine.miros"), MultiInstrumentModel.MIROS.value),
+                (t("main.engine.aria_amt_piano_stem"), TranscriptionBackend.ARIA_AMT.value),
+                (t("main.engine.yourmt3_midi"), MultiInstrumentModel.YOURMT3.value),
+                (t("main.engine.miros_midi"), MultiInstrumentModel.MIROS.value),
+            ]
+        if mode == ProcessingMode.VOCAL_SPLIT.value:
+            return [
+                (t("main.engine.yourmt3_midi"), MultiInstrumentModel.YOURMT3.value),
+                (t("main.engine.miros_midi"), MultiInstrumentModel.MIROS.value),
             ]
         return [
             (t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
@@ -427,7 +450,7 @@ class TrackPanel(QGroupBox):
         valid_values = {model.value for model in YourMT3Model}
         preferred = str(preferred_model or "").strip().lower()
         if preferred not in valid_values:
-            preferred = YourMT3Model.YPTF_MOE_MULTI_PS.value
+            preferred = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
 
         previous_blocked = self.yourmt3_model_combo.blockSignals(True)
         try:
@@ -443,17 +466,17 @@ class TrackPanel(QGroupBox):
                 self.yourmt3_model_combo.addItem(info.get("ui_label", model.value), model.value)
             index = self.yourmt3_model_combo.findData(preferred)
             if index < 0:
-                index = self.yourmt3_model_combo.findData(YourMT3Model.YPTF_MOE_MULTI_PS.value)
+                index = self.yourmt3_model_combo.findData(YourMT3Model.YPTF_MOE_MULTI_NOPS.value)
             self.yourmt3_model_combo.setCurrentIndex(index)
         finally:
             self.yourmt3_model_combo.blockSignals(previous_blocked)
 
     def _refresh_labels(self):
+        self._model_label.setText(self._model_label_text() + ":")
         self.mode_combo.setToolTip(self._mode_tooltip())
         self.model_combo.setToolTip(self._model_tooltip())
         self.yourmt3_model_combo.setToolTip(t("main.engine.yourmt3_model_tooltip"))
-        self.midi_track_mode_combo.setToolTip(t("main.engine.track_mode_tooltip"))
-        self.yourmt3_arch_hint_label.setText(t("main.engine.yourmt3_arch_hint"))
+        self.yourmt3_model_title_label.setText(self._yourmt3_model_title_text())
         self.yourmt3_model_hint_label.setText(self._yourmt3_model_hint_text())
         self.mode_desc_label.setText(self._mode_text())
         self.hint_label.setText(self._hint_text())
@@ -487,65 +510,24 @@ class TrackPanel(QGroupBox):
         self._selected_multi_instrument_model = model_name
 
     def get_yourmt3_model(self) -> str:
-        return self.yourmt3_model_combo.currentData() or YourMT3Model.YPTF_MOE_MULTI_PS.value
+        return self.yourmt3_model_combo.currentData() or YourMT3Model.YPTF_MOE_MULTI_NOPS.value
 
     def set_yourmt3_model(self, model_name: str):
         self._sync_yourmt3_model_options(model_name)
         self._refresh_labels()
 
     def get_midi_track_mode(self) -> str:
-        if self.get_multi_instrument_model() != MultiInstrumentModel.YOURMT3.value:
-            return MidiTrackMode.MULTI_TRACK.value
-        return self.midi_track_mode_combo.currentData() or MidiTrackMode.MULTI_TRACK.value
+        return MidiTrackMode.MULTI_TRACK.value
 
     def set_midi_track_mode(self, mode: str):
-        index = self.midi_track_mode_combo.findData(mode)
-        if index < 0:
-            index = self.midi_track_mode_combo.findData(MidiTrackMode.MULTI_TRACK.value)
-        self.midi_track_mode_combo.setCurrentIndex(index)
+        # Kept as a no-op for older saved Config objects and tests that still call it.
+        return None
 
     def get_vocal_split_merge_midi(self) -> bool:
         return (
             self.get_processing_mode() == ProcessingMode.VOCAL_SPLIT.value
             and self._vocal_split_merge_check.isChecked()
         )
-
-    def get_selected_six_stem_targets(self) -> list[str]:
-        if self.get_processing_mode() != ProcessingMode.SIX_STEM_SPLIT.value:
-            return []
-        if not self._six_stem_only_selected_check.isChecked():
-            return []
-        return [
-            stem
-            for stem in self._six_stem_order
-            if self._six_stem_checks[stem].isChecked()
-        ]
-
-    def get_six_stem_vocal_harmony(self) -> bool:
-        return (
-            self.get_processing_mode() == ProcessingMode.SIX_STEM_SPLIT.value
-            and self._six_stem_vocal_harmony_check.isChecked()
-        )
-
-    def _stem_label(self, stem: str) -> str:
-        labels = {
-            "bass": t("main.tracks.bass"),
-            "drums": t("main.tracks.drums"),
-            "guitar": t("main.tracks.guitar"),
-            "piano": t("main.tracks.piano"),
-            "vocals": t("main.tracks.vocals"),
-            "other": t("main.tracks.other"),
-        }
-        return labels.get(stem, stem)
-
-    def _ensure_at_least_one_stem_checked(self, _checked: bool):
-        if not self._six_stem_only_selected_check.isChecked():
-            return
-        if any(check.isChecked() for check in self._six_stem_checks.values()):
-            return
-        sender = self.sender()
-        if isinstance(sender, QCheckBox):
-            sender.setChecked(True)
 
     def _update_mode_option_widgets(self):
         mode = self.get_processing_mode()
@@ -555,42 +537,29 @@ class TrackPanel(QGroupBox):
             ProcessingMode.SIX_STEM_SPLIT.value,
         }
         is_vocal_mode = mode == ProcessingMode.VOCAL_SPLIT.value
-        is_six_stem_mode = mode == ProcessingMode.SIX_STEM_SPLIT.value
-        shows_midi_track_mode = (
-            uses_model_selector
+        shows_yourmt3_smart_controls = (
+            mode == ProcessingMode.SMART.value
             and self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value
         )
-        shows_yourmt3_model = shows_midi_track_mode
+        shows_yourmt3_model = shows_yourmt3_smart_controls
 
         self._model_row.setVisible(uses_model_selector)
         self._yourmt3_model_row.setVisible(shows_yourmt3_model)
+        self.yourmt3_model_card.setVisible(shows_yourmt3_model)
+        self.yourmt3_model_title_label.setVisible(shows_yourmt3_model)
         self.yourmt3_model_hint_label.setVisible(shows_yourmt3_model)
-        self._midi_track_mode_row.setVisible(shows_midi_track_mode)
-        self.yourmt3_arch_hint_label.setVisible(shows_midi_track_mode)
         self._vocal_split_options.setVisible(is_vocal_mode)
-        self._six_stem_options.setVisible(is_six_stem_mode)
-
-        selected_stems_enabled = (
-            self._controls_enabled
-            and is_six_stem_mode
-            and self._six_stem_only_selected_check.isChecked()
-        )
-        for check in self._six_stem_checks.values():
-            check.setEnabled(selected_stems_enabled)
 
         self.mode_combo.setEnabled(self._controls_enabled)
         self.model_combo.setEnabled(self._controls_enabled and uses_model_selector)
         self.yourmt3_model_combo.setEnabled(self._controls_enabled and shows_yourmt3_model)
-        self.midi_track_mode_combo.setEnabled(self._controls_enabled and shows_midi_track_mode)
         self._vocal_split_merge_check.setEnabled(self._controls_enabled and is_vocal_mode)
-        self._six_stem_only_selected_check.setEnabled(self._controls_enabled and is_six_stem_mode)
-        self._six_stem_vocal_harmony_check.setEnabled(self._controls_enabled and is_six_stem_mode)
         self._mode_label.setEnabled(self._controls_enabled)
         self._model_label.setEnabled(self._controls_enabled and uses_model_selector)
         self._yourmt3_model_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
-        self._midi_track_mode_label.setEnabled(self._controls_enabled and shows_midi_track_mode)
+        self.yourmt3_model_card.setEnabled(self._controls_enabled and shows_yourmt3_model)
+        self.yourmt3_model_title_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
         self.yourmt3_model_hint_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
-        self.yourmt3_arch_hint_label.setEnabled(self._controls_enabled and shows_midi_track_mode)
         self._refresh_labels()
 
     def set_processing_controls_enabled(self, enabled: bool):
@@ -609,9 +578,8 @@ class TrackPanel(QGroupBox):
     def update_translations(self):
         self.setTitle(t("main.tracks.title"))
         self._mode_label.setText(t("main.mode.label") + ":")
-        self._model_label.setText(t("main.engine.active_label") + ":")
+        self._model_label.setText(self._model_label_text() + ":")
         self._yourmt3_model_label.setText(t("main.engine.yourmt3_model_label") + ":")
-        self._midi_track_mode_label.setText(t("main.engine.track_mode_label") + ":")
         self.mode_combo.setItemText(0, t("main.mode.smart"))
         self.mode_combo.setItemText(1, t("main.mode.vocal_split"))
         self.mode_combo.setItemText(2, t("main.mode.six_stem_split"))
@@ -620,11 +588,5 @@ class TrackPanel(QGroupBox):
         self.mode_combo.setItemText(5, t("main.mode.piano_bytedance_pedal"))
         self._sync_model_options(self.get_transcription_backend())
         self._sync_yourmt3_model_options(self.get_yourmt3_model())
-        self.midi_track_mode_combo.setItemText(0, t("main.engine.track_mode_multi"))
-        self.midi_track_mode_combo.setItemText(1, t("main.engine.track_mode_single"))
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))
-        self._six_stem_only_selected_check.setText(t("main.mode.six_stem_only_selected"))
-        self._six_stem_vocal_harmony_check.setText(t("main.mode.six_stem_vocal_harmony"))
-        for stem, checkbox in self._six_stem_checks.items():
-            checkbox.setText(self._stem_label(stem))
         self._refresh_labels()

@@ -140,6 +140,22 @@ class MainSelfTestTests(unittest.TestCase):
 
         prepare_torch.assert_not_called()
 
+    def test_main_help_exits_before_gui_startup_and_torch_preload(self):
+        stdout = io.StringIO()
+        with patch.object(sys, "argv", ["MusicToMidi.exe", "--help"]), patch.object(
+            main_module, "_prepare_torch_runtime_before_pyqt"
+        ) as prepare_torch, patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication, redirect_stdout(stdout):
+            with self.assertRaises(SystemExit) as cm:
+                main_module.main()
+
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("用法: python -m src.main", stdout.getvalue())
+        self.assertIn("检查 YourMT3+ 可用性", stdout.getvalue())
+        self.assertIn("--self-test", stdout.getvalue())
+        self.assertIn("--self-test-miros", stdout.getvalue())
+        prepare_torch.assert_not_called()
+        qapplication.assert_not_called()
+
     def test_miros_worker_writes_failure_status_json(self):
         fake_transcribe = types.ModuleType("transcribe")
 

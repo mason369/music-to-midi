@@ -102,3 +102,5 @@ CLAUDE.md
 /external/ai4m-miros/
 /.tmp/
 /MusicToMidi-Windows-Portable.7z.*
+/MusicToMidi-*-Portable*
+/.playwright-cli/

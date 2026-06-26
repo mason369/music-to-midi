@@ -6,7 +6,7 @@
 
 Music to MIDI is a local-first AI audio-to-MIDI converter for music producers, transcription hobbyists, piano learners, sampling workflows, and automatic music transcription (AMT) experiments. Drop in an `MP3`, `WAV`, `FLAC`, `OGG`, or `M4A` file, then generate editable MIDI from the PyQt6 desktop app, the Gradio Web interface, or the Google Colab notebook.
 
-The current product surface syncs six processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and dedicated Transkun / Aria-AMT / ByteDance Pedal piano transcription. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, BPM detection, and MIDI post-processing into one workflow.
+The current product surface syncs six processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and dedicated Transkun / Aria-AMT / ByteDance Pedal piano transcription. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, BPM detection for split-mode MIDI extensions, and MIDI post-processing into one workflow.
 
 ## Screenshots
 
@@ -24,10 +24,9 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 - **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` separates vocals and accompaniment, transcribes both, and can optionally export one merged MIDI for a fuller arrangement sketch.
 - **Six-stem split transcription**: `SIX_STEM_SPLIT` separates `bass / drums / guitar / piano / vocals / other`, then exports stem MIDI files and one merged MIDI for DAW cleanup or re-arrangement.
 - **Dedicated piano transcription**: `PIANO_TRANSKUN`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` target pure piano audio through Transkun, Aria-AMT, and ByteDance's pedal-aware piano model.
-- **Default backend semantics**: the config default prefers the `Aria-AMT` piano backend; `SMART`, `VOCAL_SPLIT`, and non-piano stems still use YourMT3+ or MIROS as multi-instrument backends.
+- **Default backend semantics**: the multi-instrument default is the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint; the desktop app can switch to MIROS, while dedicated piano modes use Transkun, Aria-AMT, or ByteDance Pedal by entry.
 - **Optional MIROS backend**: the desktop app can route transcription through a local `ai4m-miros` checkout as an experimental backend.
-- **MIDI layout control**: YourMT3+ can export by GM instrument, or merge non-drum notes into one melodic track while keeping drums separate.
-- **Beat and post-processing**: MIDI generation includes tempo metadata after BPM detection succeeds. If beat detection fails, processing stops instead of writing a fake default tempo. Quantization, duplicate removal, velocity smoothing, and polyphony limiting are available as post-processing.
+- **Beat and post-processing**: `SMART` mode keeps the official YourMT3+ / MIROS MIDI output. Split-mode MIDI extensions run BPM detection before local MIDI generation; if beat detection fails, processing stops instead of writing a fake default tempo. Quantization, duplicate removal, velocity smoothing, and polyphony limiting are available as post-processing.
 - **Common audio formats**: `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted. Non-WAV input must be converted to 44.1 kHz PCM WAV through FFmpeg; FFmpeg failures stop processing and show the stderr root cause.
 - **Consistent mode set**: desktop, Space, and Colab expose the same six processing modes.
 
@@ -35,9 +34,9 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 
 | Interface | Modes | Backend Selection | Best For |
 |-----------|-------|-------------------|----------|
-| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | `Aria-AMT`, `ByteDance Pedal`, `YourMT3+`, `MIROS` | Local GPU use, persistent output folders, and dedicated piano transcription |
-| Gradio Space | Same six modes as desktop | Default `Aria-AMT` / `ByteDance Pedal` piano backend + `YourMT3+` multi-instrument backend | Browser-based use or hosted demos |
-| Google Colab | Same six modes as desktop | Default `Aria-AMT` / `ByteDance Pedal` piano backend + `YourMT3+` multi-instrument backend | Temporary Colab GPU sessions |
+| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | Multi-instrument default is YourMT3+ noPS, with optional MIROS; piano modes use Transkun / Aria-AMT / ByteDance Pedal by entry | Local GPU use, persistent output folders, and dedicated piano transcription |
+| Gradio Space | Same six modes as desktop | Fixed processing routes; multi-instrument default is YourMT3+ noPS; piano modes use their corresponding backend | Browser-based use or hosted demos |
+| Google Colab | Same six modes as desktop | SMART can select an official YourMT3+ checkpoint; split-mode MIDI extension uses default noPS; piano modes use their corresponding backend | Temporary Colab GPU sessions |
 
 ## Entry And Dependency Sync Status
 
@@ -51,23 +50,23 @@ Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Downloads all five official YourMT3+ checkpoint modes | Uses `OFFICIAL_YOURMT3_MODEL_KEYS` and verifies that each checkpoint can be resolved. |
-| `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, Aria-AMT, ByteDance Pedal, MIROS, and separator availability before launch | Missing required resources are reported explicitly. |
-| `install.ps1` / `install.sh` | Installs PyTorch 2.4, NumPy 1.26, audio-separator 0.41.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
+| `download_sota_models.py` | Downloads all five official YourMT3+ checkpoint modes and prepares BS-RoFormer SW six-stem assets plus RoFormer vocal_rvc/karaoke vocal ensembles | YourMT3 uses `OFFICIAL_YOURMT3_MODEL_KEYS`; the six-stem checkpoint is validated by fixed size and SHA256; vocal split uses audio-separator 0.44.1 ensemble presets. |
+| `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, BS-RoFormer SW six-stem assets, RoFormer vocal ensembles, Aria-AMT, ByteDance Pedal, MIROS, and separator availability before launch | Missing or invalid required resources are reported explicitly. |
+| `install.ps1` / `install.sh` | Installs PyTorch 2.7, NumPy 1.26, audio-separator 0.44.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
 | `.github/workflows/build.yml` | CI build and test jobs install the same pinned runtime dependencies | Test failures are not masked with `|| true`. |
-| `.github/workflows/release.yml` | Release packages download and bundle all official YourMT3+ modes, BS-RoFormer, Aria-AMT, ByteDance Pedal, and MIROS | GPU builds use PyTorch 2.4 + CUDA 12.1 wheels. |
-| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and downloads all official YourMT3+ modes | The Colab UI includes a YourMT3 model selector with per-mode descriptions. |
+| `.github/workflows/release.yml` | Release packages download and bundle all official YourMT3+ modes, BS-RoFormer SW, RoFormer vocal ensembles, Aria-AMT, ByteDance Pedal, and MIROS | GPU builds use PyTorch 2.7 + CUDA 12.8 wheels. |
+| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and downloads all official YourMT3+ modes | The Colab UI exposes the YourMT3 model selector only for SMART; split modes use the default noPS backend for MIDI extension. |
 
 ## Processing Modes
 
 | Mode | Internal Pipeline | Main Output | Notes |
 |------|-------------------|-------------|-------|
-| `SMART` | Audio -> multi-instrument backend -> MIDI generation | `<song>.mid` | No source separation. Suitable for most full mixes, instrumentals, and short multi-instrument clips. |
-| `VOCAL_SPLIT` | Audio -> vocal/accompaniment separation -> accompaniment transcription -> vocal transcription -> MIDI generation | `<song>_accompaniment.mid`, `<song>_vocal.mid`, optional `<song>_vocal_accompaniment_merged.mid` | The vocal MIDI path filters the backend output toward a vocal melody track to reduce accompaniment hallucinations. |
-| `SIX_STEM_SPLIT` | Audio -> six-stem separation -> stem transcription -> stem MIDI merge | `<song>_<stem>.mid`, `<song>_all_stems_merged.mid` or `<song>_selected_stems_merged.mid` | Can transcribe only selected stems; the piano stem prefers Aria-AMT when that backend and checkpoint are available. |
+| `SMART` | Audio -> official YourMT3+ / MIROS MIDI output | `<song>.mid` | No source separation. Suitable for most full mixes, instrumentals, and short multi-instrument clips. |
+| `VOCAL_SPLIT` | Audio -> RoFormer `vocal_rvc` vocal/accompaniment split -> RoFormer `karaoke` lead/backing split -> vocal/accompaniment MIDI transcription -> MIDI generation | `<song>_accompaniment.mid`, `<song>_vocal.mid`, optional `<song>_vocal_accompaniment_merged.mid` | The separation stage also writes `vocals_with_harmony`, `original_vocals`, `backing_vocals`, and `accompaniment_with_harmony` WAV files; MIDI transcription still uses the selected multi-instrument backend. |
+| `SIX_STEM_SPLIT` | Audio -> BS-RoFormer SW six-stem WAV separation -> one full-mix multi-instrument transcription -> route notes to stem MIDI by GM family -> stem MIDI merge | `<song>_<stem>.mid`, `<song>_all_stems_merged.mid` | The six WAV stems come from the separator. Stem MIDI is not produced by running AMT separately on each stem; it is routed from the full-mix transcription. The piano stem can prefer Aria-AMT when that backend and checkpoint are available. |
 | `PIANO_TRANSKUN` | Audio -> Transkun piano model -> MIDI | `<song>_piano_transkun.mid` | Best for pure piano audio; quality presets do not change Transkun checkpoint inference. |
-| `PIANO_ARIA_AMT` | Audio -> Aria-AMT piano model -> MIDI | `<song>_piano_aria_amt.mid` | Best for pure piano audio; requires the Aria-AMT checkpoint. |
-| `PIANO_BYTEDANCE_PEDAL` | Audio -> ByteDance pedal-aware piano model -> MIDI | `<song>_piano_bytedance_pedal.mid` | Best for pure piano audio when the output needs sustain pedal CC64; requires the ByteDance Piano checkpoint. |
+| `PIANO_ARIA_AMT` | Audio -> Aria-AMT piano model -> MIDI | `<song>_piano_aria.mid` | Best for pure piano audio; expects the Aria-AMT checkpoint to be bundled or present in the model directory. |
+| `PIANO_BYTEDANCE_PEDAL` | Audio -> ByteDance pedal-aware piano model -> MIDI | `<song>_piano_bytedance_pedal.mid` | Best for pure piano audio when the output needs sustain pedal CC64; expects the ByteDance Piano checkpoint to be bundled or present in the model directory. |
 
 ## Output Files
 
@@ -94,19 +93,28 @@ song_vocals.mid
 song_other.mid
 song_all_stems_merged.mid
 song_piano_transkun.mid
-song_piano_aria_amt.mid
+song_piano_aria.mid
 song_piano_bytedance_pedal.mid
-song_(Vocals).wav
-song_(Instrumental).wav
+song_vocals_with_harmony.wav
+song_original_vocals.wav
+song_backing_vocals.wav
+song_accompaniment.wav
+song_accompaniment_with_harmony.wav
+song_bass.wav
+song_drums.wav
+song_guitar.wav
+song_piano.wav
+song_vocals.wav
+song_other.wav
 ```
 
-The exact files depend on the selected mode, whether merged MIDI is enabled, and what the separator returns.
+The exact files depend on the selected mode, whether merged MIDI is enabled, and what the separator returns. Vocal split creates `_vocal_rvc/` and `_karaoke/` subfolders for intermediate separation outputs.
 
 ## Backends
 
 ### YourMT3+
 
-YourMT3+ is the default backend. `download_sota_models.py` downloads the default checkpoint, and `src/core/yourmt3_transcriber.py` imports a local `YourMT3/amt/src` source tree.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` downloads all official YourMT3+ checkpoint modes and prepares the BS-RoFormer SW six-stem assets plus RoFormer `vocal_rvc` / `karaoke` vocal ensembles; YourMT3 inference imports the local `YourMT3/amt/src` source tree through `src/core/yourmt3_transcriber.py`.
 
 The source tree must include:
 
@@ -188,7 +196,7 @@ Install the backend:
 python -m pip install git+https://github.com/EleutherAI/aria-amt.git
 ```
 
-Download the checkpoint:
+Prepare the checkpoint:
 
 ```bash
 python download_aria_amt_model.py
@@ -198,7 +206,6 @@ Default search roots include:
 
 ```text
 ~/.cache/music_ai_models/aria_amt
-runtime/models/aria_amt
 models/aria_amt
 ```
 
@@ -212,7 +219,7 @@ Install dependencies:
 python -m pip install "piano-transcription-inference>=0.0.6,<0.1" "torchlibrosa>=0.1.0,<0.2"
 ```
 
-Download the checkpoint:
+Prepare the checkpoint:
 
 ```bash
 python download_bytedance_piano_model.py
@@ -222,7 +229,6 @@ Default search roots include:
 
 ```text
 ~/.cache/music_ai_models/bytedance_piano
-runtime/models/bytedance_piano
 models/bytedance_piano
 ```
 
@@ -246,15 +252,15 @@ This section separates public benchmark claims from project integration status. 
 
 | Backend / Model | Type | Project Entry | Public Quality Signal | Selection Notes |
 |-----------------|------|---------------|-----------------------|-----------------|
-| YourMT3+ | Multi-instrument AMT | Multi-instrument or stem transcription in `SMART`, `VOCAL_SPLIT`, and `SIX_STEM_SPLIT` | Slakh2100 `Multi (Onset-Offset) F1 = 74.84` | Default full-mix route for multi-instrument and GM-track output. |
+| YourMT3+ | Multi-instrument AMT | `SMART` keeps the official MIDI output directly; `VOCAL_SPLIT` and `SIX_STEM_SPLIT` MIDI extensions use multi-instrument inference and project-side MIDI generation/routing | Official Space default noPS result: Slakh `multi_f = 0.7398`; YourMT3+ paper table: Slakh2100 `Multi F1 = 74.84`, same table `MT3 = 62.0` | Default full-mix route; the project default checkpoint is `YPTF.MoE+Multi (noPS)`, aligned with the official Hugging Face Space default. |
 | MIROS | Multi-instrument AMT | Optional desktop multi-instrument backend | Upstream repository describes it as a 2025 AI4Musician winning model | Experimental local backend for A/B testing against YourMT3+ on the same task. |
 | Transkun | Piano-specialized | `PIANO_TRANSKUN` | Transkun V2 and pip checkpoints publish MAESTRO V3 F1 values | Mature and lightweight; the current pip checkpoint is documented as not using pedal note extension. |
 | Aria-AMT | Piano-specialized | `PIANO_ARIA_AMT` | Public checkpoint; this README does not invent a missing same-protocol F1 score | Current default piano candidate for normal pure-piano transcription. |
 | ByteDance Pedal | Piano-specialized / pedal-aware | `PIANO_BYTEDANCE_PEDAL` | MAESTRO note onset F1 / pedal onset F1 = 96.72% / 91.86% | Prefer when the output needs sustain pedal CC64; never used as a silent substitute for other piano backends. |
-| BS-RoFormer | Vocal/accompaniment separation | Pre-separation for `VOCAL_SPLIT` | Checkpoint filename includes a training score label, not a unified benchmark | Separation only; final MIDI quality still depends on the transcription backend. |
+| RoFormer vocal_rvc / karaoke ensemble | Vocal/accompaniment plus lead/backing-vocal separation | Pre-separation for `VOCAL_SPLIT` | audio-separator 0.44.1 preset registry | Separation only; final MIDI quality still depends on the transcription backend. |
 | BS-RoFormer SW | Six-stem separation | Pre-separation for `SIX_STEM_SPLIT` | MVSEP 6-stem SDR protocol | Separation SDR is not end-to-end MIDI F1. |
 
-YourMT3+ / MIROS are multi-instrument backends, Transkun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and BS-RoFormer models are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
+YourMT3+ / MIROS are multi-instrument backends, Transkun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and RoFormer separation models are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
 
 #### YourMT3+ Official Checkpoint Modes
 
@@ -265,13 +271,13 @@ The official Hugging Face / Colab demo's model selector is a checkpoint / archit
 | YMT3+ | No | No | Baseline checkpoint from the official YourMT3+ model family. |
 | YPTF+Single (noPS) | No | No | Perceiver-TF with a single decoder and no pitch-shift augmentation. |
 | YPTF+Multi (PS) | No | Yes | Perceiver-TF with multi-t5 / multi-channel decoding. |
-| YPTF.MoE+Multi (noPS) | 8 experts | No | Official Hugging Face Space default model. |
-| YPTF.MoE+Multi (PS) | 8 experts | Yes | Project default and strongest integrated YourMT3+ mode. |
+| YPTF.MoE+Multi (noPS) | 8 experts | No | Project default and official Hugging Face Space default; the Space result file reports Slakh `multi_f = 0.7398`. |
+| YPTF.MoE+Multi (PS) | 8 experts | Yes | Optional pitch-shift MoE checkpoint; the YourMT3+ paper table reports Slakh `Multi F1 = 74.84` for its final model line. |
 
 Main alignment points:
 
 - The five official mode names, checkpoint directory mappings, and UI order match the official demo.
-- `YPTF.MoE+Multi (noPS)` is kept available because it is the official Hugging Face Space default.
+- `YPTF.MoE+Multi (noPS)` is the project default because it is the official Hugging Face Space default.
 - Older checkpoints that do not store `TOKENIZER.max_shift_steps` are loaded with the official MT3 tokenizer default of `206`.
 - Older T5 checkpoints that do not store `ff_layer_type` are loaded with the standard T5 feed-forward layer type `t5_gmlp`.
 
@@ -292,38 +298,18 @@ Known differences from the official demo:
 
 YourMT3+ / MIROS are multi-instrument backends and should not be directly ranked against the piano-specialized F1 scores above. ByteDance Pedal's `pedal onset F1` is also not equivalent to Transkun's `onset+offset+velocity F1`.
 
-## MIDI Track Layout
+## Default Processing Strategy
 
-YourMT3+ provides two output layouts:
+The desktop, Space, and Colab interfaces no longer expose a user-adjustable quality preset. All modes use a fixed high-quality strategy. YourMT3+ still uses overlap, de-duplication, and MIDI post-processing; MIROS and dedicated piano backends run their own fixed checkpoint inference.
 
-| Layout | Behavior |
-|--------|----------|
-| Multi-track by GM instrument | Each recognized GM program is kept as separate as possible; drums use the GM drum channel. |
-| Single melodic track, drums separate | Non-drum notes are written into one melodic track while keeping channel/program changes; drums remain separate. |
-
-If the detected instrument count exceeds available non-drum MIDI channels, the generator merges related instrument families instead of dropping notes outright.
-
-## Quality Presets
-
-The desktop and Web interfaces expose:
-
-```text
-fast
-balanced
-best
-```
-
-- For `YourMT3+`, the preset affects post-processing.
-- For `MIROS`, the current wrapper uses fixed checkpoint quality; the preset does not change MIROS inference.
-- For `Transkun` / `Aria-AMT` / `ByteDance Pedal`, dedicated piano modes use fixed checkpoint quality.
-- For `SIX_STEM_SPLIT`, multi-instrument stems follow the active multi-instrument backend; the piano stem uses fixed checkpoint quality when routed through Aria-AMT.
+For `SIX_STEM_SPLIT`, the WAV stems come from BS-RoFormer SW, while stem MIDI is routed from one full-mix multi-instrument transcription by GM instrument family. The piano stem can use fixed-checkpoint Aria-AMT when that route is selected and the model is available.
 
 ## Requirements
 
 | Item | Requirement |
 |------|-------------|
 | Python | 3.10+; the Windows installer prefers 3.10-3.12 |
-| PyTorch | 2.4.0 or newer, with matching `torchaudio` and `torchvision` |
+| PyTorch | 2.7.0 with matching `torchaudio==2.7.0` and `torchvision==0.22.0` in the installer/release path |
 | FFmpeg | Required for reliable MP3/M4A/FLAC/OGG handling |
 | GPU | NVIDIA CUDA recommended; CPU works but is slow |
 | OS | Windows 10/11, Linux, WSL2 |
@@ -384,23 +370,19 @@ python -m pip install --upgrade pip setuptools wheel
 
 ### 2. Install PyTorch
 
-CUDA 12.1:
+CUDA 12.8 (recommended, required for newer NVIDIA CUDA 12 class environments):
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 CUDA 11.8:
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu118
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
-CPU:
-
-```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cpu
-```
+CI/CD and portable release packages no longer build CPU-only variants. For local source development, CPU-only PyTorch is a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 
@@ -415,7 +397,7 @@ git clone https://github.com/mimbres/YourMT3.git
 python download_sota_models.py
 ```
 
-If `YourMT3/` already exists, you only need the model download step. `download_sota_models.py` prepares all five official YourMT3+ checkpoint modes, not only the default MoE model.
+If `YourMT3/` already exists, you only need the model download step. `download_sota_models.py` prepares all five official YourMT3+ checkpoint modes, the BS-RoFormer SW six-stem assets, and the RoFormer `vocal_rvc` / `karaoke` vocal ensembles.
 
 ### 5. Prepare Separation and Piano Models
 
@@ -431,6 +413,7 @@ python download_miros_model.py
 The default cache location is:
 
 ```text
+~/.cache/music_ai_models/yourmt3_all
 ~/.music-to-midi/models/audio-separator
 ~/.cache/music_ai_models/aria_amt
 ~/.cache/music_ai_models/bytedance_piano
@@ -477,7 +460,7 @@ cd space
 python app.py
 ```
 
-The Space app tries to sync YourMT3 source from the Hugging Face Space repository and checks default YourMT3+, Aria-AMT, and ByteDance Piano model weights automatically.
+The Space app tries to sync YourMT3 source from the Hugging Face Space repository. During conversion it checks/prepares the resources required by the selected mode: official YourMT3+ checkpoints, BS-RoFormer SW, RoFormer `vocal_rvc` / `karaoke`, Aria-AMT, or ByteDance Pedal. Resource preparation failures are surfaced by the processing flow.
 
 ## Portable Build
 
@@ -499,12 +482,23 @@ The build script attempts to collect:
 
 ```text
 YourMT3/amt/src
-YourMT3 model cache
-audio-separator model cache
-Aria-AMT model cache
-ByteDance Piano model cache
+YourMT3 model cache -> models/yourmt3_all
+audio-separator model cache -> models/audio-separator
+Aria-AMT model cache -> models/aria_amt
+ByteDance Piano model cache -> models/bytedance_piano
 optional local MIROS checkout
 ffmpeg.exe / ffprobe.exe
+```
+
+Portable asset source priority:
+
+```text
+MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR or ~/.cache/music_ai_models/yourmt3_all or checkpoints/yourmt3_all
+MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR or ~/.music-to-midi/models/audio-separator or checkpoints/audio-separator
+MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR or ~/.cache/music_ai_models/aria_amt or checkpoints/aria_amt
+MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR or ~/.cache/music_ai_models/bytedance_piano or checkpoints/bytedance_piano
+MUSIC_TO_MIDI_BUNDLE_MIROS_DIR or external/ai4m-miros / ai4m-miros / .tmp/ai4m-miros
+MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR or tools/ffmpeg / ffmpeg
 ```
 
 Distribute the entire folder:
@@ -528,7 +522,6 @@ src/
     bytedance_piano_transcriber.py # ByteDance Pedal piano backend
     vocal_separator.py       # Vocal/accompaniment separation
     multi_stem_separator.py  # Six-stem separation
-    vocal_harmony_separator.py # Experimental lead/harmony vocal separation
     midi_generator.py        # MIDI generation and post-processing
     beat_detector.py         # BPM/beat detection
   gui/
@@ -544,12 +537,12 @@ src/
 
 space/app.py                 # Gradio Web UI
 colab_notebook.ipynb         # Colab entry
-download_sota_models.py      # Default YourMT3+ model download
+download_sota_models.py      # Official YourMT3+ modes + BS-RoFormer SW six-stem assets
 download_vocal_model.py      # Vocal separation model download
 download_multistem_model.py  # Six-stem separation model download
 download_aria_amt_model.py   # Aria-AMT model download
 download_bytedance_piano_model.py # ByteDance Pedal model download
-download_vocal_harmony_model.py # Experimental lead/harmony model download
+download_vocal_harmony_model.py # RoFormer karaoke vocal model download
 MusicToMidi.spec             # PyInstaller configuration
 ```
 
@@ -624,13 +617,14 @@ python download_sota_models.py
 Confirm dependency and model:
 
 ```bash
-pip install "audio-separator>=0.38.0" "onnxruntime>=1.16.0,<2"
+pip install "audio-separator==0.44.1" "onnxruntime==1.23.2" --no-deps
 python download_vocal_model.py
+python download_vocal_harmony_model.py
 ```
 
 ### Six-Stem Separation Is Unavailable
 
-Confirm `audio-separator>=0.38.0` is installed and download the BS-RoFormer SW resources:
+Confirm `audio-separator==0.44.1` is installed and download the BS-RoFormer SW resources:
 
 ```bash
 python download_multistem_model.py

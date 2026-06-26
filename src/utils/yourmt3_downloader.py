@@ -89,6 +89,7 @@ YOURMT3_MODELS = {
         "checkpoint": "YMT3+",
         "size_mb": 2000,
         "features": ["YourMT3+ baseline", "MT3 tokens with singing extension"],
+        "features_zh": ["YourMT3+ 基线模型", "带歌声扩展的 MT3 token"],
     },
     "yptf_single_nops": {
         "name": "YPTF+Single (noPS)",
@@ -98,6 +99,7 @@ YOURMT3_MODELS = {
         "checkpoint": "YPTF+Single (noPS)",
         "size_mb": 2000,
         "features": ["Perceiver-TF", "single decoder", "no pitch-shift augmentation"],
+        "features_zh": ["Perceiver-TF", "单解码器", "不使用音高偏移增强"],
     },
     "yptf_multi_ps": {
         "name": "YPTF+Multi (PS)",
@@ -107,25 +109,28 @@ YOURMT3_MODELS = {
         "checkpoint": "YPTF+Multi (PS)",
         "size_mb": 2000,
         "features": ["Perceiver-TF", "multi-t5", "multi-channel decoding", "pitch-shift augmentation"],
+        "features_zh": ["Perceiver-TF", "multi-t5", "多通道解码", "使用音高偏移增强"],
     },
     "yptf_moe_multi_nops": {
         "name": "YPTF.MoE+Multi (noPS)",
         "ui_label": "YPTF.MoE+Multi (noPS)",
-        "description": "官方 Hugging Face Space 默认模型，MoE + multi-t5，不使用音高偏移增强。",
-        "ui_description": "Matches the official Hugging Face Space default: Perceiver-TF + MoE + multi-channel decoding, no pitch-shift augmentation.",
+        "description": "本项目默认模型，对齐官方 Hugging Face Space 默认展示项，MoE + multi-t5，不使用音高偏移增强。",
+        "ui_description": "Project default, aligned with the official Hugging Face Space default: Perceiver-TF + MoE + multi-channel decoding, no pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (noPS)",
         "size_mb": 2500,
+        "recommended": True,
         "features": ["MoE", "Perceiver-TF", "multi-t5", "official Hugging Face Space default"],
+        "features_zh": ["MoE", "Perceiver-TF", "multi-t5", "官方 Hugging Face Space 默认模型"],
     },
     "yptf_moe_multi_ps": {
         "name": "YPTF.MoE+Multi (PS)",
         "ui_label": "YPTF.MoE+Multi (PS)",
-        "description": "本项目默认的高性能 MoE + multi-t5 模型，使用音高偏移增强。",
-        "ui_description": "Default high-performance MoE Multi checkpoint in this app: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
+        "description": "可选高性能 MoE + multi-t5 模型，使用音高偏移增强。",
+        "ui_description": "Optional high-performance MoE Multi checkpoint: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (PS)",
         "size_mb": 2500,
-        "recommended": True,
         "features": ["MoE", "Perceiver-TF", "multi-t5", "pitch-shift augmentation"],
+        "features_zh": ["MoE", "Perceiver-TF", "multi-t5", "使用音高偏移增强"],
     },
 
     # 传统checkpoint名称格式（兼容旧版）
@@ -138,6 +143,8 @@ YOURMT3_MODELS = {
         "size_mb": 2000,
         "default": True,  # 保持向后兼容
         "features": ["通用多乐器", "跨数据集增强"],
+        "features_en": ["general multi-instrument transcription", "cross-dataset augmentation"],
+        "features_zh": ["通用多乐器", "跨数据集增强"],
     },
 }
 
@@ -163,8 +170,8 @@ CHECKPOINT_FILENAME_MAP = {
     "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k@model.ckpt": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k",
 }
 
-# 默认模型 - 使用性能最强的 MoE 版本
-DEFAULT_MODEL = "yptf_moe_multi_ps"
+# 默认模型 - 对齐官方 Hugging Face Space 展示项
+DEFAULT_MODEL = "yptf_moe_multi_nops"
 
 
 def get_model_cache_dir() -> Path:
@@ -211,8 +218,8 @@ def get_model_path(model_name: str = DEFAULT_MODEL) -> Optional[Path]:
     获取模型文件路径（智能解析）
 
     支持多种输入格式:
-    1. 短名称: "yptf_moe_multi_ps" -> 查询 YOURMT3_MODELS 获取 checkpoint
-    2. Checkpoint 名称: "YPTF.MoE+Multi (PS)" -> 映射到实际目录
+    1. 短名称: "yptf_moe_multi_nops" -> 查询 YOURMT3_MODELS 获取 checkpoint
+    2. Checkpoint 名称: "YPTF.MoE+Multi (noPS)" -> 映射到实际目录
     3. 完整目录名: "mc13_256_g4_all_v7..." -> 直接查找
 
     参数:
@@ -321,13 +328,13 @@ def download_model(
                 # 获取checkpoint文件名
                 checkpoint_filename = model_info.get("checkpoint")
                 if not checkpoint_filename:
-                    # 如果没有指定checkpoint，使用默认的MoE模型
-                    checkpoint_filename = YOURMT3_MODELS["yptf_moe_multi_ps"]["checkpoint"]
-                    logger.warning(f"模型 {model_name} 没有专用checkpoint，使用默认MoE模型")
+                    # 如果没有指定 checkpoint，使用当前默认官方对齐模型
+                    checkpoint_filename = YOURMT3_MODELS[DEFAULT_MODEL]["checkpoint"]
+                    logger.warning(f"模型 {model_name} 没有专用checkpoint，使用默认YourMT3+模型")
 
                 logger.info(f"下载 checkpoint: {checkpoint_filename}")
 
-                # 将 checkpoint 名称（如 "YPTF.MoE+Multi (PS)"）映射到实际目录名
+                # 将 checkpoint 名称（如 "YPTF.MoE+Multi (noPS)"）映射到实际目录名
                 # 仓库结构：amt/logs/2024/{dir_name}/checkpoints/model.ckpt
                 if checkpoint_filename in CHECKPOINT_FILENAME_MAP:
                     dir_name = CHECKPOINT_FILENAME_MAP[checkpoint_filename]

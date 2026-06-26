@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, TypeVar
 
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 _PATCH_ATTR = "_music_to_midi_audio_separator_metadata_patch"
 _FALLBACK_DISTRIBUTION = SimpleNamespace(version="unknown")
 _CPU_FALLBACK_PROVIDER = ["CPUExecutionProvider"]
+_CUDA_FALLBACK_PROVIDER = "CPUExecutionProvider"
+_ENSEMBLE_PRESET_PREFIX = "ensemble:"
 
 T = TypeVar("T")
 
@@ -67,8 +70,95 @@ def _force_separator_cpu(separator: Any) -> Any:
     return separator
 
 
-def _resolve_cpu_fallback_reason(prefer_gpu: bool = True) -> Optional[str]:
-    device = str(get_device(prefer_gpu=prefer_gpu))
+def _cuda_device_index(device: str) -> int:
+    try:
+        if ":" in device:
+            return max(0, int(device.split(":", 1)[1]))
+    except ValueError:
+        return 0
+    return 0
+
+
+def _onnx_cuda_provider(device: str) -> list[Any]:
+    device_id = _cuda_device_index(device)
+    if device_id > 0:
+        provider: Any = ("CUDAExecutionProvider", {"device_id": device_id})
+    else:
+        provider = "CUDAExecutionProvider"
+    return [provider, _CUDA_FALLBACK_PROVIDER]
+
+
+def _force_separator_device(separator: Any, target_device: Optional[str]) -> Any:
+    device = str(target_device or "").strip().lower()
+    if not device:
+        return separator
+    if device == "cpu":
+        return _force_separator_cpu(separator)
+
+    try:
+        import torch
+
+        separator.torch_device = torch.device(device)
+    except Exception:
+        separator.torch_device = device
+
+    if device.startswith("cuda"):
+        separator.onnx_execution_provider = _onnx_cuda_provider(device)
+    return separator
+
+
+def _parse_ensemble_preset(model_name: str) -> Optional[str]:
+    spec = str(model_name or "").strip()
+    if not spec.lower().startswith(_ENSEMBLE_PRESET_PREFIX):
+        return None
+    preset = spec[len(_ENSEMBLE_PRESET_PREFIX) :].strip()
+    return preset or None
+
+
+def _separator_supports_kwarg(separator_cls: Any, kwarg: str) -> bool:
+    try:
+        signature = inspect.signature(separator_cls.__init__)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == kwarg:
+            return True
+    return False
+
+
+def _separator_kwargs_for_model(
+    separator_cls: Any,
+    separator_kwargs: dict[str, Any],
+    model_name: str,
+) -> dict[str, Any]:
+    preset = _parse_ensemble_preset(model_name)
+    if preset is None:
+        return dict(separator_kwargs)
+    if not _separator_supports_kwarg(separator_cls, "ensemble_preset"):
+        raise RuntimeError(
+            "audio-separator runtime does not support ensemble_preset; "
+            "install audio-separator >= 0.44.x for quality-first RoFormer ensembles"
+        )
+    kwargs = dict(separator_kwargs)
+    kwargs["ensemble_preset"] = preset
+    return kwargs
+
+
+def _load_separator_model(separator: Any, model_name: str) -> None:
+    if _parse_ensemble_preset(model_name) is not None:
+        separator.load_model()
+        return
+    separator.load_model(model_name)
+
+
+def _resolve_cpu_fallback_reason(
+    prefer_gpu: bool = True,
+    *,
+    target_device: Optional[str] = None,
+) -> Optional[str]:
+    device = str(target_device or get_device(prefer_gpu=prefer_gpu))
     if not device.startswith("cuda"):
         return None
 
@@ -92,10 +182,11 @@ def execute_audio_separator_job(
     progress_callback: Optional[Callable[[float, str], None]] = None,
     fallback_progress: Optional[tuple[float, str]] = None,
     allow_cpu_fallback: bool = False,
+    target_device: Optional[str] = None,
     prepare_separator: Optional[Callable[[Any], None]] = None,
     after_load: Optional[Callable[[Any], None]] = None,
 ) -> tuple[Any, T, bool, Optional[str]]:
-    fallback_reason = _resolve_cpu_fallback_reason()
+    fallback_reason = _resolve_cpu_fallback_reason(target_device=target_device)
     force_cpu = fallback_reason is not None
 
     if force_cpu:
@@ -112,9 +203,13 @@ def execute_audio_separator_job(
             progress_callback(*fallback_progress)
 
     def _build_separator(use_cpu: bool) -> Any:
-        separator = separator_cls(**separator_kwargs)
+        separator = separator_cls(
+            **_separator_kwargs_for_model(separator_cls, separator_kwargs, model_name)
+        )
         if use_cpu:
             _force_separator_cpu(separator)
+        elif target_device:
+            _force_separator_device(separator, target_device)
         if prepare_separator is not None:
             prepare_separator(separator)
         return separator
@@ -122,7 +217,7 @@ def execute_audio_separator_job(
     separator = _build_separator(force_cpu)
 
     try:
-        separator.load_model(model_name)
+        _load_separator_model(separator, model_name)
         if after_load is not None:
             after_load(separator)
         result = action(separator)
@@ -149,7 +244,7 @@ def execute_audio_separator_job(
             progress_callback(*fallback_progress)
 
         separator = _build_separator(True)
-        separator.load_model(model_name)
+        _load_separator_model(separator, model_name)
         if after_load is not None:
             after_load(separator)
         result = action(separator)
