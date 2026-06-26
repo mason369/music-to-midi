@@ -76,6 +76,18 @@ def _is_ensemble(model_name: str) -> bool:
     return str(model_name).lower().startswith("ensemble:")
 
 
+def _download_required_models(separator, model_names: tuple[str, ...]) -> None:
+    download_model_and_data = getattr(separator, "download_model_and_data", None)
+    if not callable(download_model_and_data):
+        raise RuntimeError(
+            "当前 audio-separator 缺少 download_model_and_data；"
+            "请安装 audio-separator==0.44.1 或更高的 0.44.x 版本。"
+        )
+
+    for required_model in model_names:
+        download_model_and_data(required_model)
+
+
 def download_vocal_model(
     cache_dir: Optional[Path] = None,
     model_name: str = ROFORMER_MODEL,
@@ -121,9 +133,9 @@ def download_vocal_model(
 
     separator = separator_cls(**separator_kwargs)
     if _is_ensemble(model_name):
-        separator.load_model()
+        _download_required_models(separator, ROFORMER_MODELS)
     else:
-        separator.load_model(model_name)
+        _download_required_models(separator, (model_name,))
 
     found = _find_all_required(cache_dir)
     missing = [model for model in ROFORMER_MODELS if model not in found]
