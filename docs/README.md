@@ -168,7 +168,7 @@ logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
 
 MIROS also needs its upstream runtime dependencies. `requirements.txt` installs this project; it does not guarantee a complete MIROS environment.
 
-The downloader clones the upstream `amt-os/ai4m-miros` checkout. `pretrained_msd.pt` is fetched from the official Hugging Face `minzwon/MusicFM` repository, while `last.ckpt` still follows the official Google Drive file ID used by upstream `main.py`. If Google Drive returns a quota-exceeded page, release packaging fails with that explicit reason instead of using an unknown source or silently skipping the model.
+The downloader clones the upstream `amt-os/ai4m-miros` checkout. `pretrained_msd.pt` is fetched from the official Hugging Face `minzwon/MusicFM` repository, while `last.ckpt` still follows the official Google Drive file ID used by upstream `main.py`. GitHub Actions release packaging does not depend on the live Google Drive quota: it downloads the verified `miros-last.ckpt.part*` cloud mirror assets from this repository's existing GitHub Releases and reassembles the checkpoint. If those mirror assets are missing, size/hash validation fails, or the checkpoint container is incomplete, the release job fails explicitly instead of using an unknown source or silently skipping the model.
 
 ### Transkun
 
