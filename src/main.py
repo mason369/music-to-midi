@@ -276,7 +276,11 @@ def _run_miros_worker(argv=None) -> int:
         with _temporary_onnxruntime_stub():
             from transcribe import transcribe
 
-        transcribe(args.input, args.output)
+        input_path = Path(args.input)
+        if not input_path.is_file():
+            raise FileNotFoundError(f"MIROS input audio does not exist: {input_path}")
+
+        transcribe(str(input_path), args.output)
         output_path = Path(args.output)
         write_status(
             {
