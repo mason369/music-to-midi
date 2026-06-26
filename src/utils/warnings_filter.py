@@ -183,6 +183,10 @@ def ensure_standard_streams():
     """确保 windowed/portable 运行时也始终存在可写的标准流。"""
     sys.stdout = _normalize_text_stream(sys.stdout, "__stdout__")
     sys.stderr = _normalize_text_stream(sys.stderr, "__stderr__")
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def patch_logging_output():

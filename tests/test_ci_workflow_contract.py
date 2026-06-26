@@ -25,7 +25,7 @@ class CiWorkflowContractTests(unittest.TestCase):
     def test_build_workflow_installs_audio_separator_for_pyinstaller_metadata(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
-        self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+        self.assertIn("audio-separator==0.44.1 --no-deps", workflow)
 
     def test_build_workflow_installs_aria_amt_without_resolver_conflict(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
@@ -67,6 +67,21 @@ class CiWorkflowContractTests(unittest.TestCase):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 
         self.assertIn("actions/checkout@v6", workflow)
+
+    def test_hf_sync_workflow_packages_space_runtime_downloaders(self):
+        workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
+
+        for script_name in (
+            "download_sota_models.py",
+            "download_multistem_model.py",
+            "download_vocal_model.py",
+            "download_vocal_harmony_model.py",
+            "download_aria_amt_model.py",
+            "download_bytedance_piano_model.py",
+        ):
+            with self.subTest(script_name=script_name):
+                self.assertIn(f"- '{script_name}'", workflow)
+                self.assertIn(f"cp {script_name}", workflow)
 
 
 if __name__ == "__main__":

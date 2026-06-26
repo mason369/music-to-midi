@@ -1,4 +1,7 @@
+import json
 import os
+from pathlib import Path
+import re
 import sys
 import types
 import unittest
@@ -27,6 +30,17 @@ from src.gui.main_window import MainWindow
 from src.gui.widgets.dropzone import _display_file_name
 from src.i18n.translator import set_language, t
 from src.models.data_models import Config
+
+
+def _flatten_i18n_keys(data, prefix=""):
+    keys = set()
+    for key, value in data.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            keys.update(_flatten_i18n_keys(value, full_key))
+        else:
+            keys.add(full_key)
+    return keys
 
 
 class TestDesktopI18nIntegration(unittest.TestCase):
@@ -131,6 +145,28 @@ class TestDesktopI18nIntegration(unittest.TestCase):
             chinese_pipeline._pt("progress.complete_elapsed", seconds="1.2"),
             "处理完成，耗时 1.2 秒",
         )
+
+    def test_translation_files_have_matching_keys(self):
+        zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
+        en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(_flatten_i18n_keys(zh), _flatten_i18n_keys(en))
+
+    def test_static_translation_references_exist(self):
+        zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
+        available_keys = _flatten_i18n_keys(zh)
+        reference_pattern = re.compile(
+            r"(?:\bt|\bst|_pt|\.t)\(\s*['\"]([A-Za-z0-9_.]+)['\"]"
+        )
+
+        referenced_keys = set()
+        source_paths = list(Path("src").rglob("*.py")) + [Path("space/app.py")]
+        for path in source_paths:
+            text = path.read_text(encoding="utf-8")
+            referenced_keys.update(reference_pattern.findall(text))
+
+        missing = sorted(key for key in referenced_keys if key not in available_keys)
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

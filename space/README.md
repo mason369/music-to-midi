@@ -28,12 +28,12 @@ tags:
 
 ## 功能
 
-- **YourMT3+ 多乐器转写**：直接识别 128 种 GM 乐器并输出 MIDI，适合完整混音和纯音乐片段。
-- **人声分离 + 分别转写**：先分离人声与伴奏，再分别转写；可选生成合并 MIDI，方便继续进 DAW 整理。
-- **六声部分离 + 分别转写**：分离 bass / drums / guitar / piano / vocals / other 六个 stem，再输出 stem MIDI 与合并 MIDI。
+- **多乐器 MIDI 转写**：可走 YourMT3+ 官方 checkpoint 或 MIROS MusicFM 路线，直接识别 GM 乐器并输出 MIDI，适合完整混音和纯音乐片段。
+- **人声分离 + 分别转写**：先用 RoFormer `vocal_rvc` / `karaoke` 分离人声、伴奏、主唱和和声，再用所选多乐器后端转 MIDI；可选生成合并 MIDI。
+- **六声部分离 + 分别转写**：用 BS-RoFormer SW 分离 bass / drums / guitar / piano / vocals / other 六个 WAV stem；stem MIDI 由完整混音转写结果按 GM 乐器族分配生成，并可合并输出。
 - **钢琴专用转写 (Transkun)**：使用 Transkun 处理纯钢琴音频。
-- **钢琴专用转写 (Aria-AMT)**：使用 Aria-AMT 处理纯钢琴音频，首次使用会检查 checkpoint。
-- **钢琴专用转写 (ByteDance Pedal)**：使用 ByteDance 带踏板钢琴模型处理纯钢琴音频，保留延音踏板 CC64。
+- **钢琴专用转写 (Aria-AMT)**：使用 Aria-AMT 处理纯钢琴音频，需要 checkpoint 已在模型目录可用。
+- **钢琴专用转写 (ByteDance Pedal)**：使用 ByteDance 带踏板钢琴模型处理纯钢琴音频，保留延音踏板 CC64，需要 checkpoint 已在模型目录可用。
 - **节拍检测**：自动检测 BPM 并写入 MIDI。
 - **多格式输入**：支持 MP3、WAV、FLAC、OGG、M4A。
 
@@ -46,8 +46,8 @@ tags:
 
 ## 技术栈
 
-- **转写引擎**: YourMT3+、Transkun、Aria-AMT、ByteDance Pedal
-- **人声/伴奏/六声部分离**: `audio-separator`
+- **转写引擎**: YourMT3+、MIROS、Transkun、Aria-AMT、ByteDance Pedal
+- **人声/伴奏/六声部分离**: `audio-separator` RoFormer ensemble 与 BS-RoFormer SW
 - **节拍检测**: librosa
 - **Web 框架**: Gradio
 

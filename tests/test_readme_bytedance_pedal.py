@@ -63,6 +63,13 @@ def test_readme_documents_official_yourmt3_mode_and_delivery_sync_status():
         "python download_vocal_harmony_model.py",
         "python download_bytedance_piano_model.py",
         "python download_miros_model.py",
+        "本项目默认使用 **YPTF.MoE+Multi (noPS)**",
+        "Slakh `multi_f = 0.7398`",
+        "YPTF.MoE+Multi (PS) | 8 专家 | 有 | 可选 pitch-shift MoE checkpoint",
+        "karaoke ensemble SDR 约 10.6",
+        "SDR vocals = 10.87",
+        "SDR vocals = 10.98",
+        "MUSDB test avg 10.08",
     ):
         assert expected in readme
 
@@ -86,5 +93,43 @@ def test_english_readme_documents_official_yourmt3_mode_and_delivery_sync_status
         "python download_vocal_harmony_model.py",
         "python download_bytedance_piano_model.py",
         "python download_miros_model.py",
+        "Project default and official Hugging Face Space default",
+        "Slakh `multi_f = 0.7398`",
+        "Optional pitch-shift MoE checkpoint",
     ):
         assert expected in readme
+
+
+def test_readmes_match_current_processing_routes_and_packaged_paths():
+    zh_readme = Path("README.md").read_text(encoding="utf-8")
+    en_readme = Path("docs/README.md").read_text(encoding="utf-8")
+    docs_zh_readme = Path("docs/README_zh.md").read_text(encoding="utf-8")
+    space_readme = Path("space/README.md").read_text(encoding="utf-8")
+    combined = "\n".join([zh_readme, en_readme, docs_zh_readme, space_readme])
+
+    for expected in (
+        "song_piano_aria.mid",
+        "BS-RoFormer SW 六声部 WAV 分离",
+        "按 GM 乐器族分配到 stem MIDI",
+        "one full-mix multi-instrument transcription",
+        "route notes to stem MIDI by GM family",
+        "models/bytedance_piano",
+        "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR",
+        "RoFormer `vocal_rvc` / `karaoke`",
+    ):
+        assert expected in combined
+
+    for stale in (
+        "song_piano_aria_amt.mid",
+        "_piano_aria_amt.mid",
+        "fast / balanced / best",
+        "torch==2.4.0",
+        "https://download.pytorch.org/whl/cu121",
+        "首次使用会检查 checkpoint",
+        "YourMT3+ 多乐器转写",
+        "selected_stems_merged",
+        "vocal_harmony_separator.py",
+        "only selected stems are transcribed",
+        "Experimental lead/harmony model download",
+    ):
+        assert stale not in combined

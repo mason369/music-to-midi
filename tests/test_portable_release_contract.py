@@ -19,6 +19,11 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("repair_torch_openmp.py", workflow)
 
+    def test_release_workflow_runs_official_midi_route_contract(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("tests/test_official_midi_routes.py", workflow)
+
     def test_release_workflow_smoke_tests_miros_worker_import_without_onnxruntime_failure(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -191,7 +196,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("pytorch-lightning==2.6.1", workflow)
         self.assertIn("torchmetrics==1.8.2", workflow)
         self.assertIn("onnxruntime==1.23.2", workflow)
-        self.assertIn("audio-separator==0.41.1 --no-deps", workflow)
+        self.assertIn("audio-separator==0.44.1 --no-deps", workflow)
         self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', workflow)
         self.assertIn("six==1.17.0", workflow)
 
@@ -262,6 +267,21 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('external\\ai4m-miros', script)
         self.assertIn("Required asset missing", script)
         self.assertNotIn("[skip] $Label not found", script)
+
+    def test_build_portable_validates_six_stem_assets(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("Assert-SixStemAssets", script)
+        self.assertIn("download_multistem_model.py", script)
+        self.assertIn("--check-only", script)
+        self.assertIn("audio-separator source", script)
+        self.assertIn("audio-separator bundle", script)
+
+    def test_release_workflow_validates_six_stem_assets_after_sota_download(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("BS-RoFormer SW six-stem assets", workflow)
+        self.assertIn("python download_multistem_model.py --check-only", workflow)
 
     def test_build_portable_fails_when_clean_or_pyinstaller_fails(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

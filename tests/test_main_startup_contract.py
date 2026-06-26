@@ -18,6 +18,19 @@ class MainStartupContractTests(unittest.TestCase):
 
         self.assertNotIn("torch.backends.cudnn.benchmark = True", source)
 
+    def test_4k_detection_does_not_preempt_qt_dpi_awareness(self):
+        source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("EnumDisplaySettingsW", source)
+        self.assertNotIn("SetProcessDpiAwareness", source)
+        self.assertNotIn("SetProcessDPIAware", source)
+
+    def test_main_application_name_uses_i18n(self):
+        source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('app.setApplicationName(t("app.name"))', source)
+        self.assertNotIn('app.setApplicationName("音乐转MIDI")', source)
+
 
 if __name__ == "__main__":
     unittest.main()

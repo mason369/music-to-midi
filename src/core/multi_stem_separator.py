@@ -8,8 +8,14 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional
 
 from download_multistem_model import (
+    ROFORMER_SW_CONFIG,
+    ROFORMER_SW_DISPLAY_NAME,
     ROFORMER_SW_MODEL,
+    ROFORMER_SW_REGISTRY_NAME,
     download_multistem_model,
+    ensure_multistem_config_compatible,
+    is_multistem_model_available,
+    resolve_multistem_model_paths,
 )
 from src.i18n.translator import Translator
 from src.utils.audio_separator_compat import (
@@ -23,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 STEM_KEYS = ("bass", "drums", "guitar", "piano", "vocals", "other")
 BS_ROFORMER_SW_MODEL = ROFORMER_SW_MODEL
+BS_ROFORMER_SW_CONFIG = ROFORMER_SW_CONFIG
+BS_ROFORMER_SW_DISPLAY_NAME = ROFORMER_SW_DISPLAY_NAME
+BS_ROFORMER_SW_REGISTRY_NAME = ROFORMER_SW_REGISTRY_NAME
 
 
 class SixStemSeparator:
@@ -50,6 +59,9 @@ class SixStemSeparator:
         except Exception:
             return False
 
+    def is_model_available(self) -> bool:
+        return is_multistem_model_available(cache_dir=self.cache_dir)
+
     def _get_separator_cls(self):
         if self.separator_cls is not None:
             return patch_separator_package_metadata(self.separator_cls)
@@ -63,13 +75,13 @@ class SixStemSeparator:
         def _patched_list_supported_model_files():
             models = original()
             mdxc_models = dict(models.get("MDXC", {}))
-            if "Roformer Model: BS-Roformer-SW" not in mdxc_models:
-                mdxc_models["Roformer Model: BS-Roformer-SW"] = {
+            if BS_ROFORMER_SW_REGISTRY_NAME not in mdxc_models:
+                mdxc_models[BS_ROFORMER_SW_REGISTRY_NAME] = {
                     "filename": BS_ROFORMER_SW_MODEL,
                     "scores": {},
                     "stems": list(STEM_KEYS),
                     "target_stem": None,
-                    "download_files": [BS_ROFORMER_SW_MODEL, "config_bs_roformer_sw.yaml"],
+                    "download_files": [BS_ROFORMER_SW_MODEL, BS_ROFORMER_SW_CONFIG],
                 }
             models["MDXC"] = mdxc_models
             return models
@@ -77,7 +89,11 @@ class SixStemSeparator:
         separator.list_supported_model_files = _patched_list_supported_model_files
 
     def _prepare_separator(self, separator) -> None:
-        self.ensure_assets_fn(cache_dir=self.cache_dir, printer=logger.info)
+        if not self.is_model_available():
+            self.ensure_assets_fn(cache_dir=self.cache_dir, printer=logger.info)
+        _model_path, config_path = resolve_multistem_model_paths(self.cache_dir)
+        if ensure_multistem_config_compatible(config_path):
+            logger.info("Patched %s config compatibility fields before load", BS_ROFORMER_SW_DISPLAY_NAME)
         self._attach_sw_model_registry(separator)
 
     @staticmethod
@@ -153,8 +169,14 @@ class SixStemSeparator:
         separator_cls = self._get_separator_cls()
 
         def _after_load(_active_separator):
+            device = getattr(_active_separator, "torch_device", "unknown")
+            logger.info(
+                "Loaded six-stem separator model %s on %s",
+                BS_ROFORMER_SW_DISPLAY_NAME,
+                device,
+            )
             if progress_callback:
-                progress_callback(0.25, self._pt("progress.loaded_model", model=BS_ROFORMER_SW_MODEL))
+                progress_callback(0.25, self._pt("progress.loaded_model", model=BS_ROFORMER_SW_DISPLAY_NAME))
 
         _separator, output_files, _used_cpu_fallback, _fallback_reason = execute_audio_separator_job(
             separator_cls,

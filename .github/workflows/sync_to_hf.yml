@@ -10,6 +10,11 @@ on:
       - 'src/i18n/**'
       - 'space/**'
       - 'download_sota_models.py'
+      - 'download_multistem_model.py'
+      - 'download_vocal_model.py'
+      - 'download_vocal_harmony_model.py'
+      - 'download_aria_amt_model.py'
+      - 'download_bytedance_piano_model.py'
       - 'pyproject.toml'
 
   # 支持手动触发
@@ -41,6 +46,11 @@ jobs:
           cp space/requirements.txt "$WORK/"
           cp space/README.md       "$WORK/"
           cp download_sota_models.py "$WORK/"
+          cp download_multistem_model.py "$WORK/"
+          cp download_vocal_model.py "$WORK/"
+          cp download_vocal_harmony_model.py "$WORK/"
+          cp download_aria_amt_model.py "$WORK/"
+          cp download_bytedance_piano_model.py "$WORK/"
           cp pyproject.toml        "$WORK/"
 
           # ── 核心源码（排除 GUI） ──

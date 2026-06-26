@@ -104,12 +104,12 @@ jobs:
           pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
-          pip install audio-separator==0.41.1 --no-deps
+          pip install audio-separator==0.44.1 --no-deps
           pip install pyinstaller pytest
 
       - name: 运行便携发布回归测试
         run: |
-          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py
+          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py tests/test_official_midi_routes.py
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
@@ -121,16 +121,16 @@ jobs:
           if [ -d "/c/ProgramData/chocolatey/bin" ]; then
             export PATH="/c/ProgramData/chocolatey/bin:$PATH"
           fi
-          echo "=== Download all official YourMT3+ model modes ==="
+          echo "=== Download all official YourMT3+ model modes, BS-RoFormer SW six-stem assets, and RoFormer vocal ensembles ==="
           python download_sota_models.py
 
-          echo "=== Download BS-RoFormer ep368 vocal model ==="
+          echo "=== Verify RoFormer vocal_rvc ensemble models ==="
           python download_vocal_model.py
 
-          echo "=== Download BS-RoFormer SW multi-stem model ==="
-          python download_multistem_model.py
+          echo "=== Verify BS-RoFormer SW multi-stem model ==="
+          python download_multistem_model.py --check-only
 
-          echo "=== Download Chorus BS-RoFormer model ==="
+          echo "=== Verify RoFormer karaoke ensemble models ==="
           python download_vocal_harmony_model.py
 
           echo "=== Download Aria-AMT piano model ==="

@@ -13,6 +13,7 @@ YourMT3+ 转写器模块
 import logging
 import os
 import sys
+import shutil
 import threading
 import types
 import importlib
@@ -377,6 +378,43 @@ class YourMT3Transcriber:
         return 206
 
     @staticmethod
+    def _build_midi_output_inverse_vocab(output_vocab: Dict) -> Dict:
+        official_utils = sys.modules.get("utils.utils")
+        create_inverse_vocab = getattr(official_utils, "create_inverse_vocab", None)
+        if callable(create_inverse_vocab):
+            return create_inverse_vocab(output_vocab)
+
+        inverse_vocab = {}
+        for instrument_name, programs in output_vocab.items():
+            for program in programs:
+                inverse_vocab[program] = (programs[0], instrument_name)
+        return inverse_vocab
+
+    @staticmethod
+    def _ensure_midi_output_vocab(model: Any) -> Dict:
+        inverse_vocab = getattr(model, "midi_output_inverse_vocab", None)
+        if inverse_vocab is not None:
+            return inverse_vocab
+
+        output_vocab = getattr(model, "midi_output_vocab", None)
+        if output_vocab is None:
+            from config.vocabulary import program_vocab_presets
+
+            output_vocab = program_vocab_presets.get("gm_ext_plus")
+
+        if output_vocab is None:
+            raise RuntimeError("YourMT3+ MIDI output vocabulary is unavailable")
+
+        inverse_vocab = YourMT3Transcriber._build_midi_output_inverse_vocab(output_vocab)
+        model.midi_output_vocab = output_vocab
+        model.midi_output_inverse_vocab = inverse_vocab
+        return inverse_vocab
+
+    @staticmethod
+    def _get_midi_output_inverse_vocab(model: Any) -> Dict:
+        return YourMT3Transcriber._ensure_midi_output_vocab(model)
+
+    @staticmethod
     def _cap_batch_size_for_model(model_key: str, batch_size: int) -> int:
         from src.models.data_models import YourMT3Model
 
@@ -614,7 +652,7 @@ class YourMT3Transcriber:
         from src.models.data_models import YourMT3Model
 
         selected = str(
-            getattr(self.config, "yourmt3_model", YourMT3Model.YPTF_MOE_MULTI_PS.value) or ""
+            getattr(self.config, "yourmt3_model", YourMT3Model.YPTF_MOE_MULTI_NOPS.value) or ""
         ).strip().lower()
         valid_models = {model.value for model in YourMT3Model}
         if selected not in valid_models:
@@ -630,7 +668,7 @@ class YourMT3Transcriber:
 
     def _load_model(
         self,
-        model_name: str = "yptf_moe_multi_ps",  # 默认使用 MoE 专家版
+        model_name: str = "yptf_moe_multi_nops",  # 默认对齐官方 Space 的 MoE noPS 版本
         progress_callback: Optional[Callable[[float, str], None]] = None
     ):
         """
@@ -653,7 +691,7 @@ class YourMT3Transcriber:
             from src.utils.yourmt3_downloader import YOURMT3_MODELS
             model_info = YOURMT3_MODELS.get(model_name, {})
             friendly_name = model_info.get("name", model_name)
-            features = ", ".join(model_info.get("features", []))
+            features = "，".join(model_info.get("features_zh") or model_info.get("features", []))
 
             if progress_callback:
                 progress_callback(0.1, self._pt("progress.loading_named_model", model=friendly_name))
@@ -1570,6 +1608,123 @@ class YourMT3Transcriber:
                     logger.debug("GPU 缓存清理失败: %s", e)
 
                 logger.info("YourMT3+ 模型已卸载")
+
+    def transcribe_to_midi(
+        self,
+        audio_path: str,
+        output_path: str,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> str:
+        """Run the official YourMT3 Space transcription path and keep its MIDI output."""
+        logger.info("YourMT3+ official MIDI transcription: %s", audio_path)
+
+        self._check_cancelled()
+        if progress_callback:
+            progress_callback(0.0, self._pt("progress.preparing_best_transcription"))
+
+        if not self.is_available():
+            raise RuntimeError(self.get_unavailable_reason())
+
+        self._load_model(
+            model_name=self._get_selected_model_name(),
+            progress_callback=(
+                lambda p, m: progress_callback(p * 0.25, m)
+                if progress_callback else None
+            ),
+        )
+
+        with YourMT3Transcriber._model_lock:
+            model = YourMT3Transcriber._model
+            audio_cfg = YourMT3Transcriber._audio_cfg
+
+        if model is None or audio_cfg is None:
+            raise RuntimeError("YourMT3+ model is not loaded correctly")
+
+        import torch
+        import torchaudio
+        from utils.audio import slice_padded_array
+        from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+        from utils.note2event import mix_notes
+        from utils.utils import write_model_output_as_midi
+
+        output = Path(output_path).resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        track_name = output.stem
+
+        if progress_callback:
+            progress_callback(0.30, self._pt("progress.analyzing_audio"))
+
+        waveform, sr = _load_audio(audio_path)
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+        target_sr = audio_cfg["sample_rate"]
+        if sr != target_sr:
+            waveform = torchaudio.functional.resample(waveform, sr, target_sr)
+
+        self._check_cancelled()
+
+        audio_segments = slice_padded_array(
+            waveform.numpy(),
+            audio_cfg["input_frames"],
+            audio_cfg["input_frames"],
+        )
+        audio_segments = torch.from_numpy(
+            audio_segments.astype("float32"),
+        ).to(self.device).unsqueeze(1)
+
+        if progress_callback:
+            progress_callback(0.42, self._pt("progress.yourmt3_inference_start", batch_count=1))
+
+        bsz = int(os.getenv("MUSIC_TO_MIDI_YOURMT3_OFFICIAL_BATCH_SIZE", "8") or "8")
+        with torch.no_grad():
+            pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+
+        if progress_callback:
+            progress_callback(0.85, self._pt("progress.parsing_precise_instruments"))
+
+        num_channels = model.task_manager.num_decoding_channels
+        n_items = audio_segments.shape[0]
+        start_secs_file = [
+            audio_cfg["input_frames"] * i / audio_cfg["sample_rate"]
+            for i in range(n_items)
+        ]
+        pred_notes_in_file = []
+        for ch in range(num_channels):
+            pred_token_arr_ch = [arr[:, ch, :] for arr in pred_token_arr]
+            zipped_note_events_and_tie, _, _ = model.task_manager.detokenize_list_batches(
+                pred_token_arr_ch,
+                start_secs_file,
+                return_events=True,
+            )
+            pred_notes_ch, _ = merge_zipped_note_events_and_ties_to_notes(
+                zipped_note_events_and_tie,
+            )
+            pred_notes_in_file.append(pred_notes_ch)
+
+        pred_notes = mix_notes(pred_notes_in_file)
+        write_model_output_as_midi(
+            pred_notes,
+            str(output.parent),
+            track_name,
+            self._get_midi_output_inverse_vocab(model),
+        )
+
+        official_output = output.parent / "model_output" / f"{track_name}.mid"
+        if not official_output.exists():
+            raise RuntimeError(f"YourMT3+ official MIDI output was not created: {official_output}")
+
+        if output.exists():
+            output.unlink()
+        shutil.move(str(official_output), str(output))
+        try:
+            official_output.parent.rmdir()
+        except OSError:
+            pass
+
+        if progress_callback:
+            progress_callback(1.0, self._pt("progress.midi_generated"))
+        return str(output)
 
     def transcribe_precise(
         self,

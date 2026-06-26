@@ -316,8 +316,10 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
     返回:
         设备字符串，如 'cuda:0'、'rocm:0'（实际仍为 cuda:0）、'mps'、'xpu:0' 或 'cpu'
     """
+    from src.i18n.translator import t
+
     if not prefer_gpu:
-        logger.info("使用 CPU（由配置指定）")
+        logger.info(t("startup.device_config_cpu"))
         return "cpu"
 
     accel = get_accelerator_type()
@@ -330,13 +332,20 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
         try:
             name = torch.cuda.get_device_name(idx)
             accel_label = "ROCm/AMD" if accel == "rocm" else "CUDA/NVIDIA"
-            logger.info(f"使用 {accel_label} GPU: {name} ({device})")
+            logger.info(
+                t(
+                    "startup.device_accelerator_gpu",
+                    accelerator=accel_label,
+                    name=name,
+                    device=device,
+                )
+            )
         except Exception:
             pass
         return device
 
     if accel == "mps":
-        logger.info("使用 Apple MPS GPU")
+        logger.info(t("startup.device_apple_mps"))
         return "mps"
 
     if accel == "xpu":
@@ -346,10 +355,10 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
             idx = min(gpu_index, count - 1) if count > 0 else 0
             device = f"xpu:{idx}"
             name = torch.xpu.get_device_name(idx) if hasattr(torch.xpu, 'get_device_name') else "Intel GPU"
-            logger.info(f"使用 Intel XPU: {name} ({device})")
+            logger.info(t("startup.device_intel_xpu", name=name, device=device))
             return device
         except Exception:
-            logger.info("使用 Intel XPU: xpu:0")
+            logger.info(t("startup.device_intel_xpu_default"))
             return "xpu:0"
 
     if accel == "directml":
@@ -358,13 +367,13 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
             idx = min(gpu_index, torch_directml.device_count() - 1) if torch_directml.device_count() > 0 else 0
             device = torch_directml.device(idx)
             name = torch_directml.device_name(idx)
-            logger.info(f"使用 DirectML GPU: {name} ({device})")
+            logger.info(t("startup.device_directml_gpu", name=name, device=device))
             return str(device)
         except Exception:
-            logger.info("使用 DirectML: privateuseone:0")
+            logger.info(t("startup.device_directml_default"))
             return "privateuseone:0"
 
-    logger.info("未检测到GPU，使用 CPU")
+    logger.info(t("startup.device_no_gpu_cpu"))
     return "cpu"
 
 

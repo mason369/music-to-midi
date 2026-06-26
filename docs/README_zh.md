@@ -4,7 +4,7 @@
   中文 | <a href="./README.md">English</a>
 </p>
 
-一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本恢复并同步五种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT 两条钢琴专用转写流程。
+一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本同步六种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后分别转写，以及 Transkun / Aria-AMT / ByteDance Pedal 三条钢琴专用转写流程。
 
 ## 截图
 
@@ -17,31 +17,31 @@
 - **完整混音转写**：`SMART` 模式直接读取整首音频，用多乐器后端生成 MIDI。
 - **人声/伴奏分离转写**：`VOCAL_SPLIT` 模式先分离人声与伴奏，再分别生成 MIDI；可选额外输出一个合并 MIDI。
 - **六声部分离转写**：`SIX_STEM_SPLIT` 模式先分离 `bass / drums / guitar / piano / vocals / other` 六个 stem，再输出各 stem MIDI 和合并 MIDI。
-- **钢琴专用转写**：`PIANO_TRANSKUN` 与 `PIANO_ARIA_AMT` 面向纯钢琴音频，分别调用 Transkun 和 Aria-AMT。
-- **默认后端语义**：配置默认偏好为 `Aria-AMT` 钢琴后端；`SMART`、`VOCAL_SPLIT` 和非钢琴 stem 仍由 YourMT3+ 或 MIROS 这类多乐器后端承担。
+- **钢琴专用转写**：`PIANO_TRANSKUN`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 面向纯钢琴音频，分别调用 Transkun、Aria-AMT 和 ByteDance 带踏板模型。
+- **默认后端语义**：多乐器默认后端为 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`；桌面版可切换 MIROS，钢琴专用模式分别使用 Transkun、Aria-AMT 或 ByteDance Pedal。
 - **MIROS 可选后端**：桌面版可切换到本地 `ai4m-miros` 仓库作为实验性多乐器后端。
-- **MIDI 输出布局**：YourMT3+ 支持“按 GM 乐器分轨”和“非鼓合并单轨、鼓独立”两种布局。
-- **节拍与后处理**：自动检测 BPM，生成带速度信息的 MIDI；支持量化、去重、力度平滑、复音限制等后处理。
+- **节拍与后处理**：`SMART` 模式保留 YourMT3+ / MIROS 官方 MIDI 输出；分离后再生成 MIDI 的扩展流程会先检测 BPM，检测失败会停止，不写入默认 tempo。支持量化、去重、力度平滑、复音限制等后处理。
 - **多格式输入**：支持 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A`。非 WAV 会优先通过 FFmpeg 转为 44.1 kHz PCM WAV。
-- **多平台入口**：桌面版、Space、Colab 均同步暴露五种处理模式。
+- **多平台入口**：桌面版、Space、Colab 均同步暴露六种处理模式。
 
 ## 不同入口的功能范围
 
 | 入口 | 处理模式 | 后端选择 | 适合场景 |
 |------|----------|----------|----------|
-| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_ARIA_AMT` | `Aria-AMT`、`YourMT3+`、`MIROS` | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
-| Gradio Space | 同桌面五种模式 | 默认 `Aria-AMT` 钢琴后端 + `YourMT3+` 多乐器后端 | 浏览器中快速试用或部署 |
-| Google Colab | 同桌面五种模式 | 默认 `Aria-AMT` 钢琴后端 + `YourMT3+` 多乐器后端 | 临时使用 Colab GPU |
+| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` | 多乐器默认 YourMT3+ noPS，可选 MIROS；钢琴模式按入口使用 Transkun / Aria-AMT / ByteDance Pedal | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
+| Gradio Space | 同桌面六种模式 | 固定处理链路；多乐器默认 YourMT3+ noPS；钢琴模式按入口使用对应后端 | 浏览器中快速试用或部署 |
+| Google Colab | 同桌面六种模式 | SMART 可选 YourMT3+ 官方 checkpoint；分离模式 MIDI 扩展默认 noPS；钢琴模式按入口使用对应后端 | 临时使用 Colab GPU |
 
 ## 处理模式
 
 | 模式 | 内部流程 | 主要输出 | 说明 |
 |------|----------|----------|------|
-| `SMART` | 音频 -> 多乐器后端 -> MIDI 生成 | `<歌曲名>.mid` | 不做音源分离，适合大多数混音歌曲、纯音乐和多乐器片段。 |
-| `VOCAL_SPLIT` | 音频 -> 人声/伴奏分离 -> 伴奏转写 -> 人声转写 -> MIDI 生成 | `<歌曲名>_accompaniment.mid`、`<歌曲名>_vocal.mid`，可选 `<歌曲名>_vocal_accompaniment_merged.mid` | 分离后会把人声 MIDI 尽量收敛到旋律轨，减少伴奏乐器幻觉。 |
-| `SIX_STEM_SPLIT` | 音频 -> 六声部分离 -> stem 转写 -> stem MIDI 合并 | `<歌曲名>_<stem>.mid`、`<歌曲名>_all_stems_merged.mid` 或 `<歌曲名>_selected_stems_merged.mid` | 可只转写选中的 stem；piano stem 在偏好 Aria-AMT 且权重可用时会优先走 Aria-AMT。 |
-| `PIANO_TRANSKUN` | 音频 -> Transkun 钢琴模型 -> MIDI | `<歌曲名>_piano_transkun.mid` | 适合纯钢琴音频；质量档位不改变 Transkun checkpoint 推理。 |
-| `PIANO_ARIA_AMT` | 音频 -> Aria-AMT 钢琴模型 -> MIDI | `<歌曲名>_piano_aria_amt.mid` | 适合纯钢琴音频；需要先准备 Aria-AMT checkpoint。 |
+| `SMART` | 音频 -> YourMT3+ / MIROS 官方 MIDI 输出 | `<歌曲名>.mid` | 不做音源分离，适合大多数混音歌曲、纯音乐和多乐器片段。 |
+| `VOCAL_SPLIT` | 音频 -> RoFormer `vocal_rvc` 人声/伴奏分离 -> RoFormer `karaoke` 主唱/和声拆分 -> 人声/伴奏 MIDI 转写 -> MIDI 生成 | `<歌曲名>_accompaniment.mid`、`<歌曲名>_vocal.mid`，可选 `<歌曲名>_vocal_accompaniment_merged.mid` | 分离阶段会额外产出 `vocals_with_harmony`、`original_vocals`、`backing_vocals`、`accompaniment_with_harmony` WAV；MIDI 阶段继续用所选多乐器后端处理人声与伴奏。 |
+| `SIX_STEM_SPLIT` | 音频 -> BS-RoFormer SW 六声部 WAV 分离 -> 多乐器后端完整混音转写 -> 按 GM 乐器族分配到 stem MIDI -> stem MIDI 合并 | `<歌曲名>_<stem>.mid`、`<歌曲名>_all_stems_merged.mid` | 六个 WAV stem 来自分离模型；MIDI 不是逐个 stem 重新跑 AMT，而是由完整混音转写结果按乐器族路由生成。piano stem 在偏好 Aria-AMT 且权重可用时会优先走 Aria-AMT。 |
+| `PIANO_TRANSKUN` | 音频 -> Transkun 钢琴模型 -> MIDI | `<歌曲名>_piano_transkun.mid` | 适合纯钢琴音频；使用 Transkun 随包 checkpoint 固定推理。 |
+| `PIANO_ARIA_AMT` | 音频 -> Aria-AMT 钢琴模型 -> MIDI | `<歌曲名>_piano_aria.mid` | 适合纯钢琴音频；需要 Aria-AMT checkpoint 已随包或在模型目录可用。 |
+| `PIANO_BYTEDANCE_PEDAL` | 音频 -> ByteDance 带踏板钢琴模型 -> MIDI | `<歌曲名>_piano_bytedance_pedal.mid` | 适合纯钢琴音频；会保留延音踏板 CC64；需要 ByteDance Piano checkpoint 已随包或在模型目录可用。 |
 
 ## 输出文件
 
@@ -68,18 +68,28 @@ song_vocals.mid
 song_other.mid
 song_all_stems_merged.mid
 song_piano_transkun.mid
-song_piano_aria_amt.mid
-song_(Vocals).wav
-song_(Instrumental).wav
+song_piano_aria.mid
+song_piano_bytedance_pedal.mid
+song_vocals_with_harmony.wav
+song_original_vocals.wav
+song_backing_vocals.wav
+song_accompaniment.wav
+song_accompaniment_with_harmony.wav
+song_bass.wav
+song_drums.wav
+song_guitar.wav
+song_piano.wav
+song_vocals.wav
+song_other.wav
 ```
 
-实际文件数量取决于所选模式、是否启用合并 MIDI，以及分离器输出。
+实际文件数量取决于所选模式、是否启用人声分离合并 MIDI，以及分离器输出。六声部模式固定输出六个 stem MIDI 和一个 `all_stems` 合并 MIDI；人声分离会创建 `_vocal_rvc/`、`_karaoke/` 子目录作为中间输出目录。
 
 ## 后端说明
 
 ### YourMT3+
 
-YourMT3+ 是默认后端。项目使用 `download_sota_models.py` 下载默认 checkpoint，并通过 `src/core/yourmt3_transcriber.py` 调用本地 `YourMT3/amt/src` 源码。
+YourMT3+ 是默认多乐器后端。项目使用 `download_sota_models.py` 下载全部官方 YourMT3+ checkpoint 模式，并准备 BS-RoFormer SW 六轨资源与 RoFormer `vocal_rvc` / `karaoke` 人声 ensemble；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用本地 `YourMT3/amt/src` 源码。
 
 需要满足：
 
@@ -171,48 +181,70 @@ python download_aria_amt_model.py
 
 ```text
 ~/.cache/music_ai_models/aria_amt
-runtime/models/aria_amt
 models/aria_amt
+```
+
+### ByteDance Pedal
+
+ByteDance Pedal 是钢琴专用的带踏板转写后端，适合独奏钢琴或清晰的钢琴 stem。它来自 ByteDance 的 High-Resolution Piano Transcription with Pedals 系统，本项目通过 `piano-transcription-inference` 包装，并保留上游 MIDI 中的延音踏板 `CC64`。
+
+安装依赖：
+
+```bash
+python -m pip install "piano-transcription-inference>=0.0.6,<0.1" "torchlibrosa>=0.1.0,<0.2" "matplotlib>=3.7.0,<4"
+```
+
+准备模型：
+
+```bash
+python download_bytedance_piano_model.py
+```
+
+默认搜索模型位置包括：
+
+```text
+~/.cache/music_ai_models/bytedance_piano
+models/bytedance_piano
 ```
 
 ## 模型与公开对比
 
-本节恢复自历史 README 中的模型对比内容，并按当前版本的实际能力重新标注：当前已发布入口同步开放 `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN` 与 `PIANO_ARIA_AMT` 五种模式。下列表格把“公开 benchmark”和“项目内入口状态”分开写，避免把研究指标误写成产品能力。
+本节恢复自历史 README 中的模型对比内容，并按当前版本的实际能力重新标注：当前已发布入口同步开放 `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 六种模式。下列表格把“公开 benchmark”和“项目内入口状态”分开写，避免把研究指标误写成产品能力。
 
 ### 当前默认转写模型：YourMT3+
 
-本项目默认使用 **YPTF.MoE+Multi (PS)**，它是 YourMT3+ 系列中的高性能多乐器变体。
+本项目默认使用 **YPTF.MoE+Multi (noPS)**。官方 Hugging Face Space 的 `app.py` 默认项就是 `YPTF.MoE+Multi (noPS)`；`YPTF.MoE+Multi (PS)` 仍保留为可选 pitch-shift checkpoint，但不再写成项目默认。
 
 | 项目 | 详情 |
 |------|------|
-| 模型全称 | YPTF.MoE+Multi (PS) |
-| 检查点 | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2` |
-| 来源 | [KAIST - YourMT3+](https://huggingface.co/spaces/mimbres/YourMT3)（[arXiv:2407.04822](https://arxiv.org/abs/2407.04822)） |
+| 模型全称 | YPTF.MoE+Multi (noPS) |
+| 检查点 | `mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops`，官方 Space 指向 `last.ckpt` |
+| 来源 | [官方 Hugging Face Space](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/app.py) / [Space noPS 评测结果](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/amt/logs/2024/mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops/result_mc13_full_plus_256_default_all_eval_final.json) / [arXiv:2407.04822](https://arxiv.org/abs/2407.04822) |
 | 架构 | Perceiver Transformer 编码器 + Multi-T5 解码器 |
 | MoE | 8 专家，Top-2 路由，SiLU 激活 |
 | 位置编码 | RoPE（部分旋转位置编码） |
 | 归一化 | RMSNorm |
-| 训练增强 | Pitch Shift 音高偏移增强（PS） |
-| 模型大小 | ~724 MB（本地 checkpoint 约 723.8 MiB） |
+| 训练增强 | 不使用 Pitch Shift 音高偏移增强（noPS） |
+| 模型大小 | noPS 官方 `last.ckpt` 本地解析约 535.5 MiB；PS 本地 `model.ckpt` 约 723.8 MiB |
 | 任务类型 | `mt3_full_plus`（128 种 GM 乐器 + 鼓） |
 
 #### 性能基准（Slakh2100 数据集）
 
-下表只保留可在 YourMT3+ 论文中核到的同口径总分。README 历史版本里的 Frame / Onset / Offset / Drum Onset 单项数值没有在已核验来源中逐项定位到，因此不再写入文档。
+下表把“项目默认 noPS 的 Space 结果文件”和“YourMT3+ 论文表的最终模型数字”分开写，避免把论文表数字直接冒充当前默认 noPS checkpoint 的单独结果。
 
-| 指标 | YPTF.MoE+Multi (PS) | MT3 (Google 基线) | 来源口径 |
-|------|---------------------|-------------------|----------|
-| Multi (Onset-Offset) F1 | **74.84** | 62.0 | YourMT3+ 论文 Slakh2100 对比表 |
+| 指标 | 当前默认 noPS | YourMT3+ 论文 YPTF.MoE+Multi | MT3 (Google 基线) | 来源口径 |
+|------|----------------|-----------------------------|-------------------|----------|
+| Multi (Onset-Offset) F1 / `multi_f` | **0.7398 / 73.98%** | **74.84** | 62.0 | Space noPS 结果文件 / YourMT3+ 论文 Slakh2100 对比表 |
 
 #### YourMT3+ 可用模型变体
 
 | 模型 | MoE | Pitch Shift | 说明 |
 |------|-----|-------------|------|
-| YPTF.MoE+Multi (PS) | 8 专家 | 有 | 默认模型，综合表现最好；本地 checkpoint 约 723.8 MiB |
-| YPTF.MoE+Multi (noPS) | 8 专家 | 无 | 无音高偏移增强 |
-| YPTF+Multi (PS) | 无 | 有 | 标准 Perceiver |
-| YPTF+Multi (noPS) | 无 | 无 | 标准 Perceiver，无增强 |
-| YourMT3+ 传统版 | 无 | 无 | 旧版兼容 |
+| YMT3+ | 无 | 无 | 官方 Colab 模型族中的基线 YourMT3+ checkpoint |
+| YPTF+Single (noPS) | 无 | 无 | Perceiver-TF + 单解码器 checkpoint |
+| YPTF+Multi (PS) | 无 | 有 | Perceiver-TF + multi-t5 多通道解码 |
+| YPTF.MoE+Multi (noPS) | 8 专家 | 无 | 本项目默认模型；官方 Hugging Face Space 默认模型；Space 结果文件中 Slakh `multi_f = 0.7398` |
+| YPTF.MoE+Multi (PS) | 8 专家 | 有 | 可选 pitch-shift MoE checkpoint；YourMT3+ 论文表中最终模型 Slakh `Multi F1 = 74.84`；本地 PS checkpoint 约 723.8 MiB |
 
 ### 当前可选后端：MIROS
 
@@ -220,30 +252,27 @@ models/aria_amt
 |------|------|----------|----------|------|
 | MIROS (MusicFM) | 多乐器 | 本地 `ai4m-miros` 仓库 + 当前工程包装器 | 固定 checkpoint 质量 | 官方仓库标注为 Music Transcription Challenge winning model，可作为桌面版 `SMART` 与 `VOCAL_SPLIT` 的多乐器后端 |
 
-质量语义：
+处理语义：
 
-- `YourMT3+` 支持 `fast / balanced / best`，当前主要影响项目后处理策略。
-- `MIROS` 当前为固定 checkpoint 质量，不响应这三档推理切换。
+- 所有入口默认使用固定高质量处理策略。
+- `MIROS` 当前为固定 checkpoint 推理，可用于与 YourMT3+ 做同任务 A/B。
 
-### 当前人声分离模型：BS-RoFormer
+### 当前人声分离模型：RoFormer vocal_rvc / karaoke ensemble
 
-`VOCAL_SPLIT` 模式使用 **BS-RoFormer**（Band-Split Rotary Transformer）进行人声/伴奏分离。
+`VOCAL_SPLIT` 模式使用 TelkNet 对齐的 **audio-separator RoFormer ensemble** 链路进行人声/伴奏分离，并保留本项目“分离后继续转 MIDI”的扩展。
 
 | 项目 | 详情 |
 |------|------|
-| 模型全称 | Band-Split RoFormer |
-| 论文 | [Music Source Separation with Band-Split RoFormer](https://arxiv.org/abs/2309.02612) (ISMIR 2023 Workshop) |
-| 检查点 | `model_bs_roformer_ep_368_sdr_12.9628.ckpt` (epoch 368) |
-| 训练者 | [ZFTurbo](https://github.com/ZFTurbo) / [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) |
-| 许可证 | MIT |
-| 指标说明 | checkpoint 文件名包含 `sdr_12.9628`（训练过程分数标签，不是统一评测口径） |
-| 公开对比说明 | 人声分离指标来源混杂，常见口径包括 Multisong、MUSDB18-HQ、MVSEP 与 audio-separator 内置分数；这些分数不能直接合并成一张排行榜。 |
-| 模型大小 | ~610 MB（本地 checkpoint 约 609.7 MiB） |
-| 调用方式 | 通过 [audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 库封装 |
-| 首次使用 | 自动从 HuggingFace 下载到 `~/.music-to-midi/models/audio-separator/` |
-| 输出选项 | 默认 2 个 MIDI（伴奏 + 人声）；可勾选额外输出 1 个合并 MIDI |
+| 模型全称 | audio-separator RoFormer ensemble presets |
+| 运行库 | `audio-separator==0.44.1` |
+| 第一段 | `ensemble:vocal_rvc`，包含 `melband_roformer_big_beta6x.ckpt` 与 `mel_band_roformer_vocals_fv4_gabox.ckpt` |
+| 第二段 | `ensemble:karaoke`，包含 `mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt`、`mel_band_roformer_karaoke_gabox_v2.ckpt`、`mel_band_roformer_karaoke_becruily.ckpt` |
+| 调用方式 | 创建 `Separator(..., ensemble_preset="vocal_rvc")` / `Separator(..., ensemble_preset="karaoke")` 后无参 `load_model()` |
+| 模型准备 | `download_sota_models.py` 会准备完整五个 checkpoint；也可分别运行 `download_vocal_model.py` 与 `download_vocal_harmony_model.py` |
+| 打包行为 | release 工作流会把 `~/.music-to-midi/models/audio-separator/` 打进便携包；运行时若缺模型会明确报错，不把库的自动下载当作已打包成功 |
+| 输出选项 | 分离阶段输出 `vocals_with_harmony`、`original_vocals`、`accompaniment`、`accompaniment_with_harmony`；MIDI 阶段默认输出伴奏 + 人声两个 MIDI，可选额外输出 1 个合并 MIDI |
 
-核心思想：将频谱按频段（band）拆分后独立建模，用 RoPE 增强时序建模，通过 Band-level 和 Temporal Self-Attention 交替捕获跨频段谐波关系和时序依赖。
+核心链路：`vocal_rvc` 先分离带和声的人声与伴奏；`karaoke` 再把带和声的人声拆成主唱与 backing vocal；最后把 backing vocal 混回伴奏侧生成 `accompaniment_with_harmony` 供检查，同时本项目继续使用人声/伴奏 stem 做 MIDI 转写。
 
 #### 人声分离模型对比
 
@@ -251,10 +280,10 @@ models/aria_amt
 
 | 模型/方向 | 来源 | 类型 | 状态 | 说明 |
 |-----------|------|------|------|------|
-| BS-RoFormer ep368（当前） | [TRvlvr download_checks](https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json) / [TRvlvr model_repo](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) / [audio-separator models-scores](https://raw.githubusercontent.com/nomadkaraoke/python-audio-separator/main/audio_separator/models-scores.json) | 本地直替（audio-separator） | 使用中 | 当前工程默认 checkpoint：`model_bs_roformer_ep_368_sdr_12.9628.ckpt`；文件名自带 `sdr_12.9628`，但这不是统一公开 benchmark，README 不再把它当作横向对比分数。 |
-| BS-RoFormer ep317（公开可下载） | [MVSEP News](https://www.mvsep.com/news) / [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | 可替换（权衡） | 公开页面能确认其为可下载 BS-RoFormer 系列模型；具体 SDR 数值因榜单与 checkpoint 映射不够清晰，未写入 README。 |
-| MelBand-RoFormer (KimberleyJensen) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [Hugging Face](https://huggingface.co/KimberleyJSN/melbandroformer) / [MVSEP Full API](https://mvsep.ru/full_api) | 本地可用（vocals/other） | 可用（偏人声） | 公开权重 `MelBandRoformer.ckpt` 可核；MVSEP/API 分数未找到与该公开 checkpoint 的一一对应说明，未写入具体数值。 |
-| SCNet XL IHF（开源权重） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [ZFTurbo Release v1.0.15](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.15) | 开源可下载（4-stem） | 需改造接入 | 公开权重是 4-stem 模型，不是本项目现有 2-stem 直替；README 不写入未能绑定到当前用法的具体分数。 |
+| RoFormer vocal_rvc + karaoke ensemble（当前） | [audio-separator `ensemble_presets.json`](https://github.com/nomadkaraoke/python-audio-separator/blob/main/audio_separator/ensemble_presets.json) | 本地 ensemble（audio-separator） | 使用中 | 与 TelkNet 对齐；`vocal_rvc` 使用 `melband_roformer_big_beta6x.ckpt` + `mel_band_roformer_vocals_fv4_gabox.ckpt`；`karaoke` 使用 3 个 karaoke checkpoint，preset 描述给出 karaoke ensemble SDR 约 10.6。 |
+| BS-RoFormer ep317（公开可下载） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | 可替换（权衡） | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` 公开可下载；ZFTurbo 表按 Multisong 写明 `SDR vocals = 10.87`。注意文件名中的 `12.9755` 是训练标签，不等同于表中 vocals SDR。 |
+| MelBand-RoFormer (KimberleyJensen) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [Hugging Face](https://huggingface.co/KimberleyJSN/melbandroformer) | 本地可用（vocals/other） | 可用（偏人声） | 公开权重 `MelBandRoformer.ckpt` 可核；ZFTurbo 表按 Multisong 写明 `SDR vocals = 10.98`。 |
+| SCNet XL IHF（开源权重） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [ZFTurbo Release v1.0.15](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.15) | 开源可下载（4-stem） | 需改造接入 | 公开权重是 4-stem 模型，不是本项目现有 2-stem 直替；ZFTurbo 表写明 MUSDB test avg 10.08、Multisong avg 9.92。 |
 | MVSEP Ensemble / BS Roformer 服务模型 | [MVSEP News](https://www.mvsep.com/news) / [MVSEP Full API](https://mvsep.ru/full_api) | API 调用（权重未公开） | 非本地直替 | 榜单服务可用，但公开下载清单未见对应 checkpoint；不作为本地可复现模型写入具体数值。 |
 | Mel-RoFormer (ISMIR 2024) | [arXiv:2409.04702](https://arxiv.org/abs/2409.04702) / [ar5iv 表2](https://ar5iv.org/html/2409.04702v1) | 论文阶段（研究模型） | 论文已发表 | MUSDB18-HQ（论文表2，场景 b，含额外数据）仅报告 Vocals SDR；这是论文特定协议，不与 Multisong / MVSEP 数字混排。 |
 | Mamba2 Meets Silence (v2, 2025) | [arXiv:2508.14556](https://arxiv.org/abs/2508.14556) | 论文阶段（研究模型） | 论文 | 摘要报告 cSDR 11.03 dB（作者称 best reported），强调稀疏人声段鲁棒性 |
@@ -285,7 +314,8 @@ models/aria_amt
 
 | 模型 | 公开来源 | Benchmark / 协议 | 公开结果 | 状态 | 说明 |
 |------|----------|------------------|----------|------|------|
-| YPTF.MoE+Multi (PS)（当前） | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [KAIST HF](https://huggingface.co/spaces/mimbres/YourMT3) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**；同表 `MT3 = 62.0` | 使用中 | 当前项目主线后端，且这是 README 中与 MT3 最同口径的一组公开数字 |
+| YPTF.MoE+Multi (noPS)（当前默认） | [官方 Space app.py](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/app.py) / [Space noPS 结果文件](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/amt/logs/2024/mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops/result_mc13_full_plus_256_default_all_eval_final.json) | Slakh `multi_f` | **0.7398 / 73.98%** | 使用中 | 当前项目默认 YourMT3+ checkpoint；对齐官方 Hugging Face Space 默认项 |
+| YPTF.MoE+Multi（论文表最终模型） | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**；同表 `MT3 = 62.0` | 论文公开结果 | 这是论文表中的最终模型口径，不把它写成当前 noPS 默认 checkpoint 的单独成绩 |
 | [MT3](https://github.com/magenta/mt3) | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [Magenta 仓库](https://github.com/magenta/mt3) | Slakh2100 `Multi (Onset-Offset) F1` | **62.0** | 开源基线 | YourMT3+ 继承并扩展的 token-based 多乐器基线 |
 | 2025 AI4Musician 冠军路线（[ai4m-miros](https://github.com/amt-os/ai4m-miros)） | [ICME 2025 Workshop](https://ai4musicians.org/2025icme.html) / [Challenge 页](https://ai4musicians.org/transcription/2025transcription.html) / [代码仓库](https://github.com/amt-os/ai4m-miros) | 官方仓库描述 | winning model | 冠军路线 / 代码可见 | 这是赛事/仓库描述，不是与 Slakh Multi F1 同口径的数值榜；公开资料显示该路线基于 MusicFM 编码器与多解码器思路 |
 
@@ -315,38 +345,18 @@ models/aria_amt
 
 趋势总结：截至 2026 年初，多乐器 AMT 的公开强路线主要沿两条线发展：一条是 `MT3 / YourMT3+ / MR-MT3` 这种 token-based 专用模型演进，另一条是 `MusicFM` 这类预训练编码器增强路线。钢琴 AMT 的公开成熟度仍然更高，但 `Transkun pip 权重`、`论文 checkpoint`、`pedal-aware 论文系统` 之间的协议差异必须写清楚，不能简单合并成一个“钢琴榜单”。
 
-## MIDI 轨道布局
+## 默认处理策略
 
-YourMT3+ 后端提供两个输出布局：
+桌面版、Space 和 Colab 不再提供可调质量入口。所有流程默认走固定高质量策略；YourMT3+ 仍使用重叠分段、智能去重和 MIDI 后处理来保留细节，其它后端按各自 checkpoint 直接推理。
 
-| 布局 | 行为 |
-|------|------|
-| 多轨（按 GM 乐器分轨） | 每个识别到的 GM 程序号尽量独立成轨；鼓统一使用 GM 鼓通道。 |
-| 单轨（旋律合并，鼓独立） | 非鼓音符合并到一条旋律轨，但保留原始通道与音色变化；鼓仍独立成轨。 |
-
-当识别到的乐器数量超过 MIDI 非鼓通道上限时，生成器会按乐器族进行合并，避免直接丢弃音符。
-
-## 转写质量
-
-桌面版和 Web 版均提供：
-
-```text
-fast
-balanced
-best
-```
-
-- 对 `YourMT3+`：质量档位会影响后处理策略。
-- 对 `MIROS`：当前包装路径使用固定 checkpoint 质量，档位不会改变 MIROS 推理本身。
-- 对 `Transkun` / `Aria-AMT`：钢琴专用模式使用固定 checkpoint 质量。
-- 对 `SIX_STEM_SPLIT`：多乐器 stem 受多乐器后端质量语义影响；piano stem 若走 Aria-AMT，则该 stem 使用固定 checkpoint 质量。
+`SIX_STEM_SPLIT` 中，WAV stem 来自 BS-RoFormer SW；stem MIDI 由一次完整混音多乐器转写结果按 GM 乐器族分配而来。piano stem 在偏好 Aria-AMT 且模型可用时会使用固定 checkpoint 的 Aria-AMT。
 
 ## 环境要求
 
 | 项目 | 要求 |
 |------|------|
 | Python | 3.10+，Windows 安装脚本优先使用 3.10-3.12 |
-| PyTorch | 2.4.0 或更高，建议与 `torchaudio`、`torchvision` 版本匹配 |
+| PyTorch | 安装脚本/发布包路径使用 `torch==2.7.0`、`torchaudio==2.7.0`、`torchvision==0.22.0` |
 | FFmpeg | 必需；用于可靠处理 MP3/M4A/FLAC/OGG 等格式 |
 | GPU | 推荐 NVIDIA CUDA；CPU 可运行但速度慢 |
 | 系统 | Windows 10/11、Linux、WSL2 |
@@ -415,23 +425,19 @@ python -m pip install --upgrade pip setuptools wheel
 
 ### 2. 安装 PyTorch
 
-CUDA 12.1:
+CUDA 12.8（推荐，RTX 50 系列 / sm_120 需要此类运行时）:
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 CUDA 11.8:
 
 ```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu118
+pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
-CPU:
-
-```bash
-pip install torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cpu
-```
+CI/CD 和便携发布包不再生成 CPU 版本；本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -446,21 +452,27 @@ git clone https://github.com/mimbres/YourMT3.git
 python download_sota_models.py
 ```
 
-如果 `YourMT3/` 已经存在，可以只执行模型下载。
+如果 `YourMT3/` 已经存在，可以只执行模型下载。`download_sota_models.py` 会同时准备全部官方 YourMT3+ checkpoint 模式、BS-RoFormer SW 六轨资源与 RoFormer `vocal_rvc` / `karaoke` 人声 ensemble。
 
 ### 5. 准备分离与钢琴模型
 
 ```bash
 python download_vocal_model.py
 python download_multistem_model.py
+python download_vocal_harmony_model.py
 python download_aria_amt_model.py
+python download_bytedance_piano_model.py
+python download_miros_model.py
 ```
 
 模型默认缓存到：
 
 ```text
+~/.cache/music_ai_models/yourmt3_all
 ~/.music-to-midi/models/audio-separator
 ~/.cache/music_ai_models/aria_amt
+~/.cache/music_ai_models/bytedance_piano
+external/ai4m-miros
 ```
 
 Transkun 的模型资源随 `transkun` 包安装；若钢琴专用 Transkun 模式提示资源缺失，请执行 `python -m pip install --force-reinstall transkun`。
@@ -503,7 +515,7 @@ cd space
 python app.py
 ```
 
-Space 版会尝试从 Hugging Face Space 仓库同步 YourMT3 源码，并自动检查默认 YourMT3+ 与 Aria-AMT 模型权重。
+Space 版会尝试从 Hugging Face Space 仓库同步 YourMT3 源码。运行转换时会按所选模式检查/准备 YourMT3+ 官方 checkpoint、BS-RoFormer SW、RoFormer `vocal_rvc` / `karaoke`、Aria-AMT 或 ByteDance Pedal 资源；缺失资源准备失败会在后续流程中显式暴露。
 
 ## 便携版打包
 
@@ -525,11 +537,23 @@ powershell -ExecutionPolicy Bypass -File .\build_portable.ps1 `
 
 ```text
 YourMT3/amt/src
-YourMT3 模型缓存
-audio-separator 模型缓存
-Aria-AMT 模型缓存
+YourMT3 模型缓存 -> models/yourmt3_all
+audio-separator 模型缓存 -> models/audio-separator
+Aria-AMT 模型缓存 -> models/aria_amt
+ByteDance Piano 模型缓存 -> models/bytedance_piano
 可选 MIROS 本地仓库
 ffmpeg.exe / ffprobe.exe
+```
+
+便携版资源来源优先级：
+
+```text
+MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR 或 ~/.cache/music_ai_models/yourmt3_all 或 checkpoints/yourmt3_all
+MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR 或 ~/.music-to-midi/models/audio-separator 或 checkpoints/audio-separator
+MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR 或 ~/.cache/music_ai_models/aria_amt 或 checkpoints/aria_amt
+MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR 或 ~/.cache/music_ai_models/bytedance_piano 或 checkpoints/bytedance_piano
+MUSIC_TO_MIDI_BUNDLE_MIROS_DIR 或 external/ai4m-miros / ai4m-miros / .tmp/ai4m-miros
+MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR 或 tools/ffmpeg / ffmpeg
 ```
 
 分发时请分发整个目录：
@@ -550,14 +574,14 @@ src/
     miros_transcriber.py     # MIROS 本地包装器
     transkun_transcriber.py  # Transkun 钢琴专用后端
     aria_amt_transcriber.py  # Aria-AMT 钢琴专用后端
+    bytedance_piano_transcriber.py # ByteDance Pedal 钢琴专用后端
     vocal_separator.py       # 人声/伴奏分离
     multi_stem_separator.py  # 六声部分离
-    vocal_harmony_separator.py # 主唱/和声实验分离
     midi_generator.py        # MIDI 生成与后处理
     beat_detector.py         # BPM/节拍检测
   gui/
     main_window.py           # PyQt6 主窗口
-    widgets/track_panel.py   # 模式、后端、轨道布局选择
+    widgets/track_panel.py   # 模式、后端、模型选择
     workers/processing_worker.py
   models/
     data_models.py           # Config、ProcessingResult、NoteEvent 等
@@ -568,11 +592,12 @@ src/
 
 space/app.py                 # Gradio Web 界面
 colab_notebook.ipynb         # Colab 运行入口
-download_sota_models.py      # YourMT3+ 默认模型下载
+download_sota_models.py      # YourMT3+ 官方模式 + BS-RoFormer SW 六轨资源下载
 download_vocal_model.py      # 人声分离模型下载
 download_multistem_model.py  # 六声部分离模型下载
 download_aria_amt_model.py   # Aria-AMT 模型下载
-download_vocal_harmony_model.py # 主唱/和声实验模型下载
+download_bytedance_piano_model.py # ByteDance Pedal 模型下载
+download_vocal_harmony_model.py # RoFormer karaoke 人声模型下载
 MusicToMidi.spec             # PyInstaller 配置
 ```
 
@@ -647,13 +672,14 @@ python download_sota_models.py
 确认依赖和模型：
 
 ```bash
-pip install "audio-separator>=0.38.0" "onnxruntime>=1.16.0,<2"
+pip install "audio-separator==0.44.1" "onnxruntime==1.23.2" --no-deps
 python download_vocal_model.py
+python download_vocal_harmony_model.py
 ```
 
 ### 六声部分离不可用
 
-确认 `audio-separator>=0.38.0` 已安装，并下载 BS-RoFormer SW 资源：
+确认 `audio-separator==0.44.1` 已安装，并下载 BS-RoFormer SW 资源：
 
 ```bash
 python download_multistem_model.py
@@ -672,6 +698,13 @@ Aria-AMT 模式需要 `aria-amt` 包和 checkpoint：
 ```bash
 python -m pip install git+https://github.com/EleutherAI/aria-amt.git
 python download_aria_amt_model.py
+```
+
+ByteDance Pedal 模式需要 `piano-transcription-inference`、`torchlibrosa` 和 ByteDance Piano checkpoint：
+
+```bash
+python -m pip install "piano-transcription-inference>=0.0.6,<0.1" "torchlibrosa>=0.1.0,<0.2"
+python download_bytedance_piano_model.py
 ```
 
 ### MIROS 不可用

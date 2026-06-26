@@ -62,30 +62,55 @@ sys.exit(0 if not missing else 1)
     }
 }
 
-# 检查 4：BS-RoFormer 人声分离模型
+# 检查 4：BS-RoFormer SW 六轨分离模型
 if (-not $NEED_INSTALL) {
-    Write-Info "检查 BS-RoFormer 人声分离模型..."
-    $checkVocalScript = @"
+    Write-Info "检查 BS-RoFormer SW 六轨分离模型..."
+    $checkMultiStemScript = @"
 import sys
 sys.path.insert(0, r'$REPO_DIR')
-from download_vocal_model import is_vocal_model_available, resolve_vocal_model_path
-from src.core.vocal_separator import VocalSeparator
-target = resolve_vocal_model_path()
-print('BS-RoFormer model:', target)
-print('audio-separator package:', VocalSeparator.is_available())
-print('BS-RoFormer model available:', VocalSeparator.is_model_available())
-sys.exit(0 if VocalSeparator.is_available() and is_vocal_model_available() else 1)
+from download_multistem_model import validate_multistem_assets
+model_path, config_path = validate_multistem_assets()
+print('BS-RoFormer SW checkpoint:', model_path)
+print('BS-RoFormer SW config:', config_path)
+sys.exit(0)
 "@
-    & "$VENV_PYTHON" -c $checkVocalScript
+    & "$VENV_PYTHON" -c $checkMultiStemScript
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "未找到 BS-RoFormer 模型权重"
+        Write-Warn "未找到 BS-RoFormer SW 六轨模型，或文件校验失败"
+        Write-Warn "  请先运行: python download_multistem_model.py"
         $NEED_INSTALL = $true
     } else {
-        Write-Ok "BS-RoFormer 模型权重检查通过"
+        Write-Ok "BS-RoFormer SW 六轨模型检查通过"
     }
 }
 
-# 检查 5：Aria-AMT 钢琴后端
+# 检查 5：RoFormer vocal_rvc/karaoke 人声分离 ensemble 模型
+if (-not $NEED_INSTALL) {
+    Write-Info "检查 RoFormer vocal_rvc/karaoke 人声分离 ensemble 模型..."
+    $checkVocalScript = @"
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from download_vocal_harmony_model import is_chorus_model_available, resolve_chorus_model_paths
+from download_vocal_model import is_vocal_model_available, resolve_vocal_model_paths
+from src.core.vocal_separator import VocalSeparator
+print('RoFormer vocal_rvc models:', [str(path) for path in resolve_vocal_model_paths()])
+print('RoFormer karaoke models:', [str(path) for path in resolve_chorus_model_paths()])
+print('audio-separator package:', VocalSeparator.is_available())
+print('RoFormer vocal_rvc available:', is_vocal_model_available())
+print('RoFormer karaoke available:', is_chorus_model_available())
+print('RoFormer full vocal split available:', VocalSeparator.is_model_available())
+sys.exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_chorus_model_available() and VocalSeparator.is_model_available() else 1)
+"@
+    & "$VENV_PYTHON" -c $checkVocalScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "未找到 RoFormer vocal_rvc/karaoke ensemble 模型权重"
+        $NEED_INSTALL = $true
+    } else {
+        Write-Ok "RoFormer vocal_rvc/karaoke ensemble 模型权重检查通过"
+    }
+}
+
+# 检查 6：Aria-AMT 钢琴后端
 if (-not $NEED_INSTALL) {
     Write-Info "检查 Aria-AMT 钢琴后端..."
     $checkAriaScript = @"
@@ -109,7 +134,7 @@ sys.exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_availab
     }
 }
 
-# 检查 6：ByteDance Piano 带踏板钢琴后端
+# 检查 7：ByteDance Piano 带踏板钢琴后端
 if (-not $NEED_INSTALL) {
     Write-Info "检查 ByteDance Piano 带踏板钢琴后端..."
     $checkByteDanceScript = @"
@@ -131,7 +156,7 @@ sys.exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_
     }
 }
 
-# 检查 7：MIROS 多乐器后端
+# 检查 8：MIROS 多乐器后端
 if (-not $NEED_INSTALL) {
     Write-Info "检查 MIROS 多乐器后端..."
     $checkMirosScript = @"
