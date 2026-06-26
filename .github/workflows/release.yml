@@ -140,59 +140,33 @@ jobs:
           python download_bytedance_piano_model.py
 
           echo "=== Download MIROS MusicFM model ==="
-          MIROS_MIRROR_DIR="$GITHUB_WORKSPACE/.tmp/miros-mirror"
-          mkdir -p "$MIROS_MIRROR_DIR"
-          MIROS_MIRROR_RELEASE_TAG=""
-          while IFS= read -r candidate_tag; do
-            [ -n "$candidate_tag" ] || continue
-            count="$(gh release view "$candidate_tag" \
-              --repo ${{ github.repository }} \
-              --json assets \
-              -q '[.assets[].name | select(startswith("miros-last.ckpt.part"))] | length')"
-            if [ "$count" -gt 0 ]; then
-              MIROS_MIRROR_RELEASE_TAG="$candidate_tag"
-              break
-            fi
-          done < <(gh release list --repo ${{ github.repository }} --limit 20 --json tagName -q '.[].tagName')
-          if [ -z "$MIROS_MIRROR_RELEASE_TAG" ]; then
-            echo "::error::No GitHub Release with MIROS mirror assets was found. Cloud packaging requires miros-last.ckpt.part* assets."
+          WORKSPACE_DIR="$(pwd)"
+          MIROS_PORTABLE_RELEASE_TAG="v1.0.16"
+          MIROS_PORTABLE_ROOT="$WORKSPACE_DIR/.tmp/miros-portable"
+          rm -rf "$MIROS_PORTABLE_ROOT" "$WORKSPACE_DIR/external/ai4m-miros"
+          mkdir -p "$MIROS_PORTABLE_ROOT" "$WORKSPACE_DIR/external"
+          MIROS_PORTABLE_PARTS="$WORKSPACE_DIR/.tmp/miros-portable-parts.tsv"
+          gh release view "$MIROS_PORTABLE_RELEASE_TAG" \
+            --repo ${{ github.repository }} \
+            --json assets \
+            -q '.assets[] | select(.name | startswith("MusicToMidi-Linux-GPU-Portable.tar.gz.part")) | [.name, .url] | @tsv' \
+            | sort > "$MIROS_PORTABLE_PARTS"
+          if [ ! -s "$MIROS_PORTABLE_PARTS" ]; then
+            echo "::error::No Linux portable release parts found on ${MIROS_PORTABLE_RELEASE_TAG}; cannot restore the packaged MIROS checkpoint."
             exit 1
           fi
-          echo "Downloading MIROS release mirror assets from ${MIROS_MIRROR_RELEASE_TAG}"
-          gh release download "$MIROS_MIRROR_RELEASE_TAG" \
-            --repo ${{ github.repository }} \
-            --pattern "miros-*" \
-            --dir "$MIROS_MIRROR_DIR" \
-            --clobber
-          export MIROS_MIRROR_DIR
-          python - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["MIROS_MIRROR_DIR"])
-          expected = {
-              "miros-last.ckpt.partaa": (1992294400, "ef3c6d227bb80f8520c9c987d8c34c3c3a025e0a17cf0fd31169aa1b795b92dd"),
-              "miros-last.ckpt.partab": (1992294400, "cd0b1a20299b9b17447e5955a4339453242f323bbc1e274ad01b9aea220b4f09"),
-              "miros-pretrained_msd.pt": (1316802088, "218b483a0256ddef736267425fabb166fd97008983696bb9270def464b47bded"),
-          }
-          for name, (expected_size, expected_sha256) in expected.items():
-              path = root / name
-              if not path.is_file():
-                  raise RuntimeError(f"Missing MIROS release mirror asset: {name}")
-              actual_size = path.stat().st_size
-              if actual_size != expected_size:
-                  raise RuntimeError(f"{name} size mismatch: {actual_size} != {expected_size}")
-              hasher = hashlib.sha256()
-              with path.open("rb") as handle:
-                  for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-                      hasher.update(chunk)
-              digest = hasher.hexdigest()
-              if digest != expected_sha256:
-                  raise RuntimeError(f"{name} sha256 mismatch: {digest} != {expected_sha256}")
-          print("MIROS release mirror assets verified")
-          PY
-          export MUSIC_TO_MIDI_MIROS_MIRROR_DIR="$MIROS_MIRROR_DIR"
+          echo "Streaming packaged MIROS backend from ${MIROS_PORTABLE_RELEASE_TAG}"
+          (
+            while IFS=$'\t' read -r asset_name asset_url; do
+              echo "Streaming ${asset_name}" >&2
+              curl -L --fail --retry 3 --retry-delay 5 "$asset_url"
+            done < "$MIROS_PORTABLE_PARTS"
+          ) | tar -xz -C "$MIROS_PORTABLE_ROOT" --wildcards "MusicToMidi-Linux-GPU/_internal/external/ai4m-miros/*"
+          mv "$MIROS_PORTABLE_ROOT/MusicToMidi-Linux-GPU/_internal/external/ai4m-miros" "$WORKSPACE_DIR/external/ai4m-miros"
+          test -f "$WORKSPACE_DIR/external/ai4m-miros/main.py"
+          test -f "$WORKSPACE_DIR/external/ai4m-miros/transcribe.py"
+          test -f "$WORKSPACE_DIR/external/ai4m-miros/model/musicfm/data/pretrained_msd.pt"
+          test -f "$WORKSPACE_DIR/external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt"
           python download_miros_model.py
 
           echo "=== Verify downloaded models ==="
