@@ -106,6 +106,30 @@ class MultistemModelDownloaderTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
 
+    def test_console_encoding_is_forced_to_utf8(self):
+        class FakeStream:
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = FakeStream()
+        stderr = FakeStream()
+        original_stdout = download_multistem_model.sys.stdout
+        original_stderr = download_multistem_model.sys.stderr
+        try:
+            download_multistem_model.sys.stdout = stdout
+            download_multistem_model.sys.stderr = stderr
+
+            download_multistem_model.configure_console_encoding()
+        finally:
+            download_multistem_model.sys.stdout = original_stdout
+            download_multistem_model.sys.stderr = original_stderr
+
+        self.assertEqual(stdout.calls, [{"encoding": "utf-8", "errors": "replace"}])
+        self.assertEqual(stderr.calls, [{"encoding": "utf-8", "errors": "replace"}])
+
 
 if __name__ == "__main__":
     unittest.main()

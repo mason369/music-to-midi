@@ -33,6 +33,13 @@ ROFORMER_SW_CONFIG_URL = (
 DEFAULT_CACHE_DIR = Path.home() / ".music-to-midi" / "models" / "audio-separator"
 
 
+def configure_console_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def resolve_multistem_model_paths(
     cache_dir: Path = DEFAULT_CACHE_DIR,
     model_name: str = ROFORMER_SW_MODEL,
@@ -297,6 +304,8 @@ def download_multistem_model(
 
 
 def main(argv: list[str]) -> int:
+    configure_console_encoding()
+
     parser = argparse.ArgumentParser(description=f"下载 {ROFORMER_SW_DISPLAY_NAME} 六声部分离模型")
     parser.add_argument(
         "--cache-dir",
