@@ -175,7 +175,9 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("--self-test", workflow)
         self.assertIn('Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"', workflow)
-        self.assertIn('mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX"', workflow)
+        self.assertIn('SMOKE_DIR="./dist/MusicToMidi"', workflow)
+        self.assertNotIn('cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"', workflow)
+        self.assertIn('rm -rf "$SMOKE_DIR/runtime"', workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
 
     def test_release_workflow_self_test_has_timeout_and_log_diagnostics(self):
