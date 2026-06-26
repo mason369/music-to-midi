@@ -165,7 +165,7 @@ function Assert-SixStemAssets {
 
     & $PythonPath (Join-Path $Root "download_multistem_model.py") --cache-dir $ModelDir --check-only
     if ($LASTEXITCODE -ne 0) {
-        throw "Invalid BS-RoFormer SW six-stem assets in $Label: $ModelDir"
+        throw "Invalid BS-RoFormer SW six-stem assets in ${Label}: $ModelDir"
     }
 }
 
