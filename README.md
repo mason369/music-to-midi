@@ -168,7 +168,7 @@ logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
 
 MIROS 还需要其上游运行依赖。`requirements.txt` 保证本项目运行，不保证完整安装 MIROS 上游环境。
 
-下载脚本会克隆上游 `amt-os/ai4m-miros` 代码；`pretrained_msd.pt` 使用官方 Hugging Face `minzwon/MusicFM` 权重，`last.ckpt` 按上游 `main.py` 中的 Google Drive 官方文件 ID 获取。若 Google Drive 返回配额限制页，发布流程会直接失败并显示真实原因，不会改用未知来源或静默跳过。
+下载脚本会克隆上游 `amt-os/ai4m-miros` 代码；`pretrained_msd.pt` 使用官方 Hugging Face `minzwon/MusicFM` 权重，`last.ckpt` 按上游 `main.py` 中的 Google Drive 官方文件 ID 获取。GitHub Actions 发布打包不依赖实时 Google Drive 配额，而是从本仓库既有 GitHub Release 中下载已校验的 `miros-last.ckpt.part*` 云端镜像资产并重组；若镜像资产缺失、大小/hash 不匹配或 checkpoint 容器不完整，发布流程会直接失败并显示真实原因，不会改用未知来源或静默跳过。
 
 ### Transkun
 

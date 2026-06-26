@@ -151,7 +151,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
         self.assertIn("Download all official YourMT3+ model modes", workflow)
 
-    def test_release_workflow_prepares_miros_instead_of_optionally_copying_it(self):
+    def test_release_workflow_prepares_miros_from_verified_release_mirror(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("python download_miros_model.py", workflow)
@@ -161,11 +161,14 @@ class PortableReleaseContractTests(unittest.TestCase):
             "ls -lh external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt",
             workflow,
         )
-        self.assertNotIn("MUSIC_TO_MIDI_MIROS_MIRROR_DIR", workflow)
-        self.assertNotIn("MIROS_MIRROR_COUNT", workflow)
-        self.assertNotIn('gh release download "${MIROS_RELEASE_TAG}"', workflow)
-        self.assertNotIn('gh release download "${MIROS_MIRROR_RELEASE_TAG}"', workflow)
-        self.assertNotIn('--pattern "miros-*"', workflow)
+        self.assertIn("MUSIC_TO_MIDI_MIROS_MIRROR_DIR", workflow)
+        self.assertIn("MIROS_MIRROR_RELEASE_TAG", workflow)
+        self.assertIn('gh release download "$MIROS_MIRROR_RELEASE_TAG"', workflow)
+        self.assertIn('--pattern "miros-*"', workflow)
+        self.assertIn("MIROS release mirror assets verified", workflow)
+        self.assertIn("miros-last.ckpt.partaa", workflow)
+        self.assertIn("ef3c6d227bb80f8520c9c987d8c34c3c3a025e0a17cf0fd31169aa1b795b92dd", workflow)
+        self.assertIn("No GitHub Release with MIROS mirror assets was found", workflow)
         self.assertNotIn("canonical Google Drive source", workflow)
         self.assertNotIn('if [ -d "$GITHUB_WORKSPACE/.tmp/ai4m-miros" ]', workflow)
 

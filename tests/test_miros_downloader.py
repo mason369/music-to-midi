@@ -1,6 +1,8 @@
+import os
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -47,6 +49,72 @@ class MirosDownloaderTests(unittest.TestCase):
             self.assertTrue((repo / MirosTranscriber.PRETRAINED_REL_PATH).is_file())
             self.assertTrue(any(command[:2] == ["git", "clone"] for command in calls))
             self.assertEqual(2, sum(1 for command in calls if command[0] == "curl"))
+
+    def test_prepare_restores_finetuned_checkpoint_from_release_mirror_parts(self):
+        calls = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "ai4m-miros"
+            mirror = root / "mirror"
+            mirror.mkdir()
+            repo.mkdir()
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+
+            archive = root / "last.ckpt"
+            with zipfile.ZipFile(archive, "w") as checkpoint:
+                checkpoint.writestr("metadata.json", "{}")
+            payload = archive.read_bytes()
+            split_at = len(payload) // 2
+            (mirror / "miros-last.ckpt.partaa").write_bytes(payload[:split_at])
+            (mirror / "miros-last.ckpt.partab").write_bytes(payload[split_at:])
+
+            def fake_run(command, **_kwargs):
+                calls.append(command)
+                output = Path(command[command.index("-o") + 1])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"x" * 16)
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.dict(
+                os.environ,
+                {download_miros_model.MIROS_MIRROR_DIR_ENV: str(mirror)},
+            ), patch.object(download_miros_model, "MIROS_MIN_CHECKPOINT_BYTES", len(payload)), patch.object(
+                download_miros_model,
+                "MIROS_MIN_PRETRAINED_BYTES",
+                8,
+            ), patch.object(
+                download_miros_model.subprocess,
+                "run",
+                side_effect=fake_run,
+            ):
+                download_miros_model.prepare_miros_model(repo)
+
+            checkpoint_path = repo / MirosTranscriber.CHECKPOINT_REL_PATH
+            self.assertEqual(payload, checkpoint_path.read_bytes())
+            self.assertEqual(1, len(calls))
+            self.assertEqual(download_miros_model.MIROS_PRETRAINED_URL, calls[0][-1])
+
+    def test_prepare_rejects_corrupt_release_mirror_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "ai4m-miros"
+            mirror = root / "mirror"
+            mirror.mkdir()
+            repo.mkdir()
+            (repo / "main.py").write_text("print('miros')", encoding="utf-8")
+            (repo / "transcribe.py").write_text("print('miros')", encoding="utf-8")
+            (mirror / "miros-last.ckpt.partaa").write_bytes(b"PK\x03\x04" + b"x" * 32)
+
+            with patch.dict(
+                os.environ,
+                {download_miros_model.MIROS_MIRROR_DIR_ENV: str(mirror)},
+            ), patch.object(download_miros_model, "MIROS_MIN_CHECKPOINT_BYTES", 8):
+                with self.assertRaises(RuntimeError) as error:
+                    download_miros_model.prepare_miros_model(repo)
+
+        self.assertIn("invalid or incomplete", str(error.exception))
 
     def test_prepare_rejects_incomplete_google_drive_download(self):
         with tempfile.TemporaryDirectory() as tmp:
