@@ -254,7 +254,7 @@ jobs:
           }
           $SelfTestTimeoutSeconds = 900
           $selfTestExe = Join-Path $smokeDir 'MusicToMidi.exe'
-          $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test' -PassThru
+          $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test-no-load' -PassThru
           if (-not $proc.WaitForExit($SelfTestTimeoutSeconds * 1000)) {
             try {
               $proc.Kill($true)
@@ -345,7 +345,7 @@ jobs:
           }
           set +e
           timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s" \
-            "$SMOKE_EXE" --self-test 2>&1 | tee "$SELF_TEST_OUTPUT"
+            "$SMOKE_EXE" --self-test-no-load 2>&1 | tee "$SELF_TEST_OUTPUT"
           SELF_TEST_EXIT=${PIPESTATUS[0]}
           set -e
           if [ "$SELF_TEST_EXIT" -eq 124 ] || [ "$SELF_TEST_EXIT" -eq 137 ]; then

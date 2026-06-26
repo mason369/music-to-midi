@@ -334,15 +334,23 @@ def main():
         from src.i18n.translator import t
 
         print(
-            f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-miros]\n"
+            f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] [--self-test-miros]\n"
             "\n"
             f"{t('cli.options')}:\n"
             f"  -h, --help          {t('cli.help')}\n"
             f"  --self-test         {t('cli.self_test')}\n"
+            f"  --self-test-no-load {t('cli.self_test_no_load')}\n"
             f"  --self-test-miros   {t('cli.self_test_miros')}\n"
             f"  --miros-worker      {t('cli.miros_worker')}"
         )
         sys.exit(0)
+    if "--self-test-no-load" in sys.argv:
+        sys.exit(
+            _run_self_test(
+                success_message="SELF-TEST OK: YourMT3+ available without model load",
+                load_model=False,
+            )
+        )
     if "--self-test" in sys.argv:
         sys.exit(_run_self_test())
     if "--self-test-miros" in sys.argv:

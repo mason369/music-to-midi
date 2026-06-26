@@ -9,6 +9,7 @@
     "options": "选项",
     "help": "显示帮助并退出",
     "self_test": "检查 YourMT3+ 可用性，不打开图形界面",
+    "self_test_no_load": "检查便携包资源和 YourMT3+ 入口，不加载模型",
     "self_test_miros": "检查 MIROS 可用性，不打开图形界面",
     "miros_worker": "桌面应用内部使用的 MIROS worker 模式"
   },
