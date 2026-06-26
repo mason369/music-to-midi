@@ -92,6 +92,39 @@ class MainSelfTestTests(unittest.TestCase):
         self.assertEqual(calls, ["is_available", "init"])
         self.assertIn("SELF-TEST OK: MIROS available", stdout.getvalue())
 
+    def test_self_test_can_check_yourmt3_without_loading_model(self):
+        fake_logger = Mock()
+        calls = []
+
+        class FakeYourMT3Transcriber:
+            def __init__(self, _config):
+                calls.append("init")
+
+            @staticmethod
+            def is_available():
+                calls.append("is_available")
+                return True
+
+            def _load_model(self):
+                calls.append("load_model")
+
+            def unload_model(self):
+                calls.append("unload_model")
+
+        stdout = io.StringIO()
+        with patch.object(main_module, "setup_chinese_environment"), patch.object(
+            main_module, "get_logs_dir", return_value="logs"
+        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+            exit_code = main_module._run_self_test(
+                transcriber_cls=FakeYourMT3Transcriber,
+                success_message="SELF-TEST OK: YourMT3+ available without model load",
+                load_model=False,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls, ["is_available", "init", "unload_model"])
+        self.assertIn("without model load", stdout.getvalue())
+
     def test_self_test_returns_one_with_reason_when_yourmt3_unavailable(self):
         fake_logger = Mock()
 
@@ -152,7 +185,28 @@ class MainSelfTestTests(unittest.TestCase):
         self.assertIn("用法: python -m src.main", stdout.getvalue())
         self.assertIn("检查 YourMT3+ 可用性", stdout.getvalue())
         self.assertIn("--self-test", stdout.getvalue())
+        self.assertIn("--self-test-no-load", stdout.getvalue())
         self.assertIn("--self-test-miros", stdout.getvalue())
+        prepare_torch.assert_not_called()
+        qapplication.assert_not_called()
+
+    def test_main_dispatches_self_test_no_load_before_gui_startup_and_torch_preload(self):
+        with patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-no-load"]), patch.object(
+            main_module,
+            "_run_self_test",
+            return_value=0,
+        ) as self_test, patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch, patch(
+            "PyQt6.QtWidgets.QApplication",
+            create=True,
+        ) as qapplication:
+            with self.assertRaises(SystemExit) as cm:
+                main_module.main()
+
+        self.assertEqual(cm.exception.code, 0)
+        self_test.assert_called_once_with(
+            success_message="SELF-TEST OK: YourMT3+ available without model load",
+            load_model=False,
+        )
         prepare_torch.assert_not_called()
         qapplication.assert_not_called()
 

@@ -9,6 +9,7 @@
     "options": "Options",
     "help": "Show this help and exit",
     "self_test": "Check YourMT3+ availability without opening the GUI",
+    "self_test_no_load": "Check portable resources and the YourMT3+ entrypoint without loading the model",
     "self_test_miros": "Check MIROS availability without opening the GUI",
     "miros_worker": "Internal MIROS worker mode used by the desktop app"
   },

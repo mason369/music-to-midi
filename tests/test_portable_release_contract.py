@@ -173,7 +173,7 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_workflow_smoke_tests_built_binary(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("--self-test", workflow)
+        self.assertIn("--self-test-no-load", workflow)
         self.assertIn('Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"', workflow)
         self.assertIn('SMOKE_DIR="$(pwd)/dist/MusicToMidi"', workflow)
         self.assertIn('SMOKE_EXE="$SMOKE_DIR/MusicToMidi"', workflow)
@@ -192,7 +192,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("SELF_TEST_TIMEOUT_SECONDS=900", workflow)
         self.assertIn("timeout-minutes: 20", workflow)
         self.assertIn('timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s"', workflow)
-        self.assertIn('"$SMOKE_EXE" --self-test', workflow)
+        self.assertIn('"$SMOKE_EXE" --self-test-no-load', workflow)
         self.assertIn('2>&1 | tee "$SELF_TEST_OUTPUT"', workflow)
         self.assertIn("SELF_TEST_EXIT=${PIPESTATUS[0]}", workflow)
         self.assertIn('[ "$SELF_TEST_EXIT" -eq 137 ]', workflow)
