@@ -257,7 +257,7 @@ class MainSelfTestTests(unittest.TestCase):
         self.assertIn("miros exploded", payload["error"])
         self.assertIn("RuntimeError: miros exploded", payload["traceback"])
 
-    def test_miros_worker_imports_transcribe_then_fails_fast_for_missing_input(self):
+    def test_miros_worker_fails_fast_for_missing_input_before_import(self):
         fake_transcribe = types.ModuleType("transcribe")
         calls = []
 

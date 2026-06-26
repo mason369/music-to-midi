@@ -266,6 +266,10 @@ def _run_miros_worker(argv=None) -> int:
     repo_path_added = False
     repo_dir = os.getcwd()
     try:
+        input_path = Path(args.input)
+        if not input_path.is_file():
+            raise FileNotFoundError(f"MIROS input audio does not exist: {input_path}")
+
         if repo_dir not in sys.path:
             sys.path.insert(0, repo_dir)
             repo_path_added = True
@@ -275,10 +279,6 @@ def _run_miros_worker(argv=None) -> int:
         # while importing the upstream transcribe module.
         with _temporary_onnxruntime_stub():
             from transcribe import transcribe
-
-        input_path = Path(args.input)
-        if not input_path.is_file():
-            raise FileNotFoundError(f"MIROS input audio does not exist: {input_path}")
 
         transcribe(str(input_path), args.output)
         output_path = Path(args.output)

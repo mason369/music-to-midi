@@ -24,12 +24,12 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("tests/test_official_midi_routes.py", workflow)
 
-    def test_release_workflow_smoke_tests_miros_worker_import_without_onnxruntime_failure(self):
+    def test_release_workflow_smoke_tests_miros_worker_missing_input_before_heavy_import(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("--miros-worker", workflow)
-        self.assertIn("miros-worker-import-smoke.json", workflow)
-        self.assertIn("onnxruntime_pybind11_state|DLL load failed", workflow)
+        self.assertIn("miros-worker-missing-input-smoke.json", workflow)
+        self.assertNotIn("miros-worker-import-smoke", workflow)
         self.assertIn("_internal\\external\\ai4m-miros", workflow)
         self.assertIn("_internal/external/ai4m-miros", workflow)
 
@@ -202,16 +202,16 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MIROS_WORKER_OUTPUT=", workflow)
         self.assertIn("$MirosWorkerTimeoutSeconds = 120", workflow)
         self.assertIn("$worker.WaitForExit($MirosWorkerTimeoutSeconds * 1000)", workflow)
-        self.assertIn("MIROS worker import smoke timed out after ${MirosWorkerTimeoutSeconds}s", workflow)
+        self.assertIn("MIROS worker missing-input smoke timed out after ${MirosWorkerTimeoutSeconds}s", workflow)
         self.assertIn('timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s"', workflow)
         self.assertIn('"$SMOKE_EXE" \\', workflow)
         self.assertIn('2>&1 | tee "$MIROS_WORKER_OUTPUT"', workflow)
         self.assertIn("WORKER_EXIT=${PIPESTATUS[0]}", workflow)
         self.assertIn('[ "$WORKER_EXIT" -eq 137 ]', workflow)
         self.assertIn("dump_miros_worker_logs", workflow)
-        self.assertIn("MIROS worker import smoke returned an unexpected status", workflow)
+        self.assertIn("MIROS worker missing-input smoke returned an unexpected status", workflow)
         self.assertIn("MIROS input audio does not exist", workflow)
-        self.assertIn("MIROS worker import smoke failed before the expected missing-input check", workflow)
+        self.assertIn("MIROS worker missing-input smoke failed before the expected missing-input check", workflow)
 
     def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
