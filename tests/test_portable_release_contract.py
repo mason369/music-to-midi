@@ -172,6 +172,18 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX"', workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
 
+    def test_release_workflow_self_test_has_timeout_and_log_diagnostics(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("$SelfTestTimeoutSeconds = 900", workflow)
+        self.assertIn("$proc.WaitForExit($SelfTestTimeoutSeconds * 1000)", workflow)
+        self.assertIn("$proc.Kill($true)", workflow)
+        self.assertIn("Portable self-test timed out after ${SelfTestTimeoutSeconds}s", workflow)
+        self.assertIn("SELF_TEST_TIMEOUT_SECONDS=900", workflow)
+        self.assertIn('timeout "$SELF_TEST_TIMEOUT_SECONDS" "$SMOKE_DIR/MusicToMidi" --self-test', workflow)
+        self.assertIn("dump_linux_portable_logs", workflow)
+        self.assertIn("Portable self-test did not write the success marker to runtime logs", workflow)
+
     def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 

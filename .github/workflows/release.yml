@@ -252,7 +252,24 @@ jobs:
           if (Test-Path $logs) {
             Remove-Item -LiteralPath $logs -Recurse -Force
           }
-          $proc = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList '--self-test' -Wait -PassThru
+          $SelfTestTimeoutSeconds = 900
+          $selfTestExe = Join-Path $smokeDir 'MusicToMidi.exe'
+          $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test' -PassThru
+          if (-not $proc.WaitForExit($SelfTestTimeoutSeconds * 1000)) {
+            try {
+              $proc.Kill($true)
+            } catch {
+              $proc.Kill()
+            }
+            $logText = ""
+            if (Test-Path $logs) {
+              $latestTimeoutLog = Get-ChildItem -LiteralPath $logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+              if ($latestTimeoutLog) {
+                $logText = Get-Content -LiteralPath $latestTimeoutLog -Raw
+              }
+            }
+            throw "Portable self-test timed out after ${SelfTestTimeoutSeconds}s.`n$logText"
+          }
           if (-not (Test-Path $logs)) {
             throw "Portable self-test did not produce runtime logs. ExitCode=$($proc.ExitCode)"
           }
@@ -297,7 +314,35 @@ jobs:
           SMOKE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX")"
           cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"
           chmod +x "$SMOKE_DIR/MusicToMidi"
-          "$SMOKE_DIR/MusicToMidi" --self-test
+          SELF_TEST_TIMEOUT_SECONDS=900
+          dump_linux_portable_logs() {
+            local log_dir="$SMOKE_DIR/runtime/logs"
+            if [ -d "$log_dir" ]; then
+              echo "=== Portable runtime logs: $log_dir ===" >&2
+              find "$log_dir" -maxdepth 1 -type f -print -exec tail -n 200 {} \; >&2 || true
+            else
+              echo "No portable runtime log directory found: $log_dir" >&2
+            fi
+          }
+          set +e
+          timeout "$SELF_TEST_TIMEOUT_SECONDS" "$SMOKE_DIR/MusicToMidi" --self-test
+          SELF_TEST_EXIT=$?
+          set -e
+          if [ "$SELF_TEST_EXIT" -eq 124 ]; then
+            echo "Portable self-test timed out after ${SELF_TEST_TIMEOUT_SECONDS}s" >&2
+            dump_linux_portable_logs
+            exit 1
+          fi
+          if [ "$SELF_TEST_EXIT" -ne 0 ]; then
+            echo "Portable self-test failed. ExitCode=${SELF_TEST_EXIT}" >&2
+            dump_linux_portable_logs
+            exit "$SELF_TEST_EXIT"
+          fi
+          if ! grep -R "便携包自检通过" "$SMOKE_DIR/runtime/logs" >/dev/null 2>&1; then
+            echo "Portable self-test did not write the success marker to runtime logs" >&2
+            dump_linux_portable_logs
+            exit 1
+          fi
           STATUS_JSON="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.json"
           PROBE_MIDI="${RUNNER_TEMP:-/tmp}/miros-worker-import-smoke.mid"
           rm -f "$STATUS_JSON" "$PROBE_MIDI"
