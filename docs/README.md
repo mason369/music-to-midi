@@ -168,6 +168,8 @@ logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
 
 MIROS also needs its upstream runtime dependencies. `requirements.txt` installs this project; it does not guarantee a complete MIROS environment.
 
+The downloader clones the upstream `amt-os/ai4m-miros` checkout. `pretrained_msd.pt` is fetched from the official Hugging Face `minzwon/MusicFM` repository, while `last.ckpt` still follows the official Google Drive file ID used by upstream `main.py`. If Google Drive returns a quota-exceeded page, release packaging fails with that explicit reason instead of using an unknown source or silently skipping the model.
+
 ### Transkun
 
 Transkun is a dedicated piano transcription backend for pure or piano-forward audio. The project calls the pretrained resources bundled with the `transkun` PyPI package through `src/core/transkun_transcriber.py`:

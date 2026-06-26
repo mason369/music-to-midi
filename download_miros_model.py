@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 MIROS_REPO_URL = "https://github.com/amt-os/ai4m-miros.git"
 MIROS_FINETUNED_FILE_ID = "1hp-6D1yYvPxXCXDQyXRQRJArle8R-VfB"
-MIROS_PRETRAINED_FILE_ID = "1FqqMfcdqeiRr1v7sdrfkqPpr0Vs7e9nZ"
+MIROS_PRETRAINED_URL = "https://huggingface.co/minzwon/MusicFM/resolve/main/pretrained_msd.pt"
 MIROS_MIN_CHECKPOINT_BYTES = 4_000_000_000
 MIROS_MIN_PRETRAINED_BYTES = 1_000_000_000
 
@@ -61,6 +61,38 @@ class _GoogleDriveConfirmParser(HTMLParser):
             self._in_download_form = False
 
 
+class _GoogleDriveErrorParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capture: Optional[str] = None
+        self.title: list[str] = []
+        self.error_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        classes = set(attributes.get("class", "").split())
+        if tag == "title":
+            self._capture = "title"
+            return
+        if tag in {"p", "div"} and classes.intersection({"uc-error-caption", "uc-error-subcaption"}):
+            self._capture = "error"
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title" and self._capture == "title":
+            self._capture = None
+        elif tag in {"p", "div"} and self._capture == "error":
+            self._capture = None
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._capture == "title":
+            self.title.append(text)
+        elif self._capture == "error":
+            self.error_text.append(text)
+
+
 def _confirmed_google_drive_url(download_page: Path) -> Optional[str]:
     text = download_page.read_text(encoding="utf-8", errors="ignore")
     if "download-form" not in text:
@@ -77,6 +109,64 @@ def _confirmed_google_drive_url(download_page: Path) -> Optional[str]:
         raise RuntimeError(f"Unexpected Google Drive confirmation host: {parsed.netloc}")
 
     return f"{action}?{urlencode(parser.fields)}"
+
+
+def _google_drive_error_message(download_page: Path) -> Optional[str]:
+    text = download_page.read_text(encoding="utf-8", errors="ignore")
+    lower_text = text.lower()
+    if "google drive" not in lower_text:
+        return None
+
+    parser = _GoogleDriveErrorParser()
+    parser.feed(text)
+    details = " ".join(parser.error_text or parser.title).strip()
+    if "quota exceeded" in lower_text or "too many users have viewed or downloaded this file" in lower_text:
+        return (
+            "Google Drive quota exceeded for the official MIROS fine-tuned checkpoint"
+            + (f": {details}" if details else "")
+        )
+    if "<html" in lower_text:
+        return (
+            "Google Drive returned an HTML page instead of checkpoint bytes"
+            + (f": {details}" if details else "")
+        )
+    return None
+
+
+def _download_http_file(
+    url: str,
+    destination: Path,
+    min_size: int,
+    printer: Optional[Callable[[str], None]],
+    label: str,
+) -> None:
+    if destination.exists() and destination.stat().st_size >= min_size:
+        _log(printer, f"{label} already exists: {destination}")
+        return
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(destination.suffix + ".download")
+    if partial.exists():
+        partial.unlink()
+
+    _log(printer, f"Downloading {label}: {destination.name}")
+    try:
+        _run(["curl", "-L", "--fail", "-o", str(partial), url])
+    except Exception:
+        if partial.exists():
+            partial.unlink()
+        raise
+
+    size = partial.stat().st_size
+    if size < min_size:
+        partial.unlink()
+        raise RuntimeError(
+            f"Downloaded {label} is incomplete: {destination.name} "
+            f"{size} bytes < {min_size} bytes"
+        )
+
+    partial.replace(destination)
+    _log(printer, f"{label} saved: {destination}")
 
 
 def _download_google_drive_file(
@@ -110,7 +200,10 @@ def _download_google_drive_file(
 
     size = partial.stat().st_size
     if size < min_size:
+        drive_error = _google_drive_error_message(partial)
         partial.unlink()
+        if drive_error:
+            raise RuntimeError(f"{destination.name}: {drive_error}")
         raise RuntimeError(
             f"Downloaded MIROS weight is incomplete: {destination.name} "
             f"{size} bytes < {min_size} bytes"
@@ -152,11 +245,12 @@ def prepare_miros_model(
         MIROS_MIN_CHECKPOINT_BYTES,
         printer,
     )
-    _download_google_drive_file(
-        MIROS_PRETRAINED_FILE_ID,
+    _download_http_file(
+        MIROS_PRETRAINED_URL,
         repo / MirosTranscriber.PRETRAINED_REL_PATH,
         MIROS_MIN_PRETRAINED_BYTES,
         printer,
+        "MIROS MusicFM pretrained weight",
     )
 
     missing = [
