@@ -312,13 +312,12 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 20
         run: |
-          SMOKE_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/MusicToMidi-smoke.XXXXXX")"
-          cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"
+          SMOKE_DIR="./dist/MusicToMidi"
           chmod +x "$SMOKE_DIR/MusicToMidi"
           SELF_TEST_TIMEOUT_SECONDS=900
-          SELF_TEST_OUTPUT="$SMOKE_DIR/self-test-output.log"
+          SELF_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-self-test-output.log"
           MIROS_WORKER_TIMEOUT_SECONDS=120
-          MIROS_WORKER_OUTPUT="$SMOKE_DIR/miros-worker-output.log"
+          MIROS_WORKER_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-miros-worker-output.log"
           dump_linux_portable_logs() {
             if [ -f "$SELF_TEST_OUTPUT" ]; then
               echo "=== Portable self-test output: $SELF_TEST_OUTPUT ===" >&2
@@ -396,6 +395,7 @@ jobs:
             dump_miros_worker_logs
             exit 1
           fi
+          rm -rf "$SMOKE_DIR/runtime"
 
       - name: 创建便携包 (Windows)
         if: runner.os == 'Windows'
