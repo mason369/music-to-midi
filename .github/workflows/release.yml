@@ -284,6 +284,7 @@ jobs:
           $mirosDir = Join-Path $smokeDir '_internal\external\ai4m-miros'
           $statusJson = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.json'
           $probeMidi = Join-Path $env:RUNNER_TEMP 'miros-worker-import-smoke.mid'
+          $MirosWorkerTimeoutSeconds = 120
           Remove-Item -LiteralPath $statusJson, $probeMidi -ErrorAction SilentlyContinue
           Push-Location $mirosDir
           try {
@@ -293,7 +294,16 @@ jobs:
               '-o', $probeMidi,
               '--status-json', $statusJson
             )
-            $worker = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList $args -Wait -PassThru
+            $worker = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList $args -PassThru
+            if (-not $worker.WaitForExit($MirosWorkerTimeoutSeconds * 1000)) {
+              try {
+                $worker.Kill($true)
+              } catch {
+                $worker.Kill()
+              }
+              $statusText = if (Test-Path $statusJson) { Get-Content -LiteralPath $statusJson -Raw } else { "" }
+              throw "MIROS worker import smoke timed out after ${MirosWorkerTimeoutSeconds}s.`n$statusText"
+            }
           } finally {
             Pop-Location
           }
@@ -306,6 +316,9 @@ jobs:
           }
           if ($mirosStatus -notmatch '"ok": false') {
             throw "MIROS worker import smoke returned an unexpected status:`n$mirosStatus"
+          }
+          if ($mirosStatus -notmatch 'MIROS input audio does not exist') {
+            throw "MIROS worker import smoke failed before the expected missing-input check:`n$mirosStatus"
           }
 
       - name: 烟测便携产物 (Linux)
@@ -394,6 +407,11 @@ jobs:
           fi
           if ! grep -q '"ok": false' "$STATUS_JSON"; then
             echo "MIROS worker import smoke returned an unexpected status:" >&2
+            dump_miros_worker_logs
+            exit 1
+          fi
+          if ! grep -q 'MIROS input audio does not exist' "$STATUS_JSON"; then
+            echo "MIROS worker import smoke failed before the expected missing-input check:" >&2
             dump_miros_worker_logs
             exit 1
           fi

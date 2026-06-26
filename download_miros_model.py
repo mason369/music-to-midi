@@ -23,6 +23,10 @@ MIROS_PRETRAINED_URL = "https://huggingface.co/minzwon/MusicFM/resolve/main/pret
 MIROS_MIN_CHECKPOINT_BYTES = 3_900_000_000
 MIROS_MIN_PRETRAINED_BYTES = 1_000_000_000
 MIROS_MIRROR_DIR_ENV = "MUSIC_TO_MIDI_MIROS_MIRROR_DIR"
+MIROS_DECMOD_REL_PATH = Path("model/decmod.py")
+MIROS_FLEX_ATTENTION_BAD_IMPORT = (
+    "    from ...integrations.flex_attention import make_flex_block_causal_mask"
+)
 
 
 def _log(printer: Optional[Callable[[str], None]], message: str) -> None:
@@ -322,12 +326,29 @@ def _ensure_repo(repo_dir: Path, printer: Optional[Callable[[str], None]]) -> No
         raise RuntimeError(f"MIROS source clone is incomplete: {repo_dir}")
 
 
+def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]) -> None:
+    decmod_path = repo_dir / MIROS_DECMOD_REL_PATH
+    if not decmod_path.is_file():
+        raise RuntimeError(f"MIROS source is incomplete; missing {decmod_path}")
+
+    text = decmod_path.read_text(encoding="utf-8")
+    if MIROS_FLEX_ATTENTION_BAD_IMPORT not in text:
+        return
+
+    decmod_path.write_text(
+        text.replace(MIROS_FLEX_ATTENTION_BAD_IMPORT + "\n", ""),
+        encoding="utf-8",
+    )
+    _log(printer, f"Patched MIROS flex attention import: {decmod_path}")
+
+
 def prepare_miros_model(
     repo_dir: Path | str = Path("external") / "ai4m-miros",
     printer: Optional[Callable[[str], None]] = None,
 ) -> Path:
     repo = Path(repo_dir)
     _ensure_repo(repo, printer)
+    _patch_miros_source(repo, printer)
 
     _download_google_drive_file(
         MIROS_FINETUNED_FILE_ID,

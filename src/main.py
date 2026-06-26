@@ -325,7 +325,11 @@ def main():
     multiprocessing.freeze_support()
     if "--miros-worker" in sys.argv:
         worker_index = sys.argv.index("--miros-worker")
-        sys.exit(_run_miros_worker(sys.argv[worker_index + 1:]))
+        exit_code = _run_miros_worker(sys.argv[worker_index + 1:])
+        if getattr(sys, "frozen", False):
+            os._exit(exit_code)
+            return
+        sys.exit(exit_code)
 
     # Set console encoding before any localized CLI output.
     setup_chinese_environment()
