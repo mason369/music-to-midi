@@ -57,7 +57,13 @@ def test_cuda_preflight_reports_unsupported_gpu_architecture(monkeypatch):
 def test_transcribe_precise_rewrites_no_kernel_image_error(monkeypatch):
     monkeypatch.setattr(yourmt3_transcriber, "get_device", lambda *_args: "cuda:0")
     transcriber = yourmt3_transcriber.YourMT3Transcriber(Config())
-    monkeypatch.setattr(transcriber, "is_available", lambda: True)
+    # is_available is a classmethod; instance attribute patches do not
+    # intercept type(self).is_available(...) calls from transcribe_precise.
+    monkeypatch.setattr(
+        yourmt3_transcriber.YourMT3Transcriber,
+        "is_available",
+        classmethod(lambda cls, *args, **kwargs: True),
+    )
 
     def _raise_no_kernel_image(*_args, **_kwargs):
         raise RuntimeError(

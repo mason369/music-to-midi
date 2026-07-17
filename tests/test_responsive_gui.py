@@ -153,8 +153,19 @@ class ResponsiveGuiTests(unittest.TestCase):
 
             scrollbar = scroll.verticalScrollBar()
             self.assertTrue(scrollbar.isVisible())
+            # initStyleOption is protected and newer PyQt6 builds (6.11+)
+            # reject calling it on C++-created widgets; fill the option
+            # from public properties instead so the test runs on any build.
             scrollbar_option = QStyleOptionSlider()
-            scrollbar.initStyleOption(scrollbar_option)
+            scrollbar_option.orientation = scrollbar.orientation()
+            scrollbar_option.minimum = scrollbar.minimum()
+            scrollbar_option.maximum = scrollbar.maximum()
+            scrollbar_option.sliderPosition = scrollbar.sliderPosition()
+            scrollbar_option.sliderValue = scrollbar.value()
+            scrollbar_option.singleStep = scrollbar.singleStep()
+            scrollbar_option.pageStep = scrollbar.pageStep()
+            scrollbar_option.direction = scrollbar.layoutDirection()
+            scrollbar_option.rect = scrollbar.rect()
             handle_rect = scrollbar.style().subControlRect(
                 QStyle.ComplexControl.CC_ScrollBar,
                 scrollbar_option,

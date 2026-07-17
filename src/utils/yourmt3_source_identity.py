@@ -7,7 +7,7 @@ from pathlib import Path
 
 _IGNORED_NAMES = {"__pycache__", ".pytest_cache", ".coverage", ".DS_Store"}
 _TEXT_SUFFIXES = {"", ".ini", ".md", ".py", ".sh", ".txt"}
-PATCHED_YOURMT3_MANIFEST_SHA256 = "28fde351b4fe0f0519571fcd64e128df48a5076e7c46a9c1a604165798fe986e"
+PATCHED_YOURMT3_MANIFEST_SHA256 = "94232c1f4a5f8f3a0f19bb5b466d638f80d9d2dba4628deb8d0c2ce2c5157b34"
 PATCHED_YOURMT3_MANIFEST_FILE_COUNT = 106
 
 
@@ -25,11 +25,16 @@ def calculate_yourmt3_source_manifest(source_dir: Path | str) -> tuple[str, int]
         raise FileNotFoundError(f"YourMT3 source directory is missing: {root}")
 
     files = sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() not in {".pyc", ".pyo"}
-        and not any(part in _IGNORED_NAMES for part in path.relative_to(root).parts)
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() not in {".pyc", ".pyo"}
+            and not any(part in _IGNORED_NAMES for part in path.relative_to(root).parts)
+        ),
+        # Sort by the POSIX relative path so the manifest is identical on
+        # Windows (backslash path ordering) and Linux (forward slash).
+        key=lambda path: path.relative_to(root).as_posix(),
     )
     if not files:
         raise RuntimeError(f"YourMT3 source directory contains no identity files: {root}")

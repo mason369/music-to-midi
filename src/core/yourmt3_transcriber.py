@@ -722,24 +722,24 @@ class YourMT3Transcriber:
                 )
                 if is_missing_lightning:
                     return cls._mark_unavailable(
-                        "YourMT3+ ?????? pytorch-lightning?\n"
-                        "??????????????pip install pytorch-lightning\n"
-                        "?????????????????????????"
+                        "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
+                        "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
+                        "如果你使用打包版，请重新安装或使用修复后的安装包。"
                     )
                 return cls._mark_unavailable(
-                    "YourMT3+ ????pytorch-lightning ?????????????????\n"
-                    f"????: {e}\n"
-                    "????????????????????"
-                    "????????????????????"
+                    "YourMT3+ 不可用：pytorch-lightning 导入失败，相关依赖可能未完整打包。\n"
+                    f"原始错误: {e}\n"
+                    "如果你使用源码环境，请重新安装相关依赖；"
+                    "如果你使用打包版，请使用修复后的安装包。"
                 )
 
             amt_src_path = _get_yourmt3_amt_src_path()
             if not amt_src_path:
                 return cls._mark_unavailable(
-                    "YourMT3+ ??????? YourMT3 ?????\n"
-                    "???????????????????????????? exe?\n"
-                    "???????????????????? YourMT3/ ???",
-                    info="???????????? python download_sota_models.py",
+                    "YourMT3+ 不可用：未找到 YourMT3 代码目录。\n"
+                    "如果你使用打包版，请确认保留完整安装目录，不要只复制单个 exe。\n"
+                    "如果你使用源码环境，请确保 YourMT3/ 目录存在于项目根目录。",
+                    info="如需源码环境模型，请运行 python download_sota_models.py",
                 )
             logger.debug("YourMT3 source tree available: %s", amt_src_path)
 
@@ -751,9 +751,9 @@ class YourMT3Transcriber:
                 if not model_path or not model_path.exists():
                     return cls._mark_unavailable(
                         f"YourMT3+ selected checkpoint is unavailable: {selected_model}\n\n"
-                        "?????????\n"
+                        "请先下载模型权重：\n"
                         "  python download_sota_models.py\n\n"
-                        "?? README.md ???????"
+                        "详见 README.md 中的安装说明。"
                     )
                 logger.debug("Found YourMT3+ model %s: %s", selected_model, model_path)
             except ImportError:
@@ -764,7 +764,7 @@ class YourMT3Transcriber:
             return True
 
         except ImportError as e:
-            return cls._mark_unavailable(f"YourMT3+ ????{e}")
+            return cls._mark_unavailable(f"YourMT3+ 不可用：{e}")
 
     def is_selected_model_available(self) -> bool:
         """Check runtime/source plus the checkpoint selected in this config."""

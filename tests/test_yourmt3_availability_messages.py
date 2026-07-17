@@ -38,7 +38,7 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
 
             @staticmethod
             def get_unavailable_reason():
-                return "YourMT3+ ?????? pytorch-lightning"
+                return "YourMT3+ 不可用：缺少 pytorch-lightning"
 
         class FakeBeatDetector:
             def __init__(self, _config):
@@ -90,7 +90,7 @@ class YourMT3AvailabilityMessageTests(unittest.TestCase):
 
         self.assertFalse(available)
         reason = YourMT3Transcriber.get_unavailable_reason()
-        self.assertIn("YourMT3 ????", reason)
+        self.assertIn("未找到 YourMT3 代码目录", reason)
 
 
 if __name__ == "__main__":

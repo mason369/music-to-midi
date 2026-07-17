@@ -144,6 +144,10 @@ class MirosDownloaderTests(unittest.TestCase):
 
     def test_runtime_source_uses_bounded_inference_memory_contract(self):
         repo = Path(__file__).resolve().parents[1] / "external" / "ai4m-miros"
+        if not (repo / "transcribe.py").is_file():
+            self.skipTest(
+                "external/ai4m-miros checkout is not present in this environment"
+            )
         transcribe_text = (repo / "transcribe.py").read_text(encoding="utf-8")
 
         self.assertIn(
