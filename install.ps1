@@ -1,4 +1,4 @@
-﻿# Music to MIDI - Windows 安装脚本
+# Music to MIDI - Windows 安装脚本
 # 支持 Windows 10/11 (x64)
 # 用法: powershell -ExecutionPolicy Bypass -File install.ps1
 # 或双击 install.bat
@@ -496,7 +496,7 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "diffq-fixed==0.2.4" `
     "julius==0.2.7" `
     "ml_collections==1.1.0" `
-    "onnx-weekly==1.21.0.dev20260302" `
+    "onnx-weekly==1.21.0.dev20260223" `
     "onnx2torch-py313==1.6.0" `
     "pydub==0.25.1" `
     "requests>=2.32.5,<3" `

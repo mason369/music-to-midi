@@ -47,7 +47,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
         self.assertIn("beartype==0.18.5", workflow)
-        self.assertIn("onnx-weekly==1.21.0.dev20260302", workflow)
+        self.assertIn("onnx-weekly==1.21.0.dev20260223", workflow)
         self.assertIn("onnxruntime-gpu==1.23.2", workflow)
         self.assertIn("samplerate==0.1.0", workflow)
         self.assertIn("six==1.17.0", workflow)
@@ -128,6 +128,18 @@ class CiWorkflowContractTests(unittest.TestCase):
             with self.subTest(script_name=script_name):
                 self.assertIn(f"- '{script_name}'", workflow)
                 self.assertIn(f"cp {script_name}", workflow)
+
+    def test_hf_sync_workflow_ships_the_shared_web_mixer_runtime(self):
+        workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
+        space_app = (REPO_ROOT / "space" / "app.py").read_text(encoding="utf-8")
+
+        # space/app.py imports the Qt-free shared mixer runtime; the Space
+        # must receive it or it crashes on boot with ModuleNotFoundError.
+        self.assertIn("from src.gui.web.track_mixer_runtime import (", space_app)
+        self.assertIn("- 'src/gui/web/**'", workflow)
+        self.assertIn('cp src/gui/__init__.py "$WORK/src/gui/"', workflow)
+        self.assertIn('cp -r src/gui/web "$WORK/src/gui/"', workflow)
+        self.assertNotIn('rm -rf "$WORK/src/gui"', workflow)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ on:
       - 'src/models/**'
       - 'src/utils/**'
       - 'src/i18n/**'
+      - 'src/gui/web/**'
       - 'space/**'
       - 'YourMT3/amt/src/**'
       - 'download_sota_models.py'
@@ -65,18 +66,20 @@ jobs:
           cp LICENSE               "$WORK/"
           cp THIRD_PARTY_NOTICES.md "$WORK/"
 
-          # ── 核心源码（排除 GUI） ──
+          # ── 核心源码（排除桌面 Qt GUI，保留三端共用的 Web 混音运行时） ──
           cp src/__init__.py "$WORK/src/"
           for dir in core models utils i18n; do
             cp -r "src/$dir" "$WORK/src/"
           done
+          mkdir -p "$WORK/src/gui"
+          cp src/gui/__init__.py "$WORK/src/gui/"
+          cp -r src/gui/web "$WORK/src/gui/"
 
           # ── 三端共用的 YourMT3 新 Torch/Transformers 兼容补丁源码 ──
           cp -r YourMT3/amt/src "$WORK/YourMT3/amt/"
 
           # ── 清理不需要的文件 ──
           find "$WORK" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          rm -rf "$WORK/src/gui" 2>/dev/null || true
 
           # ── 推送到 HF Space ──
           cd "$WORK"
