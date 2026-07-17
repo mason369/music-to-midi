@@ -827,7 +827,7 @@ jobs:
           - 当前包含 7 种处理模式：智能转写 / 人声分离 / 六声部分离 / TransKun 钢琴 / TransKun V2 Aug 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
 
           ### 许可说明
-          - 包内附带完整的 `THIRD_PARTY_NOTICES.md`（逐项来源、许可与署名）与 `THIRD_PARTY_SBOM.txt`（构建环境依赖清单）
+          - 包内附带完整的 \`THIRD_PARTY_NOTICES.md\`（逐项来源、许可与署名）与 \`THIRD_PARTY_SBOM.txt\`（构建环境依赖清单）
           - 本包作为组合作品按 GPL-3.0 条款分发（含 PyQt6/Qt 组件），完整对应源代码与构建说明见本仓库
           - Aria-AMT checkpoint 按 CC BY-NC-SA 4.0 再分发（非商业用途、保留署名，见包内声明）
           - 个别未声明许可的上游权重（Leap XE、BS-RoFormer SW Fixed、MIROS）由维护者以署名方式分发，权利人可以随时通过 Issue 要求移除
