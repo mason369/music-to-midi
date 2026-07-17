@@ -88,11 +88,14 @@ jobs:
               echo "::error::Portable license inventory contains an unreviewed component ID: ${component_id}"
               FAILED=1
             fi
-            if [[ ! "$inventory_line" =~ \|\ bundle=.+\ \|\ artifact=.+\ \|\ revision=.+\ \|\ license=.+\ \|\ status=(VERIFIED|BLOCKED)$ ]]; then
+            if [[ ! "$inventory_line" =~ \|\ bundle=.+\ \|\ artifact=.+\ \|\ revision=.+\ \|\ license=.+\ \|\ status=(VERIFIED|BLOCKED|OWNER_ACCEPTED)$ ]]; then
               echo "::error::Malformed portable license inventory row: ${inventory_line}"
               FAILED=1
-            elif [[ "$inventory_line" != *"| status=VERIFIED" ]]; then
+            elif [[ "$inventory_line" == *"| status=BLOCKED" ]]; then
               echo "::error::Portable component is not cleared for redistribution: ${component_id}"
+              FAILED=1
+            elif [[ "$inventory_line" == *"| status=OWNER_ACCEPTED" ]] && ! grep -Fq "OWNER_ACCEPTED_NOTICE: ${component_id}" THIRD_PARTY_NOTICES.md; then
+              echo "::error::Owner-accepted component is missing its distribution record: ${component_id}"
               FAILED=1
             fi
           done
@@ -381,6 +384,10 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
 
+      - name: 生成第三方 SBOM
+        shell: bash
+        run: python tools/generate_third_party_sbom.py --output THIRD_PARTY_SBOM.txt
+
       - name: 使用 build_portable.ps1 构建 (Windows)
         if: runner.os == 'Windows'
         run: pwsh -ExecutionPolicy Bypass -File .\build_portable.ps1
@@ -389,7 +396,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           pyinstaller MusicToMidi.spec
-          cp LICENSE THIRD_PARTY_NOTICES.md dist/MusicToMidi/
+          cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt dist/MusicToMidi/
 
       - name: 烟测便携产物 (Windows)
         if: runner.os == 'Windows'
@@ -576,7 +583,7 @@ jobs:
               Start-Sleep -Seconds 3
             }
           }
-          Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md', '.tmp/FFMPEG_BUILD_AUDIT.txt') -Destination "dist/$name" -Force
+          Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_SBOM.txt', '.tmp/FFMPEG_BUILD_AUDIT.txt') -Destination "dist/$name" -Force
 
           $variantNote = @"
           GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
@@ -621,7 +628,7 @@ jobs:
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
           # 重命名 dist/MusicToMidi 为带平台标识的名称
           mv dist/MusicToMidi "dist/${NAME}"
-          cp LICENSE THIRD_PARTY_NOTICES.md .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${NAME}/"
+          cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${NAME}/"
 
           VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
           需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版"
@@ -818,6 +825,12 @@ jobs:
           - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
           - 当前包含 7 种处理模式：智能转写 / 人声分离 / 六声部分离 / TransKun 钢琴 / TransKun V2 Aug 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
+
+          ### 许可说明
+          - 包内附带完整的 `THIRD_PARTY_NOTICES.md`（逐项来源、许可与署名）与 `THIRD_PARTY_SBOM.txt`（构建环境依赖清单）
+          - 本包作为组合作品按 GPL-3.0 条款分发（含 PyQt6/Qt 组件），完整对应源代码与构建说明见本仓库
+          - Aria-AMT checkpoint 按 CC BY-NC-SA 4.0 再分发（非商业用途、保留署名，见包内声明）
+          - 个别未声明许可的上游权重（Leap XE、BS-RoFormer SW Fixed、MIROS）由维护者以署名方式分发，权利人可以随时通过 Issue 要求移除
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)

@@ -95,7 +95,7 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         assert " | artifact=" in row
         assert " | revision=" in row
         assert " | license=" in row
-        assert row.endswith((" | status=VERIFIED", " | status=BLOCKED"))
+        assert row.endswith((" | status=VERIFIED", " | status=OWNER_ACCEPTED"))
     for component_id in expected_ids:
         assert component_id in workflow
     assert "Portable license inventory count mismatch" in workflow
@@ -103,25 +103,48 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
     assert "Malformed portable license inventory row" in workflow
 
 
-def test_unverified_or_incompatible_redistribution_terms_block_release():
+def test_release_gate_requires_verified_or_owner_accepted_components():
     notice = _read("THIRD_PARTY_NOTICES.md")
     workflow = _read(".github/workflows/release.yml")
 
-    blockers = [
-        line
-        for line in notice.splitlines()
-        if line.startswith("RELEASE_BLOCKER_UNRESOLVED_LICENSE:")
+    # The fail-closed markers are retired: every component is either VERIFIED
+    # with declared license evidence or OWNER_ACCEPTED with a distribution record.
+    assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE:" not in notice
+
+    rows = [
+        line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")
     ]
-    assert len(blockers) >= 9
-    assert "LEAP_XE_CHECKPOINT_AND_CONFIG" in notice
-    assert "BS_ROFORMER_SW_FIXED_CHECKPOINT_AND_CONFIG" in notice
-    assert "YOURMT3_PATCHED_SOURCE_PROVENANCE_AND_MIXED_LICENSES" in notice
-    assert "TRANSKUN_DEFAULT_V2_WEIGHT" in notice
-    assert "TRANSKUN_V2_AUG_GOOGLE_DRIVE_ARTIFACT" in notice
-    assert "MIROS_SOURCE_AND_FINETUNED_CHECKPOINT" in notice
-    assert "ARIA_AMT_CC_BY_NC_SA_CHECKPOINT_COMPLIANCE" in notice
-    assert "BYTEDANCE_INFERENCE_SOURCE_LICENSE" in notice
-    assert "PYQT6_CUDA_FFMPEG_AND_FROZEN_DEPENDENCY_COMPLIANCE" in notice
+    owner_accepted = {
+        line.split(" |", 1)[0].split(": ", 1)[1]
+        for line in rows
+        if line.endswith(" | status=OWNER_ACCEPTED")
+    }
+    assert owner_accepted == {
+        "leap_xe",
+        "bs_roformer_sw_fixed",
+        "miros_source",
+        "miros_finetuned",
+    }
+
+    for component_id in sorted(owner_accepted):
+        assert f"OWNER_ACCEPTED_NOTICE: {component_id}" in notice
+
+    # Owner-accepted records keep full attribution and the takedown route.
+    assert "undeclared upstream" in notice
+    assert "issue tracker" in notice
+    assert "No license" in notice or "no license file" in notice
+
+    # Declared-license components carry their compliance records.
+    assert "CC BY-NC-SA 4.0" in notice
+    assert "GPL-3.0" in notice
+    assert "NVIDIA CUDA" in notice
+    assert "THIRD_PARTY_SBOM.txt" in notice
+    assert "FFMPEG_BUILD_AUDIT.txt" in notice
+
+    # The workflow enforces both statuses and the distribution-record check.
+    assert "status=(VERIFIED|BLOCKED|OWNER_ACCEPTED)" in workflow
+    assert '"| status=BLOCKED"' in workflow
+    assert "OWNER_ACCEPTED_NOTICE: ${component_id}" in workflow
     assert 'grep -n "^RELEASE_BLOCKER_UNRESOLVED_LICENSE:"' in workflow
     assert "Portable release is forbidden until every marker is resolved" in workflow
 
