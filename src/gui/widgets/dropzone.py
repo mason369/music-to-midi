@@ -2,7 +2,7 @@
 文件拖放区域组件 - 用于文件输入
 """
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog
+    QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
@@ -26,6 +26,7 @@ class DropZoneWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAcceptDrops(True)
         self._selected_file_path = None
         self._setup_ui()
@@ -43,6 +44,8 @@ class DropZoneWidget(QWidget):
         # 标题
         self.title_label = QLabel(t("main.dropzone.title"))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.title_label.setStyleSheet("""
             QLabel {
                 font-size: 13px;
@@ -54,6 +57,8 @@ class DropZoneWidget(QWidget):
         # 副标题
         self.subtitle_label = QLabel(t("main.dropzone.subtitle"))
         self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.subtitle_label.setStyleSheet("""
             QLabel {
                 font-size: 11px;
@@ -63,8 +68,8 @@ class DropZoneWidget(QWidget):
 
         # 浏览按钮
         self.browse_btn = QPushButton("📂  " + t("main.output.browse"))
-        self.browse_btn.setFixedWidth(130)
-        self.browse_btn.setFixedHeight(32)
+        self.browse_btn.setMinimumHeight(32)
+        self.browse_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.browse_btn.setStyleSheet("""
             QPushButton {
@@ -88,6 +93,8 @@ class DropZoneWidget(QWidget):
         # 已选文件标签
         self.file_label = QLabel()
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.file_label.setWordWrap(True)
+        self.file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.file_label.setStyleSheet("""
             QLabel {
                 font-size: 11px;
@@ -104,6 +111,8 @@ class DropZoneWidget(QWidget):
         # 支持格式提示
         self.format_label = QLabel(t("main.dropzone.subtitle"))
         self.format_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.format_label.setWordWrap(True)
+        self.format_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.format_label.setStyleSheet("""
             QLabel {
                 font-size: 10px;

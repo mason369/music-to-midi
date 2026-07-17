@@ -2,6 +2,7 @@ import hashlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import download_multistem_model
 
@@ -18,13 +19,37 @@ class MultistemModelDownloaderTests(unittest.TestCase):
         )
         self.assertNotIn("jarredou", download_multistem_model.ROFORMER_SW_CHECKPOINT_URL)
         self.assertNotIn("jarredou", download_multistem_model.ROFORMER_SW_CONFIG_URL)
+        self.assertNotIn("resolve/main", download_multistem_model.ROFORMER_SW_CHECKPOINT_URL)
+        self.assertNotIn("resolve/main", download_multistem_model.ROFORMER_SW_CONFIG_URL)
+        self.assertIn(
+            download_multistem_model.ROFORMER_SW_SOURCE_REVISION,
+            download_multistem_model.ROFORMER_SW_CHECKPOINT_URL,
+        )
+        self.assertIn(
+            download_multistem_model.ROFORMER_SW_SOURCE_REVISION,
+            download_multistem_model.ROFORMER_SW_CONFIG_URL,
+        )
         self.assertEqual(download_multistem_model.ROFORMER_SW_DISPLAY_NAME, "BS-RoFormer SW Fixed")
         self.assertEqual(download_multistem_model.ROFORMER_SW_REGISTRY_NAME, "Roformer Model: BS-Roformer-SW-Fixed")
         self.assertEqual(download_multistem_model.ROFORMER_SW_CONFIG, "BS-Rofo-SW-Fixed.yaml")
+        self.assertEqual(
+            download_multistem_model.ROFORMER_SW_OFFICIAL_CONFIG,
+            "BS-Rofo-SW-Fixed.official.yaml",
+        )
         self.assertEqual(download_multistem_model.ROFORMER_SW_CHECKPOINT_SIZE, 699_412_152)
         self.assertEqual(
             download_multistem_model.ROFORMER_SW_CHECKPOINT_SHA256,
             "24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e",
+        )
+        self.assertEqual(download_multistem_model.ROFORMER_SW_OFFICIAL_CONFIG_SIZE, 3_530)
+        self.assertEqual(
+            download_multistem_model.ROFORMER_SW_OFFICIAL_CONFIG_SHA256,
+            "4678db9430a87ee33e7fad199166928c9adcd322e2df1a812b4bf03726e2a48b",
+        )
+        self.assertEqual(download_multistem_model.ROFORMER_SW_COMPATIBLE_CONFIG_SIZE, 3_522)
+        self.assertEqual(
+            download_multistem_model.ROFORMER_SW_COMPATIBLE_CONFIG_SHA256,
+            "e7dc288d2456a9a186c451ca551025db408a1cbf3fff2b98c8eb0077129324c3",
         )
 
     def test_validate_file_checksum_accepts_exact_match(self):
@@ -88,17 +113,67 @@ class MultistemModelDownloaderTests(unittest.TestCase):
 
     def test_compatibility_patch_matches_telknet_bs_roformer_config_fields(self):
         with TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "BS-Rofo-SW-Fixed.official.yaml"
             config_path = Path(tmp) / "BS-Rofo-SW-Fixed.yaml"
-            config_path.write_text("model: {}\ninference: {}\n", encoding="utf-8")
+            source_text = (
+                "model:\n"
+                "  freqs_per_bands: !!python/tuple\n"
+                "    - 129\n"
+                "  dim_head: 64\n"
+                "  multi_stft_resolutions_window_sizes: !!python/tuple\n"
+                "    - 256\n"
+                "augmentations:\n"
+                "  mixup_probs: !!python/tuple\n"
+                "    - 0.2\n"
+                "inference:\n"
+                "  dim_t: 1101\n"
+            )
+            expected_text = (
+                source_text.replace("freqs_per_bands: !!python/tuple", "freqs_per_bands:")
+                .replace(
+                    "multi_stft_resolutions_window_sizes: !!python/tuple",
+                    "multi_stft_resolutions_window_sizes:",
+                )
+                .replace("mixup_probs: !!python/tuple", "mixup_probs:")
+                .replace(
+                    "    - 129\n  dim_head: 64\n",
+                    "    - 129\n  num_subbands: 1\n  dim_head: 64\n",
+                )
+                + "is_roformer: true\n"
+            )
+            source_bytes = source_text.encode("utf-8")
+            expected_bytes = expected_text.encode("utf-8")
+            source_path.write_bytes(source_bytes)
 
-            modified = download_multistem_model.ensure_multistem_config_compatible(config_path)
+            with (
+                patch.object(download_multistem_model, "_REQUIRED_FREQS_PER_BANDS", (129,)),
+                patch.object(download_multistem_model, "ROFORMER_SW_OFFICIAL_CONFIG_SIZE", len(source_bytes)),
+                patch.object(
+                    download_multistem_model,
+                    "ROFORMER_SW_OFFICIAL_CONFIG_SHA256",
+                    hashlib.sha256(source_bytes).hexdigest(),
+                ),
+                patch.object(download_multistem_model, "ROFORMER_SW_COMPATIBLE_CONFIG_SIZE", len(expected_bytes)),
+                patch.object(
+                    download_multistem_model,
+                    "ROFORMER_SW_COMPATIBLE_CONFIG_SHA256",
+                    hashlib.sha256(expected_bytes).hexdigest(),
+                ),
+            ):
+                modified = download_multistem_model.ensure_multistem_config_compatible(
+                    config_path,
+                    source_path,
+                )
+                modified_again = download_multistem_model.ensure_multistem_config_compatible(
+                    config_path,
+                    source_path,
+                )
 
-            text = config_path.read_text(encoding="utf-8")
             self.assertTrue(modified)
-            self.assertIn("is_roformer: true", text)
-            self.assertIn("freqs_per_bands:", text)
-            self.assertIn("num_subbands: 62", text)
-            self.assertIn("dim_t: 1151", text)
+            self.assertFalse(modified_again)
+            self.assertEqual(config_path.read_bytes(), expected_bytes)
+            self.assertNotIn(b"\r\n", config_path.read_bytes())
+            self.assertIn("dim_t: 1101", config_path.read_text(encoding="utf-8"))
 
     def test_check_only_reports_missing_assets(self):
         with TemporaryDirectory() as tmp:

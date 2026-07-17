@@ -7,7 +7,10 @@ from urllib.request import Request, urlopen
 from src.core.aria_amt_transcriber import (
     ARIA_AMT_CACHE_DIR,
     ARIA_AMT_CHECKPOINT_NAME,
+    ARIA_AMT_CHECKPOINT_SHA256,
+    ARIA_AMT_CHECKPOINT_SIZE,
     ARIA_AMT_CHECKPOINT_URL,
+    validate_aria_amt_checkpoint,
 )
 
 
@@ -23,7 +26,11 @@ def is_aria_model_available(
     model_name: str = ARIA_AMT_CHECKPOINT_NAME,
 ) -> bool:
     path = resolve_aria_model_path(cache_dir, model_name)
-    return path.exists() and path.stat().st_size > 0
+    try:
+        validate_aria_amt_checkpoint(path)
+        return True
+    except (OSError, RuntimeError):
+        return False
 
 
 def _download_file(url: str, output_path: Path) -> None:
@@ -45,10 +52,15 @@ def download_aria_model(
     printer: Callable[[str], None] = print,
 ) -> Path:
     model_path = resolve_aria_model_path(cache_dir, model_name)
-    if model_path.exists() and model_path.stat().st_size > 0:
+    if is_aria_model_available(cache_dir, model_name):
         size_mb = model_path.stat().st_size / (1024 * 1024)
         printer(f"Aria-AMT 模型已存在，跳过下载：{model_path} ({size_mb:.1f} MB)")
         return model_path
+
+    if model_path.exists():
+        printer(
+            "现有 Aria-AMT checkpoint 身份校验失败，将下载固定版本并在校验后替换：" f"{model_path}"
+        )
 
     if downloader is None:
         downloader = _download_file
@@ -57,14 +69,23 @@ def download_aria_model(
     printer("模型: piano-medium-double-1.0.safetensors")
     printer(f"URL: {model_url}")
     printer(f"保存到: {model_path}")
-    downloader(model_url, model_path)
+    partial_path = model_path.with_suffix(model_path.suffix + ".part")
+    if partial_path.exists():
+        partial_path.unlink()
 
-    if not is_aria_model_available(cache_dir, model_name):
-        raise RuntimeError("Aria-AMT 模型下载后校验失败")
+    try:
+        downloader(model_url, partial_path)
+        validate_aria_amt_checkpoint(partial_path)
+        partial_path.replace(model_path)
+    except Exception:
+        if partial_path.exists():
+            partial_path.unlink()
+        raise
 
     size_mb = model_path.stat().st_size / (1024 * 1024)
     printer("下载成功！")
     printer(f"模型文件：{model_path} ({size_mb:.1f} MB)")
+    printer("身份校验：" f"{ARIA_AMT_CHECKPOINT_SIZE} bytes, SHA-256 {ARIA_AMT_CHECKPOINT_SHA256}")
     return model_path
 
 

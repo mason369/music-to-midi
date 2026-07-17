@@ -1,19 +1,19 @@
 # Music to MIDI - Hugging Face Space 依赖
 # 注意：不包含 PyQt6（桌面 GUI），使用 Gradio 替代
 
-# PyTorch 核心（版本必须匹配，避免 ABI 不兼容）
-torch>=2.3.0,<2.10.0
-torchaudio>=2.3.0,<2.10.0
-torchvision>=2.3.0,<2.10.0
+# PyTorch 核心（匹配当前 Hugging Face ZeroGPU 支持矩阵）
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
 
 # NumPy（audio-separator 0.44.x 要求 numpy>=2，numba 0.64 支持 <2.5）
-numpy>=2.0.0
+numpy>=2.0.0,<2.5
 numba>=0.60.0
 
 # YourMT3+ 依赖（使用 lightning 而非 pytorch-lightning，与官方 Space 一致）
 lightning>=2.2.1
 einops>=0.7.0
-transformers==4.45.1
+transformers==4.48.3
 mir-eval>=0.7
 deprecated>=1.2.0
 smart-open>=6.0.0
@@ -24,6 +24,7 @@ torchmetrics>=0.11.0
 wandb
 pretty-midi>=0.2.10
 soxr>=0.3.7
+h5py>=3.10,<4
 
 # 模型下载
 huggingface_hub>=0.20.0
@@ -37,12 +38,17 @@ soundfile>=0.12.0
 
 # 人声分离
 audio-separator==0.44.1
-onnxruntime>=1.16.0
+onnxruntime-gpu==1.23.2
 
 # 钢琴专用转写
-transkun>=2.0.1
-aria-amt @ git+https://github.com/EleutherAI/aria-amt.git
-piano-transcription-inference>=0.0.6,<0.1
+transkun==2.0.1
+# Aria-AMT upstream pins torchaudio<=2.5, which conflicts with ZeroGPU's
+# torch/torchaudio>=2.8 runtime.  Its exact code revision is installed with
+# --no-deps at app startup; declare every runtime dependency here instead.
+ariautils @ https://github.com/EleutherAI/aria-utils/archive/93da092204e5b1189ed8e0259f6156266fd086a7.zip
+safetensors>=0.4,<1
+orjson>=3.9,<4
+piano-transcription-inference==0.0.6
 torchlibrosa>=0.1.0,<0.2
 matplotlib>=3.7.0,<4
 
@@ -52,7 +58,7 @@ fastapi==0.115.2
 starlette==0.40.0
 
 # ZeroGPU 支持
-spaces
+spaces==0.51.0
 
 # 工具
 tqdm>=4.66.0

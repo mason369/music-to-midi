@@ -158,6 +158,7 @@ class ProcessingMode(Enum):
     VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
     SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
     PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
+    PIANO_TRANSKUN_V2_AUG = "piano_transkun_v2_aug"  # TransKun V2 Aug 钢琴专用转写
     PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
     PIANO_BYTEDANCE_PEDAL = "piano_bytedance_pedal"  # ByteDance 带踏板钢琴转写
     PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
@@ -449,7 +450,7 @@ class ProcessingResult:
     total_notes: int = 0                     # 转写的总音符数
     vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
     accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
-    separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径 {"vocals": ..., "no_vocals": ...}
+    separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径；键为 vocals/accompaniment 或六个 stem 名
     stem_midi_paths: Optional[Dict[str, str]] = None  # 多 stem 模式下每个 stem 的 MIDI 路径
     merged_midi_path: Optional[str] = None  # 合并 MIDI 路径（人声分离可选合并）
 
@@ -465,7 +466,7 @@ class Config:
     use_gpu: bool = True
     gpu_device: int = 0
 
-    # 处理模式（smart / vocal_split / six_stem_split / piano_transkun / piano_aria_amt）
+    # 七种处理模式：三个多乐器流程 + 四个固定钢琴专用流程
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
@@ -494,12 +495,17 @@ class Config:
     save_separated_tracks: bool = True
 
     def __post_init__(self):
+        self.validate()
+
+    def validate(self) -> None:
+        """Normalize and validate mutable configuration before each processing run."""
         mode = str(getattr(self, "processing_mode", "") or "").strip().lower()
         valid_modes = {
             ProcessingMode.SMART.value,
             ProcessingMode.VOCAL_SPLIT.value,
             ProcessingMode.SIX_STEM_SPLIT.value,
             ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value,
             ProcessingMode.PIANO_ARIA_AMT.value,
             ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         }
@@ -515,13 +521,29 @@ class Config:
         normalized_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
         normalized_multi_model = str(getattr(self, "multi_instrument_model", "") or "").strip().lower()
 
-        if normalized_backend not in valid_backends and normalized_multi_model in valid_backends:
-            normalized_backend = normalized_multi_model
         if normalized_backend not in valid_backends:
             raise ValueError(f"invalid transcription_backend: {self.transcription_backend!r}")
 
+        multi_instrument_modes = {
+            ProcessingMode.SMART.value,
+            ProcessingMode.VOCAL_SPLIT.value,
+            ProcessingMode.SIX_STEM_SPLIT.value,
+        }
+        if mode in multi_instrument_modes and normalized_backend not in valid_multi_models:
+            raise ValueError(
+                f"processing_mode={mode!r} requires transcription_backend to be "
+                f"one of {sorted(valid_multi_models)!r}, got {normalized_backend!r}"
+            )
+
         if normalized_backend == TranscriptionBackend.ARIA_AMT.value:
-            normalized_multi_model = MultiInstrumentModel.YOURMT3.value
+            # Legacy fixed-piano configs used the route-specific engine name as the
+            # global backend.  The processing mode still selects Aria-AMT; retain
+            # the saved multi-instrument choice for controls shared across modes.
+            if normalized_multi_model not in valid_multi_models:
+                raise ValueError(
+                    f"invalid multi_instrument_model: {self.multi_instrument_model!r}"
+                )
+            normalized_backend = normalized_multi_model
         elif normalized_backend in valid_multi_models:
             normalized_multi_model = normalized_backend
         elif normalized_multi_model not in valid_multi_models:
@@ -552,7 +574,11 @@ class Config:
         if multi_model in valid_multi_models:
             return multi_model
 
-        return MultiInstrumentModel.YOURMT3.value
+        raise ValueError(
+            "invalid multi-instrument backend configuration: "
+            f"transcription_backend={self.transcription_backend!r}, "
+            f"multi_instrument_model={self.multi_instrument_model!r}"
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {

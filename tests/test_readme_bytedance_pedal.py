@@ -13,7 +13,7 @@ def test_readme_documents_bytedance_pedal_selection_guidance_and_model_class():
         "需要踏板 CC64",
         "踏板 onset F1",
         "96.72% / 91.86%",
-        "Transkun V2",
+        "TransKun V2",
         "Aria-AMT",
         "YourMT3+ / MIROS 属于多乐器后端",
         "钢琴专精模型对比",
@@ -35,7 +35,7 @@ def test_english_readme_documents_bytedance_pedal_model_comparisons():
         "needs sustain pedal CC64",
         "pedal onset F1",
         "96.72% / 91.86%",
-        "Transkun V2",
+        "PIANO_TRANSKUN",
         "Aria-AMT",
         "YourMT3+ / MIROS are multi-instrument backends",
         "piano_bytedance_pedal",
@@ -49,6 +49,7 @@ def test_readme_documents_official_yourmt3_mode_and_delivery_sync_status():
 
     for expected in (
         "## 入口与依赖同步状态",
+        "七种处理工作流",
         "官方 YourMT3 demo 暴露的五种 checkpoint / 架构模式",
         "download_sota_models.py",
         "run.ps1",
@@ -57,19 +58,21 @@ def test_readme_documents_official_yourmt3_mode_and_delivery_sync_status():
         ".github/workflows/release.yml",
         "colab_notebook.ipynb",
         "YourMT3+ 官方 checkpoint 模式",
-        "旧官方模式默认最多 1",
-        "MoE 模式默认最多 2",
-        "MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE",
-        "python download_vocal_harmony_model.py",
+        "官方 `update_config`",
+        "inference_file(bsz=8)",
+        "环境变量不再改写这条官方路线的 batch",
+        "python download_vocal_model.py",
+        "python download_accompaniment_model.py",
+        "python download_transkun_v2_aug_model.py",
         "python download_bytedance_piano_model.py",
         "python download_miros_model.py",
         "本项目默认使用 **YPTF.MoE+Multi (noPS)**",
         "Slakh `multi_f = 0.7398`",
         "YPTF.MoE+Multi (PS) | 8 专家 | 有 | 可选 pitch-shift MoE checkpoint",
-        "karaoke ensemble SDR 约 10.6",
-        "SDR vocals = 10.87",
-        "SDR vocals = 10.98",
-        "MUSDB test avg 10.08",
+        "### 当前人声分离模型：Leap XE vocals + PolarFormer accompaniment",
+        "`BS-Rofo-SW-Fixed.ckpt` 六声部 WAV 分离",
+        "每个 stem 独立运行所选 YourMT3+ / MIROS",
+        "`PIANO_TRANSKUN_V2_AUG`",
     ):
         assert expected in readme
 
@@ -87,10 +90,9 @@ def test_english_readme_documents_official_yourmt3_mode_and_delivery_sync_status
         ".github/workflows/release.yml",
         "colab_notebook.ipynb",
         "YourMT3+ Official Checkpoint Modes",
-        "older official modes default to 1",
-        "MoE modes default to 2",
-        "MUSIC_TO_MIDI_YOURMT3_BATCH_SIZE",
-        "python download_vocal_harmony_model.py",
+        "official `update_config` path",
+        "inference_file(bsz=8)",
+        "environment variables no longer alter the batch size",
         "python download_bytedance_piano_model.py",
         "python download_miros_model.py",
         "Project default and official Hugging Face Space default",
@@ -106,18 +108,40 @@ def test_readmes_match_current_processing_routes_and_packaged_paths():
     docs_zh_readme = Path("docs/README_zh.md").read_text(encoding="utf-8")
     space_readme = Path("space/README.md").read_text(encoding="utf-8")
     combined = "\n".join([zh_readme, en_readme, docs_zh_readme, space_readme])
+    aligned_routes = "\n".join([zh_readme, space_readme])
 
     for expected in (
         "song_piano_aria.mid",
-        "BS-RoFormer SW 六声部 WAV 分离",
-        "按 GM 乐器族分配到 stem MIDI",
-        "one full-mix multi-instrument transcription",
-        "route notes to stem MIDI by GM family",
+        "song_piano_transkun_v2_aug.mid",
+        "BS-Rofo-SW-Fixed.ckpt",
+        "Leap XE 90-band",
+        "PolarFormer accompaniment",
+        "每个 stem 独立运行所选 YourMT3+ / MIROS",
+        "PIANO_TRANSKUN_V2_AUG",
+        "download_transkun_v2_aug_model.py",
         "models/bytedance_piano",
         "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR",
+    ):
+        assert expected in aligned_routes
+
+    for mode in (
+        "SMART",
+        "VOCAL_SPLIT",
+        "SIX_STEM_SPLIT",
+        "PIANO_TRANSKUN",
+        "PIANO_TRANSKUN_V2_AUG",
+        "PIANO_ARIA_AMT",
+        "PIANO_BYTEDANCE_PEDAL",
+    ):
+        assert mode in zh_readme
+
+    for stale_route in (
+        "one full-mix multi-instrument transcription",
+        "route notes to stem MIDI by GM family",
+        "按 GM 乐器族分配到 stem MIDI",
         "RoFormer `vocal_rvc` / `karaoke`",
     ):
-        assert expected in combined
+        assert stale_route not in aligned_routes
 
     for stale in (
         "song_piano_aria_amt.mid",
@@ -125,6 +149,8 @@ def test_readmes_match_current_processing_routes_and_packaged_paths():
         "fast / balanced / best",
         "torch==2.4.0",
         "https://download.pytorch.org/whl/cu121",
+        "https://download.pytorch.org/whl/cu118",
+        "CUDA 11.8:",
         "首次使用会检查 checkpoint",
         "YourMT3+ 多乐器转写",
         "selected_stems_merged",

@@ -3,33 +3,108 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
+import os
 import platform
-import shutil
 import subprocess
 import sys
+import tempfile
+import time
+from importlib import metadata
 from pathlib import Path
 from typing import Callable, Optional
 
 import torchaudio
 
 from src.i18n.translator import Translator
+from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import ensure_cuda_runtime_compatibility, rewrite_cuda_runtime_error
+from src.utils.midi_output import publish_midi_output
 from src.utils.runtime_paths import get_aria_amt_dir, is_frozen_app
 
 logger = logging.getLogger(__name__)
 
 ARIA_AMT_CHECKPOINT_NAME = "piano-medium-double-1.0.safetensors"
 ARIA_AMT_MODEL_CONFIG_NAME = "medium-double"
+ARIA_AMT_PACKAGE_NAME = "aria-amt"
+ARIA_AMT_SOURCE_REVISION = "a1ab73fc901d1759ec3bc173c146b3c6a3040261"
+ARIA_AMT_SOURCE_ARCHIVE_URL = (
+    "https://github.com/EleutherAI/aria-amt/archive/" f"{ARIA_AMT_SOURCE_REVISION}.zip"
+)
+ARIA_AMT_SOURCE_REQUIREMENT = f"aria-amt @ {ARIA_AMT_SOURCE_ARCHIVE_URL}"
+ARIA_AMT_CHECKPOINT_REVISION = "8cc4cf5c83b47f2689ac256a947b2a57c17a4c8b"
 ARIA_AMT_CHECKPOINT_URL = (
-    "https://huggingface.co/datasets/loubb/aria-midi/resolve/main/"
+    "https://huggingface.co/datasets/loubb/aria-midi/resolve/"
+    f"{ARIA_AMT_CHECKPOINT_REVISION}/"
     "piano-medium-double-1.0.safetensors?download=true"
 )
+ARIA_AMT_CHECKPOINT_SIZE = 446_577_344
+ARIA_AMT_CHECKPOINT_SHA256 = "089d3129dbe93246aeda55efe668c8a48af08afaf9dd15c64cef0a07c0fb30a4"
 ARIA_AMT_CACHE_DIR = Path.home() / ".cache" / "music_ai_models" / "aria_amt"
 
 
+def get_aria_amt_runtime_unavailable_reason() -> str:
+    """Return why the installed Aria-AMT source is not the pinned revision."""
+
+    try:
+        if importlib.util.find_spec("amt.run") is None:
+            return "Aria-AMT 未安装。请安装固定源码版本: " f"{ARIA_AMT_SOURCE_REQUIREMENT}"
+    except (ImportError, ModuleNotFoundError, ValueError) as exc:
+        return f"Aria-AMT 模块不可用: {exc}"
+
+    try:
+        distribution = metadata.distribution(ARIA_AMT_PACKAGE_NAME)
+    except metadata.PackageNotFoundError:
+        return (
+            "Aria-AMT 缺少安装元数据，无法验证源码版本。请重新安装固定源码版本: "
+            f"{ARIA_AMT_SOURCE_REQUIREMENT}"
+        )
+
+    direct_url_text = distribution.read_text("direct_url.json")
+    if not direct_url_text:
+        return (
+            "Aria-AMT 缺少 direct_url.json，无法验证源码提交。请重新安装固定源码版本: "
+            f"{ARIA_AMT_SOURCE_REQUIREMENT}"
+        )
+
+    try:
+        direct_url = json.loads(direct_url_text)
+    except (TypeError, json.JSONDecodeError) as exc:
+        return f"Aria-AMT direct_url.json 无效，无法验证源码提交: {exc}"
+
+    vcs_info = direct_url.get("vcs_info") or {}
+    if vcs_info:
+        if vcs_info.get("commit_id") == ARIA_AMT_SOURCE_REVISION:
+            return ""
+    elif direct_url.get("url") == ARIA_AMT_SOURCE_ARCHIVE_URL:
+        return ""
+
+    observed_commit = vcs_info.get("commit_id") or "unknown"
+    observed_url = direct_url.get("url") or "unknown"
+    return (
+        "Aria-AMT 源码版本不匹配: "
+        f"expected commit {ARIA_AMT_SOURCE_REVISION}, "
+        f"got commit {observed_commit}, source {observed_url}。"
+        f"请重新安装固定源码版本: {ARIA_AMT_SOURCE_REQUIREMENT}"
+    )
+
+
+def validate_aria_amt_checkpoint(path: Path) -> Path:
+    """Require the exact pinned Aria-AMT checkpoint artifact."""
+
+    return validate_file_identity(
+        path,
+        expected_size=ARIA_AMT_CHECKPOINT_SIZE,
+        expected_sha256=ARIA_AMT_CHECKPOINT_SHA256,
+        label="Aria-AMT checkpoint",
+    )
+
+
 class AriaAmtTranscriber:
-    def __init__(self, checkpoint_path: Optional[Path] = None, language: str = Translator.DEFAULT_LANGUAGE):
+    def __init__(
+        self, checkpoint_path: Optional[Path] = None, language: str = Translator.DEFAULT_LANGUAGE
+    ):
         if checkpoint_path is None:
             checkpoint_path = self.default_checkpoint_path()
         self.checkpoint_path = Path(checkpoint_path)
@@ -46,13 +121,18 @@ class AriaAmtTranscriber:
 
     @staticmethod
     def is_available() -> bool:
-        try:
-            return importlib.util.find_spec("amt.run") is not None
-        except (ImportError, ModuleNotFoundError, ValueError):
-            return False
+        return get_aria_amt_runtime_unavailable_reason() == ""
+
+    @staticmethod
+    def get_unavailable_reason() -> str:
+        return get_aria_amt_runtime_unavailable_reason()
 
     def is_model_available(self) -> bool:
-        return self.checkpoint_path.exists() and self.checkpoint_path.stat().st_size > 0
+        try:
+            validate_aria_amt_checkpoint(self.checkpoint_path)
+            return True
+        except (OSError, RuntimeError):
+            return False
 
     @staticmethod
     def _guess_output_midi(save_dir: Path, audio_path: Path) -> Optional[Path]:
@@ -112,7 +192,7 @@ class AriaAmtTranscriber:
         normalized_state = {}
         for key, value in model_state.items():
             if key.startswith("_orig_mod."):
-                normalized_state[key[len("_orig_mod."):]] = value
+                normalized_state[key[len("_orig_mod.") :]] = value
             else:
                 normalized_state[key] = value
         model.load_state_dict(normalized_state)
@@ -145,7 +225,7 @@ class AriaAmtTranscriber:
 
         buffer = torch.tensor([], dtype=torch.float32)
         for start in range(0, len(waveform), stride_samples):
-            stride_segment = waveform[start:start + stride_samples]
+            stride_segment = waveform[start : start + stride_samples]
             if stride_segment.shape[0] < stride_samples:
                 stride_segment = torch_functional.pad(
                     stride_segment,
@@ -210,7 +290,9 @@ class AriaAmtTranscriber:
                     raise InterruptedError("Aria-AMT 转写处理已取消")
 
                 if progress_callback:
-                    progress_callback(0.10 + min(index, 8) * 0.08, self._pt("progress.running_aria_amt"))
+                    progress_callback(
+                        0.10 + min(index, 8) * 0.08, self._pt("progress.running_aria_amt")
+                    )
 
                 init_index = len(sequence)
                 silent_intervals = transcribe_module._get_silent_intervals(audio_segment)
@@ -288,27 +370,62 @@ class AriaAmtTranscriber:
         ]
 
         logger.info("Running Aria-AMT transcription: %s", " ".join(command))
+        process_env = dict(os.environ)
+        process_env["PYTHONIOENCODING"] = "utf-8"
+        process_env["PYTHONUTF8"] = "1"
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=process_env,
         )
         self._process = process
         try:
-            stdout, stderr = process.communicate()
+            if self._cancelled:
+                self.cancel()
+            stdout, stderr = self._communicate_subprocess(process)
         finally:
             self._process = None
 
+        if self._cancelled:
+            raise InterruptedError("Aria-AMT 转写处理已取消")
+
         if process.returncode != 0:
-            error = RuntimeError(
-                "Aria-AMT 转写失败:\n"
-                f"{stdout}\n{stderr}"
-            )
+            error = RuntimeError("Aria-AMT 转写失败:\n" f"{stdout}\n{stderr}")
             friendly_message = rewrite_cuda_runtime_error(error, "cuda:0")
             if friendly_message != str(error):
                 raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from error
             raise error
+
+    def _communicate_subprocess(self, process) -> tuple[str, str]:
+        """Drain/reap the subprocess; enforce the cancellation deadline off the GUI thread."""
+
+        cancel_deadline = None
+        while True:
+            try:
+                return process.communicate(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                if not self._cancelled:
+                    continue
+
+                if cancel_deadline is None:
+                    cancel_deadline = time.monotonic() + 5.0
+                if time.monotonic() < cancel_deadline:
+                    continue
+
+                logger.warning("Aria-AMT 子进程未在 5 秒内退出，强制终止")
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    logger.info("Aria-AMT 子进程已在强制终止前退出")
+
+                try:
+                    return process.communicate(timeout=5.0)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("Aria-AMT 子进程在强制终止后仍未退出") from exc
 
     def transcribe(
         self,
@@ -316,44 +433,45 @@ class AriaAmtTranscriber:
         output_path: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> str:
+        if self._cancelled:
+            raise InterruptedError("Aria-AMT 转写处理已取消")
+
         input_path = Path(audio_path)
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not self.is_available():
-            raise RuntimeError(
-                "Aria-AMT 未安装。请执行: "
-                "python -m pip install git+https://github.com/EleutherAI/aria-amt.git"
-            )
+            raise RuntimeError(self.get_unavailable_reason())
         if not self.is_model_available():
             raise RuntimeError(
-                "Aria-AMT 模型权重缺失。请执行: "
+                "Aria-AMT 模型权重缺失或身份校验失败。"
+                f"期望大小 {ARIA_AMT_CHECKPOINT_SIZE} bytes，"
+                f"SHA-256 {ARIA_AMT_CHECKPOINT_SHA256}。请执行: "
                 "python download_aria_amt_model.py"
             )
 
-        temp_dir = out_path.parent / ".aria_amt_tmp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=".aria_amt_",
+            dir=out_path.parent,
+        ) as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            if progress_callback:
+                progress_callback(0.05, self._pt("progress.loading_aria_amt"))
 
-        if progress_callback:
-            progress_callback(0.05, self._pt("progress.loading_aria_amt"))
+            if platform.system() == "Windows":
+                self._run_transcription_windows_single_file(input_path, temp_dir, progress_callback)
+            elif is_frozen_app():
+                self._run_transcription_in_process(input_path, temp_dir)
+            else:
+                self._run_transcription_subprocess(input_path, temp_dir)
 
-        self._cancelled = False
-        if platform.system() == "Windows":
-            self._run_transcription_windows_single_file(input_path, temp_dir, progress_callback)
-        elif is_frozen_app():
-            self._run_transcription_in_process(input_path, temp_dir)
-        else:
-            self._run_transcription_subprocess(input_path, temp_dir)
+            if self._cancelled:
+                raise InterruptedError("Aria-AMT 转写处理已取消")
 
-        if self._cancelled:
-            raise InterruptedError("Aria-AMT 转写处理已取消")
-
-        midi_path = self._guess_output_midi(temp_dir, input_path)
-        if midi_path is None or not midi_path.exists():
-            raise RuntimeError(self._format_missing_output_error(out_path, temp_dir))
-
-        shutil.move(str(midi_path), str(out_path))
-        shutil.rmtree(temp_dir, ignore_errors=True)
+            midi_path = self._guess_output_midi(temp_dir, input_path)
+            if midi_path is None:
+                raise RuntimeError(self._format_missing_output_error(out_path, temp_dir))
+            publish_midi_output(midi_path, out_path, "Aria-AMT")
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.aria_amt_complete"))
@@ -362,8 +480,13 @@ class AriaAmtTranscriber:
         return str(out_path)
 
     def cancel(self) -> None:
+        """快速发出取消/terminate；等待与强杀由转写 worker 负责。"""
+
         self._cancelled = True
         process = self._process
         if process is not None and process.poll() is None:
             logger.info("正在终止 Aria-AMT 子进程...")
-            process.terminate()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                logger.info("Aria-AMT 子进程已在终止请求前退出")

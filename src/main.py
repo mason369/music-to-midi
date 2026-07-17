@@ -15,6 +15,7 @@ from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 from src import __version__
+from src.utils.midi_output import validate_midi_output
 from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
 from src.utils.warnings_filter import ensure_standard_streams
 
@@ -107,70 +108,6 @@ def _prepare_torch_runtime_before_pyqt() -> None:
             torchaudio.set_audio_backend("soundfile")
     except Exception as e:
         logging.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
-
-
-def _is_4k_display() -> bool:
-    """检测主显示器是否为 4K（>= 3840x2160）。
-
-    在 QApplication 创建之前调用。Windows 上使用 EnumDisplaySettingsW
-    读取当前显示模式，避免提前设置进程 DPI awareness，防止 Qt 初始化时
-    再设置 DPI awareness 触发 Access denied 警告。
-    """
-    import platform
-    try:
-        if platform.system() == "Windows":
-            import ctypes
-            from ctypes import wintypes
-
-            CCHDEVICENAME = 32
-            CCHFORMNAME = 32
-            ENUM_CURRENT_SETTINGS = -1
-
-            class DEVMODEW(ctypes.Structure):
-                _fields_ = [
-                    ("dmDeviceName", wintypes.WCHAR * CCHDEVICENAME),
-                    ("dmSpecVersion", wintypes.WORD),
-                    ("dmDriverVersion", wintypes.WORD),
-                    ("dmSize", wintypes.WORD),
-                    ("dmDriverExtra", wintypes.WORD),
-                    ("dmFields", wintypes.DWORD),
-                    ("dmOrientation", wintypes.SHORT),
-                    ("dmPaperSize", wintypes.SHORT),
-                    ("dmPaperLength", wintypes.SHORT),
-                    ("dmPaperWidth", wintypes.SHORT),
-                    ("dmScale", wintypes.SHORT),
-                    ("dmCopies", wintypes.SHORT),
-                    ("dmDefaultSource", wintypes.SHORT),
-                    ("dmPrintQuality", wintypes.SHORT),
-                    ("dmColor", wintypes.SHORT),
-                    ("dmDuplex", wintypes.SHORT),
-                    ("dmYResolution", wintypes.SHORT),
-                    ("dmTTOption", wintypes.SHORT),
-                    ("dmCollate", wintypes.SHORT),
-                    ("dmFormName", wintypes.WCHAR * CCHFORMNAME),
-                    ("dmLogPixels", wintypes.WORD),
-                    ("dmBitsPerPel", wintypes.DWORD),
-                    ("dmPelsWidth", wintypes.DWORD),
-                    ("dmPelsHeight", wintypes.DWORD),
-                    ("dmDisplayFlags", wintypes.DWORD),
-                    ("dmDisplayFrequency", wintypes.DWORD),
-                    ("dmICMMethod", wintypes.DWORD),
-                    ("dmICMIntent", wintypes.DWORD),
-                    ("dmMediaType", wintypes.DWORD),
-                    ("dmDitherType", wintypes.DWORD),
-                    ("dmReserved1", wintypes.DWORD),
-                    ("dmReserved2", wintypes.DWORD),
-                    ("dmPanningWidth", wintypes.DWORD),
-                    ("dmPanningHeight", wintypes.DWORD),
-                ]
-
-            devmode = DEVMODEW()
-            devmode.dmSize = ctypes.sizeof(DEVMODEW)
-            if ctypes.windll.user32.EnumDisplaySettingsW(None, ENUM_CURRENT_SETTINGS, ctypes.byref(devmode)):
-                return devmode.dmPelsWidth >= 3840 and devmode.dmPelsHeight >= 2160
-    except Exception as exc:
-        logging.getLogger(__name__).debug("4K 显示器检测失败: %s", exc)
-    return False
 
 
 def _run_self_test(
@@ -281,7 +218,7 @@ def _run_miros_worker(argv=None) -> int:
             from transcribe import transcribe
 
         transcribe(str(input_path), args.output)
-        output_path = Path(args.output)
+        output_path = validate_midi_output(args.output, "MIROS worker")
         write_status(
             {
                 "ok": True,
@@ -395,18 +332,11 @@ def main():
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config
 
-        # 高DPI缩放策略：
-        #   4K 屏幕使用 PassThrough 保留精确缩放比例，避免 Floor 将 1.5x 截断为 1x 导致界面过小
-        #   非 4K 屏幕使用 Floor 避免界面过大导致文字被遮挡
-        if _is_4k_display():
-            logger.info(t("startup.detected_4k_passthrough"))
-            QApplication.setHighDpiScaleFactorRoundingPolicy(
-                Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-            )
-        else:
-            QApplication.setHighDpiScaleFactorRoundingPolicy(
-                Qt.HighDpiScaleFactorRoundingPolicy.Floor
-            )
+        # DPI 缩放与面板分辨率无关。保留 Windows 的 125%/150%/175%
+        # 等分数缩放，让 Qt 按每块屏幕的逻辑像素完成布局。
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
 
         # 创建应用程序
         app = QApplication(sys.argv)

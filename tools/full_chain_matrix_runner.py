@@ -48,6 +48,19 @@ def midi_stats(path: str) -> dict:
     }
 
 
+def build_case_config(case: dict, output_dir: Path) -> Config:
+    """Build the same fixed-quality config used by a real matrix case."""
+    return Config(
+        processing_mode=case["mode"],
+        transcription_backend=case["backend"],
+        multi_instrument_model=case.get("multi_model", "yourmt3"),
+        midi_track_mode=case.get("track_mode", "multi_track"),
+        vocal_split_merge_midi=case.get("merge", False),
+        output_dir=str(output_dir),
+        save_separated_tracks=True,
+    )
+
+
 def run_case(case: dict, mix_audio: Path, piano_audio: Path, root: Path) -> dict:
     audio_path = piano_audio if case.get("audio") == "piano" else mix_audio
     output_dir = root / case["name"]
@@ -55,16 +68,7 @@ def run_case(case: dict, mix_audio: Path, piano_audio: Path, root: Path) -> dict
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config = Config(
-        processing_mode=case["mode"],
-        transcription_backend=case["backend"],
-        multi_instrument_model=case.get("multi_model", "yourmt3"),
-        midi_track_mode=case.get("track_mode", "multi_track"),
-        vocal_split_merge_midi=case.get("merge", False),
-        transcription_quality="fast",
-        output_dir=str(output_dir),
-        save_separated_tracks=True,
-    )
+    config = build_case_config(case, output_dir)
 
     progress_tail = []
 

@@ -18,10 +18,12 @@ class MainStartupContractTests(unittest.TestCase):
 
         self.assertNotIn("torch.backends.cudnn.benchmark = True", source)
 
-    def test_4k_detection_does_not_preempt_qt_dpi_awareness(self):
+    def test_qt_uses_fractional_dpi_scaling_for_every_resolution(self):
         source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
 
-        self.assertIn("EnumDisplaySettingsW", source)
+        self.assertIn("HighDpiScaleFactorRoundingPolicy.PassThrough", source)
+        self.assertNotIn("HighDpiScaleFactorRoundingPolicy.Floor", source)
+        self.assertNotIn("if _is_4k_display()", source)
         self.assertNotIn("SetProcessDpiAwareness", source)
         self.assertNotIn("SetProcessDPIAware", source)
 

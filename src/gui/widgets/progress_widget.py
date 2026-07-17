@@ -2,11 +2,18 @@
 进度组件 - 显示处理阶段
 """
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QGroupBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QGroupBox,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt
 
 from src.i18n.translator import t
+from src.gui.layouts import FlowLayout
 from src.models.data_models import ProcessingStage, ProcessingProgress
 
 
@@ -30,6 +37,11 @@ class StageIndicator(QWidget):
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.name_label = QLabel(self._get_stage_name())
+        self.name_label.setWordWrap(True)
+        self.name_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
         self.name_label.setStyleSheet("font-size: 10px; color: #b0b8c8;")
 
         layout.addWidget(self.icon_label)
@@ -45,7 +57,7 @@ class StageIndicator(QWidget):
             ProcessingStage.TRANSCRIPTION: "transcription",
             ProcessingStage.VOCAL_TRANSCRIPTION: "vocal_transcription",
             ProcessingStage.SYNTHESIS: "synthesis",
-            ProcessingStage.COMPLETE: "complete"
+            ProcessingStage.COMPLETE: "complete",
         }
         key = stage_keys.get(self.stage, "")
         return t(f"main.progress.stages.{key}")
@@ -59,38 +71,50 @@ class StageIndicator(QWidget):
         """根据状态更新视觉样式"""
         if self.status == "done":
             self.icon_label.setText("✓")
-            self.icon_label.setStyleSheet("""
+            self.icon_label.setStyleSheet(
+                """
                 color: #50c878;
                 font-weight: bold;
                 font-size: 12px;
-            """)
-            self.name_label.setStyleSheet("""
+            """
+            )
+            self.name_label.setStyleSheet(
+                """
                 font-size: 10px;
                 color: #50c878;
                 font-weight: 500;
-            """)
+            """
+            )
         elif self.status == "current":
             self.icon_label.setText("◉")
-            self.icon_label.setStyleSheet("""
+            self.icon_label.setStyleSheet(
+                """
                 color: #4a9eff;
                 font-weight: bold;
                 font-size: 12px;
-            """)
-            self.name_label.setStyleSheet("""
+            """
+            )
+            self.name_label.setStyleSheet(
+                """
                 font-size: 10px;
                 color: #4a9eff;
                 font-weight: bold;
-            """)
+            """
+            )
         else:
             self.icon_label.setText("○")
-            self.icon_label.setStyleSheet("""
+            self.icon_label.setStyleSheet(
+                """
                 color: #4a5a6a;
                 font-size: 12px;
-            """)
-            self.name_label.setStyleSheet("""
+            """
+            )
+            self.name_label.setStyleSheet(
+                """
                 font-size: 10px;
                 color: #6a7a8a;
-            """)
+            """
+            )
 
     def update_translations(self):
         """更新当前语言的文本"""
@@ -110,7 +134,8 @@ class ProgressWidget(QGroupBox):
     def _setup_ui(self):
         """设置用户界面"""
         self.setTitle(t("main.progress.title"))
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QGroupBox {
                 font-weight: bold;
                 font-size: 11px;
@@ -127,7 +152,8 @@ class ProgressWidget(QGroupBox):
                 padding: 0 6px;
                 background: #1f2940;
             }
-        """)
+        """
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 14, 10, 10)
@@ -135,13 +161,20 @@ class ProgressWidget(QGroupBox):
 
         # 当前阶段标签
         self.current_label = QLabel(f"{t('main.progress.current')}: --")
-        self.current_label.setStyleSheet("""
+        self.current_label.setWordWrap(True)
+        self.current_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.current_label.setStyleSheet(
+            """
             QLabel {
                 font-weight: normal;
                 color: #b0b8c8;
                 font-size: 10px;
             }
-        """)
+        """
+        )
 
         # 进度条
         self.progress_bar = QProgressBar()
@@ -149,7 +182,8 @@ class ProgressWidget(QGroupBox):
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFixedHeight(18)
-        self.progress_bar.setStyleSheet("""
+        self.progress_bar.setStyleSheet(
+            """
             QProgressBar {
                 border: none;
                 border-radius: 9px;
@@ -163,11 +197,14 @@ class ProgressWidget(QGroupBox):
                 border-radius: 9px;
                 background: #4a9eff;
             }
-        """)
+        """
+        )
 
         # 阶段指示器容器
-        self._stages_layout = QHBoxLayout()
-        self._stages_layout.setSpacing(5)
+        self._stages_layout = FlowLayout(
+            horizontal_spacing=12,
+            vertical_spacing=6,
+        )
         self._build_stage_indicators("smart")
 
         layout.addWidget(self.current_label)
@@ -186,33 +223,22 @@ class ProgressWidget(QGroupBox):
         self.stage_indicators.clear()
         self._arrow_labels.clear()
 
-        if mode == "vocal_split":
+        if mode in {"vocal_split", "six_stem_split"}:
             stages = [
                 ProcessingStage.PREPROCESSING,
                 ProcessingStage.SEPARATION,
-                ProcessingStage.TRANSCRIPTION,
-                ProcessingStage.VOCAL_TRANSCRIPTION,
-                ProcessingStage.SYNTHESIS
             ]
         else:
             stages = [
                 ProcessingStage.PREPROCESSING,
                 ProcessingStage.TRANSCRIPTION,
-                ProcessingStage.SYNTHESIS
+                ProcessingStage.SYNTHESIS,
             ]
 
-        for i, stage in enumerate(stages):
+        for stage in stages:
             indicator = StageIndicator(stage)
             self.stage_indicators[stage] = indicator
             self._stages_layout.addWidget(indicator)
-
-            if i < len(stages) - 1:
-                arrow = QLabel("→")
-                arrow.setStyleSheet("color: #4a5a6a;")
-                self._arrow_labels.append(arrow)
-                self._stages_layout.addWidget(arrow)
-
-        self._stages_layout.addStretch()
 
     def set_mode(self, mode: str):
         """切换处理模式时更新阶段指示器"""
@@ -221,10 +247,14 @@ class ProgressWidget(QGroupBox):
     def update_progress(self, progress: ProcessingProgress):
         """更新进度显示"""
         # 更新进度条
-        self.progress_bar.setValue(max(0, min(100, int(progress.overall_progress * 100))))
+        self.progress_bar.setValue(
+            max(0, min(100, int(progress.overall_progress * 100)))
+        )
 
         # 更新当前标签
-        self.current_label.setText(f"{t('main.progress.current')}: {progress.message}")
+        self.current_label.setText(
+            f"{t('main.progress.current')}: {progress.message}"
+        )
 
         # 更新阶段指示器
         current_stage = progress.stage
@@ -233,7 +263,9 @@ class ProgressWidget(QGroupBox):
         displayed_stages = list(self.stage_indicators.keys())
         stage_order = displayed_stages + [ProcessingStage.COMPLETE]
 
-        current_idx = stage_order.index(current_stage) if current_stage in stage_order else 0
+        current_idx = (
+            stage_order.index(current_stage) if current_stage in stage_order else 0
+        )
 
         for stage, indicator in self.stage_indicators.items():
             stage_idx = stage_order.index(stage) if stage in stage_order else 0

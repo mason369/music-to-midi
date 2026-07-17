@@ -1,28 +1,80 @@
 """
 轨道面板组件 - 支持模式选择与多乐器后端选择。
 """
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from src.i18n.translator import get_translator, t
+from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
 from src.models.data_models import (
     MidiTrackMode,
     MultiInstrumentModel,
     ProcessingMode,
-    TranscriptionBackend,
     TrackLayout,
     YourMT3Model,
 )
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
+
+
+class WrappedCheckBox(QWidget):
+    """Checkbox with a label that participates in height-for-width wrapping."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.checkbox = QCheckBox()
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+        self.label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.label.installEventFilter(self)
+        self.label.setBuddy(self.checkbox)
+        self.label.setStyleSheet("color: #c8d3e6;")
+
+        layout.addWidget(self.checkbox, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.label, 1)
+        self.setFocusProxy(self.checkbox)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        self.toggled = self.checkbox.toggled
+        self.stateChanged = self.checkbox.stateChanged
+
+    def eventFilter(self, watched, event):
+        if (
+            watched is self.label
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.isEnabled()
+        ):
+            self.checkbox.toggle()
+            return True
+        return super().eventFilter(watched, event)
+
+    def isChecked(self) -> bool:  # noqa: N802 - mirrors QCheckBox
+        return self.checkbox.isChecked()
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802 - mirrors QCheckBox
+        self.checkbox.setChecked(checked)
+
+    def text(self) -> str:
+        return self.label.text()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - mirrors QCheckBox
+        self.label.setText(text)
 
 
 class TrackPanel(QGroupBox):
@@ -40,31 +92,50 @@ class TrackPanel(QGroupBox):
         self._setup_ui()
 
     @staticmethod
-    def _combo_style(min_width: int = 200) -> str:
-        return f"""
-            QComboBox {{
+    def _combo_style() -> str:
+        return """
+            QComboBox {
                 padding: 4px 10px;
                 border: 1px solid #3a4a6a;
                 border-radius: 5px;
                 background: #16213e;
                 color: #e0e0e0;
                 font-size: 11px;
-                min-width: {min_width}px;
-            }}
-            QComboBox:hover {{
+                min-width: 0px;
+            }
+            QComboBox:hover {
                 border-color: #4a9eff;
-            }}
-            QComboBox::drop-down {{
+            }
+            QComboBox::drop-down {
                 border: none;
                 width: 24px;
-            }}
-            QComboBox QAbstractItemView {{
+            }
+            QComboBox QAbstractItemView {
                 background: #1f2940;
                 border: 1px solid #3a4a6a;
                 color: #e0e0e0;
                 selection-background-color: #3a5a7c;
-            }}
+            }
         """
+
+    @classmethod
+    def _configure_combo(cls, combo: QComboBox) -> None:
+        combo.setStyleSheet(cls._combo_style())
+        combo.setMinimumWidth(0)
+        combo.setMinimumContentsLength(0)
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _selector_layout(parent: QWidget) -> QFormLayout:
+        layout = QFormLayout(parent)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        return layout
 
     def _setup_ui(self):
         self.setTitle(t("main.tracks.title"))
@@ -95,62 +166,59 @@ class TrackPanel(QGroupBox):
         main_layout.setSpacing(4)
 
         self._mode_label = QLabel(t("main.mode.label") + ":")
+        self._mode_label.setWordWrap(True)
         self._mode_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
 
-        self.mode_combo = QComboBox()
+        self.mode_combo = NoWheelComboBox()
         self.mode_combo.addItem(t("main.mode.smart"), ProcessingMode.SMART.value)
         self.mode_combo.addItem(t("main.mode.vocal_split"), ProcessingMode.VOCAL_SPLIT.value)
         self.mode_combo.addItem(t("main.mode.six_stem_split"), ProcessingMode.SIX_STEM_SPLIT.value)
         self.mode_combo.addItem(t("main.mode.piano_transkun"), ProcessingMode.PIANO_TRANSKUN.value)
+        self.mode_combo.addItem(
+            t("main.mode.piano_transkun_v2_aug"),
+            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value,
+        )
         self.mode_combo.addItem(t("main.mode.piano_aria_amt"), ProcessingMode.PIANO_ARIA_AMT.value)
         self.mode_combo.addItem(
             t("main.mode.piano_bytedance_pedal"),
             ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         )
-        self.mode_combo.setStyleSheet(self._combo_style())
+        self._configure_combo(self.mode_combo)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(10)
-        mode_row.addWidget(self._mode_label)
-        mode_row.addWidget(self.mode_combo)
-        mode_row.addStretch()
-        main_layout.addLayout(mode_row)
+        self._mode_row = QWidget()
+        mode_row = self._selector_layout(self._mode_row)
+        mode_row.addRow(self._mode_label, self.mode_combo)
+        main_layout.addWidget(self._mode_row)
 
         self._model_row = QWidget()
-        model_row = QHBoxLayout(self._model_row)
-        model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.setSpacing(10)
+        model_row = self._selector_layout(self._model_row)
 
         self._model_label = QLabel(t("main.engine.active_label") + ":")
+        self._model_label.setWordWrap(True)
         self._model_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
 
-        self.model_combo = QComboBox()
-        self.model_combo.setStyleSheet(self._combo_style(240))
+        self.model_combo = NoWheelComboBox()
+        self._configure_combo(self.model_combo)
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         self._sync_model_options(MultiInstrumentModel.YOURMT3.value)
 
-        model_row.addWidget(self._model_label)
-        model_row.addWidget(self.model_combo)
-        model_row.addStretch()
+        model_row.addRow(self._model_label, self.model_combo)
         main_layout.addWidget(self._model_row)
 
         self._yourmt3_model_row = QWidget()
-        yourmt3_model_row = QHBoxLayout(self._yourmt3_model_row)
-        yourmt3_model_row.setContentsMargins(0, 0, 0, 0)
-        yourmt3_model_row.setSpacing(10)
+        yourmt3_model_row = self._selector_layout(self._yourmt3_model_row)
 
         self._yourmt3_model_label = QLabel(t("main.engine.yourmt3_model_label") + ":")
+        self._yourmt3_model_label.setWordWrap(True)
         self._yourmt3_model_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
 
-        self.yourmt3_model_combo = QComboBox()
-        self.yourmt3_model_combo.setStyleSheet(self._combo_style(260))
+        self.yourmt3_model_combo = NoWheelComboBox()
+        self._configure_combo(self.yourmt3_model_combo)
         self.yourmt3_model_combo.currentIndexChanged.connect(self._on_yourmt3_model_changed)
         self._sync_yourmt3_model_options(YourMT3Model.YPTF_MOE_MULTI_NOPS.value)
 
-        yourmt3_model_row.addWidget(self._yourmt3_model_label)
-        yourmt3_model_row.addWidget(self.yourmt3_model_combo)
-        yourmt3_model_row.addStretch()
+        yourmt3_model_row.addRow(self._yourmt3_model_label, self.yourmt3_model_combo)
         main_layout.addWidget(self._yourmt3_model_row)
 
         self.yourmt3_model_card = QFrame()
@@ -256,7 +324,7 @@ class TrackPanel(QGroupBox):
         vocal_layout = QVBoxLayout(self._vocal_split_options)
         vocal_layout.setContentsMargins(6, 4, 6, 2)
         vocal_layout.setSpacing(4)
-        self._vocal_split_merge_check = QCheckBox(t("main.mode.vocal_split_merge_midi"))
+        self._vocal_split_merge_check = WrappedCheckBox(t("main.mode.vocal_split_merge_midi"))
         self._vocal_split_merge_check.setChecked(False)
         self._vocal_split_merge_check.setStyleSheet("font-size: 10px; color: #b0b8c8; spacing: 4px;")
         vocal_layout.addWidget(self._vocal_split_merge_check)
@@ -292,6 +360,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.six_stem_split_tooltip")
         if mode == ProcessingMode.PIANO_TRANSKUN.value:
             return t("main.mode.piano_transkun_tooltip")
+        if mode == ProcessingMode.PIANO_TRANSKUN_V2_AUG.value:
+            return t("main.mode.piano_transkun_v2_aug_tooltip")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_tooltip")
         if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
@@ -301,8 +371,6 @@ class TrackPanel(QGroupBox):
     def _model_tooltip(self) -> str:
         mode = self.get_processing_mode()
         backend = self.get_transcription_backend()
-        if backend == TranscriptionBackend.ARIA_AMT.value:
-            return t("main.engine.aria_amt_tooltip")
         if backend == MultiInstrumentModel.MIROS.value:
             return t("main.engine.miros_tooltip")
         if mode in {ProcessingMode.VOCAL_SPLIT.value, ProcessingMode.SIX_STEM_SPLIT.value}:
@@ -325,6 +393,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.six_stem_split_desc")
         if mode == ProcessingMode.PIANO_TRANSKUN.value:
             return t("main.mode.piano_transkun_desc")
+        if mode == ProcessingMode.PIANO_TRANSKUN_V2_AUG.value:
+            return t("main.mode.piano_transkun_v2_aug_desc")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_desc")
         if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
@@ -343,6 +413,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.six_stem_split_hint")
         if mode == ProcessingMode.PIANO_TRANSKUN.value:
             return t("main.mode.piano_transkun_hint")
+        if mode == ProcessingMode.PIANO_TRANSKUN_V2_AUG.value:
+            return t("main.mode.piano_transkun_v2_aug_hint")
         if mode == ProcessingMode.PIANO_ARIA_AMT.value:
             return t("main.mode.piano_aria_amt_hint")
         if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
@@ -355,31 +427,22 @@ class TrackPanel(QGroupBox):
 
     def _model_hint_text(self) -> str:
         mode = self.get_processing_mode()
-        backend = self.get_transcription_backend()
+        if mode in {
+            ProcessingMode.VOCAL_SPLIT.value,
+            ProcessingMode.SIX_STEM_SPLIT.value,
+        }:
+            return t("main.engine.manual_split_midi_hint")
         multi_model = self.get_multi_instrument_model()
 
         if mode in {
             ProcessingMode.PIANO_TRANSKUN.value,
+            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value,
             ProcessingMode.PIANO_ARIA_AMT.value,
             ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
         }:
             return t("main.engine.dedicated_mode_hint")
-        if mode == ProcessingMode.VOCAL_SPLIT.value:
-            if multi_model == MultiInstrumentModel.MIROS.value:
-                return t("main.engine.vocal_split_miros_midi_hint")
-            return t("main.engine.vocal_split_yourmt3_midi_hint")
-        if backend == TranscriptionBackend.ARIA_AMT.value and mode == ProcessingMode.SIX_STEM_SPLIT.value:
-            return t("main.engine.aria_amt_six_stem_hint")
-        if backend == TranscriptionBackend.ARIA_AMT.value and multi_model == MultiInstrumentModel.MIROS.value:
-            return t("main.engine.aria_amt_with_miros_hint")
-        if backend == TranscriptionBackend.ARIA_AMT.value:
-            return t("main.engine.aria_amt_general_hint")
-        if multi_model == MultiInstrumentModel.MIROS.value and mode == ProcessingMode.SIX_STEM_SPLIT.value:
-            return t("main.engine.miros_six_stem_hint")
         if multi_model == MultiInstrumentModel.MIROS.value:
             return t("main.engine.miros_general_hint")
-        if mode == ProcessingMode.SIX_STEM_SPLIT.value:
-            return t("main.engine.yourmt3_six_stem_hint")
         return t("main.engine.yourmt3_general_hint")
 
     def _yourmt3_model_hint_text(self) -> str:
@@ -413,7 +476,6 @@ class TrackPanel(QGroupBox):
         mode = mode or self.get_processing_mode()
         if mode == ProcessingMode.SIX_STEM_SPLIT.value:
             return [
-                (t("main.engine.aria_amt_piano_stem"), TranscriptionBackend.ARIA_AMT.value),
                 (t("main.engine.yourmt3_midi"), MultiInstrumentModel.YOURMT3.value),
                 (t("main.engine.miros_midi"), MultiInstrumentModel.MIROS.value),
             ]
@@ -432,7 +494,10 @@ class TrackPanel(QGroupBox):
         values = [value for _label, value in options]
         preferred = str(preferred_backend or "").strip().lower()
         if preferred not in values:
-            preferred = MultiInstrumentModel.YOURMT3.value
+            raise ValueError(
+                f"Unsupported transcription backend {preferred_backend!r} "
+                f"for mode {self.get_processing_mode()!r}"
+            )
 
         previous_blocked = self.model_combo.blockSignals(True)
         try:
@@ -441,7 +506,7 @@ class TrackPanel(QGroupBox):
                 self.model_combo.addItem(label, value)
             index = self.model_combo.findData(preferred)
             if index < 0:
-                index = 0
+                raise RuntimeError(f"Backend option was not populated: {preferred!r}")
             self.model_combo.setCurrentIndex(index)
         finally:
             self.model_combo.blockSignals(previous_blocked)
@@ -450,7 +515,7 @@ class TrackPanel(QGroupBox):
         valid_values = {model.value for model in YourMT3Model}
         preferred = str(preferred_model or "").strip().lower()
         if preferred not in valid_values:
-            preferred = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
+            raise ValueError(f"Unsupported YourMT3 checkpoint: {preferred_model!r}")
 
         previous_blocked = self.yourmt3_model_combo.blockSignals(True)
         try:
@@ -466,7 +531,7 @@ class TrackPanel(QGroupBox):
                 self.yourmt3_model_combo.addItem(info.get("ui_label", model.value), model.value)
             index = self.yourmt3_model_combo.findData(preferred)
             if index < 0:
-                index = self.yourmt3_model_combo.findData(YourMT3Model.YPTF_MOE_MULTI_NOPS.value)
+                raise RuntimeError(f"YourMT3 checkpoint option was not populated: {preferred!r}")
             self.yourmt3_model_combo.setCurrentIndex(index)
         finally:
             self.yourmt3_model_combo.blockSignals(previous_blocked)
@@ -483,16 +548,22 @@ class TrackPanel(QGroupBox):
         self.model_hint_label.setText(self._model_hint_text())
 
     def get_processing_mode(self) -> str:
-        return self.mode_combo.currentData() or ProcessingMode.SMART.value
+        mode = self.mode_combo.currentData()
+        if mode is None:
+            raise RuntimeError("No processing mode is selected")
+        return str(mode)
 
     def set_processing_mode(self, mode: str):
         index = self.mode_combo.findData(mode)
         if index < 0:
-            index = self.mode_combo.findData(ProcessingMode.SMART.value)
+            raise ValueError(f"Unsupported processing mode: {mode!r}")
         self.mode_combo.setCurrentIndex(index)
 
     def get_transcription_backend(self) -> str:
-        return self.model_combo.currentData() or MultiInstrumentModel.YOURMT3.value
+        backend = self.model_combo.currentData()
+        if backend is None:
+            raise RuntimeError("No transcription backend is selected")
+        return str(backend)
 
     def set_transcription_backend(self, backend: str):
         self._sync_model_options(backend)
@@ -502,15 +573,18 @@ class TrackPanel(QGroupBox):
         preferred = self.get_transcription_backend()
         if preferred in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
             return preferred
-        return MultiInstrumentModel.YOURMT3.value
+        raise ValueError(f"Unsupported multi-instrument backend: {preferred!r}")
 
     def set_multi_instrument_model(self, model_name: str):
         if model_name not in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
-            model_name = MultiInstrumentModel.YOURMT3.value
+            raise ValueError(f"Unsupported multi-instrument backend: {model_name!r}")
         self._selected_multi_instrument_model = model_name
 
     def get_yourmt3_model(self) -> str:
-        return self.yourmt3_model_combo.currentData() or YourMT3Model.YPTF_MOE_MULTI_NOPS.value
+        model_name = self.yourmt3_model_combo.currentData()
+        if model_name is None:
+            raise RuntimeError("No YourMT3 checkpoint is selected")
+        return str(model_name)
 
     def set_yourmt3_model(self, model_name: str):
         self._sync_yourmt3_model_options(model_name)
@@ -531,29 +605,23 @@ class TrackPanel(QGroupBox):
 
     def _update_mode_option_widgets(self):
         mode = self.get_processing_mode()
-        uses_model_selector = mode in {
-            ProcessingMode.SMART.value,
-            ProcessingMode.VOCAL_SPLIT.value,
-            ProcessingMode.SIX_STEM_SPLIT.value,
-        }
-        is_vocal_mode = mode == ProcessingMode.VOCAL_SPLIT.value
-        shows_yourmt3_smart_controls = (
-            mode == ProcessingMode.SMART.value
+        uses_model_selector = mode == ProcessingMode.SMART.value
+        shows_yourmt3_model = (
+            uses_model_selector
             and self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value
         )
-        shows_yourmt3_model = shows_yourmt3_smart_controls
 
         self._model_row.setVisible(uses_model_selector)
         self._yourmt3_model_row.setVisible(shows_yourmt3_model)
         self.yourmt3_model_card.setVisible(shows_yourmt3_model)
         self.yourmt3_model_title_label.setVisible(shows_yourmt3_model)
         self.yourmt3_model_hint_label.setVisible(shows_yourmt3_model)
-        self._vocal_split_options.setVisible(is_vocal_mode)
+        self._vocal_split_options.setVisible(False)
 
         self.mode_combo.setEnabled(self._controls_enabled)
         self.model_combo.setEnabled(self._controls_enabled and uses_model_selector)
         self.yourmt3_model_combo.setEnabled(self._controls_enabled and shows_yourmt3_model)
-        self._vocal_split_merge_check.setEnabled(self._controls_enabled and is_vocal_mode)
+        self._vocal_split_merge_check.setEnabled(False)
         self._mode_label.setEnabled(self._controls_enabled)
         self._model_label.setEnabled(self._controls_enabled and uses_model_selector)
         self._yourmt3_model_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
@@ -580,12 +648,20 @@ class TrackPanel(QGroupBox):
         self._mode_label.setText(t("main.mode.label") + ":")
         self._model_label.setText(self._model_label_text() + ":")
         self._yourmt3_model_label.setText(t("main.engine.yourmt3_model_label") + ":")
-        self.mode_combo.setItemText(0, t("main.mode.smart"))
-        self.mode_combo.setItemText(1, t("main.mode.vocal_split"))
-        self.mode_combo.setItemText(2, t("main.mode.six_stem_split"))
-        self.mode_combo.setItemText(3, t("main.mode.piano_transkun"))
-        self.mode_combo.setItemText(4, t("main.mode.piano_aria_amt"))
-        self.mode_combo.setItemText(5, t("main.mode.piano_bytedance_pedal"))
+        mode_labels = {
+            ProcessingMode.SMART.value: "main.mode.smart",
+            ProcessingMode.VOCAL_SPLIT.value: "main.mode.vocal_split",
+            ProcessingMode.SIX_STEM_SPLIT.value: "main.mode.six_stem_split",
+            ProcessingMode.PIANO_TRANSKUN.value: "main.mode.piano_transkun",
+            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value: "main.mode.piano_transkun_v2_aug",
+            ProcessingMode.PIANO_ARIA_AMT.value: "main.mode.piano_aria_amt",
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value: "main.mode.piano_bytedance_pedal",
+        }
+        for mode, translation_key in mode_labels.items():
+            index = self.mode_combo.findData(mode)
+            if index < 0:
+                raise RuntimeError(f"Processing mode option was not populated: {mode!r}")
+            self.mode_combo.setItemText(index, t(translation_key))
         self._sync_model_options(self.get_transcription_backend())
         self._sync_yourmt3_model_options(self.get_yourmt3_model())
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))

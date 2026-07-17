@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import argparse
-import inspect
+import hashlib
 import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+LEAP_REPO_ID = "pcunwa/BS-Roformer-Leap"
+LEAP_REVISION = "4e47d6662ae82eaa8b4ac4329fe66099a843b48e"
+LEAP_CHECKPOINT_REPO_PATH = "Xe/bs_leap_xe_voc.ckpt"
+LEAP_CONFIG_REPO_PATH = "Xe/leap_xe_config_voc.yaml"
+LEAP_CHECKPOINT_NAME = Path(LEAP_CHECKPOINT_REPO_PATH).name
+LEAP_CONFIG_NAME = Path(LEAP_CONFIG_REPO_PATH).name
+LEAP_CHECKPOINT_SIZE = 267_796_851
+LEAP_CHECKPOINT_SHA256 = "b739c1d2d87a81cd3dd3844ed9ad0bd678708c7a0a761a03a1aaff9af79a096d"
+LEAP_CONFIG_SIZE = 2_190
+LEAP_CONFIG_SHA256 = "d3cb8c84be2e9bcbc64c1086e2256dc097ab5addebc5ce507818e90ff8cbdc25"
 
-ROFORMER_PRESET = "vocal_rvc"
-ROFORMER_MODEL = f"ensemble:{ROFORMER_PRESET}"
-ROFORMER_MODELS = (
-    "melband_roformer_big_beta6x.ckpt",
-    "mel_band_roformer_vocals_fv4_gabox.ckpt",
-)
+# Compatibility names used by the installer and aggregate downloader.
+ROFORMER_MODEL = LEAP_CHECKPOINT_NAME
+ROFORMER_MODELS = (LEAP_CHECKPOINT_NAME, LEAP_CONFIG_NAME)
 DEFAULT_CACHE_DIR = Path.home() / ".music-to-midi" / "models" / "audio-separator"
 
 
@@ -20,11 +27,27 @@ def _resolve_cache_dir(cache_dir: Optional[Path]) -> Path:
     return Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR
 
 
+def _find_asset(cache_dir: Path, asset_name: str) -> Optional[Path]:
+    direct = cache_dir / asset_name
+    if direct.is_file() and direct.stat().st_size > 0:
+        return direct
+    for path in cache_dir.rglob(asset_name):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
 def resolve_vocal_model_path(
     cache_dir: Optional[Path] = None,
-    model_name: str = ROFORMER_MODELS[0],
+    model_name: str = LEAP_CHECKPOINT_NAME,
 ) -> Path:
-    return _resolve_cache_dir(cache_dir) / model_name
+    root = _resolve_cache_dir(cache_dir)
+    return _find_asset(root, model_name) or root / model_name
+
+
+def resolve_vocal_config_path(cache_dir: Optional[Path] = None) -> Path:
+    root = _resolve_cache_dir(cache_dir)
+    return _find_asset(root, LEAP_CONFIG_NAME) or root / LEAP_CONFIG_NAME
 
 
 def resolve_vocal_model_paths(
@@ -32,60 +55,55 @@ def resolve_vocal_model_paths(
     model_names: tuple[str, ...] = ROFORMER_MODELS,
 ) -> tuple[Path, ...]:
     root = _resolve_cache_dir(cache_dir)
-    return tuple(root / model_name for model_name in model_names)
+    return tuple(_find_asset(root, name) or root / name for name in model_names)
 
 
-def _find_downloaded_checkpoint(cache_dir: Path, model_name: str) -> Optional[Path]:
-    direct = cache_dir / model_name
-    if direct.is_file():
-        return direct
-
-    for path in cache_dir.rglob(model_name):
-        if path.is_file():
-            return path
-    return None
-
-
-def _find_all_required(cache_dir: Path) -> dict[str, Path]:
-    found: dict[str, Path] = {}
-    for model_name in ROFORMER_MODELS:
-        path = _find_downloaded_checkpoint(cache_dir, model_name)
-        if path and path.stat().st_size > 0:
-            found[model_name] = path
-    return found
-
-
-def is_vocal_model_available(cache_dir: Optional[Path] = None) -> bool:
-    cache_dir = _resolve_cache_dir(cache_dir)
-    return len(_find_all_required(cache_dir)) == len(ROFORMER_MODELS)
-
-
-def _separator_supports_ensemble(separator_cls) -> bool:
-    try:
-        signature = inspect.signature(separator_cls.__init__)
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        or parameter.name == "ensemble_preset"
-        for parameter in signature.parameters.values()
+def _checkpoint_has_expected_identity(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.stat().st_size == LEAP_CHECKPOINT_SIZE
+        and _sha256(path) == LEAP_CHECKPOINT_SHA256
     )
 
 
-def _is_ensemble(model_name: str) -> bool:
-    return str(model_name).lower().startswith("ensemble:")
+def _config_has_expected_identity(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.stat().st_size == LEAP_CONFIG_SIZE
+        and _sha256(path) == LEAP_CONFIG_SHA256
+    )
 
 
-def _download_required_models(separator, model_names: tuple[str, ...]) -> None:
-    download_model_and_data = getattr(separator, "download_model_and_data", None)
-    if not callable(download_model_and_data):
-        raise RuntimeError(
-            "当前 audio-separator 缺少 download_model_and_data；"
-            "请安装 audio-separator==0.44.1 或更高的 0.44.x 版本。"
+def is_vocal_model_available(cache_dir: Optional[Path] = None) -> bool:
+    checkpoint = resolve_vocal_model_path(cache_dir)
+    config = resolve_vocal_config_path(cache_dir)
+    return (
+        _checkpoint_has_expected_identity(checkpoint)
+        and _config_has_expected_identity(config)
+    )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_asset(cache_dir: Path, repo_path: str, downloader) -> Path:
+    downloaded = Path(
+        downloader(
+            repo_id=LEAP_REPO_ID,
+            filename=repo_path,
+            revision=LEAP_REVISION,
+            repo_type="model",
+            local_dir=str(cache_dir),
         )
-
-    for required_model in model_names:
-        download_model_and_data(required_model)
+    )
+    if not downloaded.is_file() or downloaded.stat().st_size <= 0:
+        raise RuntimeError(f"Hugging Face download did not create a valid asset: {downloaded}")
+    return downloaded
 
 
 def download_vocal_model(
@@ -93,80 +111,78 @@ def download_vocal_model(
     model_name: str = ROFORMER_MODEL,
     separator_cls=None,
     printer: Callable[[str], None] = print,
+    downloader=None,
 ) -> Path:
+    """Download this project's pinned Leap XE 90-band vocals checkpoint and config."""
+    del separator_cls  # Kept only for source compatibility with older callers.
+    if model_name not in (ROFORMER_MODEL, LEAP_CHECKPOINT_NAME):
+        raise ValueError(
+            f"Unsupported vocal model {model_name!r}; expected {LEAP_CHECKPOINT_NAME!r}"
+        )
+
     cache_dir = _resolve_cache_dir(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    found = _find_all_required(cache_dir)
-    if len(found) == len(ROFORMER_MODELS):
-        printer("RoFormer vocal_rvc ensemble 模型已存在，跳过下载。")
-        return found[ROFORMER_MODELS[0]]
+    checkpoint = resolve_vocal_model_path(cache_dir)
+    config = resolve_vocal_config_path(cache_dir)
+    if (
+        _checkpoint_has_expected_identity(checkpoint)
+        and _config_has_expected_identity(config)
+    ):
+        printer("BS-RoFormer Leap XE 90-band vocals assets already exist; skipping download.")
+        return checkpoint
 
-    if separator_cls is None:
+    if downloader is None:
         try:
-            from audio_separator.separator import Separator
-        except Exception as exc:
+            from huggingface_hub import hf_hub_download
+        except ImportError as exc:
             raise RuntimeError(
-                "未找到 audio-separator，无法下载 RoFormer vocal_rvc ensemble 模型。"
+                "huggingface_hub is required to download BS-RoFormer Leap XE assets"
             ) from exc
-        separator_cls = Separator
+        downloader = hf_hub_download
 
-    if _is_ensemble(model_name) and not _separator_supports_ensemble(separator_cls):
+    printer(f"Downloading BS-RoFormer Leap XE vocals from {LEAP_REPO_ID}@{LEAP_REVISION}")
+    checkpoint = _download_asset(cache_dir, LEAP_CHECKPOINT_REPO_PATH, downloader)
+    config = _download_asset(cache_dir, LEAP_CONFIG_REPO_PATH, downloader)
+
+    if checkpoint.stat().st_size != LEAP_CHECKPOINT_SIZE:
         raise RuntimeError(
-            "当前 audio-separator 不支持 ensemble_preset；"
-            "请安装 audio-separator==0.44.1 或更高的 0.44.x 版本。"
+            f"Leap XE checkpoint size mismatch: expected {LEAP_CHECKPOINT_SIZE}, "
+            f"got {checkpoint.stat().st_size} ({checkpoint})"
+        )
+    actual_sha256 = _sha256(checkpoint)
+    if actual_sha256 != LEAP_CHECKPOINT_SHA256:
+        raise RuntimeError(
+            "Leap XE checkpoint SHA256 mismatch: "
+            f"expected {LEAP_CHECKPOINT_SHA256}, got {actual_sha256}"
+        )
+    if not _config_has_expected_identity(config):
+        raise RuntimeError(
+            "Leap XE config identity mismatch: "
+            f"expected size={LEAP_CONFIG_SIZE}, sha256={LEAP_CONFIG_SHA256}, path={config}"
         )
 
-    printer(f"正在下载 RoFormer vocal_rvc ensemble: {model_name}")
-    printer("模型组：")
-    for required_model in ROFORMER_MODELS:
-        printer(f"  - {required_model}")
-    printer(f"目标缓存目录：{cache_dir}")
-
-    separator_kwargs = {
-        "output_dir": str(cache_dir),
-        "model_file_dir": str(cache_dir),
-        "output_format": "WAV",
-    }
-    if _is_ensemble(model_name):
-        separator_kwargs["ensemble_preset"] = model_name.split(":", 1)[1]
-
-    separator = separator_cls(**separator_kwargs)
-    if _is_ensemble(model_name):
-        _download_required_models(separator, ROFORMER_MODELS)
-    else:
-        _download_required_models(separator, (model_name,))
-
-    found = _find_all_required(cache_dir)
-    missing = [model for model in ROFORMER_MODELS if model not in found]
-    if missing:
-        raise RuntimeError(
-            f"已调用 audio-separator，但缺少 RoFormer vocal_rvc 必需模型: {missing}"
-        )
-
-    for model, path in found.items():
-        printer(f"模型就绪：{model} ({path.stat().st_size / (1024 * 1024):.1f} MB)")
-    return found[ROFORMER_MODELS[0]]
+    printer(f"Leap XE checkpoint ready: {checkpoint}")
+    printer(f"Leap XE config ready: {config}")
+    return checkpoint
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="下载 RoFormer vocal_rvc ensemble 人声分离模型")
+    parser = argparse.ArgumentParser(
+        description="Download BS-RoFormer Leap XE 90-band vocals assets"
+    )
     parser.add_argument(
         "--cache-dir",
         default=str(DEFAULT_CACHE_DIR),
-        help="模型缓存目录（默认: ~/.music-to-midi/models/audio-separator）",
+        help="Model cache directory (default: ~/.music-to-midi/models/audio-separator)",
     )
-    parser.add_argument("--model-name", default=ROFORMER_MODEL, help="模型名或 ensemble preset")
     args = parser.parse_args(argv)
 
     try:
-        download_vocal_model(
-            cache_dir=Path(args.cache_dir),
-            model_name=args.model_name,
-        )
+        download_vocal_model(cache_dir=Path(args.cache_dir))
         return 0
     except Exception as exc:
-        print(f"[错误] RoFormer vocal_rvc ensemble 模型下载失败: {exc}")
+        print(f"[error] BS-RoFormer Leap XE download failed: {exc}")
         return 1
 
 

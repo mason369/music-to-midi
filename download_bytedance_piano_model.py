@@ -11,9 +11,11 @@ from typing import Callable, Optional
 
 from src.core.bytedance_piano_transcriber import (
     BYTEDANCE_PIANO_CHECKPOINT_NAME,
+    BYTEDANCE_PIANO_CHECKPOINT_SHA256,
+    BYTEDANCE_PIANO_CHECKPOINT_SIZE,
     BYTEDANCE_PIANO_CHECKPOINT_URL,
-    BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES,
     ByteDancePianoTranscriber,
+    validate_bytedance_piano_checkpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,11 @@ def get_bytedance_piano_model_path() -> Path:
 
 def is_bytedance_piano_model_available() -> bool:
     path = get_bytedance_piano_model_path()
-    return path.exists() and path.stat().st_size >= BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES
+    try:
+        validate_bytedance_piano_checkpoint(path)
+        return True
+    except (OSError, RuntimeError):
+        return False
 
 
 def _is_retriable_download_error(error: BaseException) -> bool:
@@ -54,7 +60,14 @@ def download_bytedance_piano_model(
         _log(printer, f"ByteDance Piano checkpoint already exists: {target}")
         return target
 
-    partial = target.with_suffix(target.suffix + ".download")
+    if target.exists():
+        _log(
+            printer,
+            "Existing ByteDance Piano checkpoint failed identity validation; "
+            f"downloading the pinned artifact before replacing it: {target}",
+        )
+
+    partial = target.with_suffix(target.suffix + ".part")
     if partial.exists():
         partial.unlink()
 
@@ -76,7 +89,9 @@ def download_bytedance_piano_model(
         except Exception as exc:
             if partial.exists():
                 partial.unlink()
-            if attempt >= BYTEDANCE_PIANO_DOWNLOAD_ATTEMPTS or not _is_retriable_download_error(exc):
+            if attempt >= BYTEDANCE_PIANO_DOWNLOAD_ATTEMPTS or not _is_retriable_download_error(
+                exc
+            ):
                 raise
             _log(
                 printer,
@@ -85,16 +100,20 @@ def download_bytedance_piano_model(
             )
             time.sleep(BYTEDANCE_PIANO_RETRY_DELAY_SECONDS)
 
-    size = partial.stat().st_size
-    if size < BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES:
-        partial.unlink()
-        raise RuntimeError(
-            "Downloaded ByteDance Piano checkpoint is incomplete: "
-            f"{size} bytes < {BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES} bytes"
-        )
+    try:
+        validate_bytedance_piano_checkpoint(partial)
+    except Exception:
+        if partial.exists():
+            partial.unlink()
+        raise
 
     partial.replace(target)
-    _log(printer, f"ByteDance Piano checkpoint saved: {target}")
+    _log(
+        printer,
+        "ByteDance Piano checkpoint saved and validated: "
+        f"{target} ({BYTEDANCE_PIANO_CHECKPOINT_SIZE} bytes, "
+        f"SHA-256 {BYTEDANCE_PIANO_CHECKPOINT_SHA256})",
+    )
     return target
 
 

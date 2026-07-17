@@ -2,7 +2,6 @@ import os
 import sys
 import types
 import unittest
-from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,7 +22,6 @@ except ImportError:
 
 from PyQt6.QtWidgets import QApplication
 
-from src.gui.main_window import MainWindow
 from src.gui.widgets.track_panel import TrackPanel
 from src.i18n.translator import set_language
 from src.models.data_models import Config
@@ -51,6 +49,7 @@ class TestBackendSelectorUi(unittest.TestCase):
                 "vocal_split",
                 "six_stem_split",
                 "piano_transkun",
+                "piano_transkun_v2_aug",
                 "piano_aria_amt",
                 "piano_bytedance_pedal",
             ],
@@ -71,13 +70,17 @@ class TestBackendSelectorUi(unittest.TestCase):
             [panel.model_combo.itemData(index) for index in range(panel.model_combo.count())],
             ["yourmt3", "miros"],
         )
-        self.assertNotIn("Aria-AMT", [panel.model_combo.itemText(index) for index in range(panel.model_combo.count())])
+        self.assertNotIn(
+            "Aria-AMT",
+            [panel.model_combo.itemText(index) for index in range(panel.model_combo.count())],
+        )
 
     def test_smart_mode_rejects_aria_amt_as_displayed_full_mix_engine(self):
         panel = TrackPanel()
 
         panel.set_processing_mode("smart")
-        panel.set_transcription_backend("aria_amt")
+        with self.assertRaisesRegex(ValueError, "Unsupported transcription backend"):
+            panel.set_transcription_backend("aria_amt")
 
         self.assertEqual(panel.get_transcription_backend(), "yourmt3")
         self.assertEqual(
@@ -89,10 +92,31 @@ class TestBackendSelectorUi(unittest.TestCase):
         panel = TrackPanel()
 
         panel.set_processing_mode("six_stem_split")
-        panel.set_transcription_backend("aria_amt")
+        for backend in ("yourmt3", "miros"):
+            with self.subTest(backend=backend):
+                panel.set_transcription_backend(backend)
+                self.assertEqual(panel.get_transcription_backend(), backend)
 
         self.assertEqual(panel.get_processing_mode(), "six_stem_split")
-        self.assertEqual(panel.get_transcription_backend(), "aria_amt")
+        with self.assertRaisesRegex(ValueError, "Unsupported transcription backend"):
+            panel.set_transcription_backend("aria_amt")
+
+    def test_legacy_aria_piano_config_normalizes_before_track_panel_load(self):
+        config = Config.from_dict(
+            {
+                "processing_mode": "piano_aria_amt",
+                "transcription_backend": "aria_amt",
+                "multi_instrument_model": "miros",
+            }
+        )
+        panel = TrackPanel()
+
+        panel.set_processing_mode(config.processing_mode)
+        panel.set_transcription_backend(config.transcription_backend)
+
+        self.assertEqual(panel.get_processing_mode(), "piano_aria_amt")
+        self.assertEqual(panel.get_transcription_backend(), "miros")
+        self.assertTrue(panel._model_row.isHidden())
 
     def test_six_stem_mode_does_not_expose_removed_selection_controls(self):
         panel = TrackPanel()
@@ -103,11 +127,17 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertFalse(hasattr(panel, "_six_stem_vocal_harmony_check"))
         self.assertFalse(hasattr(panel, "get_selected_six_stem_targets"))
         self.assertFalse(hasattr(panel, "get_six_stem_vocal_harmony"))
-        self.assertIn("six stem MIDI files", panel.hint_label.text())
-        self.assertIn("all_stems merged MIDI", panel.hint_label.text())
-        self.assertNotIn("selected", panel.hint_label.text().lower())
-        self.assertNotIn("lead", panel.hint_label.text().lower())
-        self.assertNotIn("harmony", panel.hint_label.text().lower())
+        self.assertTrue(panel._model_row.isHidden())
+        self.assertTrue(panel._yourmt3_model_row.isHidden())
+        self.assertTrue(panel.yourmt3_model_card.isHidden())
+        self.assertIn(
+            "does not automatically transcribe or merge MIDI",
+            panel.hint_label.text(),
+        )
+        self.assertIn(
+            "choose any supported model per track afterward",
+            panel.hint_label.text(),
+        )
 
     def test_processing_controls_disable_mode_specific_checkboxes(self):
         panel = TrackPanel()
@@ -116,14 +146,8 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertFalse(panel._vocal_split_merge_check.isEnabled())
 
     def test_main_window_does_not_display_aria_as_smart_full_mix_engine(self):
-        config = Config(transcription_backend="aria_amt", multi_instrument_model="miros")
-
-        with mock.patch.object(MainWindow, "_start_gpu_detection", return_value=None):
-            window = MainWindow(config)
-
-        self.assertEqual(window.track_panel.get_transcription_backend(), "yourmt3")
-        self.assertEqual(window.track_panel.get_multi_instrument_model(), "yourmt3")
-        window.close()
+        with self.assertRaisesRegex(ValueError, "requires transcription_backend"):
+            Config(transcription_backend="aria_amt", multi_instrument_model="miros")
 
     def test_track_panel_does_not_expose_non_official_midi_track_layout(self):
         panel = TrackPanel()
@@ -138,22 +162,29 @@ class TestBackendSelectorUi(unittest.TestCase):
         panel.set_midi_track_mode("single_track")
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
 
-    def test_vocal_split_hides_yourmt3_checkpoint_and_track_layout(self):
+    def test_vocal_split_shows_yourmt3_checkpoint_and_hides_it_for_miros(self):
         panel = TrackPanel()
         panel.set_processing_mode("vocal_split")
         panel.set_transcription_backend("yourmt3")
         panel.set_midi_track_mode("single_track")
 
-        self.assertEqual(panel._model_label.text(), "Post-Split MIDI Backend:")
-        self.assertEqual(panel.model_combo.currentText(), "YourMT3+ (MIDI only)")
+        self.assertTrue(panel._model_row.isHidden())
         self.assertTrue(panel._yourmt3_model_row.isHidden())
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertFalse(hasattr(panel, "_midi_track_mode_row"))
         self.assertFalse(hasattr(panel, "yourmt3_arch_hint_label"))
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
-        self.assertIn("RoFormer vocal_rvc/karaoke", panel.mode_desc_label.text())
-        self.assertIn("does not use YourMT3+ / MIROS", panel.hint_label.text())
-        self.assertIn("YourMT3+ is only the downstream MIDI backend", panel.model_hint_label.text())
+        self.assertIn("Leap XE + PolarFormer", panel.mode_desc_label.text())
+        self.assertIn("No MIDI model is loaded or run", panel.hint_label.text())
+        self.assertIn(
+            "choose YourMT3+, MIROS, or a dedicated piano model independently",
+            panel.hint_label.text(),
+        )
+
+        panel.set_transcription_backend("miros")
+        self.assertTrue(panel._model_row.isHidden())
+        self.assertTrue(panel._yourmt3_model_row.isHidden())
+        self.assertTrue(panel.yourmt3_model_card.isHidden())
 
     def test_track_panel_explains_official_yourmt3_single_multi_in_model_card(self):
         panel = TrackPanel()
@@ -263,17 +294,26 @@ class TestBackendSelectorUi(unittest.TestCase):
         panel.set_transcription_backend("yourmt3")
         panel.set_midi_track_mode("single_track")
 
-        self.assertEqual(panel._model_label.text(), "Stem MIDI Backend:")
-        self.assertEqual(panel.model_combo.currentText(), "YourMT3+ (MIDI only)")
+        self.assertTrue(panel._model_row.isHidden())
         self.assertTrue(panel._yourmt3_model_row.isHidden())
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertFalse(hasattr(panel, "_midi_track_mode_row"))
         self.assertFalse(hasattr(panel, "yourmt3_arch_hint_label"))
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
         self.assertIn("BS-RoFormer SW", panel.mode_desc_label.text())
-        self.assertIn("TelkNet/MVSep-aligned", panel.hint_label.text())
-        self.assertIn("MIDI extension", panel.hint_label.text())
-        self.assertIn("YourMT3+ is only the downstream Stem MIDI backend", panel.model_hint_label.text())
+        self.assertIn(
+            "does not automatically transcribe or merge MIDI",
+            panel.hint_label.text(),
+        )
+        self.assertIn(
+            "choose any supported model per track afterward",
+            panel.hint_label.text(),
+        )
+
+        panel.set_transcription_backend("miros")
+        self.assertTrue(panel._model_row.isHidden())
+        self.assertTrue(panel._yourmt3_model_row.isHidden())
+        self.assertTrue(panel.yourmt3_model_card.isHidden())
 
     def test_restored_dedicated_piano_mode_remains_selectable(self):
         panel = TrackPanel()
@@ -304,8 +344,18 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertNotIn("下载", panel.hint_label.text())
 
         panel.set_processing_mode("smart")
-        self.assertIn("模型目录可用", panel.yourmt3_model_combo.toolTip())
-        self.assertNotIn("下载", panel.yourmt3_model_combo.toolTip())
+        self.assertIn("YourMT3+", panel.yourmt3_model_combo.toolTip())
+        self.assertNotIn("will retry", panel.yourmt3_model_combo.toolTip().lower())
+
+    def test_track_panel_rejects_unknown_mode_backend_and_checkpoint(self):
+        panel = TrackPanel()
+
+        with self.assertRaisesRegex(ValueError, "Unsupported processing mode"):
+            panel.set_processing_mode("not_a_mode")
+        with self.assertRaisesRegex(ValueError, "Unsupported transcription backend"):
+            panel.set_transcription_backend("not_a_backend")
+        with self.assertRaisesRegex(ValueError, "Unsupported YourMT3 checkpoint"):
+            panel.set_yourmt3_model("not_a_checkpoint")
 
 
 if __name__ == "__main__":

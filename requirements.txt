@@ -2,9 +2,9 @@
 # 默认转写引擎：YourMT3+ MoE；Aria-AMT 为钢琴专用后端，MIROS 为本地可选后端
 
 # PyTorch 核心（三件套版本必须匹配）
-torch>=2.7.0
-torchaudio>=2.7.0
-torchvision>=0.22.0       # onnx2torch 需要 torchvision C++ 算子
+torch==2.7.0
+torchaudio==2.7.0
+torchvision==0.22.0       # onnx2torch 需要 torchvision C++ 算子
 
 # NumPy
 numpy>=1.26.0,<2
@@ -33,15 +33,15 @@ requests>=2.32.5,<3
 chardet>=5,<6
 
 # 钢琴专用转写
-transkun>=2.0.1,<3
+transkun==2.0.1
 # aria-amt is installed separately with --no-deps after the pinned
 # PyTorch/torchaudio runtime is in place. Upstream currently declares
 # torchaudio<=2.5, which conflicts with the CUDA 12.8 runtime required
 # for RTX 50-series GPUs.
-ariautils @ git+https://github.com/EleutherAI/aria-utils.git
+ariautils @ https://github.com/EleutherAI/aria-utils/archive/93da092204e5b1189ed8e0259f6156266fd086a7.zip
 safetensors>=0.4.0,<1
 orjson>=3.9.0,<4
-piano-transcription-inference>=0.0.6,<0.1
+piano-transcription-inference==0.0.6
 torchlibrosa>=0.1.0,<0.2
 matplotlib>=3.7.0,<4
 
@@ -60,7 +60,8 @@ PyQt6-sip>=13.6.0,<14
 
 # 人声分离 / 六声部分离（BS-RoFormer / BS-RoFormer SW）
 # audio-separator 由 install.ps1 / install.sh 单独安装，并锁定到兼容的 no-deps 组合
-onnxruntime==1.23.2
+onnxruntime-gpu==1.23.2; platform_system != "Darwin"
+onnxruntime==1.23.2; platform_system == "Darwin"
 
 # 工具
 tqdm>=4.66.0,<5

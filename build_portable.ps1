@@ -164,12 +164,56 @@ function Assert-SixStemAssets {
     )
 
     if ([string]::IsNullOrWhiteSpace($ModelDir)) {
-        throw "Required BS-RoFormer SW six-stem assets missing: $Label directory was not resolved."
+        throw "Required BS-RoFormer SW Fixed six-stem assets missing: $Label directory was not resolved."
     }
 
     & $PythonPath (Join-Path $Root "download_multistem_model.py") --cache-dir $ModelDir --check-only
     if ($LASTEXITCODE -ne 0) {
-        throw "Invalid BS-RoFormer SW six-stem assets in ${Label}: $ModelDir"
+        throw "Invalid BS-RoFormer SW Fixed six-stem assets in ${Label}: $ModelDir"
+    }
+}
+
+function Assert-PortableModelIdentities {
+    param(
+        [string]$AudioSeparatorDir,
+        [string]$YourMt3Dir,
+        [string]$YourMt3SourceDir,
+        [string]$AriaAmtDir,
+        [string]$ByteDancePianoDir,
+        [string]$MirosDir,
+        [string]$PythonPath,
+        [string]$Label
+    )
+
+    $requiredDirectories = [ordered]@{
+        "audio-separator" = $AudioSeparatorDir
+        "YourMT3" = $YourMt3Dir
+        "patched YourMT3 source" = $YourMt3SourceDir
+        "Aria-AMT" = $AriaAmtDir
+        "ByteDance Piano" = $ByteDancePianoDir
+        "MIROS" = $MirosDir
+    }
+    foreach ($entry in $requiredDirectories.GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+            throw "Required $($entry.Key) directory was not resolved for ${Label}."
+        }
+    }
+
+    $validator = Join-Path $Root "tools\validate_portable_model_assets.py"
+    if (-not (Test-Path -LiteralPath $validator -PathType Leaf)) {
+        throw "Portable model identity validator is missing: $validator"
+    }
+
+    & $PythonPath $validator `
+        --audio-separator-dir $AudioSeparatorDir `
+        --yourmt3-dir $YourMt3Dir `
+        --yourmt3-source-dir $YourMt3SourceDir `
+        --aria-amt-dir $AriaAmtDir `
+        --bytedance-piano-dir $ByteDancePianoDir `
+        --miros-dir $MirosDir `
+        --label $Label
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pinned portable model identity validation failed for ${Label}."
     }
 }
 
@@ -257,6 +301,7 @@ if (Test-Path $TorchRuntimeRepair) {
 }
 
 $BuildAssetRoot = Join-Path $Root "build\portable_assets"
+$YourMt3CodeSource = Join-Path $Root "YourMT3\amt\src"
 
 if ($Clean) {
     Remove-PathIfExists -Path (Join-Path $Root "build") -Label "build directory"
@@ -286,6 +331,11 @@ $ByteDancePianoSource = Resolve-ExistingDir @(
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\bytedance_piano"),
     (Join-Path $Root "checkpoints\bytedance_piano")
 )
+$TransKunV2AugSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR,
+    (Join-Path $env:USERPROFILE ".cache\music_ai_models\transkun_v2_aug"),
+    (Join-Path $Root "checkpoints\transkun_v2_aug")
+)
 $MirosSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR,
     (Join-Path $Root "external\ai4m-miros"),
@@ -312,35 +362,77 @@ $AudioSeparatorBundle = Join-Path $BuildAssetRoot "audio-separator"
 $YourMt3Bundle = Join-Path $BuildAssetRoot "yourmt3_all"
 $AriaAmtBundle = Join-Path $BuildAssetRoot "aria_amt"
 $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
+$TransKunV2AugBundle = Join-Path $BuildAssetRoot "transkun_v2_aug"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
+Assert-PortableModelIdentities `
+    -AudioSeparatorDir $AudioSeparatorSource `
+    -YourMt3Dir $YourMt3Source `
+    -YourMt3SourceDir $YourMt3CodeSource `
+    -AriaAmtDir $AriaAmtSource `
+    -ByteDancePianoDir $ByteDancePianoSource `
+    -MirosDir $MirosSource `
+    -PythonPath $Python `
+    -Label "portable source assets"
 Assert-SixStemAssets -ModelDir $AudioSeparatorSource -PythonPath $Python -Label "audio-separator source"
 Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" -Required | Out-Null
 Assert-SixStemAssets -ModelDir $AudioSeparatorBundle -PythonPath $Python -Label "audio-separator bundle"
 Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required | Out-Null
 Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required | Out-Null
 Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required | Out-Null
-Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
-
-if ($ResolvedFfmpegDir) {
-    $FfmpegBundleBin = Join-Path $FfmpegBundle "bin"
-    New-Item -ItemType Directory -Force -Path $FfmpegBundleBin | Out-Null
-    foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
-        $sourceFile = Join-Path $ResolvedFfmpegDir $name
-        if (Test-Path $sourceFile) {
-            Copy-Item -Path $sourceFile -Destination (Join-Path $FfmpegBundleBin $name) -Force
-        }
-    }
-    Write-Host "[ok] Collected ffmpeg -> $FfmpegBundleBin"
-} else {
-    Write-Host "[warn] ffmpeg not found; build will continue, but non-WAV inputs will fail until ffmpeg is bundled or installed."
+Copy-Tree -Source $TransKunV2AugSource -Destination $TransKunV2AugBundle -Label "TransKun V2 Aug models" -Required | Out-Null
+$transkunV2AugCheck = @"
+from pathlib import Path
+from src.core.transkun_v2_aug_transcriber import (
+    TRANSKUN_V2_AUG_MODEL_DIR_NAME,
+    validate_transkun_v2_aug_model_files,
+)
+model_dir = Path(r'$TransKunV2AugBundle') / TRANSKUN_V2_AUG_MODEL_DIR_NAME
+reason = validate_transkun_v2_aug_model_files(model_dir)
+if reason:
+    raise RuntimeError(reason)
+print(f'TransKun V2 Aug assets verified: {model_dir}')
+"@
+& $Python -c $transkunV2AugCheck
+if ($LASTEXITCODE -ne 0) {
+    throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
+Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
+Assert-PortableModelIdentities `
+    -AudioSeparatorDir $AudioSeparatorBundle `
+    -YourMt3Dir $YourMt3Bundle `
+    -YourMt3SourceDir $YourMt3CodeSource `
+    -AriaAmtDir $AriaAmtBundle `
+    -ByteDancePianoDir $ByteDancePianoBundle `
+    -MirosDir $MirosBundle `
+    -PythonPath $Python `
+    -Label "staged portable model assets"
+
+if (-not $ResolvedFfmpegDir) {
+    throw "FFmpeg bundle source not found. Portable builds require ffmpeg.exe and ffprobe.exe for MP3/FLAC/M4A input."
+}
+
+$FfmpegBundleBin = Join-Path $FfmpegBundle "bin"
+New-Item -ItemType Directory -Force -Path $FfmpegBundleBin | Out-Null
+foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
+    $sourceFile = Join-Path $ResolvedFfmpegDir $name
+    if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
+        throw "Required FFmpeg executable is missing: $sourceFile"
+    }
+    $destinationFile = Join-Path $FfmpegBundleBin $name
+    Copy-Item -LiteralPath $sourceFile -Destination $destinationFile -Force
+    if (-not (Test-Path -LiteralPath $destinationFile -PathType Leaf)) {
+        throw "Failed to stage required FFmpeg executable: $destinationFile"
+    }
+}
+Write-Host "[ok] Collected ffmpeg and ffprobe -> $FfmpegBundleBin"
 
 $env:MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR = $AudioSeparatorBundle
 $env:MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR = $YourMt3Bundle
 $env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR = $AriaAmtBundle
 $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
+$env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR = $TransKunV2AugBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
@@ -353,6 +445,7 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
 }
@@ -363,6 +456,13 @@ if ($PyInstallerExitCode -ne 0) {
 
 $DistDir = Join-Path $Root "dist\MusicToMidi"
 if (Test-Path $DistDir) {
+    foreach ($noticeName in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {
+        $noticeSource = Join-Path $Root $noticeName
+        if (-not (Test-Path -LiteralPath $noticeSource -PathType Leaf)) {
+            throw "Required distribution notice is missing: $noticeSource"
+        }
+        Copy-Item -LiteralPath $noticeSource -Destination (Join-Path $DistDir $noticeName) -Force
+    }
     Write-Host ""
     Write-Host "Portable build created: $DistDir"
     Write-Host "Distribute the entire directory instead of a single exe."

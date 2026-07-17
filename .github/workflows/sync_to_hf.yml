@@ -5,17 +5,24 @@ on:
     branches: [master]
     paths:
       - 'src/core/**'
+      - 'src/__init__.py'
       - 'src/models/**'
       - 'src/utils/**'
       - 'src/i18n/**'
       - 'space/**'
+      - 'YourMT3/amt/src/**'
       - 'download_sota_models.py'
       - 'download_multistem_model.py'
       - 'download_vocal_model.py'
+      - 'download_accompaniment_model.py'
       - 'download_vocal_harmony_model.py'
+      - 'download_transkun_v2_aug_model.py'
+      - 'download_miros_model.py'
       - 'download_aria_amt_model.py'
       - 'download_bytedance_piano_model.py'
       - 'pyproject.toml'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
 
   # 支持手动触发
   workflow_dispatch:
@@ -39,7 +46,7 @@ jobs:
 
           WORK="/tmp/hf_space"
           rm -rf "$WORK"
-          mkdir -p "$WORK/src"
+          mkdir -p "$WORK/src" "$WORK/YourMT3/amt"
 
           # ── 根文件 ──
           cp space/app.py          "$WORK/"
@@ -48,16 +55,24 @@ jobs:
           cp download_sota_models.py "$WORK/"
           cp download_multistem_model.py "$WORK/"
           cp download_vocal_model.py "$WORK/"
+          cp download_accompaniment_model.py "$WORK/"
           cp download_vocal_harmony_model.py "$WORK/"
+          cp download_transkun_v2_aug_model.py "$WORK/"
+          cp download_miros_model.py "$WORK/"
           cp download_aria_amt_model.py "$WORK/"
           cp download_bytedance_piano_model.py "$WORK/"
           cp pyproject.toml        "$WORK/"
+          cp LICENSE               "$WORK/"
+          cp THIRD_PARTY_NOTICES.md "$WORK/"
 
           # ── 核心源码（排除 GUI） ──
           cp src/__init__.py "$WORK/src/"
           for dir in core models utils i18n; do
             cp -r "src/$dir" "$WORK/src/"
           done
+
+          # ── 三端共用的 YourMT3 新 Torch/Transformers 兼容补丁源码 ──
+          cp -r YourMT3/amt/src "$WORK/YourMT3/amt/"
 
           # ── 清理不需要的文件 ──
           find "$WORK" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

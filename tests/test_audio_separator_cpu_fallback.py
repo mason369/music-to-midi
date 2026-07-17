@@ -4,8 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.core.multi_stem_separator import SixStemSeparator
-from src.core.vocal_separator import VocalSeparator
-
+from src.core.vocal_separator import _resolve_torch_device
 
 _NO_KERNEL_IMAGE = RuntimeError(
     "CUDA error: no kernel image is available for execution on the device"
@@ -82,31 +81,41 @@ class _SixStemSeparatorNoFailFake(_SixStemSeparatorFallbackFake):
 
 
 class AudioSeparatorCpuFallbackTests(unittest.TestCase):
-    def test_vocal_separator_reports_unsupported_cuda_without_cpu_retry(self):
-        _VocalSeparatorFallbackFake.reset()
+    def test_six_stem_separator_passes_explicit_target_device(self):
+        captured = {}
+
+        def fake_execute(_separator_cls, **kwargs):
+            captured.update(kwargs)
+            return object(), [], False, None
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            audio_path = tmp_path / "song.wav"
-            audio_path.write_bytes(b"audio")
-            out_dir = tmp_path / "out"
-
-            with patch(
-                "src.core.vocal_separator.get_separator_cls",
-                return_value=_VocalSeparatorFallbackFake,
-            ), patch(
-                "src.utils.audio_separator_compat.get_device",
-                return_value="cuda:0",
-                create=True,
-            ), patch(
-                "src.utils.audio_separator_compat.ensure_cuda_runtime_compatibility",
-                side_effect=_NO_KERNEL_IMAGE,
-                create=True,
+            with (
+                patch(
+                    "src.core.multi_stem_separator.execute_audio_separator_job",
+                    side_effect=fake_execute,
+                ),
+                patch.object(SixStemSeparator, "_normalize_outputs", return_value={}),
             ):
-                with self.assertRaisesRegex(RuntimeError, "GPU 不兼容"):
-                    VocalSeparator().separate(str(audio_path), str(out_dir))
-                self.assertEqual(_VocalSeparatorFallbackFake.load_devices, [])
-                self.assertEqual(_VocalSeparatorFallbackFake.separate_devices, [])
+                SixStemSeparator(
+                    separator_cls=_SixStemSeparatorNoFailFake,
+                    cache_dir=tmp_path,
+                    target_device="cpu",
+                ).separate("song.wav", str(tmp_path / "out"))
+
+        self.assertEqual(captured["target_device"], "cpu")
+
+    def test_vocal_separator_reports_unsupported_cuda_without_cpu_retry(self):
+        with (
+            patch("torch.cuda.is_available", return_value=True),
+            patch(
+                "src.core.vocal_separator.ensure_cuda_runtime_compatibility",
+                side_effect=_NO_KERNEL_IMAGE,
+            ) as compatibility_check,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no kernel image"):
+                _resolve_torch_device("cuda:0")
+        compatibility_check.assert_called_once_with("cuda:0")
 
     def test_six_stem_separator_reports_unsupported_cuda_without_cpu_retry(self):
         _SixStemSeparatorFallbackFake.reset()
@@ -117,14 +126,17 @@ class AudioSeparatorCpuFallbackTests(unittest.TestCase):
             audio_path.write_bytes(b"audio")
             out_dir = tmp_path / "out"
 
-            with patch(
-                "src.utils.audio_separator_compat.get_device",
-                return_value="cuda:0",
-                create=True,
-            ), patch(
-                "src.utils.audio_separator_compat.ensure_cuda_runtime_compatibility",
-                side_effect=_NO_KERNEL_IMAGE,
-                create=True,
+            with (
+                patch(
+                    "src.utils.audio_separator_compat.get_device",
+                    return_value="cuda:0",
+                    create=True,
+                ),
+                patch(
+                    "src.utils.audio_separator_compat.ensure_cuda_runtime_compatibility",
+                    side_effect=_NO_KERNEL_IMAGE,
+                    create=True,
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "GPU 不兼容|CUDA"):
                     SixStemSeparator(
@@ -154,6 +166,7 @@ class AudioSeparatorCpuFallbackTests(unittest.TestCase):
         self.assertTrue(mdxc_params["override_model_segment_size"])
         self.assertEqual(mdxc_params["segment_size"], 128)
         self.assertEqual(mdxc_params["batch_size"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

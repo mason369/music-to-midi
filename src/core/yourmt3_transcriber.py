@@ -13,7 +13,6 @@ YourMT3+ 转写器模块
 import logging
 import os
 import sys
-import shutil
 import threading
 import types
 import importlib
@@ -42,6 +41,11 @@ import numpy as np
 from src.i18n.translator import Translator
 from src.models.data_models import Config, FIXED_TRANSCRIPTION_QUALITY, NoteEvent, InstrumentType, PedalEvent
 from src.models.gm_instruments import get_instrument_name
+from src.utils.midi_output import (
+    publish_midi_output,
+    remove_temporary_midi,
+    unique_midi_temp_path,
+)
 from src.utils.gpu_utils import (
     get_device,
     get_optimal_batch_size,
@@ -361,21 +365,36 @@ class YourMT3Transcriber:
 
     @staticmethod
     def _resolve_max_shift_steps(shared_cfg: dict, task_manager_obj=None) -> int:
-        task_manager_value = getattr(task_manager_obj, "max_shift_steps", None)
-        if task_manager_value is not None:
-            return int(task_manager_value)
-
         tokenizer_cfg = shared_cfg.get("TOKENIZER") if isinstance(shared_cfg, dict) else None
-        if isinstance(tokenizer_cfg, dict) and "max_shift_steps" in tokenizer_cfg:
-            max_shift_steps_value = tokenizer_cfg["max_shift_steps"]
-            if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
-                return 206
-            return int(max_shift_steps_value)
+        if not isinstance(tokenizer_cfg, dict) or "max_shift_steps" not in tokenizer_cfg:
+            raise RuntimeError(
+                "YourMT3+ checkpoint is missing shared_cfg.TOKENIZER.max_shift_steps"
+            )
 
-        logger.info(
-            "Checkpoint shared_cfg has no TOKENIZER.max_shift_steps; using legacy official checkpoint default 206."
-        )
-        return 206
+        max_shift_steps_value = tokenizer_cfg["max_shift_steps"]
+        if isinstance(max_shift_steps_value, str) and max_shift_steps_value == "auto":
+            raise RuntimeError(
+                "YourMT3+ checkpoint has unresolved TOKENIZER.max_shift_steps='auto'"
+            )
+        try:
+            max_shift_steps = int(max_shift_steps_value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "YourMT3+ checkpoint has invalid TOKENIZER.max_shift_steps: "
+                f"{max_shift_steps_value!r}"
+            ) from exc
+        if max_shift_steps <= 0:
+            raise RuntimeError(
+                "YourMT3+ checkpoint TOKENIZER.max_shift_steps must be positive"
+            )
+
+        task_manager_value = getattr(task_manager_obj, "max_shift_steps", None)
+        if task_manager_value is not None and int(task_manager_value) != max_shift_steps:
+            raise RuntimeError(
+                "YourMT3+ checkpoint task manager and shared config disagree on "
+                "max_shift_steps"
+            )
+        return max_shift_steps
 
     @staticmethod
     def _build_midi_output_inverse_vocab(output_vocab: Dict) -> Dict:
@@ -393,26 +412,131 @@ class YourMT3Transcriber:
     @staticmethod
     def _ensure_midi_output_vocab(model: Any) -> Dict:
         inverse_vocab = getattr(model, "midi_output_inverse_vocab", None)
-        if inverse_vocab is not None:
-            return inverse_vocab
-
-        output_vocab = getattr(model, "midi_output_vocab", None)
-        if output_vocab is None:
-            from config.vocabulary import program_vocab_presets
-
-            output_vocab = program_vocab_presets.get("gm_ext_plus")
-
-        if output_vocab is None:
-            raise RuntimeError("YourMT3+ MIDI output vocabulary is unavailable")
-
-        inverse_vocab = YourMT3Transcriber._build_midi_output_inverse_vocab(output_vocab)
-        model.midi_output_vocab = output_vocab
-        model.midi_output_inverse_vocab = inverse_vocab
+        if inverse_vocab is None:
+            raise RuntimeError(
+                "YourMT3+ official model loader did not initialize "
+                "midi_output_inverse_vocab"
+            )
         return inverse_vocab
 
     @staticmethod
     def _get_midi_output_inverse_vocab(model: Any) -> Dict:
         return YourMT3Transcriber._ensure_midi_output_vocab(model)
+
+    @staticmethod
+    def _build_official_model_args(model_name: str, exp_id: str):
+        """Build the exact checkpoint arguments published by the YourMT3 Space."""
+        import argparse
+
+        from src.models.data_models import YourMT3Model
+
+        normalized_model = (
+            YourMT3Model.YPTF_MULTI_PS.value
+            if model_name == YourMT3Model.LEGACY_MC13.value
+            else model_name
+        )
+        official_models = {
+            model.value
+            for model in YourMT3Model
+            if model is not YourMT3Model.LEGACY_MC13
+        }
+        if normalized_model not in official_models:
+            raise ValueError(f"Unsupported official YourMT3 model: {model_name!r}")
+
+        args = argparse.Namespace(
+            exp_id=exp_id,
+            project="2024",
+            audio_codec=None,
+            hop_length=None,
+            n_mels=None,
+            input_frames=None,
+            sca_use_query_residual=None,
+            encoder_type=None,
+            decoder_type=None,
+            pre_encoder_type="default",
+            pre_decoder_type="default",
+            conv_out_channels=None,
+            task_cond_encoder=True,
+            task_cond_decoder=True,
+            d_feat=None,
+            pretrained=False,
+            base_name="google/t5-v1_1-small",
+            encoder_position_encoding_type="default",
+            decoder_position_encoding_type="default",
+            tie_word_embedding=None,
+            event_length=None,
+            d_latent=None,
+            num_latents=None,
+            perceiver_tf_d_model=None,
+            num_perceiver_tf_blocks=None,
+            num_perceiver_tf_local_transformers_per_block=None,
+            num_perceiver_tf_temporal_transformers_per_block=None,
+            attention_to_channel=None,
+            layer_norm_type=None,
+            ff_layer_type=None,
+            ff_widening_factor=None,
+            moe_num_experts=None,
+            moe_topk=None,
+            hidden_act=None,
+            rotary_type=None,
+            rope_apply_to_keys=None,
+            rope_partial_pe=None,
+            decoder_ff_layer_type=None,
+            decoder_ff_widening_factor=None,
+            task="mt3_full_plus",
+            eval_program_vocab=None,
+            eval_drum_vocab=None,
+            eval_subtask_key="default",
+            onset_tolerance=0.05,
+            test_octave_shift=False,
+            write_model_output=True,
+            precision="16",
+            strategy="auto",
+            num_nodes=1,
+            num_gpus="auto",
+            wandb_mode="disabled",
+            debug_mode=False,
+            test_pitch_shift=None,
+            epochs=None,
+        )
+
+        perceiver_models = {
+            YourMT3Model.YPTF_SINGLE_NOPS.value,
+            YourMT3Model.YPTF_MULTI_PS.value,
+            YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            YourMT3Model.YPTF_MOE_MULTI_PS.value,
+        }
+        if normalized_model in perceiver_models:
+            args.encoder_type = "perceiver-tf"
+            args.audio_codec = "spec"
+            args.hop_length = 300
+            args.attention_to_channel = True
+
+        multi_models = {
+            YourMT3Model.YPTF_MULTI_PS.value,
+            YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            YourMT3Model.YPTF_MOE_MULTI_PS.value,
+        }
+        if normalized_model in multi_models:
+            args.task = "mc13_full_plus_256"
+            args.decoder_type = "multi-t5"
+            args.num_latents = 26
+
+        moe_models = {
+            YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            YourMT3Model.YPTF_MOE_MULTI_PS.value,
+        }
+        if normalized_model in moe_models:
+            args.sca_use_query_residual = True
+            args.ff_layer_type = "moe"
+            args.ff_widening_factor = 4
+            args.moe_num_experts = 8
+            args.moe_topk = 2
+            args.hidden_act = "silu"
+            args.encoder_position_encoding_type = "rope"
+            args.rope_partial_pe = True
+
+        return args
 
     @staticmethod
     def _cap_batch_size_for_model(model_key: str, batch_size: int) -> int:
@@ -573,8 +697,14 @@ class YourMT3Transcriber:
         )
 
     @classmethod
-    def is_available(cls) -> bool:
-        """???? YourMT3+ ???????????????????"""
+    def is_available(cls, model_name: Optional[str] = None) -> bool:
+        """Check the runtime and an official checkpoint.
+
+        With no argument this preserves the public class-level check for the
+        project default checkpoint. Instance processing uses
+        ``is_selected_model_available`` so a non-default cold cache is checked
+        against the checkpoint selected in ``Config``.
+        """
         cls._last_unavailable_reason = None
         try:
             _import_torch()
@@ -616,15 +746,16 @@ class YourMT3Transcriber:
             try:
                 from src.utils.yourmt3_downloader import DEFAULT_MODEL, get_model_path
 
-                model_path = get_model_path(DEFAULT_MODEL)
+                selected_model = model_name or DEFAULT_MODEL
+                model_path = get_model_path(selected_model)
                 if not model_path or not model_path.exists():
                     return cls._mark_unavailable(
-                        "YourMT3+ ????????????\n\n"
+                        f"YourMT3+ selected checkpoint is unavailable: {selected_model}\n\n"
                         "?????????\n"
                         "  python download_sota_models.py\n\n"
                         "?? README.md ???????"
                     )
-                logger.debug("Found YourMT3+ model: %s", model_path)
+                logger.debug("Found YourMT3+ model %s: %s", selected_model, model_path)
             except ImportError:
                 logger.debug("yourmt3_downloader unavailable, skipping model path check")
 
@@ -634,6 +765,10 @@ class YourMT3Transcriber:
 
         except ImportError as e:
             return cls._mark_unavailable(f"YourMT3+ ????{e}")
+
+    def is_selected_model_available(self) -> bool:
+        """Check runtime/source plus the checkpoint selected in this config."""
+        return type(self).is_available(self._get_selected_model_name())
 
     def set_cancel_check(self, callback) -> None:
         """设置取消检查回调"""
@@ -672,10 +807,10 @@ class YourMT3Transcriber:
         progress_callback: Optional[Callable[[float, str], None]] = None
     ):
         """
-        加载 YourMT3 MoE 模型
+        按官方配置加载所选 YourMT3+ 模型
 
         参数:
-            model_name: 模型名称（只支持 MoE 版本）
+            model_name: 官方 checkpoint 模式名称
             progress_callback: 进度回调
         """
         # 双重检查锁定：整个加载过程在锁内执行，防止并发加载
@@ -724,9 +859,8 @@ class YourMT3Transcriber:
                     ensure_cuda_runtime_compatibility(self.device)
                 from utils.task_manager import TaskManager
                 from model.ymt3 import YourMT3
+                from model.init_train import update_config
                 from config.config import shared_cfg as default_shared_cfg
-                from config.config import audio_cfg as default_audio_cfg
-                from config.config import model_cfg as default_model_cfg
                 logger.debug("YourMT3 import origin | model=%s", getattr(sys.modules.get("model"), "__path__", None))
                 logger.debug("YourMT3 import origin | utils=%s", getattr(sys.modules.get("utils"), "__path__", None))
                 logger.debug("YourMT3 import origin | config=%s", getattr(sys.modules.get("config"), "__path__", None))
@@ -741,7 +875,7 @@ class YourMT3Transcriber:
                 model_path = get_model_path(model_name)
                 if not model_path or not model_path.exists():
                     raise FileNotFoundError(
-                        f"YourMT3 MoE 模型未找到: {model_name}\n"
+                        f"YourMT3+ 模型未找到: {model_name}\n"
                         f"请先运行: python download_sota_models.py"
                     )
 
@@ -750,108 +884,24 @@ class YourMT3Transcriber:
                 if progress_callback:
                     progress_callback(0.3, self._pt("progress.building_config"))
 
-                # 4. 构建配置参数（参考 model_helper.py）
-                import argparse
-
-                # 从 checkpoint 路径提取 exp_id 并使用 @ 扩展指定checkpoint文件
-                # 例如: "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2@model.ckpt"
+                # 4. 使用官方 Space 针对所选 checkpoint 的参数构建配置。
+                # checkpoint 仍从经过身份校验的本地绝对路径加载，因此无需
+                # 创建符号链接或复制数百 MB 权重文件。
                 checkpoint_dir = model_path.parent  # checkpoints/
-                exp_dir = checkpoint_dir.parent      # mc13_256.../
-                exp_id = exp_dir.name                # mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b80_ps2
-                checkpoint_file = model_path.name    # model.ckpt 或 last.ckpt
-
-                # 使用 @ 语法指定checkpoint文件
+                exp_dir = checkpoint_dir.parent
+                exp_id = exp_dir.name
+                checkpoint_file = model_path.name
                 exp_id_with_checkpoint = f"{exp_id}@{checkpoint_file}"
-
-                # 需要创建一个符号链接或临时目录结构
-                # 因为 initialize_trainer 期望的路径是 amt/logs/ymt3/{exp_id}/checkpoints/{checkpoint}
-                # 但实际路径是 ~/.cache/music_ai_models/yourmt3_all/logs/2024/{exp_id}/checkpoints/{checkpoint}
-
-                # 方案：在 YourMT3 目录下创建符号链接
-                import tempfile
-                yourmt3_logs_dir = os.path.join(amt_src_path, "../logs/ymt3")
-                os.makedirs(yourmt3_logs_dir, exist_ok=True)
-
-                # 创建到实际checkpoint目录的符号链接
-                symlink_path = os.path.join(yourmt3_logs_dir, exp_id)
-                if os.path.islink(symlink_path):
-                    os.unlink(symlink_path)
-                elif os.path.exists(symlink_path):
-                    # 如果是真实目录，不要覆盖
-                    pass
-                else:
-                    import sys as _sys
-                    if _sys.platform == "win32":
-                        # Windows 普通用户无 symlink 权限；模型通过绝对路径直接加载，无需符号链接
-                        logger.debug("Windows 环境跳过符号链接创建，使用绝对路径加载模型")
-                    else:
-                        try:
-                            os.symlink(str(exp_dir), symlink_path)
-                            logger.debug(f"创建符号链接: {symlink_path} -> {exp_dir}")
-                        except OSError as e:
-                            logger.warning(f"无法创建符号链接: {e}，将直接使用绝对路径")
-
-                args = argparse.Namespace(
-                    exp_id=exp_id_with_checkpoint,
-                    project='ymt3',
-                    audio_codec=None,
-                    hop_length=None,
-                    n_mels=None,
-                    input_frames=None,
-                    sca_use_query_residual=None,
-                    encoder_type='perceiver-tf',
-                    decoder_type='multi-t5',
-                    pre_encoder_type='default',
-                    pre_decoder_type='default',
-                    conv_out_channels=None,
-                    task_cond_encoder=True,
-                    task_cond_decoder=True,
-                    d_feat=None,
-                    pretrained=False,
-                    base_name="google/t5-v1_1-small",
-                    encoder_position_encoding_type='rope',
-                    decoder_position_encoding_type='default',
-                    tie_word_embedding=None,
-                    event_length=None,
-                    d_latent=None,
-                    num_latents=26,
-                    perceiver_tf_d_model=None,
-                    num_perceiver_tf_blocks=3,
-                    num_perceiver_tf_local_transformers_per_block=2,
-                    num_perceiver_tf_temporal_transformers_per_block=2,
-                    attention_to_channel=True,
-                    layer_norm_type='rms_norm',
-                    ff_layer_type='moe',
-                    ff_widening_factor=4,
-                    moe_num_experts=8,
-                    moe_topk=2,
-                    hidden_act='silu',
-                    rotary_type=None,
-                    rope_apply_to_keys=None,
-                    rope_partial_pe=True,
-                    decoder_ff_layer_type=None,
-                    decoder_ff_widening_factor=None,
-                    task='mt3_full_plus',
-                    eval_program_vocab=None,
-                    eval_drum_vocab=None,
-                    eval_subtask_key='default',
-                    onset_tolerance=0.05,
-                    test_octave_shift=False,
-                    write_model_output=False,
-                    precision="32-true",
-                    strategy='auto',
-                    num_nodes=1,
-                    num_gpus='auto',
-                    wandb_mode="disabled",
-                    debug_mode=False,
-                    test_pitch_shift=None,
-                    epochs=None
+                args = self._build_official_model_args(
+                    model_name,
+                    exp_id_with_checkpoint,
                 )
 
                 if progress_callback:
                     progress_callback(0.5, self._pt("progress.loading_checkpoint_config"))
 
-                # 5. 从 checkpoint 加载超参数（最可靠的方法）
+                # 5. 加载官方 checkpoint 权重，并用官方 update_config 路径
+                # 解析模型/音频/tokenizer 配置。
                 logger.info(f"正在加载 checkpoint: {model_path} ...")
                 checkpoint = None
                 try:
@@ -860,30 +910,26 @@ class YourMT3Transcriber:
                     except Exception as e:
                         raise RuntimeError(f"Checkpoint 文件加载失败（可能已损坏）: {e}") from e
 
-                    if 'hyper_parameters' not in checkpoint:
-                        raise RuntimeError("Checkpoint 格式无效: 缺少 'hyper_parameters' 键")
-                    hparams = checkpoint['hyper_parameters']
-                    logger.info("Checkpoint 加载完成，正在提取配置...")
+                    if 'state_dict' not in checkpoint:
+                        raise RuntimeError("Checkpoint 格式无效: 缺少 'state_dict' 键")
+                    logger.info("Checkpoint 加载完成，正在应用官方配置...")
 
-                    # 提取配置
-                    audio_cfg = hparams['audio_cfg']
-                    model_cfg = hparams['model_cfg']
-                    shared_cfg = hparams['shared_cfg']
+                    from copy import deepcopy
 
-                    # task_manager 是一个对象，提取其 task_name
-                    task_manager_obj = hparams.get('task_manager')
-                    if task_manager_obj and hasattr(task_manager_obj, 'task_name'):
-                        task_name = task_manager_obj.task_name
-                    else:
-                        task_name = 'mt3_full_plus'  # 默认任务
+                    shared_cfg, audio_cfg, model_cfg = update_config(
+                        args,
+                        deepcopy(default_shared_cfg),
+                        stage="test",
+                    )
+                    task_name = args.task
 
-                    logger.info(f"从 checkpoint 加载的配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
+                    logger.info(f"官方配置: task={task_name}, encoder={model_cfg['encoder_type']}, decoder={model_cfg['decoder_type']}")
 
                     if progress_callback:
                         progress_callback(0.6, self._pt("progress.creating_task_manager"))
 
                     # 6. 创建任务管理器
-                    max_shift_steps = self._resolve_max_shift_steps(shared_cfg, task_manager_obj)
+                    max_shift_steps = self._resolve_max_shift_steps(shared_cfg)
 
                     tm = TaskManager(
                         task_name=task_name,
@@ -895,8 +941,8 @@ class YourMT3Transcriber:
                     if progress_callback:
                         progress_callback(0.7, self._pt("progress.creating_model_instance"))
 
-                    # 7. 创建 YourMT3 MoE 模型实例
-                    logger.info(f"正在创建 YourMT3 MoE 模型实例并移至 {self.device}...")
+                    # 7. 创建所选官方 YourMT3+ 模型实例
+                    logger.info(f"正在创建 YourMT3+ 模型实例并移至 {self.device}...")
                     with suppress_output():
                         model = YourMT3(
                             audio_cfg=audio_cfg,
@@ -905,7 +951,10 @@ class YourMT3Transcriber:
                             optimizer=None,
                             task_manager=tm,
                             eval_subtask_key=args.eval_subtask_key,
-                            write_output_dir=None
+                            # The official loader enables model output so YourMT3
+                            # initializes its canonical MIDI vocabulary.  The app
+                            # still publishes the resulting MIDI atomically below.
+                            write_output_dir=str(exp_dir)
                         ).to(self.device)
                     logger.info("模型实例创建完成")
 
@@ -1082,7 +1131,7 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, self._pt("progress.preparing_yourmt3"))
 
-        if not self.is_available():
+        if not self.is_selected_model_available():
             raise RuntimeError(self.get_unavailable_reason())
 
         try:
@@ -1143,7 +1192,7 @@ class YourMT3Transcriber:
 
         self._check_cancelled()
 
-        if not self.is_available():
+        if not self.is_selected_model_available():
             raise RuntimeError("YourMT3+ 不可用，无法转写")
 
         try:
@@ -1548,7 +1597,7 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, self._pt("progress.preparing_precise_transcription"))
 
-        if not self.is_available():
+        if not self.is_selected_model_available():
             raise RuntimeError(self.get_unavailable_reason())
 
         try:
@@ -1622,7 +1671,7 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, self._pt("progress.preparing_best_transcription"))
 
-        if not self.is_available():
+        if not self.is_selected_model_available():
             raise RuntimeError(self.get_unavailable_reason())
 
         self._load_model(
@@ -1649,18 +1698,19 @@ class YourMT3Transcriber:
 
         output = Path(output_path).resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        track_name = output.stem
+        attempt_path = unique_midi_temp_path(output, "yourmt3")
+        track_name = attempt_path.stem
+        official_output = output.parent / "model_output" / f"{track_name}.mid"
 
         if progress_callback:
             progress_callback(0.30, self._pt("progress.analyzing_audio"))
 
-        waveform, sr = _load_audio(audio_path)
-        if waveform.shape[0] > 1:
-            waveform = torch.mean(waveform, dim=0, keepdim=True)
-
+        # Match the official Space preprocessing exactly: torchaudio decoder,
+        # channel mean, and an unconditional functional resample call.
+        waveform, sr = torchaudio.load(uri=audio_path)
+        waveform = torch.mean(waveform, dim=0).unsqueeze(0)
         target_sr = audio_cfg["sample_rate"]
-        if sr != target_sr:
-            waveform = torchaudio.functional.resample(waveform, sr, target_sr)
+        waveform = torchaudio.functional.resample(waveform, sr, target_sr)
 
         self._check_cancelled()
 
@@ -1676,9 +1726,8 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.42, self._pt("progress.yourmt3_inference_start", batch_count=1))
 
-        bsz = int(os.getenv("MUSIC_TO_MIDI_YOURMT3_OFFICIAL_BATCH_SIZE", "8") or "8")
         with torch.no_grad():
-            pred_token_arr, _ = model.inference_file(bsz=bsz, audio_segments=audio_segments)
+            pred_token_arr, _ = model.inference_file(bsz=8, audio_segments=audio_segments)
 
         if progress_callback:
             progress_callback(0.85, self._pt("progress.parsing_precise_instruments"))
@@ -1703,28 +1752,28 @@ class YourMT3Transcriber:
             pred_notes_in_file.append(pred_notes_ch)
 
         pred_notes = mix_notes(pred_notes_in_file)
-        write_model_output_as_midi(
-            pred_notes,
-            str(output.parent),
-            track_name,
-            self._get_midi_output_inverse_vocab(model),
-        )
-
-        official_output = output.parent / "model_output" / f"{track_name}.mid"
-        if not official_output.exists():
-            raise RuntimeError(f"YourMT3+ official MIDI output was not created: {official_output}")
-
-        if output.exists():
-            output.unlink()
-        shutil.move(str(official_output), str(output))
         try:
-            official_output.parent.rmdir()
-        except OSError:
-            pass
+            write_model_output_as_midi(
+                pred_notes,
+                str(output.parent),
+                track_name,
+                self._get_midi_output_inverse_vocab(model),
+            )
+            published_path = publish_midi_output(
+                official_output,
+                output,
+                "YourMT3+",
+            )
+        finally:
+            remove_temporary_midi(official_output)
+            try:
+                official_output.parent.rmdir()
+            except OSError:
+                pass
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.midi_generated"))
-        return str(output)
+        return published_path
 
     def transcribe_precise(
         self,
@@ -1758,7 +1807,7 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.0, self._pt("progress.preparing_best_transcription"))
 
-        if not self.is_available():
+        if not self.is_selected_model_available():
             raise RuntimeError(self.get_unavailable_reason())
 
         try:

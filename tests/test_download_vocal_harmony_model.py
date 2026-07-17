@@ -1,15 +1,21 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from download_vocal_harmony_model import (
-    CHORUS_MODEL,
-    CHORUS_MODELS,
-    CHORUS_PRESET,
     DEFAULT_CACHE_DIR,
+    POLARFORMER_CONFIG_NAME,
+    POLARFORMER_ONNX_NAME,
+    POLARFORMER_REPO_ID,
+    POLARFORMER_REVISION,
+    download_accompaniment_model,
     download_chorus_model,
+    is_accompaniment_model_available,
     is_chorus_model_available,
-    resolve_chorus_model_path,
+    resolve_accompaniment_config_path,
+    resolve_accompaniment_model_path,
     resolve_chorus_model_paths,
 )
 
@@ -19,111 +25,131 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
         self.assertIn(".music-to-midi", str(DEFAULT_CACHE_DIR))
         self.assertIn("audio-separator", str(DEFAULT_CACHE_DIR))
 
-    def test_resolve_chorus_model_paths(self):
+    def test_resolve_paths_find_nested_huggingface_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
+            nested = cache_dir / "polar"
+            nested.mkdir()
+            model = nested / POLARFORMER_ONNX_NAME
+            config = nested / POLARFORMER_CONFIG_NAME
+            model.write_bytes(b"model")
+            config.write_bytes(b"config")
 
-            self.assertEqual(resolve_chorus_model_path(cache_dir), cache_dir / CHORUS_MODELS[0])
+            self.assertEqual(resolve_accompaniment_model_path(cache_dir), model)
+            self.assertEqual(resolve_accompaniment_config_path(cache_dir), config)
+            self.assertEqual(resolve_chorus_model_paths(cache_dir), (model, config))
+
+    def test_availability_requires_expected_onnx_size_and_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / POLARFORMER_ONNX_NAME).write_bytes(b"model")
+            (cache_dir / POLARFORMER_CONFIG_NAME).write_bytes(b"config")
+
+            with (
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", hashlib.sha256(b"model").hexdigest()),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(b"config").hexdigest()),
+            ):
+                self.assertTrue(is_accompaniment_model_available(cache_dir))
+                self.assertTrue(is_chorus_model_available(cache_dir))
+            with patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 6):
+                self.assertFalse(is_accompaniment_model_available(cache_dir))
+
+    def test_download_uses_pinned_repo_revision_and_verifies_onnx(self):
+        payload = b"polar-model"
+        expected_hash = hashlib.sha256(payload).hexdigest()
+        config_payload = b"yaml"
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            calls = []
+
+            def fake_download(**kwargs):
+                calls.append(kwargs)
+                path = cache_dir / kwargs["filename"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload if path.suffix == ".onnx" else config_payload)
+                return str(path)
+
+            with (
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", len(payload)),
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", expected_hash),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", len(config_payload)),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(config_payload).hexdigest()),
+            ):
+                result = download_accompaniment_model(
+                    cache_dir=cache_dir,
+                    downloader=fake_download,
+                    printer=lambda *_: None,
+                )
+
+            self.assertEqual(result, cache_dir / POLARFORMER_ONNX_NAME)
             self.assertEqual(
-                resolve_chorus_model_paths(cache_dir),
-                tuple(cache_dir / model_name for model_name in CHORUS_MODELS),
+                [call["filename"] for call in calls],
+                [POLARFORMER_ONNX_NAME, POLARFORMER_CONFIG_NAME],
             )
+            self.assertTrue(all(call["repo_id"] == POLARFORMER_REPO_ID for call in calls))
+            self.assertTrue(all(call["revision"] == POLARFORMER_REVISION for call in calls))
 
-    def test_is_chorus_model_available_requires_all_ensemble_files(self):
+    def test_legacy_download_entrypoint_routes_to_polarformer(self):
+        with patch(
+            "download_vocal_harmony_model.download_accompaniment_model",
+            return_value=Path("polar.onnx"),
+        ) as download:
+            result = download_chorus_model(printer=lambda *_: None)
+        self.assertEqual(result, Path("polar.onnx"))
+        download.assert_called_once()
+
+    def test_download_skips_only_when_both_assets_have_valid_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
-            self.assertFalse(is_chorus_model_available(cache_dir))
+            model = cache_dir / POLARFORMER_ONNX_NAME
+            config = cache_dir / POLARFORMER_CONFIG_NAME
+            model.write_bytes(b"model")
+            config.write_bytes(b"config")
+            downloader = Mock(side_effect=AssertionError("download must not run"))
 
-            for model_name in CHORUS_MODELS[:-1]:
-                (cache_dir / model_name).write_bytes(b"ok")
-            self.assertFalse(is_chorus_model_available(cache_dir))
-
-            (cache_dir / CHORUS_MODELS[-1]).write_bytes(b"ok")
-            self.assertTrue(is_chorus_model_available(cache_dir))
-
-    def test_download_invokes_karaoke_preset_and_returns_first_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            seen = {}
-
-            class FakeSeparator:
-                def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
-                    seen["model_file_dir"] = model_file_dir
-                    seen["ensemble_preset"] = ensemble_preset
-                    seen["downloaded"] = []
-
-                def download_model_and_data(self, model_name):
-                    seen["downloaded"].append(model_name)
-                    nested = Path(seen["model_file_dir"]) / "nested"
-                    nested.mkdir(parents=True, exist_ok=True)
-                    (nested / model_name).write_bytes(b"x" * 16)
-
-            result = download_chorus_model(
-                cache_dir=cache_dir,
-                separator_cls=FakeSeparator,
-                printer=lambda *_: None,
-            )
-
-            self.assertTrue(result.exists())
-            self.assertEqual(result.name, CHORUS_MODELS[0])
-            self.assertEqual(seen["ensemble_preset"], CHORUS_PRESET)
-            self.assertEqual(seen["downloaded"], list(CHORUS_MODELS))
-
-    def test_download_rejects_old_separator_without_ensemble_support(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-
-            class OldSeparator:
-                def __init__(self, output_dir, model_file_dir, output_format):
-                    pass
-
-                def load_model(self, model_name):
-                    raise AssertionError(model_name)
-
-            with self.assertRaisesRegex(RuntimeError, "ensemble_preset"):
-                download_chorus_model(
+            with (
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", hashlib.sha256(b"model").hexdigest()),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(b"config").hexdigest()),
+            ):
+                result = download_accompaniment_model(
                     cache_dir=cache_dir,
-                    model_name=CHORUS_MODEL,
-                    separator_cls=OldSeparator,
+                    downloader=downloader,
                     printer=lambda *_: None,
                 )
+            self.assertEqual(result, model)
+            downloader.assert_not_called()
 
-    def test_download_raises_if_required_checkpoint_still_missing(self):
+    def test_download_rejects_onnx_hash_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
 
-            class BrokenSeparator:
-                def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
-                    self.model_file_dir = model_file_dir
+            def fake_download(**kwargs):
+                path = cache_dir / kwargs["filename"]
+                path.write_bytes(b"bad" if path.suffix == ".onnx" else b"yaml")
+                return str(path)
 
-                def download_model_and_data(self, model_name):
-                    nested = Path(self.model_file_dir) / "nested"
-                    nested.mkdir(parents=True, exist_ok=True)
-                    if model_name == CHORUS_MODELS[0]:
-                        (nested / model_name).write_bytes(b"x")
+            with (
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 3),
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", "0" * 64),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "SHA256 mismatch"):
+                    download_accompaniment_model(
+                        cache_dir=cache_dir,
+                        downloader=fake_download,
+                        printer=lambda *_: None,
+                    )
 
-            with self.assertRaisesRegex(RuntimeError, CHORUS_MODELS[1]):
-                download_chorus_model(
-                    cache_dir=cache_dir,
-                    separator_cls=BrokenSeparator,
-                    printer=lambda *_: None,
-                )
-
-    def test_download_rejects_separator_without_download_api(self):
+    def test_download_rejects_old_karaoke_preset(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-
-            class LoadOnlySeparator:
-                def __init__(self, output_dir, model_file_dir, output_format, ensemble_preset=None):
-                    pass
-
-                def load_model(self):
-                    raise AssertionError("load_model must not be used for downloads")
-
-            with self.assertRaisesRegex(RuntimeError, "download_model_and_data"):
-                download_chorus_model(
-                    cache_dir=cache_dir,
-                    separator_cls=LoadOnlySeparator,
+            with self.assertRaisesRegex(ValueError, "Unsupported accompaniment model"):
+                download_accompaniment_model(
+                    cache_dir=Path(tmp),
+                    model_name="ensemble:karaoke",
+                    downloader=Mock(),
                     printer=lambda *_: None,
                 )
 

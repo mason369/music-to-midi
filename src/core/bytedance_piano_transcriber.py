@@ -6,16 +6,24 @@ import importlib
 import importlib.util
 import logging
 import os
+from importlib import metadata
 from pathlib import Path
 from typing import Callable, Optional
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config
+from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import (
     clear_gpu_memory,
     ensure_cuda_runtime_compatibility,
     get_device,
     rewrite_cuda_runtime_error,
+)
+from src.utils.midi_output import (
+    clip_midi_to_duration,
+    publish_midi_output,
+    remove_temporary_midi,
+    unique_midi_temp_path,
 )
 from src.utils.runtime_paths import get_bytedance_piano_dir
 
@@ -26,7 +34,25 @@ BYTEDANCE_PIANO_CHECKPOINT_URL = (
     "https://zenodo.org/record/4034264/files/"
     "CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
 )
-BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES = 160_000_000
+BYTEDANCE_PIANO_PACKAGE_NAME = "piano-transcription-inference"
+BYTEDANCE_PIANO_PACKAGE_VERSION = "0.0.6"
+BYTEDANCE_PIANO_CHECKPOINT_SIZE = 171_966_578
+BYTEDANCE_PIANO_CHECKPOINT_SHA256 = (
+    "c3fa9730725bf4a762f1c14bc80cd5986eacda01b026f5a4a2525cd607876141"
+)
+# Compatibility alias for callers that previously used a minimum-size threshold.
+BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES = BYTEDANCE_PIANO_CHECKPOINT_SIZE
+
+
+def validate_bytedance_piano_checkpoint(path: Path) -> Path:
+    """Require the exact official ByteDance piano checkpoint artifact."""
+
+    return validate_file_identity(
+        path,
+        expected_size=BYTEDANCE_PIANO_CHECKPOINT_SIZE,
+        expected_sha256=BYTEDANCE_PIANO_CHECKPOINT_SHA256,
+        label="ByteDance Piano checkpoint",
+    )
 
 
 class ByteDancePianoTranscriber:
@@ -61,7 +87,20 @@ class ByteDancePianoTranscriber:
             if importlib.util.find_spec("piano_transcription_inference") is None:
                 return (
                     "ByteDance Piano 未安装。请执行: "
-                    "python -m pip install piano-transcription-inference torchlibrosa matplotlib"
+                    "python -m pip install piano-transcription-inference==0.0.6 "
+                    "torchlibrosa matplotlib"
+                )
+
+            try:
+                installed_version = metadata.version(BYTEDANCE_PIANO_PACKAGE_NAME)
+            except metadata.PackageNotFoundError:
+                return "ByteDance Piano 缺少 distribution metadata，无法验证包版本"
+            if installed_version != BYTEDANCE_PIANO_PACKAGE_VERSION:
+                return (
+                    "ByteDance Piano 包版本不匹配: "
+                    f"expected {BYTEDANCE_PIANO_PACKAGE_VERSION}, got {installed_version}。"
+                    "请执行: python -m pip install --force-reinstall "
+                    "piano-transcription-inference==0.0.6"
                 )
 
             # The upstream package imports matplotlib.pyplot at module import time.
@@ -72,16 +111,18 @@ class ByteDancePianoTranscriber:
         except (ImportError, ModuleNotFoundError) as exc:
             return (
                 f"ByteDance Piano 运行依赖缺失: {exc}。请执行: "
-                "python -m pip install piano-transcription-inference torchlibrosa matplotlib"
+                "python -m pip install piano-transcription-inference==0.0.6 "
+                "torchlibrosa matplotlib"
             )
         except Exception as exc:
             return f"ByteDance Piano 后端导入失败: {exc}"
 
     def is_model_available(self) -> bool:
-        return (
-            self.checkpoint_path.exists()
-            and self.checkpoint_path.stat().st_size >= BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES
-        )
+        try:
+            validate_bytedance_piano_checkpoint(self.checkpoint_path)
+            return True
+        except (OSError, RuntimeError):
+            return False
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -133,6 +174,8 @@ class ByteDancePianoTranscriber:
             [
                 "ByteDance Piano checkpoint 缺失或不完整。",
                 f"期望文件名: {BYTEDANCE_PIANO_CHECKPOINT_NAME}",
+                f"期望大小: {BYTEDANCE_PIANO_CHECKPOINT_SIZE} bytes",
+                f"期望 SHA-256: {BYTEDANCE_PIANO_CHECKPOINT_SHA256}",
                 f"当前检查路径: {self.checkpoint_path.resolve()}",
                 "如果曾将 checkpoint 改名为 matplotlib.pth，请改回上面的原始文件名。",
                 "matplotlib 是 Python 依赖，需要通过 pip 安装，不能通过重命名模型文件提供。",
@@ -155,7 +198,6 @@ class ByteDancePianoTranscriber:
         if not self.is_model_available():
             raise RuntimeError(self._format_missing_checkpoint_error())
 
-        self._cancelled = False
         self._check_cancelled()
         device = self._resolve_runtime_device()
         logger.info("Running ByteDance Piano transcription on %s: %s", device, input_path)
@@ -163,6 +205,7 @@ class ByteDancePianoTranscriber:
         if progress_callback:
             progress_callback(0.05, self._pt("progress.loading_bytedance_piano", device=device))
 
+        temp_output_path = unique_midi_temp_path(out_path, "bytedance-piano")
         try:
             os.environ.setdefault("MPLBACKEND", "Agg")
             module = importlib.import_module("piano_transcription_inference")
@@ -173,6 +216,7 @@ class ByteDancePianoTranscriber:
                 sr=module.sample_rate,
                 mono=True,
             )
+            audio_duration_seconds = len(audio) / float(module.sample_rate)
             self._check_cancelled()
 
             if progress_callback:
@@ -183,8 +227,16 @@ class ByteDancePianoTranscriber:
                 checkpoint_path=str(self.checkpoint_path),
             )
             self._check_cancelled()
-            transcriptor.transcribe(audio, str(out_path))
+            transcriptor.transcribe(audio, str(temp_output_path))
             self._check_cancelled()
+            if not temp_output_path.is_file() or temp_output_path.stat().st_size == 0:
+                raise RuntimeError(self._format_missing_output_error(input_path, out_path, device))
+            clip_midi_to_duration(
+                temp_output_path,
+                audio_duration_seconds,
+                "ByteDance Piano",
+            )
+            publish_midi_output(temp_output_path, out_path, "ByteDance Piano")
         except InterruptedError:
             raise
         except Exception as exc:
@@ -194,10 +246,10 @@ class ByteDancePianoTranscriber:
             )
             raise RuntimeError(f"ByteDance Piano 转写失败: {friendly_message}") from exc
         finally:
-            clear_gpu_memory()
-
-        if not out_path.exists() or out_path.stat().st_size == 0:
-            raise RuntimeError(self._format_missing_output_error(input_path, out_path, device))
+            try:
+                remove_temporary_midi(temp_output_path)
+            finally:
+                clear_gpu_memory()
 
         if progress_callback:
             progress_callback(1.0, self._pt("progress.bytedance_piano_complete"))

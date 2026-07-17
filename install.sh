@@ -202,125 +202,67 @@ info "升级 pip..."
 "$PIP" install --upgrade pip setuptools wheel
 success "pip 升级完成"
 
-# ───────────────────────── 安装 PyTorch ─────────────────────────
-info "检测 GPU / 加速器..."
+# ───────────────────────── 严格 NVIDIA CUDA / PyTorch 契约 ─────────────────────────
+info "验证完整七模式 NVIDIA CUDA 12.8 运行时..."
 
-TORCH_INSTALLED=false
-info "检查 PyTorch 是否已安装（首次检查可能需要几秒）..."
-if "$PYTHON" -c "import torch; v=torch.__version__; assert tuple(int(x) for x in v.split('+')[0].split('.')[:2]) >= (2,7)" 2>/dev/null; then
-    success "PyTorch 已安装且版本满足要求"
-    TORCH_INSTALLED=true
-    # 检查 torchvision 是否缺失
-    if ! "$PYTHON" -c "import torchvision" 2>/dev/null; then
-        # torch 2.x.y → torchvision 0.(x+15).y
-        _TORCH_MINOR=$("$PYTHON" -c "import torch; print(torch.__version__.split('+')[0].split('.')[1])")
-        _TV_MINOR=$((_TORCH_MINOR + 15))
-        _TV_NEXT=$((_TV_MINOR + 1))
-        info "torchvision 未安装，正在从 PyTorch 官方源补装 (0.${_TV_MINOR}.*)..."
-        TV_INDEX="https://download.pytorch.org/whl/cpu"
-        if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null 2>&1; then
-            _CV=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[\d.]+' | head -1 || echo "")
-            _CM=$(echo "$_CV" | cut -d. -f1)
-            if [ "$_CM" -ge 12 ] 2>/dev/null; then TV_INDEX="https://download.pytorch.org/whl/cu128"
-            elif [ "$_CM" -ge 11 ] 2>/dev/null; then TV_INDEX="https://download.pytorch.org/whl/cu118"; fi
-        fi
-        "$PIP" install "torchvision>=0.${_TV_MINOR}.0,<0.${_TV_NEXT}.0" --index-url "$TV_INDEX"
-    fi
-fi
-
-if ! $TORCH_INSTALLED; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cpu"
-    TORCH_LABEL="CPU"
-
-    # 检测 NVIDIA GPU (CUDA)
-    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null 2>&1; then
-        CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[\d.]+' | head -1 || echo "")
-        CUDA_MAJOR="${CUDA_VER%%.*}"
-        if [ "${CUDA_MAJOR:-0}" -ge 12 ]; then
-            TORCH_INDEX="https://download.pytorch.org/whl/cu128"
-            TORCH_LABEL="CUDA 12.8 (NVIDIA)"
-        elif [ "${CUDA_MAJOR:-0}" -ge 11 ]; then
-            TORCH_INDEX="https://download.pytorch.org/whl/cu118"
-            TORCH_LABEL="CUDA 11.8 (NVIDIA)"
-        fi
-    fi
-
-    # 检测 AMD GPU (ROCm) - 仅 Linux
+if ! command -v nvidia-smi &>/dev/null || ! nvidia-smi &>/dev/null 2>&1; then
     if command -v rocm-smi &>/dev/null && rocm-smi &>/dev/null 2>&1; then
-        TORCH_INDEX="https://download.pytorch.org/whl/rocm5.7"
-        TORCH_LABEL="ROCm 5.7 (AMD)"
+        error "检测到 AMD/ROCm；当前完整七模式需要 NVIDIA CUDA 12.8 与 ONNX Runtime CUDAExecutionProvider，尚未支持 ROCm。不会静默改用 CPU。"
     fi
+    error "未检测到可用的 NVIDIA 驱动 (nvidia-smi)；完整七模式不支持 CPU/Intel 降级运行。"
+fi
 
-    info "安装 PyTorch ($TORCH_LABEL)..."
+CUDA_VER=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1)
+if [ -z "$CUDA_VER" ]; then
+    error "nvidia-smi 未报告 CUDA 驱动版本，无法确认 CUDA 12.8 运行时兼容性。"
+fi
+CUDA_MAJOR="${CUDA_VER%%.*}"
+CUDA_MINOR="${CUDA_VER#*.}"
+CUDA_MINOR="${CUDA_MINOR%%.*}"
+if [ "${CUDA_MAJOR:-0}" -lt 12 ] || { [ "$CUDA_MAJOR" -eq 12 ] && [ "${CUDA_MINOR:-0}" -lt 8 ]; }; then
+    error "NVIDIA 驱动仅报告 CUDA $CUDA_VER；完整七模式的固定 PyTorch/ONNX Runtime 组合需要 CUDA 12.8 兼容驱动。"
+fi
+success "NVIDIA 驱动检查通过（报告 CUDA $CUDA_VER）"
+
+validate_torch_cuda_runtime() {
+    "$PYTHON" -c '
+from importlib import metadata
+expected = {"torch": "2.7.0", "torchaudio": "2.7.0", "torchvision": "0.22.0"}
+actual = {name: metadata.version(name) for name in expected}
+base = {name: version.split("+", 1)[0] for name, version in actual.items()}
+if base != expected:
+    raise RuntimeError(f"PyTorch trio mismatch: expected={expected}, actual={actual}")
+import torch, torchaudio, torchvision
+if getattr(torch.version, "hip", None):
+    raise RuntimeError(f"ROCm runtime is unsupported for the complete seven-mode stack: HIP={torch.version.hip}")
+if torch.version.cuda != "12.8":
+    raise RuntimeError(f"Expected PyTorch CUDA 12.8 runtime, got {torch.version.cuda!r}")
+if not torch.cuda.is_available():
+    raise RuntimeError("torch.cuda.is_available() is False; a working NVIDIA CUDA GPU is required")
+probe = torch.ones(1, device="cuda")
+probe.add_(1)
+torch.cuda.synchronize()
+print("PyTorch trio:", actual)
+print("PyTorch CUDA runtime:", torch.version.cuda)
+print("NVIDIA device:", torch.cuda.get_device_name(0))
+'
+}
+
+info "检查 PyTorch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 cu128..."
+if ! validate_torch_cuda_runtime; then
+    info "当前 PyTorch 三件套或 CUDA flavor 不符合固定运行时，正在强制安装 cu128..."
     "$PIP" install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 \
-        --index-url "$TORCH_INDEX"
-    success "PyTorch ($TORCH_LABEL) 安装完成"
-fi
-
-# ───────────────────────── Intel 加速（可选）─────────────────────────
-if ! "$PYTHON" -c "import intel_extension_for_pytorch" 2>/dev/null; then
-    INTEL_FOUND=false
-    INTEL_HAS_GPU=false
-
-    # 方式1: lspci 检测 Intel GPU（原生 Linux，WSL2 通常不可见）
-    if command -v lspci &>/dev/null && lspci 2>/dev/null | grep -qi \
-        "intel.*graphics\|intel.*display\|intel.*uhd\|intel.*iris\|intel.*arc"; then
-        INTEL_FOUND=true
-        INTEL_HAS_GPU=true
-        info "检测到 Intel GPU（lspci）"
-    fi
-
-    # 方式2: /proc/cpuinfo 检测 Intel 处理器（WSL2/虚拟机/所有环境通用）
-    if ! $INTEL_FOUND && grep -qi "genuine intel\|intel(r)" /proc/cpuinfo 2>/dev/null; then
-        INTEL_FOUND=true
-        info "检测到 Intel 处理器（/proc/cpuinfo）"
-    fi
-
-    if $INTEL_FOUND; then
-        # 原生 Linux：尝试安装 Intel Level Zero GPU 计算驱动（启用 XPU 模式）
-        if ! $IS_WSL && $INTEL_HAS_GPU; then
-            if ! dpkg -s intel-level-zero-gpu &>/dev/null 2>&1; then
-        info "检测到 Intel GPU，安装 Intel Level Zero GPU 驱动..."
-                info "  → 安装 gpg-agent、wget..."
-                sudo apt-get install -y --no-install-recommends \
-                    gpg-agent wget || true
-                info "  → 下载并导入 Intel GPU GPG 密钥..."
-                wget -O - https://repositories.intel.com/gpu/intel-graphics.key | \
-                    sudo gpg --dearmor -o /usr/share/keyrings/intel-graphics.gpg || true
-                info "  → 添加 Intel GPU 软件仓库..."
-                echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] \
-https://repositories.intel.com/gpu/ubuntu jammy unified" | \
-                    sudo tee /etc/apt/sources.list.d/intel-gpu.list || true
-                info "  → 更新包列表..."
-                sudo apt-get update -q || true
-                info "  → 安装 Level Zero 驱动..."
-                sudo apt-get install -y --no-install-recommends \
-                    intel-level-zero-gpu libze-intel-gpu1 libze-dev && \
-                    success "Intel Level Zero GPU 驱动安装完成（XPU 加速已就绪）" || \
-                    warn "Level Zero 驱动安装失败（Intel Arc/Iris Xe XPU 不可用，仍可使用 CPU 优化）"
-            else
-                success "Intel Level Zero GPU 驱动已安装"
-            fi
-        fi
-
-        if $IS_WSL; then
-            warn "WSL2 环境：Intel iGPU XPU 模式不可用（驱动限制）"
-            info "  → 将安装 IPEX 启用 Intel CPU 指令集优化（AVX-512/AMX）"
-        fi
-
-        info "安装 intel_extension_for_pytorch（Intel GPU/CPU 加速）..."
-        "$PIP" install intel_extension_for_pytorch && \
-            success "intel_extension_for_pytorch 安装完成" || \
-            warn "intel_extension_for_pytorch 安装失败（可选，将使用标准 PyTorch）"
+        --index-url "https://download.pytorch.org/whl/cu128" --force-reinstall
+    if ! validate_torch_cuda_runtime; then
+        error "PyTorch 三件套安装后仍未通过精确版本/CUDA 12.8/GPU 张量验证"
     fi
 fi
+success "PyTorch 三件套与 NVIDIA CUDA 12.8 实测通过"
+info "完整七模式固定使用 NVIDIA CUDA，不安装 IPEX/CPU 降级运行时。"
 
 # ───────────────────────── 安装项目依赖 ─────────────────────────
 info "安装项目 Python 依赖..."
 cd "$REPO_DIR"
-
-info "安装 tflite-runtime（可选，Linux 专用 TensorFlow Lite 后端）..."
-"$PIP" install tflite-runtime || warn "tflite-runtime 安装失败（可选，不影响主要功能）"
 
 if "$PIP" show audio-separator >/dev/null 2>&1; then
     info "检测到旧的 audio-separator，先卸载以避免 NumPy 解析冲突..."
@@ -329,7 +271,11 @@ fi
 
 TMP_REQ="${TMPDIR:-/tmp}/requirements-without-aria-amt.txt"
 grep -vE '^[[:space:]]*aria-amt[[:space:]]*@' requirements.txt > "$TMP_REQ"
+"$PIP" uninstall onnxruntime onnxruntime-gpu -y
 "$PIP" install -r "$TMP_REQ"
+if ! validate_torch_cuda_runtime; then
+    error "requirements.txt 安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
+fi
 success "Python 依赖安装完成"
 
 info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
@@ -344,32 +290,72 @@ info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "pydub==0.25.1" \
     "requests>=2.32.5,<3" \
     "chardet>=5,<6" \
-    "onnxruntime==1.23.2" \
+    'onnxruntime-gpu==1.23.2; platform_system != "Darwin"' \
+    'onnxruntime==1.23.2; platform_system == "Darwin"' \
     "resampy==0.4.3" \
     "rotary-embedding-torch==0.6.5" \
     "samplerate==0.1.0" \
     "six==1.17.0"
+if ! validate_torch_cuda_runtime; then
+    error "audio-separator 运行依赖安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
+fi
+"$PYTHON" - <<'PY'
+import onnxruntime as ort
+import torch
+
+providers = ort.get_available_providers()
+print("ONNX Runtime providers:", providers)
+if getattr(torch.version, "hip", None):
+    raise RuntimeError(f"ROCm runtime is unsupported: HIP={torch.version.hip}")
+if torch.version.cuda != "12.8" or not torch.cuda.is_available():
+    raise RuntimeError(f"Expected working PyTorch CUDA 12.8, got CUDA={torch.version.cuda!r}")
+if "CUDAExecutionProvider" not in providers:
+    raise RuntimeError("Complete seven-mode runtime requires ONNX Runtime CUDAExecutionProvider")
+PY
 "$PIP" install "audio-separator==0.44.1" --no-deps
 success "audio-separator 安装完成"
+
+validate_default_transkun_runtime() {
+    "$PYTHON" - <<'PY'
+from download_sota_models import validate_default_transkun_runtime
+
+identity = validate_default_transkun_runtime()
+print("TransKun default runtime:", identity)
+PY
+}
+
+info "验证 TransKun 2.0.1 默认 V2 包与随包资源身份..."
+if ! validate_default_transkun_runtime; then
+    info "TransKun 默认 V2 身份不完整，正在强制重装 transkun==2.0.1..."
+    "$PIP" install "transkun==2.0.1" --no-deps --force-reinstall
+    if ! validate_default_transkun_runtime; then
+        error "TransKun 2.0.1 重装后包内 V2 资源仍未通过大小/SHA256 身份校验"
+    fi
+fi
+success "TransKun 默认 V2 严格身份检查通过"
 
 info "验证 Aria-AMT 钢琴后端..."
 if ! "$PYTHON" - <<'PY'
 import sys
 sys.path.insert(0, '.')
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
+reason = AriaAmtTranscriber.get_unavailable_reason()
+print(reason or 'Aria-AMT source identity verified')
 print('Aria-AMT package:', AriaAmtTranscriber.is_available())
 print('Aria-AMT model:', AriaAmtTranscriber().is_model_available())
-raise SystemExit(0 if AriaAmtTranscriber.is_available() else 1)
+raise SystemExit(0 if reason == '' else 1)
 PY
 then
-    info "Aria-AMT 未安装，正在从 GitHub 安装..."
-    "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
+    info "Aria-AMT 缺失或源码身份不匹配，正在强制安装固定 GitHub archive..."
+    "$PIP" install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps --force-reinstall
     "$PYTHON" - <<'PY'
 import sys
 sys.path.insert(0, '.')
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
+reason = AriaAmtTranscriber.get_unavailable_reason()
+print(reason or 'Aria-AMT source identity verified')
 print('Aria-AMT package:', AriaAmtTranscriber.is_available())
-raise SystemExit(0 if AriaAmtTranscriber.is_available() else 1)
+raise SystemExit(0 if reason == '' else 1)
 PY
 fi
 
@@ -407,7 +393,6 @@ success "MIROS 后端准备完成"
 
 # ───────────────────────── 验证核心依赖 ─────────────────────────
 info "验证核心依赖..."
-DEPS_OK=true
 
 declare -A DEP_CHECKS=(
     ["PyQt6"]="PyQt6"
@@ -422,195 +407,74 @@ declare -A DEP_CHECKS=(
 for name in "${!DEP_CHECKS[@]}"; do
     mod="${DEP_CHECKS[$name]}"
     info "  validating $name..."
-    dep_output=$("$PYTHON" -c "import importlib; m=importlib.import_module('$mod'); print(getattr(m, '__version__', 'unknown'))" 2>&1)
-    dep_code=$?
-    if [ $dep_code -eq 0 ]; then
+    if dep_output=$("$PYTHON" -c "import importlib; m=importlib.import_module('$mod'); print(getattr(m, '__version__', 'unknown'))" 2>&1); then
         success "  $name OK (version: $dep_output)"
     else
         echo "$dep_output"
-        warn "  $name import failed (full error shown above)"
+        error "  $name import failed (full error shown above)"
     fi
 done
 
 if ! command -v ffmpeg &>/dev/null; then
-    warn "  ffmpeg 未找到 - 部分音频格式可能无法处理"
-    DEPS_OK=false
+    error "  ffmpeg 未找到；音频转换所需运行时不完整"
 else
     FFMPEG_VER=$(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')
     success "  ffmpeg $FFMPEG_VER OK"
 fi
 
-# ───────────────────────── 下载 YourMT3+ 官方模式、六轨与人声 ensemble 模型权重 ─────────────────────────
-info "下载 YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重..."
+info "验证受控 YourMT3+ 源码树身份..."
+if ! "$PYTHON" - <<'PY'
+from pathlib import Path
+
+from src.utils.yourmt3_source_identity import validate_patched_yourmt3_source
+
+source_dir = Path("YourMT3") / "amt" / "src"
+manifest, file_count = validate_patched_yourmt3_source(source_dir)
+print("YourMT3+ patched source manifest:", manifest)
+print("YourMT3+ patched source files:", file_count)
+PY
+then
+    error "YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。"
+fi
+success "YourMT3+ 源码身份检查通过"
+
+# ───────────────────────── 下载统一模型集合 ─────────────────────────
+info "下载 YourMT3+、BS-RoFormer SW Fixed、Leap XE、PolarFormer 与 TransKun V2 Aug 模型..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_sota_models.py"; then
-    error "YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败"
+    error "统一模型集合下载或校验失败"
 fi
-success "YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重下载完成"
+success "YourMT3+、六声部、人声分离与 TransKun V2 Aug 模型下载完成"
 
-info "Verifying/downloading RoFormer vocal_rvc ensemble models..."
+info "Verifying/downloading Leap XE 90-band vocals assets..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_vocal_model.py"; then
-    error "RoFormer vocal_rvc ensemble model download failed"
+    error "Leap XE vocals model download or verification failed"
 fi
-success "RoFormer vocal_rvc ensemble models ready"
+success "Leap XE vocals model ready"
 
-info "Verifying/downloading RoFormer karaoke ensemble models..."
+info "Verifying/downloading PolarFormer accompaniment assets..."
 
-if ! "$PYTHON" "${REPO_DIR}/download_vocal_harmony_model.py"; then
-    error "RoFormer karaoke ensemble model download failed"
+if ! "$PYTHON" "${REPO_DIR}/download_accompaniment_model.py"; then
+    error "PolarFormer accompaniment model download or verification failed"
 fi
-success "RoFormer karaoke ensemble models ready"
+success "PolarFormer accompaniment model ready"
 
-# ───────────────────────── 创建启动脚本 ─────────────────────────
-info "创建启动脚本..."
-cat > "${REPO_DIR}/run.sh" << 'LAUNCH_EOF'
-#!/usr/bin/env bash
-# Music to MIDI 启动脚本
-# 自动检测依赖完整性，缺失时运行 install.sh 后再启动
+info "Verifying/downloading TransKun V2 Aug assets..."
 
-set -euo pipefail
-
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_PYTHON="${REPO_DIR}/venv/bin/python"
-
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-info()  { echo -e "${BLUE}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
-
-# WSL / Linux 显示环境初始化
-if grep -qi microsoft /proc/version 2>/dev/null; then
-    [ -z "${DISPLAY:-}" ] && export DISPLAY=:0
-    WAYLAND_SOCK="/run/user/$(id -u)/wayland-0"
-    [ -z "${WAYLAND_DISPLAY:-}" ] && [ -e "$WAYLAND_SOCK" ] && \
-        export WAYLAND_DISPLAY=wayland-0
+if ! "$PYTHON" "${REPO_DIR}/download_transkun_v2_aug_model.py"; then
+    error "TransKun V2 Aug model download or verification failed"
 fi
+success "TransKun V2 Aug model ready"
 
-# 修复运行时目录权限（避免 Qt 警告）
-[ -d "/run/user/$(id -u)" ] && chmod 700 "/run/user/$(id -u)" 2>/dev/null || true
-
-# ───────────────────────── 依赖完整性检查 ─────────────────────────
-NEED_INSTALL=false
-
-if [ ! -f "$VENV_PYTHON" ]; then
-    warn "虚拟环境不存在"; NEED_INSTALL=true
+# ───────────────────────── 验证启动脚本 ─────────────────────────
+info "验证版本控制的启动脚本..."
+RUN_SCRIPT="${REPO_DIR}/run.sh"
+if [ ! -f "$RUN_SCRIPT" ]; then
+    error "缺少版本控制的 run.sh；请重新取得完整项目，而不是由安装器生成过期副本。"
 fi
-
-if ! $NEED_INSTALL; then
-    info "Checking core Python packages..."
-    if ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido; print('core imports OK')"; then
-        warn "core Python packages missing (full error shown above)"; NEED_INSTALL=true
-    fi
-fi
-
-if ! $NEED_INSTALL && [ ! -d "${REPO_DIR}/YourMT3/amt/src" ]; then
-    warn "YourMT3 代码库不存在"; NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from src.utils.yourmt3_downloader import get_model_path
-from src.utils.yourmt3_downloader import OFFICIAL_YOURMT3_MODEL_KEYS, YOURMT3_MODELS
-missing = []
-for model_key in OFFICIAL_YOURMT3_MODEL_KEYS:
-    model_info = YOURMT3_MODELS[model_key]
-    label = model_info.get('ui_label', model_key)
-    model_path = get_model_path(model_key)
-    print(f'YourMT3+ {label}:', model_path if model_path else 'missing')
-    if model_path is None:
-        missing.append(label)
-if missing:
-    print('missing YourMT3+ official model modes:', ', '.join(missing))
-exit(0 if not missing else 1)
-"; then
-    warn "YourMT3+ model weights missing"; NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from download_multistem_model import validate_multistem_assets
-model_path, config_path = validate_multistem_assets()
-print('BS-RoFormer SW checkpoint:', model_path)
-print('BS-RoFormer SW config:', config_path)
-exit(0)
-"; then
-    warn "BS-RoFormer SW six-stem model missing or checksum validation failed"
-    warn "  先运行: python download_multistem_model.py"
-    NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from download_vocal_harmony_model import is_chorus_model_available, resolve_chorus_model_paths
-from download_vocal_model import is_vocal_model_available, resolve_vocal_model_paths
-from src.core.vocal_separator import VocalSeparator
-print('RoFormer vocal_rvc models:', [str(path) for path in resolve_vocal_model_paths()])
-print('RoFormer karaoke models:', [str(path) for path in resolve_chorus_model_paths()])
-print('audio-separator package:', VocalSeparator.is_available())
-print('RoFormer vocal_rvc available:', is_vocal_model_available())
-print('RoFormer karaoke available:', is_chorus_model_available())
-print('RoFormer full vocal split available:', VocalSeparator.is_model_available())
-exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_chorus_model_available() and VocalSeparator.is_model_available() else 1)
-"; then
-    warn "RoFormer vocal_rvc/karaoke ensemble weights missing"; NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from src.core.aria_amt_transcriber import AriaAmtTranscriber
-transcriber = AriaAmtTranscriber()
-print('Aria-AMT package:', AriaAmtTranscriber.is_available())
-print('Aria-AMT model:', transcriber.is_model_available())
-exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
-"; then
-    warn "Aria-AMT backend or model missing"
-    NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
-transcriber = ByteDancePianoTranscriber()
-print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
-print('ByteDance Piano model:', transcriber.is_model_available())
-exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
-"; then
-    warn "ByteDance Piano backend or model missing"
-    warn "  先运行: python download_bytedance_piano_model.py"
-    NEED_INSTALL=true
-fi
-
-if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
-import sys; sys.path.insert(0, '${REPO_DIR}')
-from src.core.miros_transcriber import MirosTranscriber
-reason = MirosTranscriber.get_unavailable_reason()
-print(reason or 'MIROS available')
-print('MIROS package:', MirosTranscriber.is_available())
-print('MIROS model:', MirosTranscriber.is_model_available())
-exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_available() else 1)
-"; then
-    warn "MIROS backend or model missing"
-    warn "  先运行: python download_miros_model.py"
-    NEED_INSTALL=true
-fi
-
-# ───────────────────────── 按需安装 ─────────────────────────
-if $NEED_INSTALL; then
-    info "依赖不完整，正在运行安装脚本..."
-    bash "${REPO_DIR}/install.sh"
-    ok "安装完成，正在启动应用..."
-    # install.sh 会覆盖 run.sh，必须重新执行以读取新文件
-    exec bash "${BASH_SOURCE[0]}" "$@"
-fi
-
-ok "所有依赖已就绪"
-source "${REPO_DIR}/venv/bin/activate"
-cd "$REPO_DIR"
-exec python -m src.main "$@"
-LAUNCH_EOF
-chmod +x "${REPO_DIR}/run.sh"
-success "启动脚本已创建: run.sh"
+chmod +x "$RUN_SCRIPT"
+success "启动脚本已验证: run.sh"
 
 # ───────────────────────── 添加 ~/.bashrc 配置 ─────────────────────────
 if $IS_WSL; then
@@ -636,15 +500,17 @@ echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YourMT3+ 官方模式模型权重"
-echo -e "  ${GREEN}✔${NC} BS-RoFormer SW 六轨模型"
-echo -e "  ${GREEN}✔${NC} RoFormer vocal_rvc/karaoke 人声 ensemble 模型"
+echo -e "  ${GREEN}✔${NC} BS-RoFormer SW Fixed 六声部模型"
+echo -e "  ${GREEN}✔${NC} Leap XE 人声 + PolarFormer 伴奏模型"
+echo -e "  ${GREEN}✔${NC} TransKun V2 Aug 模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
 echo ""
 echo -e "  ${BOLD}模型维护命令：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_multistem_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
-echo -e "  ${YELLOW}venv/bin/python download_vocal_harmony_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_accompaniment_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_transkun_v2_aug_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
 echo ""
 if $IS_WSL; then

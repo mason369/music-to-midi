@@ -94,7 +94,7 @@ Write-Info "第 1 步/共 12 步  检测 Python 版本..."
 $PYTHON_BIN = $null
 
 # 优先使用 py launcher 指定兼容版本（3.11~3.12），避免选中过新的 Python（3.13+ 尚未被 PyTorch 完全支持）
-foreach ($ver in @("-3.12", "-3.11", "-3.10")) {
+foreach ($ver in @("-3.12", "-3.11")) {
     try {
         $verStr = & py $ver -c "import sys; print(str(sys.version_info.major) + '.' + str(sys.version_info.minor))" 2>&1
         if ($LASTEXITCODE -eq 0 -and ("$verStr" -match '^(\d+)\.(\d+)')) {
@@ -376,174 +376,93 @@ Write-Info "第 6 步/共 12 步  升级 pip..."
 if ($LASTEXITCODE -ne 0) { Write-Err "pip 升级失败" }
 Write-Ok "pip 升级成功"
 
-# --- 第 7 步/共 12 步：检测 GPU / 安装 PyTorch ---
-Write-Info "第 7 步/共 12 步  检测 GPU / 安装 PyTorch..."
+# --- 第 7 步/共 12 步：严格验证 NVIDIA CUDA 12.8 / PyTorch ---
+Write-Info "第 7 步/共 12 步  验证完整七模式 NVIDIA CUDA 12.8 运行时..."
 
-$TORCH_INSTALLED = $false
-$torchDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Directory `
-    -Filter "torch-*.dist-info" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($torchDistInfo -and $torchDistInfo.Name -match '^torch-([\d.]+)') {
-    $torchVer = $Matches[1]
-    $tvParts = $torchVer.Split('.')
-    if ([int]$tvParts[0] -ge 2 -and ([int]$tvParts[0] -gt 2 -or [int]$tvParts[1] -ge 7)) {
-        Write-Ok "PyTorch $torchVer 已安装（dist-info 验证，跳过重新安装）"
-        $TORCH_INSTALLED = $true
-        # 检查 torchvision 是否缺失，缺失则从 PyTorch 官方源补装（版本必须匹配 torch）
-        $tvisionDistInfo = Get-ChildItem (Join-Path $VENV_DIR "Lib\site-packages") -Directory `
-            -Filter "torchvision-*.dist-info" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $tvisionDistInfo) {
-            # torch 2.x.y → torchvision 0.(x+15).y（PyTorch 官方版本映射）
-            $tvMinor = [int]$tvParts[1] + 15
-            Write-Info "torchvision 未安装，正在从 PyTorch 官方源补装 (0.$tvMinor.*)..."
-            $TV_INDEX = "https://download.pytorch.org/whl/cpu"
-            try {
-                $nvOut = & nvidia-smi 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    $nvS = $nvOut -join " "
-                    $cm = [regex]::Match($nvS, 'CUDA Version:\s*([\d.]+)')
-                    if ($cm.Success) {
-                        $cmaj = [int]($cm.Groups[1].Value -split '\.')[0]
-                        if ($cmaj -ge 12) { $TV_INDEX = "https://download.pytorch.org/whl/cu128" }
-                        elseif ($cmaj -ge 11) { $TV_INDEX = "https://download.pytorch.org/whl/cu118" }
-                    }
-                }
-            } catch {}
-            $tvNextMinor = $tvMinor + 1
-            & "$PIP" install "torchvision>=0.$tvMinor.0,<0.$tvNextMinor.0" --index-url "$TV_INDEX"
-        }
-    }
-}
-if (-not $TORCH_INSTALLED) {
-    $TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
-    $TORCH_LABEL = "CPU"
-
-    # 检测 NVIDIA GPU (CUDA)
-    try {
-        $nvOutput = & nvidia-smi 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $nvStr = $nvOutput -join " "
-            $cudaMatch = [regex]::Match($nvStr, 'CUDA Version:\s*([\d.]+)')
-            if ($cudaMatch.Success) {
-                $cudaMajor = [int]($cudaMatch.Groups[1].Value -split '\.')[0]
-                if ($cudaMajor -ge 12) {
-                    $TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
-                    $TORCH_LABEL = "CUDA 12.8 (NVIDIA)"
-                } elseif ($cudaMajor -ge 11) {
-                    $TORCH_INDEX = "https://download.pytorch.org/whl/cu118"
-                    $TORCH_LABEL = "CUDA 11.8 (NVIDIA)"
-                }
-            }
-        }
-    }
-    catch {
-        # nvidia-smi 不可用
-    }
-
-    # 检测 AMD GPU（Windows 暂无原生 ROCm wheel）
-    try {
-        $gpuInfo = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'AMD|Radeon' }
-        if ($gpuInfo) {
-            Write-Warn "检测到 AMD GPU，Windows 暂无原生 PyTorch ROCm wheel。"
-            Write-Warn "  将使用 CPU 模式，如需 GPU 加速请使用 Linux/WSL2。"
-        }
-    }
-    catch {
-        # 无法获取 GPU 信息
-    }
-
-    Write-Info "正在安装 PyTorch ($TORCH_LABEL)..."
-    & "$PIP" install "torch==2.7.0" "torchaudio==2.7.0" "torchvision==0.22.0" --index-url "$TORCH_INDEX"
-    if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 安装失败" }
-    Write-Ok "PyTorch ($TORCH_LABEL) 安装成功"
-}
-
-# --- 第 7.5 步：确保 libomp140.x86_64.dll 存在（fbgemm.dll 依赖）---
-$torchLib = Join-Path $VENV_DIR "Lib\site-packages\torch\lib"
-$libompDll = Join-Path $torchLib "libomp140.x86_64.dll"
-$torchRuntimeRepair = Join-Path $REPO_DIR "tools\repair_torch_openmp.py"
-
-if ((Test-Path $torchLib) -and -not (Test-Path $libompDll)) {
-    Write-Info "正在修复 libomp140.x86_64.dll 缺失问题（fbgemm.dll 依赖 LLVM OpenMP 运行时）..."
-    try {
-        & "$PIP" install zstandard
-        if ($LASTEXITCODE -ne 0) { throw "zstandard 安装失败" }
-
-        & "$PYTHON" $torchRuntimeRepair --torch-lib-dir "$torchLib"
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "libomp140.x86_64.dll 已修复"
-        } else {
-            Write-Warn "libomp140.x86_64.dll 自动修复失败，torch 可能无法正常导入"
-        }
-    }
-    catch {
-        Write-Warn "libomp140.x86_64.dll 修复失败: $_"
-    }
-} elseif (Test-Path $libompDll) {
-    Write-Ok "libomp140.x86_64.dll 已存在"
-}
-
-# --- 第 8 步/共 12 步：Intel GPU 加速（可选）---
-Write-Info "第 8 步/共 12 步  检测 Intel GPU 加速（可选）..."
-
-# 预先检查：若已安装 IPEX 但 torch 无法正常导入，说明版本不兼容，自动卸载
-$preIpexDir = Join-Path $VENV_DIR "Lib\site-packages\intel_extension_for_pytorch"
-if (Test-Path $preIpexDir) {
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $null = & "$PYTHON" -c "import torch" 2>&1
-    $ErrorActionPreference = $prevEAP
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "已安装的 IPEX 与当前 torch 版本不兼容（torch 导入失败），正在自动卸载 IPEX..."
-        & "$PIP" uninstall intel_extension_for_pytorch -y
-        Write-Info "已卸载 IPEX，torch 将以 CPU 模式正常运行"
-    }
-}
-
-$intelGpuFound = $false
+$nvidiaOk = $false
+$nvOutput = $null
 try {
-    $gpuInfo = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match 'Intel.*Arc|Intel.*Xe' }
-    if ($gpuInfo) {
-        $intelGpuFound = $true
-        Write-Info "检测到 Intel GPU: $($gpuInfo.Name)"
+    $nvOutput = & nvidia-smi 2>&1
+    if ($LASTEXITCODE -eq 0) { $nvidiaOk = $true }
+} catch { }
+
+if (-not $nvidiaOk) {
+    $amdGpu = $null
+    try {
+        $amdGpu = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'AMD|Radeon' }
+    } catch { }
+    if ($amdGpu) {
+        Write-Err "检测到 AMD GPU；完整七模式当前需要 NVIDIA CUDA 12.8 与 ONNX Runtime CUDAExecutionProvider。Windows 不会静默改用 CPU。"
     }
-}
-catch {
-    # 无法获取 GPU 信息
+    Write-Err "未检测到可用的 NVIDIA 驱动 (nvidia-smi)；完整七模式不支持 CPU/Intel 降级运行。"
 }
 
-if ($intelGpuFound) {
-    $ipexInstalled = $false
-    $ipexSiteDir = Join-Path $VENV_DIR "Lib\site-packages\intel_extension_for_pytorch"
-    if (Test-Path $ipexSiteDir) { $ipexInstalled = $true }
-
-    if (-not $ipexInstalled) {
-        Write-Info "正在尝试安装 intel_extension_for_pytorch（Intel GPU 加速）..."
-        try {
-            & "$PIP" install intel_extension_for_pytorch --extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/us/
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok "intel_extension_for_pytorch 安装成功（Intel GPU 加速已启用）"
-                # 验证 IPEX 安装后 torch 是否仍可正常导入（防止版本不兼容破坏 torch）
-                $prevEAP2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-                $null = & "$PYTHON" -c "import torch" 2>&1
-                $ErrorActionPreference = $prevEAP2
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warn "IPEX 与 torch 版本不兼容（IPEX XPU 需要匹配的 torch 版本），正在自动卸载 IPEX..."
-                    & "$PIP" uninstall intel_extension_for_pytorch -y
-                    Write-Info "已卸载 IPEX，将以 CPU 模式运行"
-                }            } else {
-                Write-Warn "intel_extension_for_pytorch 安装失败，将使用 CPU 模式。"
-            }
-        }
-        catch {
-            Write-Warn "intel_extension_for_pytorch 安装失败（可选）"
-        }
-    } else {
-        Write-Ok "intel_extension_for_pytorch 已安装"
-    }
-} else {
-    Write-Info "未检测到 Intel GPU（Arc/Xe/UHD/Iris），跳过 IPEX 安装"
+$nvText = $nvOutput -join " "
+$cudaMatch = [regex]::Match($nvText, 'CUDA Version:\s*([\d.]+)')
+if (-not $cudaMatch.Success) {
+    Write-Err "nvidia-smi 未报告 CUDA 驱动版本，无法确认 CUDA 12.8 运行时兼容性。"
 }
+$driverCuda = [version]$cudaMatch.Groups[1].Value
+if ($driverCuda -lt [version]"12.8") {
+    Write-Err "NVIDIA 驱动仅报告 CUDA $driverCuda；完整七模式的固定 PyTorch/ONNX Runtime 组合需要 CUDA 12.8 兼容驱动。"
+}
+Write-Ok "NVIDIA 驱动检查通过（报告 CUDA $driverCuda）"
+
+function Repair-TorchOpenMPRuntime {
+    $torchLib = Join-Path $VENV_DIR "Lib\site-packages\torch\lib"
+    $libompDll = Join-Path $torchLib "libomp140.x86_64.dll"
+    if ((Test-Path $torchLib) -and -not (Test-Path $libompDll)) {
+        Write-Info "修复 PyTorch 必需的 libomp140.x86_64.dll..."
+        & "$PIP" install zstandard
+        if ($LASTEXITCODE -ne 0) { Write-Err "zstandard 安装失败，无法修复 PyTorch OpenMP 运行时" }
+        & "$PYTHON" (Join-Path $REPO_DIR "tools\repair_torch_openmp.py") --torch-lib-dir "$torchLib"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $libompDll)) {
+            Write-Err "libomp140.x86_64.dll 修复失败，不能继续验证 PyTorch"
+        }
+        Write-Ok "libomp140.x86_64.dll 已修复"
+    }
+}
+
+$torchCudaRuntimeCheck = @"
+from importlib import metadata
+expected = {'torch': '2.7.0', 'torchaudio': '2.7.0', 'torchvision': '0.22.0'}
+actual = {name: metadata.version(name) for name in expected}
+base = {name: version.split('+', 1)[0] for name, version in actual.items()}
+if base != expected:
+    raise RuntimeError(f'PyTorch trio mismatch: expected={expected}, actual={actual}')
+import torch, torchaudio, torchvision
+if getattr(torch.version, 'hip', None):
+    raise RuntimeError(f'ROCm runtime is unsupported for the complete seven-mode stack: HIP={torch.version.hip}')
+if torch.version.cuda != '12.8':
+    raise RuntimeError(f'Expected PyTorch CUDA 12.8 runtime, got {torch.version.cuda!r}')
+if not torch.cuda.is_available():
+    raise RuntimeError('torch.cuda.is_available() is False; a working NVIDIA CUDA GPU is required')
+probe = torch.ones(1, device='cuda')
+probe.add_(1)
+torch.cuda.synchronize()
+print('PyTorch trio:', actual)
+print('PyTorch CUDA runtime:', torch.version.cuda)
+print('NVIDIA device:', torch.cuda.get_device_name(0))
+"@
+
+Repair-TorchOpenMPRuntime
+& "$PYTHON" -c $torchCudaRuntimeCheck
+if ($LASTEXITCODE -ne 0) {
+    Write-Info "当前 PyTorch 三件套或 CUDA flavor 不符合固定运行时，正在强制安装 cu128..."
+    & "$PIP" install "torch==2.7.0" "torchaudio==2.7.0" "torchvision==0.22.0" `
+        --index-url "https://download.pytorch.org/whl/cu128" --force-reinstall
+    if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 cu128 安装失败" }
+    Repair-TorchOpenMPRuntime
+    & "$PYTHON" -c $torchCudaRuntimeCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "PyTorch 三件套安装后仍未通过精确版本/CUDA 12.8/GPU 张量验证"
+    }
+}
+Write-Ok "PyTorch 三件套与 NVIDIA CUDA 12.8 实测通过"
+
+# --- 第 8 步/共 12 步：锁定完整运行时 ---
+Write-Info "第 8 步/共 12 步  完整七模式固定使用 NVIDIA CUDA，不安装 IPEX/CPU 降级运行时。"
 
 # --- 第 9 步/共 12 步：安装项目依赖 ---
 Write-Info "第 9 步/共 12 步  安装项目 Python 依赖..."
@@ -560,6 +479,9 @@ $tmpReq = Join-Path $env:TEMP "requirements-without-aria-amt.txt"
 Get-Content (Join-Path $REPO_DIR "requirements.txt") |
     Where-Object { $_ -notmatch '^\s*aria-amt\s*@' } |
     Set-Content -Encoding UTF8 $tmpReq
+
+& "$PIP" uninstall onnxruntime onnxruntime-gpu -y
+if ($LASTEXITCODE -ne 0) { Write-Err "清理冲突的 ONNX Runtime 包失败" }
 
 & "$PIP" install -r $tmpReq
 if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
@@ -579,7 +501,8 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "pydub==0.25.1" `
     "requests>=2.32.5,<3" `
     "chardet>=5,<6" `
-    "onnxruntime==1.23.2" `
+    'onnxruntime-gpu==1.23.2; platform_system != "Darwin"' `
+    'onnxruntime==1.23.2; platform_system == "Darwin"' `
     "resampy==0.4.3" `
     "rotary-embedding-torch==0.6.5" `
     "samplerate==0.1.0" `
@@ -588,9 +511,51 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "six==1.17.0"
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 运行依赖安装失败" }
 
+$ortProviderCheck = @"
+import onnxruntime as ort
+import torch
+providers = ort.get_available_providers()
+print('ONNX Runtime providers:', providers)
+if getattr(torch.version, 'hip', None):
+    raise RuntimeError(f'ROCm runtime is unsupported: HIP={torch.version.hip}')
+if torch.version.cuda != '12.8' or not torch.cuda.is_available():
+    raise RuntimeError(f'Expected working PyTorch CUDA 12.8, got CUDA={torch.version.cuda!r}')
+if 'CUDAExecutionProvider' not in providers:
+    raise RuntimeError('Complete seven-mode runtime requires ONNX Runtime CUDAExecutionProvider')
+"@
+& "$PYTHON" -c $torchCudaRuntimeCheck
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "requirements.txt 安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
+}
+& "$PYTHON" -c $ortProviderCheck
+if ($LASTEXITCODE -ne 0) { Write-Err "ONNX Runtime CUDAExecutionProvider 严格校验失败" }
+
 & "$PIP" install "audio-separator==0.44.1" --no-deps
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
+
+# --- 第 9.4 步：严格验证 TransKun 默认 V2 包与随包资源 ---
+Write-Info "第 9.4 步/共 12 步  验证 TransKun 2.0.1 默认 V2 运行时身份..."
+
+$transkunIdentityScript = @"
+import sys
+sys.path.insert(0, r'$REPO_DIR')
+from download_sota_models import validate_default_transkun_runtime
+identity = validate_default_transkun_runtime()
+print('TransKun default runtime:', identity)
+"@
+
+& "$PYTHON" -c $transkunIdentityScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Info "TransKun 默认 V2 身份不完整，正在强制重装 transkun==2.0.1..."
+    & "$PIP" install "transkun==2.0.1" --no-deps --force-reinstall
+    if ($LASTEXITCODE -ne 0) { Write-Err "TransKun 2.0.1 强制重装失败" }
+    & "$PYTHON" -c $transkunIdentityScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "TransKun 2.0.1 重装后包内 V2 资源仍未通过大小/SHA256 身份校验"
+    }
+}
+Write-Ok "TransKun 默认 V2 严格身份检查通过"
 
 # --- 第 9.5 步：验证 Aria-AMT 可用性并补装模型权重 ---
 Write-Info "第 9.5 步/共 12 步  验证 Aria-AMT 钢琴后端..."
@@ -599,15 +564,17 @@ $ariaCheckScript = @"
 import sys
 sys.path.insert(0, r'$REPO_DIR')
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
+reason = AriaAmtTranscriber.get_unavailable_reason()
+print(reason or 'Aria-AMT source identity verified')
 print('Aria-AMT package:', AriaAmtTranscriber.is_available())
 print('Aria-AMT model:', AriaAmtTranscriber().is_model_available())
-sys.exit(0 if AriaAmtTranscriber.is_available() else 1)
+sys.exit(0 if reason == '' else 1)
 "@
 
 & "$PYTHON" -c $ariaCheckScript
 if ($LASTEXITCODE -ne 0) {
-    Write-Info "Aria-AMT 未安装，正在从 GitHub 安装..."
-    & "$PIP" install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
+    Write-Info "Aria-AMT 缺失或源码身份不匹配，正在强制安装固定 GitHub archive..."
+    & "$PIP" install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps --force-reinstall
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Aria-AMT 安装失败，请确认 Python 3.11+ 且能访问 GitHub 仓库。"
     }
@@ -728,43 +695,67 @@ foreach ($dep in @("PyQt6", "torch", "numpy", "librosa", "mido", "soundfile", "p
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "  $dep 正常"
     } else {
-        Write-Warn "  $dep 导入失败（上方已显示完整错误输出）"
+        Write-Err "  $dep 导入失败（上方已显示完整错误输出）"
     }
 }
 
 if ($FFMPEG_OK) {
     Write-Ok "  ffmpeg 正常"
 } else {
-    Write-Warn "  ffmpeg 未安装（已在第 3 步提示）"
+    Write-Err "  ffmpeg 未安装；音频转换所需运行时不完整"
 }
 
-# --- 第 11 步/共 12 步：下载 YourMT3+ 官方模式、六轨与人声 ensemble 模型权重 ---
-Write-Info "第 11 步/共 12 步  下载 YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重..."
+Write-Info "验证受控 YourMT3+ 源码树身份..."
+$yourMt3SourceIdentityScript = @"
+import sys
+from pathlib import Path
+sys.path.insert(0, r'$REPO_DIR')
+from src.utils.yourmt3_source_identity import validate_patched_yourmt3_source
+source_dir = Path(r'$REPO_DIR') / 'YourMT3' / 'amt' / 'src'
+manifest, file_count = validate_patched_yourmt3_source(source_dir)
+print('YourMT3+ patched source manifest:', manifest)
+print('YourMT3+ patched source files:', file_count)
+"@
+& "$PYTHON" -c $yourMt3SourceIdentityScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。"
+}
+Write-Ok "YourMT3+ 源码身份检查通过"
+
+# --- 第 11 步/共 12 步：下载统一模型集合 ---
+Write-Info "第 11 步/共 12 步  下载 YourMT3+、BS-RoFormer SW Fixed、Leap XE、PolarFormer 与 TransKun V2 Aug 模型..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_sota_models.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "YourMT3+ 官方模式、BS-RoFormer SW 六轨与 RoFormer 人声 ensemble 模型权重下载成功"
+    Write-Ok "YourMT3+、六声部、人声分离与 TransKun V2 Aug 模型下载成功"
 } else {
-    Write-Err "YourMT3+ 官方模式、BS-RoFormer SW 六轨或 RoFormer 人声 ensemble 模型下载失败"
+    Write-Err "统一模型集合下载或校验失败"
 }
 
-# --- 第 12 步/共 12 步：验证/补下载 RoFormer 人声 ensemble 模型 ---
-Write-Info "第 12 步/共 12 步  验证/补下载 RoFormer vocal_rvc 与 karaoke ensemble 模型..."
+# --- 第 12 步/共 12 步：逐项验证新模型路线 ---
+Write-Info "第 12 步/共 12 步  验证 Leap XE 人声、PolarFormer 伴奏与 TransKun V2 Aug 模型..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_vocal_model.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "RoFormer vocal_rvc ensemble 模型准备完成"
+    Write-Ok "Leap XE 90-band 人声模型准备完成"
 } else {
-    Write-Err "RoFormer vocal_rvc ensemble 模型下载失败"
+    Write-Err "Leap XE 90-band 人声模型下载或校验失败"
 }
 
-& "$PYTHON" (Join-Path $REPO_DIR "download_vocal_harmony_model.py")
+& "$PYTHON" (Join-Path $REPO_DIR "download_accompaniment_model.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "RoFormer karaoke ensemble 模型准备完成"
+    Write-Ok "PolarFormer 伴奏模型准备完成"
 } else {
-    Write-Err "RoFormer karaoke ensemble 模型下载失败"
+    Write-Err "PolarFormer 伴奏模型下载或校验失败"
+}
+
+& "$PYTHON" (Join-Path $REPO_DIR "download_transkun_v2_aug_model.py")
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "TransKun V2 Aug 模型准备完成"
+} else {
+    Write-Err "TransKun V2 Aug 模型下载或校验失败"
 }
 
 # --- 完成 ---
@@ -779,8 +770,9 @@ Write-Host "  .\run.ps1" -ForegroundColor Green
 Write-Host ""
 Write-Host "  模型维护命令：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_vocal_harmony_model.py" -ForegroundColor Yellow
-Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_accompaniment_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_transkun_v2_aug_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
 Write-Host ""

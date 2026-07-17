@@ -1,10 +1,28 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import mido
 import pytest
 
 from src.core.pipeline import MusicToMidiPipeline
-from src.models.data_models import Config
+from src.models.data_models import BeatInfo, Config
+
+
+def _write_valid_backend_midi(path: str) -> None:
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.extend(
+        [
+            mido.MetaMessage("track_name", name="official", time=0),
+            mido.Message("program_change", program=73, channel=0, time=0),
+            mido.Message("control_change", control=11, value=87, channel=0, time=0),
+            mido.Message("note_on", note=60, velocity=100, channel=0, time=0),
+            mido.Message("note_off", note=60, velocity=0, channel=0, time=480),
+        ]
+    )
+    midi.tracks.append(track)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    midi.save(path)
 
 
 def test_smart_yourmt3_uses_official_direct_midi_output(monkeypatch, tmp_path):
@@ -18,8 +36,7 @@ def test_smart_yourmt3_uses_official_direct_midi_output(monkeypatch, tmp_path):
 
         def transcribe_to_midi(self, audio_path, output_path, progress_callback=None):
             self.calls.append((audio_path, output_path))
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(output_path).write_bytes(b"MThd")
+            _write_valid_backend_midi(output_path)
             if progress_callback:
                 progress_callback(1.0, "YourMT3 complete")
             return output_path
@@ -47,7 +64,7 @@ def test_smart_yourmt3_uses_official_direct_midi_output(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "_detect_beat_or_raise",
-        lambda _path: pytest.fail("official YourMT3 route must not run beat detection"),
+        lambda _path: BeatInfo(bpm=96.0),
     )
     monkeypatch.setattr(pipeline, "_require_multi_instrument_available", lambda: None)
     monkeypatch.setattr(pipeline, "_cleanup_multi_instrument_backend", lambda: None)
@@ -57,8 +74,11 @@ def test_smart_yourmt3_uses_official_direct_midi_output(monkeypatch, tmp_path):
 
     assert fake_yourmt3.calls == [(str(input_path), str(output_dir / "song.mid"))]
     assert result.midi_path == str(output_dir / "song.mid")
-    assert result.beat_info is None
+    assert result.beat_info == BeatInfo(bpm=96.0)
     assert result.total_notes == 9
+    messages = [message for track in mido.MidiFile(result.midi_path).tracks for message in track]
+    assert any(message.type == "set_tempo" for message in messages)
+    assert any(message.type == "program_change" and message.program == 73 for message in messages)
 
 
 def test_smart_miros_uses_official_direct_midi_output(monkeypatch, tmp_path):
@@ -72,8 +92,7 @@ def test_smart_miros_uses_official_direct_midi_output(monkeypatch, tmp_path):
 
         def transcribe_to_midi(self, audio_path, output_path, progress_callback=None):
             self.calls.append((audio_path, output_path))
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(output_path).write_bytes(b"MThd")
+            _write_valid_backend_midi(output_path)
             if progress_callback:
                 progress_callback(1.0, "MIROS complete")
             return output_path
@@ -101,7 +120,7 @@ def test_smart_miros_uses_official_direct_midi_output(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "_detect_beat_or_raise",
-        lambda _path: pytest.fail("official MIROS route must not run beat detection"),
+        lambda _path: BeatInfo(bpm=132.0),
     )
     monkeypatch.setattr(pipeline, "_require_multi_instrument_available", lambda: None)
     monkeypatch.setattr(pipeline, "_cleanup_multi_instrument_backend", lambda: None)
@@ -111,5 +130,8 @@ def test_smart_miros_uses_official_direct_midi_output(monkeypatch, tmp_path):
 
     assert fake_miros.calls == [(str(input_path), str(output_dir / "song.mid"))]
     assert result.midi_path == str(output_dir / "song.mid")
-    assert result.beat_info is None
+    assert result.beat_info == BeatInfo(bpm=132.0)
     assert result.total_notes == 7
+    messages = [message for track in mido.MidiFile(result.midi_path).tracks for message in track]
+    assert any(message.type == "set_tempo" for message in messages)
+    assert any(message.type == "control_change" and message.control == 11 for message in messages)

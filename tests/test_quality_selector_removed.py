@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 
 from src.gui.widgets.track_panel import TrackPanel
 from src.models.data_models import Config
+from tools.full_chain_matrix_runner import build_case_config
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -19,6 +20,23 @@ def test_config_no_longer_serializes_transcription_quality():
     assert "transcription_quality" not in Config.from_dict(
         {"transcription_quality": "fast"}
     ).to_dict()
+
+
+def test_full_chain_matrix_runner_builds_current_fixed_quality_config(tmp_path):
+    config = build_case_config(
+        {
+            "mode": "smart",
+            "backend": "yourmt3",
+            "multi_model": "yourmt3",
+            "track_mode": "multi_track",
+        },
+        tmp_path,
+    )
+
+    assert config.processing_mode == "smart"
+    assert config.transcription_backend == "yourmt3"
+    assert config.output_dir == str(tmp_path)
+    assert not hasattr(config, "transcription_quality")
 
 
 def test_desktop_track_panel_no_longer_exposes_quality_behavior_hint():

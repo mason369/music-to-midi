@@ -111,7 +111,7 @@ def _parse_ensemble_preset(model_name: str) -> Optional[str]:
     spec = str(model_name or "").strip()
     if not spec.lower().startswith(_ENSEMBLE_PRESET_PREFIX):
         return None
-    preset = spec[len(_ENSEMBLE_PRESET_PREFIX) :].strip()
+    preset = spec[len(_ENSEMBLE_PRESET_PREFIX):].strip()
     return preset or None
 
 

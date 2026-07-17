@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import argparse
-import inspect
+import hashlib
 import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-
-CHORUS_PRESET = "karaoke"
-CHORUS_MODEL = f"ensemble:{CHORUS_PRESET}"
-CHORUS_MODELS = (
-    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
-    "mel_band_roformer_karaoke_gabox_v2.ckpt",
-    "mel_band_roformer_karaoke_becruily.ckpt",
+POLARFORMER_REPO_ID = "bgkb/bs_polarformer"
+POLARFORMER_REVISION = "9158719ee2173edd480a735764627526506fe4af"
+POLARFORMER_ONNX_NAME = "bs_polarformer.onnx"
+POLARFORMER_CONFIG_NAME = "model_bs_polarformer_float16.yaml"
+POLARFORMER_ONNX_SIZE = 210_652_828
+POLARFORMER_ONNX_SHA256 = "1c6857c34556c72d4094d4515c5725549bf987a63a1a8c37a7e7fc111b525c50"
+POLARFORMER_CONFIG_SIZE = 3_599
+POLARFORMER_CONFIG_SHA256 = (
+    "0348205cb562a58e9724870a4cf43e5d2c49ae87258159b2827c4e42ed51b00d"
 )
+
+# Compatibility names retained for installers that still import this module by its
+# historical filename. These now refer exclusively to the PolarFormer accompaniment leg.
+CHORUS_PRESET = "polarformer_onnx"
+CHORUS_MODEL = POLARFORMER_ONNX_NAME
+CHORUS_MODELS = (POLARFORMER_ONNX_NAME, POLARFORMER_CONFIG_NAME)
 DEFAULT_CACHE_DIR = Path.home() / ".music-to-midi" / "models" / "audio-separator"
 
 
@@ -21,11 +29,32 @@ def _resolve_cache_dir(cache_dir: Optional[Path]) -> Path:
     return Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR
 
 
+def _find_asset(cache_dir: Path, asset_name: str) -> Optional[Path]:
+    direct = cache_dir / asset_name
+    if direct.is_file() and direct.stat().st_size > 0:
+        return direct
+    for path in cache_dir.rglob(asset_name):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def resolve_accompaniment_model_path(cache_dir: Optional[Path] = None) -> Path:
+    root = _resolve_cache_dir(cache_dir)
+    return _find_asset(root, POLARFORMER_ONNX_NAME) or root / POLARFORMER_ONNX_NAME
+
+
+def resolve_accompaniment_config_path(cache_dir: Optional[Path] = None) -> Path:
+    root = _resolve_cache_dir(cache_dir)
+    return _find_asset(root, POLARFORMER_CONFIG_NAME) or root / POLARFORMER_CONFIG_NAME
+
+
 def resolve_chorus_model_path(
     cache_dir: Optional[Path] = None,
     model_name: str = CHORUS_MODELS[0],
 ) -> Path:
-    return _resolve_cache_dir(cache_dir) / model_name
+    root = _resolve_cache_dir(cache_dir)
+    return _find_asset(root, model_name) or root / model_name
 
 
 def resolve_chorus_model_paths(
@@ -33,60 +62,122 @@ def resolve_chorus_model_paths(
     model_names: tuple[str, ...] = CHORUS_MODELS,
 ) -> tuple[Path, ...]:
     root = _resolve_cache_dir(cache_dir)
-    return tuple(root / model_name for model_name in model_names)
+    return tuple(_find_asset(root, name) or root / name for name in model_names)
 
 
-def _find_downloaded_checkpoint(cache_dir: Path, model_name: str) -> Optional[Path]:
-    direct = cache_dir / model_name
-    if direct.is_file():
-        return direct
-
-    for path in cache_dir.rglob(model_name):
-        if path.is_file():
-            return path
-    return None
-
-
-def _find_all_required(cache_dir: Path) -> dict[str, Path]:
-    found: dict[str, Path] = {}
-    for model_name in CHORUS_MODELS:
-        path = _find_downloaded_checkpoint(cache_dir, model_name)
-        if path and path.stat().st_size > 0:
-            found[model_name] = path
-    return found
-
-
-def is_chorus_model_available(cache_dir: Optional[Path] = None) -> bool:
-    cache_dir = _resolve_cache_dir(cache_dir)
-    return len(_find_all_required(cache_dir)) == len(CHORUS_MODELS)
-
-
-def _separator_supports_ensemble(separator_cls) -> bool:
-    try:
-        signature = inspect.signature(separator_cls.__init__)
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        or parameter.name == "ensemble_preset"
-        for parameter in signature.parameters.values()
+def _onnx_has_expected_identity(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.stat().st_size == POLARFORMER_ONNX_SIZE
+        and _sha256(path) == POLARFORMER_ONNX_SHA256
     )
 
 
-def _is_ensemble(model_name: str) -> bool:
-    return str(model_name).lower().startswith("ensemble:")
+def _config_has_expected_identity(path: Path) -> bool:
+    return (
+        path.is_file()
+        and path.stat().st_size == POLARFORMER_CONFIG_SIZE
+        and _sha256(path) == POLARFORMER_CONFIG_SHA256
+    )
 
 
-def _download_required_models(separator, model_names: tuple[str, ...]) -> None:
-    download_model_and_data = getattr(separator, "download_model_and_data", None)
-    if not callable(download_model_and_data):
-        raise RuntimeError(
-            "当前 audio-separator 缺少 download_model_and_data；"
-            "请安装 audio-separator==0.44.1 或更高的 0.44.x 版本。"
+def is_accompaniment_model_available(cache_dir: Optional[Path] = None) -> bool:
+    model = resolve_accompaniment_model_path(cache_dir)
+    config = resolve_accompaniment_config_path(cache_dir)
+    return _onnx_has_expected_identity(model) and _config_has_expected_identity(config)
+
+
+def is_chorus_model_available(cache_dir: Optional[Path] = None) -> bool:
+    return is_accompaniment_model_available(cache_dir)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_asset(cache_dir: Path, filename: str, downloader) -> Path:
+    downloaded = Path(
+        downloader(
+            repo_id=POLARFORMER_REPO_ID,
+            filename=filename,
+            revision=POLARFORMER_REVISION,
+            repo_type="model",
+            local_dir=str(cache_dir),
+        )
+    )
+    if not downloaded.is_file() or downloaded.stat().st_size <= 0:
+        raise RuntimeError(f"Hugging Face download did not create a valid asset: {downloaded}")
+    return downloaded
+
+
+def download_accompaniment_model(
+    cache_dir: Optional[Path] = None,
+    model_name: str = CHORUS_MODEL,
+    separator_cls=None,
+    printer: Callable[[str], None] = print,
+    downloader=None,
+) -> Path:
+    """Download the pinned public FP32 BS PolarFormer ONNX model and config."""
+    del separator_cls  # Kept only for source compatibility with older callers.
+    if model_name not in (CHORUS_MODEL, POLARFORMER_ONNX_NAME):
+        raise ValueError(
+            f"Unsupported accompaniment model {model_name!r}; "
+            f"expected {POLARFORMER_ONNX_NAME!r}"
         )
 
-    for required_model in model_names:
-        download_model_and_data(required_model)
+    cache_dir = _resolve_cache_dir(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    onnx_path = resolve_accompaniment_model_path(cache_dir)
+    config_path = resolve_accompaniment_config_path(cache_dir)
+    if (
+        _onnx_has_expected_identity(onnx_path)
+        and _config_has_expected_identity(config_path)
+    ):
+        printer("BS PolarFormer public FP32 ONNX assets already exist; skipping download.")
+        return onnx_path
+
+    if downloader is None:
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "huggingface_hub is required to download BS PolarFormer assets"
+            ) from exc
+        downloader = hf_hub_download
+
+    printer(
+        f"Downloading BS PolarFormer public ONNX from "
+        f"{POLARFORMER_REPO_ID}@{POLARFORMER_REVISION}"
+    )
+    onnx_path = _download_asset(cache_dir, POLARFORMER_ONNX_NAME, downloader)
+    config_path = _download_asset(cache_dir, POLARFORMER_CONFIG_NAME, downloader)
+
+    if onnx_path.stat().st_size != POLARFORMER_ONNX_SIZE:
+        raise RuntimeError(
+            f"PolarFormer ONNX size mismatch: expected {POLARFORMER_ONNX_SIZE}, "
+            f"got {onnx_path.stat().st_size} ({onnx_path})"
+        )
+    actual_sha256 = _sha256(onnx_path)
+    if actual_sha256 != POLARFORMER_ONNX_SHA256:
+        raise RuntimeError(
+            "PolarFormer ONNX SHA256 mismatch: "
+            f"expected {POLARFORMER_ONNX_SHA256}, got {actual_sha256}"
+        )
+    if not _config_has_expected_identity(config_path):
+        raise RuntimeError(
+            "PolarFormer config identity mismatch: "
+            f"expected size={POLARFORMER_CONFIG_SIZE}, "
+            f"sha256={POLARFORMER_CONFIG_SHA256}, path={config_path}"
+        )
+
+    printer(f"PolarFormer ONNX ready: {onnx_path}")
+    printer(f"PolarFormer config ready: {config_path}")
+    return onnx_path
 
 
 def download_chorus_model(
@@ -94,80 +185,34 @@ def download_chorus_model(
     model_name: str = CHORUS_MODEL,
     separator_cls=None,
     printer: Callable[[str], None] = print,
+    downloader=None,
 ) -> Path:
-    cache_dir = _resolve_cache_dir(cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    found = _find_all_required(cache_dir)
-    if len(found) == len(CHORUS_MODELS):
-        printer("RoFormer karaoke ensemble 模型已存在，跳过下载。")
-        return found[CHORUS_MODELS[0]]
-
-    if separator_cls is None:
-        try:
-            from audio_separator.separator import Separator
-        except Exception as exc:
-            raise RuntimeError(
-                "未找到 audio-separator，无法下载 RoFormer karaoke ensemble 模型。"
-            ) from exc
-        separator_cls = Separator
-
-    if _is_ensemble(model_name) and not _separator_supports_ensemble(separator_cls):
-        raise RuntimeError(
-            "当前 audio-separator 不支持 ensemble_preset；"
-            "请安装 audio-separator==0.44.1 或更高的 0.44.x 版本。"
-        )
-
-    printer(f"正在下载 RoFormer karaoke ensemble: {model_name}")
-    printer("模型组：")
-    for required_model in CHORUS_MODELS:
-        printer(f"  - {required_model}")
-    printer(f"目标缓存目录：{cache_dir}")
-
-    separator_kwargs = {
-        "output_dir": str(cache_dir),
-        "model_file_dir": str(cache_dir),
-        "output_format": "WAV",
-    }
-    if _is_ensemble(model_name):
-        separator_kwargs["ensemble_preset"] = model_name.split(":", 1)[1]
-
-    separator = separator_cls(**separator_kwargs)
-    if _is_ensemble(model_name):
-        _download_required_models(separator, CHORUS_MODELS)
-    else:
-        _download_required_models(separator, (model_name,))
-
-    found = _find_all_required(cache_dir)
-    missing = [model for model in CHORUS_MODELS if model not in found]
-    if missing:
-        raise RuntimeError(
-            f"已调用 audio-separator，但缺少 RoFormer karaoke 必需模型: {missing}"
-        )
-
-    for model, path in found.items():
-        printer(f"模型就绪：{model} ({path.stat().st_size / (1024 * 1024):.1f} MB)")
-    return found[CHORUS_MODELS[0]]
+    """Compatibility entry point for the PolarFormer accompaniment downloader."""
+    return download_accompaniment_model(
+        cache_dir=cache_dir,
+        model_name=model_name,
+        separator_cls=separator_cls,
+        printer=printer,
+        downloader=downloader,
+    )
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="下载 RoFormer karaoke ensemble 主唱/和声分离模型")
+    parser = argparse.ArgumentParser(
+        description="Download BS PolarFormer public FP32 ONNX accompaniment assets"
+    )
     parser.add_argument(
         "--cache-dir",
         default=str(DEFAULT_CACHE_DIR),
-        help="模型缓存目录（默认: ~/.music-to-midi/models/audio-separator）",
+        help="Model cache directory (default: ~/.music-to-midi/models/audio-separator)",
     )
-    parser.add_argument("--model-name", default=CHORUS_MODEL, help="模型名或 ensemble preset")
     args = parser.parse_args(argv)
 
     try:
-        download_chorus_model(
-            cache_dir=Path(args.cache_dir),
-            model_name=args.model_name,
-        )
+        download_accompaniment_model(cache_dir=Path(args.cache_dir))
         return 0
     except Exception as exc:
-        print(f"[错误] RoFormer karaoke ensemble 模型下载失败: {exc}")
+        print(f"[error] BS PolarFormer download failed: {exc}")
         return 1
 
 

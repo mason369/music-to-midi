@@ -18,8 +18,10 @@ USER_HOME = str(Path.home())
 
 def _collect_tree(source_dir, target_root):
     items = []
-    if not source_dir or not os.path.exists(source_dir):
-        return items
+    if not source_dir or not os.path.isdir(source_dir):
+        raise FileNotFoundError(
+            f"Required portable bundle directory is missing for {target_root}: {source_dir}"
+        )
     source_dir = os.path.abspath(source_dir)
     for current_root, dirs, files in os.walk(source_dir):
         dirs[:] = [name for name in dirs if name not in {".git", "__pycache__", ".pytest_cache"}]
@@ -27,6 +29,10 @@ def _collect_tree(source_dir, target_root):
         dest = target_root if rel == "." else os.path.join(target_root, rel)
         for name in files:
             items.append((os.path.join(current_root, name), dest))
+    if not items:
+        raise RuntimeError(
+            f"Required portable bundle directory is empty for {target_root}: {source_dir}"
+        )
     return items
 
 
@@ -40,12 +46,12 @@ def _resolve_existing_dir(*candidates):
 def _collect_aria_amt_config_datas():
     amt_spec = importlib.util.find_spec("amt")
     if not amt_spec or not amt_spec.origin:
-        return []
+        raise RuntimeError("Required aria-amt package is not installed")
 
     config_dir = os.path.abspath(os.path.join(os.path.dirname(amt_spec.origin), "..", "config"))
     config_file = os.path.join(config_dir, "config.json")
     if not os.path.exists(config_file):
-        return []
+        raise FileNotFoundError(f"Required Aria-AMT config is missing: {config_file}")
 
     return _collect_tree(config_dir, "config")
 
@@ -61,6 +67,10 @@ aria_amt_models_dir = _resolve_existing_dir(
 bytedance_piano_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "bytedance_piano"),
+)
+transkun_v2_aug_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "transkun_v2_aug"),
 )
 yourmt3_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR"),
@@ -84,24 +94,49 @@ if torch_spec and torch_spec.origin:
         os.path.join(os.path.dirname(torch_spec.origin), "lib"),
     )
 
+
+def _require_ffmpeg_tools(source_dir):
+    if not source_dir:
+        raise FileNotFoundError("Required FFmpeg bundle directory is missing")
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    for tool_name in ("ffmpeg", "ffprobe"):
+        executable_name = tool_name + executable_suffix
+        candidates = (
+            os.path.join(source_dir, "bin", executable_name),
+            os.path.join(source_dir, executable_name),
+        )
+        if not any(os.path.isfile(candidate) and os.path.getsize(candidate) > 0 for candidate in candidates):
+            raise FileNotFoundError(
+                f"Required FFmpeg executable is missing: {executable_name} under {source_dir}"
+            )
+
+
+_require_ffmpeg_tools(ffmpeg_dir)
+
 datas = [
     # 翻译文件
     ('src/i18n/zh_CN.json', 'src/i18n'),
     ('src/i18n/en_US.json', 'src/i18n'),
     # 资源文件（图标等）
     ('resources/icons', 'resources/icons'),
+    # Project and embedded third-party license notices.
+    ('LICENSE', '.'),
+    ('THIRD_PARTY_NOTICES.md', '.'),
 ]
 aria_amt_config_datas = _collect_aria_amt_config_datas()
 datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3/amt/src")
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
+datas += _collect_tree(transkun_v2_aug_models_dir, "models/transkun_v2_aug")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')
+datas += copy_metadata('aria-amt')
 datas += copy_metadata('piano-transcription-inference')
+datas += copy_metadata('transkun')
 datas += copy_metadata('torchlibrosa')
 
 hiddenimports = [
@@ -113,7 +148,7 @@ hiddenimports = [
     'librosa',
     'soundfile',
     'audioread',
-    # 人声分离（audio-separator + BS-RoFormer）
+    # 人声分离（Leap XE vocals + PolarFormer accompaniment）与六声部 BS-RoFormer SW Fixed
     'audio_separator',
     'audio_separator.separator',
     'onnxruntime',

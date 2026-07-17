@@ -79,7 +79,7 @@ class TestDesktopI18nIntegration(unittest.TestCase):
             labels = [label.text() for label in window.findChildren(QLabel)]
             self.assertIn("Music to MIDI", labels)
             self.assertIn("Intelligently convert music to MIDI files", labels)
-            self.assertEqual(window.start_btn.text(), "▶  Start")
+            self.assertEqual(window.start_btn.text(), "▶  Convert")
             self.assertEqual(window.stop_btn.text(), "■  Stop")
         finally:
             window.close()
@@ -125,9 +125,17 @@ class TestDesktopI18nIntegration(unittest.TestCase):
     def test_cancelled_status_key_is_translated(self):
         set_language("en_US")
         self.assertEqual(t("status.cancelled"), "Processing cancelled")
+        self.assertEqual(
+            t("status.cancelling"),
+            "Cancelling; waiting for the current inference to stop safely…",
+        )
 
         set_language("zh_CN")
         self.assertEqual(t("status.cancelled"), "处理已取消")
+        self.assertEqual(
+            t("status.cancelling"),
+            "正在取消，等待当前推理安全停止…",
+        )
 
     def test_pipeline_progress_helpers_are_translated(self):
         from src.core.pipeline import MusicToMidiPipeline
@@ -152,12 +160,44 @@ class TestDesktopI18nIntegration(unittest.TestCase):
 
         self.assertEqual(_flatten_i18n_keys(zh), _flatten_i18n_keys(en))
 
+    def test_legacy_translation_shell_is_removed_but_current_paths_remain(self):
+        for language in ("zh_CN", "en_US"):
+            with self.subTest(language=language):
+                catalog = json.loads(Path(f"src/i18n/{language}.json").read_text(encoding="utf-8"))
+                keys = _flatten_i18n_keys(catalog)
+                self.assertIn("settings.general.language", keys)
+                self.assertIn("main.tracks.title", keys)
+                self.assertIn("main.output.options.saveTracks", keys)
+                self.assertIn("space.mode.vocal_split_info", keys)
+                self.assertIn("main.progress.stages.separation", keys)
+
+                legacy_keys = {
+                    "main.engine.label",
+                    "main.engine.aria_amt",
+                    "main.engine.aria_amt_piano_stem",
+                    "main.engine.aria_amt_tooltip",
+                    "main.engine.aria_amt_general_hint",
+                    "main.engine.aria_amt_six_stem_hint",
+                    "main.engine.aria_amt_with_miros_hint",
+                    "main.tracks.vocals",
+                    "main.tracks.program",
+                    "main.programs.piano",
+                    "main.output.options.generateMidi",
+                    "main.output.options.vocalsOnly",
+                    "settings.title",
+                    "settings.processing.title",
+                    "settings.midi.title",
+                    "settings.buttons.ok",
+                    "progress.separating_vocals_accompaniment_detail",
+                    "progress.elapsed_remaining",
+                    "progress.splitting_midi_by_family",
+                }
+                self.assertTrue(legacy_keys.isdisjoint(keys))
+
     def test_static_translation_references_exist(self):
         zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
         available_keys = _flatten_i18n_keys(zh)
-        reference_pattern = re.compile(
-            r"(?:\bt|\bst|_pt|\.t)\(\s*['\"]([A-Za-z0-9_.]+)['\"]"
-        )
+        reference_pattern = re.compile(r"(?:\bt|\bst|_pt|\.t)\(\s*['\"]([A-Za-z0-9_.]+)['\"]")
 
         referenced_keys = set()
         source_paths = list(Path("src").rglob("*.py")) + [Path("space/app.py")]

@@ -1,4 +1,9 @@
-name: 构建应用程序
+name: Source and packaging-contract CI (portable artifacts are release-only)
+
+# Full portable artifacts embed more than 10 GB of exact-identity model assets.
+# They are built only by release.yml, whose strict pipeline restores/verifies MIROS,
+# downloads every other pinned model, stages all required bundle directories, and
+# then invokes MusicToMidi.spec. Push/PR CI must never use empty or fake model dirs.
 
 on:
   push:
@@ -7,124 +12,94 @@ on:
     branches: [main, master]
 
 jobs:
-  build-linux:
-    name: 构建 Linux GPU 版本
+  packaging-contract-linux:
+    name: Linux source and packaging contracts (no portable artifact)
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 检出代码
+      - name: Check out source
         uses: actions/checkout@v6
 
-      - name: 设置 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 安装系统依赖
+      - name: Install contract-test dependencies
+        run: python -m pip install --upgrade pytest pyyaml
+
+      - name: Validate shell and portable packaging contracts
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            ffmpeg \
-            libsndfile1 \
-            libportaudio2 \
-            portaudio19-dev \
-            libxcb-xinerama0 \
-            libxcb-cursor0 \
-            libxkbcommon-x11-0 \
-            libxcb-icccm4 \
-            libxcb-image0 \
-            libxcb-keysyms1 \
-            libxcb-randr0 \
-            libxcb-render-util0 \
-            libxcb-shape0 \
-            libxcb-util1 \
-            libgl1 \
-            libegl1 \
-            fonts-ubuntu \
-            fonts-dejavu-core \
-            xvfb
+          bash -n install.sh
+          bash -n run.sh
+          pytest -q \
+            tests/test_ci_workflow_contract.py \
+            tests/test_portable_release_contract.py \
+            tests/test_release_model_order_contract.py \
+            tests/test_third_party_notice_packaging.py
 
-      - name: 安装 Python 依赖
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 \
-            --index-url https://download.pytorch.org/whl/cu128
-          pip install numpy==1.26.4
-          pip install -r requirements.txt
-          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
-          pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
-          pip install audio-separator==0.44.1 --no-deps
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 构建
-        run: |
-          pyinstaller MusicToMidi.spec
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v7
-        with:
-          name: MusicToMidi-Linux-GPU
-          path: dist/
-
-  build-windows:
-    name: 构建 Windows GPU 版本
+  packaging-contract-windows:
+    name: Windows source and packaging contracts (no portable artifact)
     runs-on: windows-latest
 
     steps:
-      - name: 检出代码
+      - name: Check out source
         uses: actions/checkout@v6
 
-      - name: 设置 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 安装 FFmpeg
-        run: choco install ffmpeg -y
+      - name: Install contract-test dependencies
+        run: python -m pip install --upgrade pytest pyyaml
 
-      - name: 安装 Python 依赖
+      - name: Parse PowerShell entry points
+        shell: pwsh
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
-          pip install numpy==1.26.4
-          pip install -r requirements.txt
-          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
-          pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
-          pip install audio-separator==0.44.1 --no-deps
-          pip install pyinstaller
+          $failed = $false
+          foreach ($script in @('install.ps1', 'run.ps1', 'build_portable.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $script).Path,
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $failed = $true
+              Write-Error "$script has PowerShell parse errors: $($parseErrors -join '; ')"
+            }
+          }
+          if ($failed) {
+            exit 1
+          }
 
-      - name: 修复 Torch OpenMP 运行时
+      - name: Validate portable packaging contracts
         run: |
-          python -m pip install zstandard
-          python tools/repair_torch_openmp.py
-
-      - name: 使用 PyInstaller 构建
-        run: |
-          pyinstaller MusicToMidi.spec
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v7
-        with:
-          name: MusicToMidi-Windows-GPU
-          path: dist/
+          pytest -q `
+            tests/test_ci_workflow_contract.py `
+            tests/test_portable_release_contract.py `
+            tests/test_release_model_order_contract.py `
+            tests/test_third_party_notice_packaging.py
 
   test:
-    name: 运行测试
+    name: Run source tests
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 检出代码
+      - name: Check out source
         uses: actions/checkout@v6
 
-      - name: 设置 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 安装系统依赖
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -138,7 +113,7 @@ jobs:
             libegl1 \
             xvfb
 
-      - name: 安装依赖
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 \
@@ -146,16 +121,17 @@ jobs:
           pip install numpy==1.26.4
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
-          pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
+          pip install gradio==4.44.1 fastapi==0.115.2 starlette==0.40.0
+          pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
+          pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime-gpu==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
-
-      - name: 运行代码检查
-        run: |
           pip install flake8
-          flake8 src/ --max-line-length=100 --ignore=E501,W503,W504,F401,F841,F541,E127,E128,E129,E241,E261,E231,E301,E402
 
-      - name: 运行测试
+      - name: Run code checks
+        run: |
+          flake8 src/ --max-line-length=100 --ignore=E203,E501,W503,W504,F401,F841,F541,E127,E128,E129,E241,E261,E231,E301,E402
+
+      - name: Run tests
         env:
           DISPLAY: ':99'
         run: |

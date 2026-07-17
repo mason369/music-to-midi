@@ -13,6 +13,11 @@ from src.models.data_models import (
     Config, NoteEvent, TrackType,
     InstrumentType, TrackConfig, TrackLayout, PedalEvent, MidiTrackMode
 )
+from src.utils.midi_output import (
+    publish_midi_output,
+    remove_temporary_midi,
+    unique_midi_temp_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1295,13 +1300,26 @@ class MidiGenerator:
             MidiTrackMode.MULTI_TRACK.value,
         )
         if midi_track_mode == MidiTrackMode.SINGLE_TRACK.value:
-            return self._generate_precise_single_track_midi(
-                instrument_notes=instrument_notes,
-                drum_notes=drum_notes,
-                tempo=tempo,
-                output_path=output_path,
-                quality=quality,
+            temporary_output_path = unique_midi_temp_path(
+                output_path,
+                "midi-generator",
             )
+            try:
+                self._generate_precise_single_track_midi(
+                    instrument_notes=instrument_notes,
+                    drum_notes=drum_notes,
+                    tempo=tempo,
+                    output_path=str(temporary_output_path),
+                    quality=quality,
+                )
+                publish_midi_output(
+                    temporary_output_path,
+                    output_path,
+                    "MIDI generator",
+                )
+            finally:
+                remove_temporary_midi(temporary_output_path)
+            return output_path
 
         # 创建 MIDI 文件
         midi = MidiFile(type=1, ticks_per_beat=self.ticks_per_beat)
@@ -1438,8 +1456,19 @@ class MidiGenerator:
                     logger.info(f"鼓轨道: {len(processed_drums)} 个音符，通道 9")
 
         # 保存文件
-        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-        midi.save(output_path)
+        temporary_output_path = unique_midi_temp_path(
+            output_path,
+            "midi-generator",
+        )
+        try:
+            midi.save(str(temporary_output_path))
+            publish_midi_output(
+                temporary_output_path,
+                output_path,
+                "MIDI generator",
+            )
+        finally:
+            remove_temporary_midi(temporary_output_path)
 
         # 输出保留率统计
         retention_rate = final_total / max(initial_total, 1)

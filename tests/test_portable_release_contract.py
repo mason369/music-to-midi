@@ -1,7 +1,6 @@
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -56,6 +55,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("_collect_aria_amt_config_datas", spec)
         self.assertIn('"config"', spec)
         self.assertIn("aria_amt_config_datas", spec)
+        self.assertIn("copy_metadata('aria-amt')", spec)
+
+    def test_pyinstaller_spec_bundles_pinned_piano_backend_metadata(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("copy_metadata('piano-transcription-inference')", spec)
+        self.assertIn("copy_metadata('transkun')", spec)
 
     def test_pyinstaller_spec_bundles_bytedance_pedal_backend(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
@@ -98,12 +104,49 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("copy_metadata('audio-separator')", spec)
         self.assertIn("collect_all('audio_separator')", spec)
 
-    def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(self):
+    def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(
+        self,
+    ):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡", workflow)
         self.assertIn("当前显卡与内置 PyTorch/CUDA 不兼容", workflow)
         self.assertNotIn("GTX 750 Ti 及以上", workflow)
+
+    def test_release_workflow_checks_version_tag_parity_before_mutating_release(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Version contract verified:", workflow)
+        self.assertIn('Path("pyproject.toml")', workflow)
+        self.assertIn('Path("src/__init__.py")', workflow)
+        self.assertIn('expected_tag = f"v{project_version}"', workflow)
+        self.assertLess(
+            workflow.index("校验 pyproject、运行时版本与发布标签一致"),
+            workflow.index("创建 Release（如不存在）"),
+        )
+
+    def test_portable_usage_and_asset_log_cover_all_seven_routes_and_backends(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for mode in (
+            "SMART",
+            "VOCAL_SPLIT",
+            "SIX_STEM_SPLIT",
+            "PIANO_TRANSKUN",
+            "PIANO_TRANSKUN_V2_AUG",
+            "PIANO_ARIA_AMT",
+            "PIANO_BYTEDANCE_PEDAL",
+        ):
+            self.assertGreaterEqual(workflow.count(mode), 2)
+        self.assertIn("YourMT3+ 或 MIROS", workflow)
+        self.assertIn("都会各自调用所选后端", workflow)
+        self.assertIn("YourMT3+ (5 checkpoints)", workflow)
+        self.assertIn("MIROS (source + pretrained + fine-tuned)", workflow)
+        self.assertIn("TransKun 2.0.1 default V2", workflow)
 
     def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -191,19 +234,28 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Portable self-test timed out after ${SelfTestTimeoutSeconds}s", workflow)
         self.assertIn("SELF_TEST_TIMEOUT_SECONDS=900", workflow)
         self.assertIn("timeout-minutes: 20", workflow)
-        self.assertIn('timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s"', workflow)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s"', workflow
+        )
         self.assertIn('"$SMOKE_EXE" --self-test-no-load', workflow)
         self.assertIn('2>&1 | tee "$SELF_TEST_OUTPUT"', workflow)
         self.assertIn("SELF_TEST_EXIT=${PIPESTATUS[0]}", workflow)
         self.assertIn('[ "$SELF_TEST_EXIT" -eq 137 ]', workflow)
         self.assertIn("dump_linux_portable_logs", workflow)
-        self.assertIn("Portable self-test did not write the success marker to runtime logs", workflow)
+        self.assertIn(
+            "Portable self-test did not write the success marker to runtime logs", workflow
+        )
         self.assertIn("MIROS_WORKER_TIMEOUT_SECONDS=120", workflow)
         self.assertIn("MIROS_WORKER_OUTPUT=", workflow)
         self.assertIn("$MirosWorkerTimeoutSeconds = 120", workflow)
         self.assertIn("$worker.WaitForExit($MirosWorkerTimeoutSeconds * 1000)", workflow)
-        self.assertIn("MIROS worker missing-input smoke timed out after ${MirosWorkerTimeoutSeconds}s", workflow)
-        self.assertIn('timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s"', workflow)
+        self.assertIn(
+            "MIROS worker missing-input smoke timed out after ${MirosWorkerTimeoutSeconds}s",
+            workflow,
+        )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s"', workflow
+        )
         self.assertIn('"$SMOKE_EXE" \\', workflow)
         self.assertIn('2>&1 | tee "$MIROS_WORKER_OUTPUT"', workflow)
         self.assertIn("WORKER_EXIT=${PIPESTATUS[0]}", workflow)
@@ -211,7 +263,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("dump_miros_worker_logs", workflow)
         self.assertIn("MIROS worker missing-input smoke returned an unexpected status", workflow)
         self.assertIn("MIROS input audio does not exist", workflow)
-        self.assertIn("MIROS worker missing-input smoke failed before the expected missing-input check", workflow)
+        self.assertIn(
+            "MIROS worker missing-input smoke failed before the expected missing-input check",
+            workflow,
+        )
 
     def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -236,9 +291,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Pillow==12.0.0", workflow)
         self.assertIn("pytorch-lightning==2.6.1", workflow)
         self.assertIn("torchmetrics==1.8.2", workflow)
-        self.assertIn("onnxruntime==1.23.2", workflow)
+        self.assertIn("onnxruntime-gpu==1.23.2", workflow)
         self.assertIn("audio-separator==0.44.1 --no-deps", workflow)
-        self.assertIn('"aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps', workflow)
+        self.assertIn(
+            '"aria-amt @ https://github.com/EleutherAI/aria-amt/archive/'
+            'a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps',
+            workflow,
+        )
         self.assertIn("six==1.17.0", workflow)
 
     def test_release_workflow_matches_supported_torch_runtime(self):
@@ -297,7 +356,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
         self.assertIn("同名前缀的全部分卷", workflow)
-        self.assertIn("6 种处理模式", workflow)
+        self.assertIn("当前包含 7 种处理模式", workflow)
+        self.assertNotIn("旧版 6 种处理模式", workflow)
         self.assertIn("ByteDance Pedal", workflow)
 
     def test_build_portable_collects_miros_bundle_assets(self):
@@ -305,7 +365,7 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", script)
         self.assertIn("ai4m-miros", script)
-        self.assertIn('external\\ai4m-miros', script)
+        self.assertIn("external\\ai4m-miros", script)
         self.assertIn("Required asset missing", script)
         self.assertNotIn("[skip] $Label not found", script)
 
@@ -331,13 +391,48 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop", script)
         self.assertIn("$PyInstallerExitCode = $LASTEXITCODE", script)
         self.assertIn("PyInstaller build failed with exit code", script)
-        self.assertNotIn("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root \"build\")", script)
-        self.assertNotIn("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root \"dist\")", script)
+        self.assertNotIn(
+            'Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "build")',
+            script,
+        )
+        self.assertNotIn(
+            'Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist")',
+            script,
+        )
 
     def test_pyinstaller_spec_collects_miros_from_external_checkout(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
         self.assertIn('"external", "ai4m-miros"', spec)
+
+    def test_packaging_fails_when_required_assets_or_ffmpeg_tools_are_missing(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("Required portable bundle directory is missing", spec)
+        self.assertIn("_require_ffmpeg_tools(ffmpeg_dir)", spec)
+        self.assertIn('FFMPEG_SOURCE="$(command -v ffmpeg)" || {', workflow)
+        self.assertIn('FFPROBE_SOURCE="$(command -v ffprobe)" || {', workflow)
+        self.assertIn('test -s "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"', workflow)
+
+    def test_release_records_exact_ffmpeg_license_build_and_hash_evidence(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for expected in (
+            "FFMPEG_BUILD_AUDIT.txt",
+            "Package source:",
+            "Package version:",
+            "ffmpeg -version",
+            "ffmpeg -buildconf",
+            "ffmpeg -L",
+            "sha256sum",
+            "--enable-nonfree",
+            "is not redistributable; refusing portable build",
+        ):
+            self.assertIn(expected, workflow)
+        self.assertGreaterEqual(workflow.count("FFMPEG_BUILD_AUDIT.txt"), 4)
 
     def test_build_portable_collects_aria_amt_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

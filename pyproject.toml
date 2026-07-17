@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "music-to-midi"
-version = "1.0.15"
+version = "1.0.17"
 description = "AI audio-to-MIDI converter with multi-instrument, stem, vocal, and piano transcription workflows"
 readme = "docs/README.md"
 license = {text = "MIT"}
@@ -28,7 +28,8 @@ classifiers = [
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -41,8 +42,9 @@ Homepage = "https://github.com/mason369/music-to-midi"
 Repository = "https://github.com/mason369/music-to-midi"
 Issues = "https://github.com/mason369/music-to-midi/issues"
 
-[project.scripts]
-music-to-midi = "src.main:main"
+# Intentionally no console-script entry.  The supported install.ps1/install.sh
+# launchers select and validate the exact CUDA runtime, ONNX Runtime provider,
+# model assets, and non-PyPI backends that a plain `pip install` cannot provide.
 
 [tool.setuptools.packages.find]
 where = ["."]

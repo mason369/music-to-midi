@@ -300,7 +300,9 @@ class MainSelfTestTests(unittest.TestCase):
                         "if getattr(onnxruntime, '__version__', None) != '0.0':",
                         "    raise RuntimeError('onnxruntime was not isolated')",
                         "def transcribe(input_path, output_path):",
-                        "    Path(output_path).write_bytes(b'mid')",
+                        "    Path(output_path).write_bytes("
+                        "b'MThd\\x00\\x00\\x00\\x06\\x00\\x00\\x00\\x01\\x01\\xe0'"
+                        "+ b'MTrk\\x00\\x00\\x00\\x04\\x00\\xff\\x2f\\x00')",
                     ]
                 ),
                 encoding="utf-8",

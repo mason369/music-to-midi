@@ -10,9 +10,19 @@ ROFORMER_SW_DISPLAY_NAME = "BS-RoFormer SW Fixed"
 ROFORMER_SW_REGISTRY_NAME = "Roformer Model: BS-Roformer-SW-Fixed"
 ROFORMER_SW_MODEL = "BS-Rofo-SW-Fixed.ckpt"
 ROFORMER_SW_CONFIG = "BS-Rofo-SW-Fixed.yaml"
+ROFORMER_SW_OFFICIAL_CONFIG = "BS-Rofo-SW-Fixed.official.yaml"
+ROFORMER_SW_SOURCE_REVISION = "370198fbb6997e3f5774778254698794e7b1267d"
 ROFORMER_SW_CHECKPOINT_SIZE = 699_412_152
 ROFORMER_SW_CHECKPOINT_SHA256 = (
     "24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e"
+)
+ROFORMER_SW_OFFICIAL_CONFIG_SIZE = 3_530
+ROFORMER_SW_OFFICIAL_CONFIG_SHA256 = (
+    "4678db9430a87ee33e7fad199166928c9adcd322e2df1a812b4bf03726e2a48b"
+)
+ROFORMER_SW_COMPATIBLE_CONFIG_SIZE = 3_522
+ROFORMER_SW_COMPATIBLE_CONFIG_SHA256 = (
+    "e7dc288d2456a9a186c451ca551025db408a1cbf3fff2b98c8eb0077129324c3"
 )
 
 _REQUIRED_FREQS_PER_BANDS = (
@@ -24,10 +34,12 @@ _REQUIRED_FREQS_PER_BANDS = (
     128, 129,
 )
 ROFORMER_SW_CHECKPOINT_URL = (
-    "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_6stem_fixed.ckpt"
+    "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/"
+    f"{ROFORMER_SW_SOURCE_REVISION}/bs_roformer/bs_6stem_fixed.ckpt"
 )
 ROFORMER_SW_CONFIG_URL = (
-    "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_6stem_fixed_config.yaml"
+    "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/"
+    f"{ROFORMER_SW_SOURCE_REVISION}/bs_roformer/bs_6stem_fixed_config.yaml"
 )
 
 DEFAULT_CACHE_DIR = Path.home() / ".music-to-midi" / "models" / "audio-separator"
@@ -47,6 +59,19 @@ def resolve_multistem_model_paths(
 ) -> Tuple[Path, Path]:
     cache_path = Path(cache_dir)
     return cache_path / model_name, cache_path / config_name
+
+
+def resolve_multistem_source_config_path(
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    config_name: str = ROFORMER_SW_CONFIG,
+) -> Path:
+    cache_path = Path(cache_dir)
+    if config_name == ROFORMER_SW_CONFIG:
+        source_name = ROFORMER_SW_OFFICIAL_CONFIG
+    else:
+        config_path = Path(config_name)
+        source_name = f"{config_path.stem}.official{config_path.suffix}"
+    return cache_path / source_name
 
 
 def is_multistem_model_available(
@@ -99,12 +124,37 @@ def validate_file_checksum(
 
 
 def _validate_config_file(path: Path) -> None:
-    if not path.exists():
-        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 不存在: {path}")
-    if not path.is_file():
-        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 不是文件: {path}")
-    if path.stat().st_size <= 0:
-        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 是空文件: {path}")
+    validate_file_checksum(
+        path,
+        ROFORMER_SW_COMPATIBLE_CONFIG_SHA256,
+        ROFORMER_SW_COMPATIBLE_CONFIG_SIZE,
+        f"{ROFORMER_SW_DISPLAY_NAME} compatible config",
+    )
+    data = _load_sw_config(path)
+    if data is None:
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} compatible config 无法解析: {path}")
+
+    model = data.get("model")
+    inference = data.get("inference")
+    if data.get("is_roformer") is not True:
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 缺少 is_roformer=true: {path}")
+    if not isinstance(model, dict):
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 缺少 model 节: {path}")
+    if model.get("freqs_per_bands") != list(_REQUIRED_FREQS_PER_BANDS):
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config 频带定义不匹配: {path}")
+    if model.get("num_subbands") != len(_REQUIRED_FREQS_PER_BANDS):
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config num_subbands 不匹配: {path}")
+    if not isinstance(inference, dict) or inference.get("dim_t") != 1101:
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} config inference.dim_t 必须为 1101: {path}")
+
+
+def _validate_official_config_file(path: Path) -> None:
+    validate_file_checksum(
+        path,
+        ROFORMER_SW_OFFICIAL_CONFIG_SHA256,
+        ROFORMER_SW_OFFICIAL_CONFIG_SIZE,
+        f"{ROFORMER_SW_DISPLAY_NAME} official config",
+    )
 
 
 def validate_multistem_assets(
@@ -113,12 +163,14 @@ def validate_multistem_assets(
     config_name: str = ROFORMER_SW_CONFIG,
 ) -> Tuple[Path, Path]:
     model_path, config_path = resolve_multistem_model_paths(cache_dir, model_name, config_name)
+    source_config_path = resolve_multistem_source_config_path(cache_dir, config_name)
     validate_file_checksum(
         model_path,
         ROFORMER_SW_CHECKPOINT_SHA256,
         ROFORMER_SW_CHECKPOINT_SIZE,
         "BS-RoFormer SW checkpoint",
     )
+    _validate_official_config_file(source_config_path)
     _validate_config_file(config_path)
     return model_path, config_path
 
@@ -141,6 +193,32 @@ def _download_file(url: str, output_path: Path, _description: str) -> None:
     except Exception:
         if temp_path.exists():
             temp_path.unlink()
+        raise
+
+
+def _download_verified_file(
+    url: str,
+    output_path: Path,
+    description: str,
+    expected_sha256: str,
+    expected_size: int,
+    downloader: Callable[[str, Path, str], None],
+) -> None:
+    download_path = output_path.with_name(f"{output_path.name}.download")
+    if download_path.exists():
+        download_path.unlink()
+    try:
+        downloader(url, download_path, description)
+        validate_file_checksum(
+            download_path,
+            expected_sha256,
+            expected_size,
+            description,
+        )
+        download_path.replace(output_path)
+    except Exception:
+        if download_path.exists():
+            download_path.unlink()
         raise
 
 
@@ -189,72 +267,92 @@ def _load_sw_config(config_path: Path) -> dict[str, Any] | None:
     return _plain_yaml_value(data)
 
 
-def ensure_multistem_config_compatible(config_path: Path) -> bool:
+def _build_compatible_config_bytes(source_config_path: Path) -> bytes:
+    """Create the one canonical runtime config from the pinned official YAML."""
+    _validate_official_config_file(source_config_path)
     try:
-        import yaml
-    except ImportError:
-        return False
+        text = source_config_path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            f"{ROFORMER_SW_DISPLAY_NAME} official config 不是有效 UTF-8: {source_config_path}"
+        ) from exc
 
-    data = _load_sw_config(config_path)
-    if data is None:
-        return False
+    replacements = (
+        ("freqs_per_bands: !!python/tuple", "freqs_per_bands:"),
+        (
+            "multi_stft_resolutions_window_sizes: !!python/tuple",
+            "multi_stft_resolutions_window_sizes:",
+        ),
+        ("mixup_probs: !!python/tuple", "mixup_probs:"),
+        (
+            "    - 129\n  dim_head: 64\n",
+            "    - 129\n"
+            f"  num_subbands: {len(_REQUIRED_FREQS_PER_BANDS)}\n"
+            "  dim_head: 64\n",
+        ),
+    )
+    for old, new in replacements:
+        if text.count(old) != 1:
+            raise RuntimeError(
+                f"{ROFORMER_SW_DISPLAY_NAME} official config 结构与固定转换规则不匹配: {old!r}"
+            )
+        text = text.replace(old, new, 1)
 
-    modified = False
-    if data.get("is_roformer") is not True:
-        data["is_roformer"] = True
-        modified = True
+    if not text.endswith("\n"):
+        raise RuntimeError(f"{ROFORMER_SW_DISPLAY_NAME} official config 必须以 LF 结尾")
+    text += "is_roformer: true\n"
+    compatible_bytes = text.encode("utf-8")
 
-    model_section = data.get("model", data)
-    required_freqs = list(_REQUIRED_FREQS_PER_BANDS)
-    required_num_subbands = len(required_freqs)
-    if isinstance(model_section, dict):
-        if model_section.get("freqs_per_bands") != required_freqs:
-            model_section["freqs_per_bands"] = required_freqs
-            modified = True
-        if model_section.get("num_subbands") != required_num_subbands:
-            model_section["num_subbands"] = required_num_subbands
-            modified = True
+    actual_size = len(compatible_bytes)
+    actual_sha256 = hashlib.sha256(compatible_bytes).hexdigest()
+    if (
+        actual_size != ROFORMER_SW_COMPATIBLE_CONFIG_SIZE
+        or actual_sha256 != ROFORMER_SW_COMPATIBLE_CONFIG_SHA256
+    ):
+        raise RuntimeError(
+            f"{ROFORMER_SW_DISPLAY_NAME} compatible config 生成结果身份不匹配; "
+            f"expected_size={ROFORMER_SW_COMPATIBLE_CONFIG_SIZE} actual_size={actual_size} "
+            f"expected_sha256={ROFORMER_SW_COMPATIBLE_CONFIG_SHA256} "
+            f"actual_sha256={actual_sha256}"
+        )
+    return compatible_bytes
+
+
+def ensure_multistem_config_compatible(
+    config_path: Path,
+    source_config_path: Optional[Path] = None,
+) -> bool:
+    """Ensure the derived runtime YAML exactly matches the pinned canonical bytes."""
+    config_path = Path(config_path)
+    if source_config_path is None:
+        source_config_path = resolve_multistem_source_config_path(
+            config_path.parent,
+            config_path.name,
+        )
     else:
-        data["model"] = {
-            "freqs_per_bands": required_freqs,
-            "num_subbands": required_num_subbands,
-        }
-        modified = True
-
-    if "audio" not in data:
-        data["audio"] = {
-            "chunk_size": 588800,
-            "dim_f": 1024,
-            "dim_t": 1151,
-            "hop_length": 512,
-            "n_fft": 2048,
-            "num_channels": 2,
-            "sample_rate": 44100,
-            "min_mean_abs": 0.001,
-        }
-        modified = True
-
-    inference = data.get("inference")
-    if isinstance(inference, dict) and "dim_t" not in inference:
-        inference["dim_t"] = 1151
-        inference.setdefault("batch_size", 1)
-        modified = True
-
-    plain_data = _plain_yaml_value(data)
-    if plain_data != data:
-        data = plain_data
-        modified = True
+        source_config_path = Path(source_config_path)
 
     try:
-        if "!!python/" in config_path.read_text(encoding="utf-8", errors="ignore"):
-            modified = True
-    except Exception:
+        _validate_config_file(config_path)
+        return False
+    except RuntimeError:
         pass
 
-    if modified:
-        with config_path.open("w", encoding="utf-8") as fh:
-            yaml.safe_dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
-    return modified
+    compatible_bytes = _build_compatible_config_bytes(source_config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = config_path.with_name(f"{config_path.name}.part")
+    if temp_path.exists():
+        temp_path.unlink()
+    try:
+        temp_path.write_bytes(compatible_bytes)
+        _validate_config_file(temp_path)
+        temp_path.replace(config_path)
+        _validate_config_file(config_path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+    return True
 
 
 def download_multistem_model(
@@ -269,6 +367,7 @@ def download_multistem_model(
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
     model_path, config_path = resolve_multistem_model_paths(cache_path, model_name, config_name)
+    source_config_path = resolve_multistem_source_config_path(cache_path, config_name)
 
     if model_path.exists():
         validate_file_checksum(
@@ -277,29 +376,57 @@ def download_multistem_model(
             ROFORMER_SW_CHECKPOINT_SIZE,
             "BS-RoFormer SW checkpoint",
         )
-    if config_path.exists():
-        _validate_config_file(config_path)
-
-    if model_path.exists() and config_path.exists():
-        printer(f"{ROFORMER_SW_DISPLAY_NAME} checkpoint 已存在，跳过下载：{model_path} ({_format_size(model_path)})")
-        printer(f"{ROFORMER_SW_DISPLAY_NAME} config 已存在：{config_path} ({_format_size(config_path)})")
-        if ensure_multistem_config_compatible(config_path):
-            printer("已补全 BS-RoFormer SW Fixed config 兼容字段")
-        return model_path, config_path
+    if source_config_path.exists():
+        _validate_official_config_file(source_config_path)
 
     if downloader is None:
         downloader = _download_file
 
-    if not model_path.exists() or model_path.stat().st_size <= 0:
+    if not model_path.exists():
         printer(f"正在下载 {ROFORMER_SW_DISPLAY_NAME} checkpoint...")
-        downloader(checkpoint_url, model_path, f"{ROFORMER_SW_DISPLAY_NAME} checkpoint")
-    if not config_path.exists() or config_path.stat().st_size <= 0:
-        printer(f"正在下载 {ROFORMER_SW_DISPLAY_NAME} config...")
-        downloader(config_url, config_path, f"{ROFORMER_SW_DISPLAY_NAME} config")
+        _download_verified_file(
+            checkpoint_url,
+            model_path,
+            f"{ROFORMER_SW_DISPLAY_NAME} checkpoint",
+            ROFORMER_SW_CHECKPOINT_SHA256,
+            ROFORMER_SW_CHECKPOINT_SIZE,
+            downloader,
+        )
+    else:
+        printer(
+            f"{ROFORMER_SW_DISPLAY_NAME} checkpoint 已严格校验："
+            f"{model_path} ({_format_size(model_path)})"
+        )
+
+    if not source_config_path.exists():
+        printer(f"正在下载 {ROFORMER_SW_DISPLAY_NAME} official config...")
+        _download_verified_file(
+            config_url,
+            source_config_path,
+            f"{ROFORMER_SW_DISPLAY_NAME} official config",
+            ROFORMER_SW_OFFICIAL_CONFIG_SHA256,
+            ROFORMER_SW_OFFICIAL_CONFIG_SIZE,
+            downloader,
+        )
+    else:
+        printer(
+            f"{ROFORMER_SW_DISPLAY_NAME} official config 已严格校验："
+            f"{source_config_path} ({_format_size(source_config_path)})"
+        )
+
+    try:
+        _validate_config_file(config_path)
+        regenerated = False
+    except RuntimeError as exc:
+        printer(f"正在重建固定 LF compatible config；原文件不可用：{exc}")
+        regenerated = ensure_multistem_config_compatible(config_path, source_config_path)
+    if regenerated:
+        printer(
+            f"已生成固定身份的 {ROFORMER_SW_DISPLAY_NAME} compatible config："
+            f"{config_path}"
+        )
 
     validate_multistem_assets(cache_path, model_name, config_name)
-
-    ensure_multistem_config_compatible(config_path)
     return model_path, config_path
 
 

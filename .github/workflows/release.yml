@@ -38,6 +38,68 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v6
 
+      - name: 阻断未解决的第三方许可证发布
+        shell: bash
+        run: |
+          FAILED=0
+          if grep -n "^RELEASE_BLOCKER_UNRESOLVED_LICENSE:" THIRD_PARTY_NOTICES.md; then
+            echo "::error::THIRD_PARTY_NOTICES.md contains unresolved redistribution/license blockers. Portable release is forbidden until every marker is resolved."
+            FAILED=1
+          fi
+          EXPECTED_COMPONENTS=(
+            zfturbo_adapted_source
+            yourmt3_checkpoints
+            yourmt3_patched_source
+            leap_xe
+            polarformer
+            bs_roformer_sw_fixed
+            audio_separator
+            transkun_source
+            transkun_default_v2_weight
+            transkun_v2_aug
+            aria_amt_source
+            aria_amt_checkpoint
+            bytedance_inference
+            bytedance_checkpoint
+            miros_source
+            musicfm_pretrained
+            miros_finetuned
+            pytorch_cuda_runtime
+            onnxruntime_gpu
+            pyqt6_runtime
+            ffmpeg_runtime
+            frozen_dependency_set
+          )
+          mapfile -t INVENTORY_LINES < <(grep '^PORTABLE_COMPONENT:' THIRD_PARTY_NOTICES.md || true)
+          if [ "${#INVENTORY_LINES[@]}" -ne "${#EXPECTED_COMPONENTS[@]}" ]; then
+            echo "::error::Portable license inventory count mismatch: expected ${#EXPECTED_COMPONENTS[@]}, got ${#INVENTORY_LINES[@]}"
+            FAILED=1
+          fi
+          for component_id in "${EXPECTED_COMPONENTS[@]}"; do
+            if ! grep -Fq "PORTABLE_COMPONENT: ${component_id} |" THIRD_PARTY_NOTICES.md; then
+              echo "::error::Portable license inventory is missing required component: ${component_id}"
+              FAILED=1
+            fi
+          done
+          for inventory_line in "${INVENTORY_LINES[@]}"; do
+            component_id=${inventory_line#PORTABLE_COMPONENT: }
+            component_id=${component_id%% |*}
+            if [[ " ${EXPECTED_COMPONENTS[*]} " != *" ${component_id} "* ]]; then
+              echo "::error::Portable license inventory contains an unreviewed component ID: ${component_id}"
+              FAILED=1
+            fi
+            if [[ ! "$inventory_line" =~ \|\ bundle=.+\ \|\ artifact=.+\ \|\ revision=.+\ \|\ license=.+\ \|\ status=(VERIFIED|BLOCKED)$ ]]; then
+              echo "::error::Malformed portable license inventory row: ${inventory_line}"
+              FAILED=1
+            elif [[ "$inventory_line" != *"| status=VERIFIED" ]]; then
+              echo "::error::Portable component is not cleared for redistribution: ${component_id}"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: 设置 Python 环境
         uses: actions/setup-python@v6
         with:
@@ -72,6 +134,51 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y
 
+      - name: 记录并校验实际打包的 FFmpeg
+        shell: bash
+        run: |
+          mkdir -p .tmp
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            FFMPEG_BIN="/c/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffmpeg.exe"
+            FFPROBE_BIN="/c/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffprobe.exe"
+            PACKAGE_SOURCE="Chocolatey ffmpeg package: https://community.chocolatey.org/packages/ffmpeg"
+            PACKAGE_VERSION=$(choco list --exact ffmpeg --limit-output)
+          else
+            FFMPEG_BIN=$(readlink -f "$(command -v ffmpeg)")
+            FFPROBE_BIN=$(readlink -f "$(command -v ffprobe)")
+            PACKAGE_SOURCE="Ubuntu 22.04 apt ffmpeg source route: https://packages.ubuntu.com/jammy/ffmpeg"
+            PACKAGE_VERSION=$(dpkg-query -W -f='${Package}=${Version}' ffmpeg)
+          fi
+          test -x "$FFMPEG_BIN" || { echo "Exact FFmpeg bundle executable missing: $FFMPEG_BIN" >&2; exit 1; }
+          test -x "$FFPROBE_BIN" || { echo "Exact ffprobe bundle executable missing: $FFPROBE_BIN" >&2; exit 1; }
+
+          BUILD_CONF=$("$FFMPEG_BIN" -hide_banner -buildconf 2>&1)
+          if printf '%s\n' "$BUILD_CONF" | grep -F -- '--enable-nonfree'; then
+            echo "::error::FFmpeg was built with --enable-nonfree and is not redistributable; refusing portable build."
+            exit 1
+          fi
+
+          {
+            echo "Package source: $PACKAGE_SOURCE"
+            echo "Package version: $PACKAGE_VERSION"
+            echo "Bundled ffmpeg path: $FFMPEG_BIN"
+            echo "Bundled ffprobe path: $FFPROBE_BIN"
+            echo
+            echo "=== ffmpeg -version ==="
+            "$FFMPEG_BIN" -version
+            echo
+            echo "=== ffmpeg -buildconf ==="
+            "$FFMPEG_BIN" -hide_banner -buildconf
+            echo
+            echo "=== ffmpeg -L ==="
+            "$FFMPEG_BIN" -hide_banner -L
+            echo
+            echo "=== SHA-256 ==="
+            sha256sum "$FFMPEG_BIN" "$FFPROBE_BIN"
+          } > .tmp/FFMPEG_BUILD_AUDIT.txt
+          test -s .tmp/FFMPEG_BUILD_AUDIT.txt
+          cat .tmp/FFMPEG_BUILD_AUDIT.txt
+
       - name: 安装 Python 依赖
         shell: bash
         run: |
@@ -101,15 +208,15 @@ jobs:
           pip install numpy==1.26.4
           pip install -r .tmp/requirements-build.txt
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
-          pip install "aria-amt @ git+https://github.com/EleutherAI/aria-amt.git" --no-deps
-          pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime==1.23.2
+          pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
+          pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime-gpu==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260302 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
           pip install pyinstaller pytest
 
       - name: 运行便携发布回归测试
         run: |
-          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py tests/test_official_midi_routes.py
+          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_portable_model_asset_validator.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py tests/test_official_midi_routes.py
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
@@ -121,25 +228,8 @@ jobs:
           if [ -d "/c/ProgramData/chocolatey/bin" ]; then
             export PATH="/c/ProgramData/chocolatey/bin:$PATH"
           fi
-          echo "=== Download all official YourMT3+ model modes, BS-RoFormer SW six-stem assets, and RoFormer vocal ensembles ==="
-          python download_sota_models.py
 
-          echo "=== Verify RoFormer vocal_rvc ensemble models ==="
-          python download_vocal_model.py
-
-          echo "=== Verify BS-RoFormer SW multi-stem model ==="
-          python download_multistem_model.py --check-only
-
-          echo "=== Verify RoFormer karaoke ensemble models ==="
-          python download_vocal_harmony_model.py
-
-          echo "=== Download Aria-AMT piano model ==="
-          python download_aria_amt_model.py
-
-          echo "=== Download ByteDance pedal piano model ==="
-          python download_bytedance_piano_model.py
-
-          echo "=== Download MIROS MusicFM model ==="
+          echo "=== Restore and strictly verify pinned MIROS before the aggregate downloader ==="
           WORKSPACE_DIR="$(pwd)"
           MIROS_PORTABLE_RELEASE_TAG="v1.0.16"
           MIROS_PORTABLE_ROOT="$WORKSPACE_DIR/.tmp/miros-portable"
@@ -169,11 +259,34 @@ jobs:
           test -f "$WORKSPACE_DIR/external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt"
           python download_miros_model.py
 
+          echo "=== Download all official YourMT3+ model modes; verify complete seven-mode assets: YourMT3+ (5 checkpoints), MIROS (source + pretrained + fine-tuned), BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun 2.0.1 default V2, TransKun V2 Aug, Aria-AMT, and ByteDance Piano ==="
+          python download_sota_models.py
+
+          echo "=== Verify Leap XE 90-band vocals assets ==="
+          python download_vocal_model.py
+
+          echo "=== Verify BS-RoFormer SW six-stem assets (Fixed checkpoint) ==="
+          python download_multistem_model.py --check-only
+
+          echo "=== Verify PolarFormer accompaniment assets ==="
+          python download_accompaniment_model.py
+
+          echo "=== Verify TransKun V2 Aug checkpoint assets ==="
+          python download_transkun_v2_aug_model.py
+
+          echo "=== Download Aria-AMT piano model ==="
+          python download_aria_amt_model.py
+
+          echo "=== Download ByteDance pedal piano model ==="
+          python download_bytedance_piano_model.py
+
           echo "=== Verify downloaded models ==="
           echo "YourMT3+:"
           find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \;
           echo "Audio-Separator:"
-          ls -lh ~/.music-to-midi/models/audio-separator/*.ckpt
+          find ~/.music-to-midi/models/audio-separator -maxdepth 3 -type f -exec ls -lh {} \;
+          echo "TransKun V2 Aug:"
+          find ~/.cache/music_ai_models/transkun_v2_aug -maxdepth 3 -type f -exec ls -lh {} \;
           echo "Aria-AMT:"
           ls -lh ~/.cache/music_ai_models/aria_amt/*
           echo "ByteDance Piano:"
@@ -212,22 +325,59 @@ jobs:
 
           cp -a "$HOME/.cache/music_ai_models/bytedance_piano" "$BUILD_ASSET_ROOT/bytedance_piano"
 
+          cp -a "$HOME/.cache/music_ai_models/transkun_v2_aug" "$BUILD_ASSET_ROOT/transkun_v2_aug"
+
           cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
 
-          if command -v ffmpeg >/dev/null 2>&1; then
-            mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
-            cp "$(command -v ffmpeg)" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffmpeg"
-          fi
+          python tools/validate_portable_model_assets.py \
+            --audio-separator-dir "$BUILD_ASSET_ROOT/audio-separator" \
+            --yourmt3-dir "$BUILD_ASSET_ROOT/yourmt3_all" \
+            --yourmt3-source-dir "$GITHUB_WORKSPACE/YourMT3/amt/src" \
+            --aria-amt-dir "$BUILD_ASSET_ROOT/aria_amt" \
+            --bytedance-piano-dir "$BUILD_ASSET_ROOT/bytedance_piano" \
+            --miros-dir "$BUILD_ASSET_ROOT/ai4m-miros" \
+            --label "staged Linux portable model assets"
+          python download_multistem_model.py \
+            --cache-dir "$BUILD_ASSET_ROOT/audio-separator" \
+            --check-only
+          TRANSKUN_V2_AUG_BUNDLE="$BUILD_ASSET_ROOT/transkun_v2_aug" python - <<'PY'
+          import os
+          from pathlib import Path
 
-          if command -v ffprobe >/dev/null 2>&1; then
-            mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
-            cp "$(command -v ffprobe)" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"
-          fi
+          from src.core.transkun_v2_aug_transcriber import (
+              TRANSKUN_V2_AUG_MODEL_DIR_NAME,
+              validate_transkun_v2_aug_model_files,
+          )
+
+          model_dir = (
+              Path(os.environ["TRANSKUN_V2_AUG_BUNDLE"])
+              / TRANSKUN_V2_AUG_MODEL_DIR_NAME
+          )
+          reason = validate_transkun_v2_aug_model_files(model_dir)
+          if reason:
+              raise RuntimeError(reason)
+          print(f"TransKun V2 Aug staged assets verified: {model_dir}")
+          PY
+
+          FFMPEG_SOURCE="$(command -v ffmpeg)" || {
+            echo "Required ffmpeg executable is missing" >&2
+            exit 1
+          }
+          FFPROBE_SOURCE="$(command -v ffprobe)" || {
+            echo "Required ffprobe executable is missing" >&2
+            exit 1
+          }
+          mkdir -p "$BUILD_ASSET_ROOT/ffmpeg/bin"
+          cp "$FFMPEG_SOURCE" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffmpeg"
+          cp "$FFPROBE_SOURCE" "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"
+          test -s "$BUILD_ASSET_ROOT/ffmpeg/bin/ffmpeg"
+          test -s "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"
 
           echo "MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR=$BUILD_ASSET_ROOT/audio-separator" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR=$BUILD_ASSET_ROOT/yourmt3_all" >> "$GITHUB_ENV"
-          echo "MUSIC_TO_MIDI_BUNDLE_ARIA_DIR=$BUILD_ASSET_ROOT/aria_amt" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR=$BUILD_ASSET_ROOT/aria_amt" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR=$BUILD_ASSET_ROOT/bytedance_piano" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR=$BUILD_ASSET_ROOT/transkun_v2_aug" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
 
@@ -237,7 +387,9 @@ jobs:
 
       - name: 使用 PyInstaller 构建 (Linux)
         if: runner.os == 'Linux'
-        run: pyinstaller MusicToMidi.spec
+        run: |
+          pyinstaller MusicToMidi.spec
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/MusicToMidi/
 
       - name: 烟测便携产物 (Windows)
         if: runner.os == 'Windows'
@@ -424,6 +576,7 @@ jobs:
               Start-Sleep -Seconds 3
             }
           }
+          Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md', '.tmp/FFMPEG_BUILD_AUDIT.txt') -Destination "dist/$name" -Force
 
           $variantNote = @"
           GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
@@ -441,6 +594,22 @@ jobs:
           支持格式：MP3, WAV, FLAC, OGG, M4A 等
           输出格式：多轨道 MIDI（128 种 GM 乐器）
 
+          处理模式（完整 7 种）：
+            1. SMART：完整混音多乐器转写
+            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，分离结果分别转写
+            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，每个 stem 独立转写并合并 MIDI
+            4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
+            5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
+            6. PIANO_ARIA_AMT：Aria-AMT
+            7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
+
+          后端选择：
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+ 或 MIROS。
+            VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
+
+          内置资产：YourMT3+ 5 个固定 checkpoint、MIROS 源码/两组权重、SW Fixed、Leap XE、PolarFormer、
+            TransKun 默认 V2、TransKun V2 Aug、Aria-AMT 与 ByteDance Piano。
+
           无需安装 Python，解压即用
           "@
           Set-Content -LiteralPath "dist/$name/使用说明.txt" -Value $readme -Encoding UTF8
@@ -452,6 +621,7 @@ jobs:
           NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
           # 重命名 dist/MusicToMidi 为带平台标识的名称
           mv dist/MusicToMidi "dist/${NAME}"
+          cp LICENSE THIRD_PARTY_NOTICES.md .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${NAME}/"
 
           VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
           需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版"
@@ -473,6 +643,22 @@ jobs:
 
           支持格式：MP3, WAV, FLAC, OGG, M4A 等
           输出格式：多轨道 MIDI（128 种 GM 乐器）
+
+          处理模式（完整 7 种）：
+            1. SMART：完整混音多乐器转写
+            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，分离结果分别转写
+            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，每个 stem 独立转写并合并 MIDI
+            4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
+            5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
+            6. PIANO_ARIA_AMT：Aria-AMT
+            7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
+
+          后端选择：
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+ 或 MIROS。
+            VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
+
+          内置资产：YourMT3+ 5 个固定 checkpoint、MIROS 源码/两组权重、SW Fixed、Leap XE、PolarFormer、
+            TransKun 默认 V2、TransKun V2 Aug、Aria-AMT 与 ByteDance Piano。
 
           无需安装 Python，解压即用
           HEREDOC
@@ -539,6 +725,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: 检出发布源码
+        uses: actions/checkout@v6
+
       - name: 下载所有构建产物
         uses: actions/download-artifact@v8
         with:
@@ -560,6 +749,37 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 校验 pyproject、运行时版本与发布标签一致
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          module = ast.parse(Path("src/__init__.py").read_text(encoding="utf-8"))
+          runtime_version = next(
+              ast.literal_eval(node.value)
+              for node in module.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+          )
+          release_tag = os.environ["RELEASE_TAG"].strip()
+          expected_tag = f"v{project_version}"
+          if runtime_version != project_version:
+              raise SystemExit(
+                  f"Version mismatch: pyproject.toml={project_version}, src.__version__={runtime_version}"
+              )
+          if release_tag != expected_tag:
+              raise SystemExit(
+                  f"Release tag mismatch: expected {expected_tag} from project version, got {release_tag!r}"
+              )
+          print(f"Version contract verified: {release_tag}")
+          PY
 
       - name: 创建 Release（如不存在）
         run: |
@@ -597,7 +817,7 @@ jobs:
           - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
           - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
-          - 6 种处理模式：智能转写 / 人声分离 / 六声部分离 / Transkun 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
+          - 当前包含 7 种处理模式：智能转写 / 人声分离 / 六声部分离 / TransKun 钢琴 / TransKun V2 Aug 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)
