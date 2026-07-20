@@ -471,7 +471,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 AMD/ROCm cannot currently run the complete seven-mode surface: even though PyTorch publishes ROCm wheels, PolarFormer requires ONNX Runtime `CUDAExecutionProvider`. The installer stops explicitly instead of silently switching to CPU. The complete seven-mode path is currently validated only on NVIDIA CUDA.
 
-The target `release.yml` artifact is CUDA 12.8 GPU-only; no CPU variant is planned. However, 13 of the 22 components in the closed third-party inventory are currently `BLOCKED`, so the workflow fails before building and there is no current portable artifact that can be described as redistribution-cleared. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
+`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 26 third-party components: 22 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 
