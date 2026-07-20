@@ -223,6 +223,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("command -v fluidsynth", workflow)
         linux_system_packages = workflow.split("sudo apt-get install -y \\", 1)[1].split("\n\n", 1)[0]
         self.assertIn("fluidsynth \\", linux_system_packages)
+        self.assertIn("pip install pyinstaller pytest pytest-timeout", workflow)
+        self.assertIn("pytest -vv --timeout=60 --timeout-method=thread", workflow)
 
     def test_build_portable_collects_and_validates_muscriptor_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
