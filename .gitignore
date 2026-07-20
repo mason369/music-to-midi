@@ -94,9 +94,18 @@ temp/
 # Logs
 *.log
 logs/
-/.claude
-/CProgram Filesnodejsnode_cache
+
+# Local agent instructions and QA evidence (never publish)
+/.claude/
+/.codex/
+AGENTS.md
 CLAUDE.md
+CODEX.md
+GEMINI.md
+/design-qa.md
+codex-clipboard-*
+pasted-text*
+/CProgram Filesnodejsnode_cache
 /docs
 !/docs/
 /docs/*
