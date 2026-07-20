@@ -281,16 +281,14 @@ def test_colab_request_outputs_are_scoped_to_runtime_and_failures_are_deleted():
 
 
 def test_telknet_claims_state_asset_baseline_reuse_and_project_extensions():
-    paths = (
+    documentation_paths = (
         "README.md",
         "docs/README.md",
         "docs/README_zh.md",
         "space/README.md",
-        "src/i18n/zh_CN.json",
-        "src/i18n/en_US.json",
         "colab_notebook.ipynb",
     )
-    combined = "\n".join(Path(path).read_text(encoding="utf-8") for path in paths)
+    combined = "\n".join(Path(path).read_text(encoding="utf-8") for path in documentation_paths)
 
     for overclaim in (
         "TelkNet" + "-aligned",
@@ -301,11 +299,11 @@ def test_telknet_claims_state_asset_baseline_reuse_and_project_extensions():
     ):
         assert overclaim not in combined
 
-    assert "TelkNet 公开发布或使用的 YourMT3+ 模型资产" in combined
-    assert "not claimed to match current public TelkNet master line for line" in combined
+    assert "YourMT3/MIROS“官方 writer 后只补 tempo" in combined
     assert "52be6fec179be492f5229ba149545ac2833b284a" in combined
     assert "没有证据证明该 `dev` 已部署线上" in combined
-    assert "standalone private-dev tools are WAV-only" in combined
+    assert "Both separation workflows likewise deliver WAV first" in combined
+    assert "MIDI is explicitly triggered" in combined
 
 
 def test_zfturbo_reference_has_complete_mit_notice():

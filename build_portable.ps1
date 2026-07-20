@@ -342,6 +342,30 @@ $MirosSource = Resolve-ExistingDir @(
     (Join-Path $Root "ai4m-miros"),
     (Join-Path $Root ".tmp\ai4m-miros")
 )
+$muscriptorModelSourceText = & $Python -c "from src.utils.muscriptor_downloader import get_cached_muscriptor_paths; print(get_cached_muscriptor_paths(validate_hashes=True)[0].parent)"
+if ($LASTEXITCODE -ne 0) {
+    throw "Pinned MuScriptor-large model is not available or failed identity validation. Run download_sota_models.py after accepting the Hugging Face terms."
+}
+$MuscriptorModelSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR,
+    ($muscriptorModelSourceText | Select-Object -Last 1)
+)
+$muscriptorAssetsSourceText = & $Python -c "from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont; print(download_muscriptor_soundfont(printer=lambda _message: None).parent)"
+if ($LASTEXITCODE -ne 0) {
+    throw "MuScriptor official SoundFont is not available or failed identity validation. Run download_sota_models.py."
+}
+$MuscriptorAssetsSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR,
+    ($muscriptorAssetsSourceText | Select-Object -Last 1)
+)
+$fluidsynthSourceText = & $Python -c "from src.utils.fluidsynth_runtime import get_fluidsynth_executable; print(get_fluidsynth_executable().parent.parent)"
+if ($LASTEXITCODE -ne 0) {
+    throw "Pinned FluidSynth runtime is unavailable. Run download_fluidsynth_runtime.py."
+}
+$FluidSynthSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR,
+    ($fluidsynthSourceText | Select-Object -Last 1)
+)
 
 $ResolvedFfmpegDir = Resolve-FFmpegBinDir @(
     $FfmpegDir,
@@ -364,6 +388,9 @@ $AriaAmtBundle = Join-Path $BuildAssetRoot "aria_amt"
 $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
 $TransKunV2AugBundle = Join-Path $BuildAssetRoot "transkun_v2_aug"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
+$MuscriptorModelBundle = Join-Path $BuildAssetRoot "muscriptor_large"
+$MuscriptorAssetsBundle = Join-Path $BuildAssetRoot "muscriptor_assets"
+$FluidSynthBundle = Join-Path $BuildAssetRoot "fluidsynth"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
 Assert-PortableModelIdentities `
@@ -399,6 +426,41 @@ if ($LASTEXITCODE -ne 0) {
     throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
+Copy-Tree -Source $MuscriptorModelSource -Destination $MuscriptorModelBundle -Label "MuScriptor-large model" -Required | Out-Null
+Copy-Tree -Source $MuscriptorAssetsSource -Destination $MuscriptorAssetsBundle -Label "MuScriptor playback assets" -Required | Out-Null
+Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required | Out-Null
+$muscriptorPortableCheck = @"
+from pathlib import Path
+from src.utils.artifact_identity import validate_file_identity
+from src.utils.muscriptor_downloader import (
+    MUSCRIPTOR_CONFIG_EXACT_BYTES,
+    MUSCRIPTOR_CONFIG_FILENAME,
+    MUSCRIPTOR_CONFIG_SHA256,
+    MUSCRIPTOR_MODEL_EXACT_BYTES,
+    MUSCRIPTOR_MODEL_FILENAME,
+    MUSCRIPTOR_MODEL_SHA256,
+)
+from src.utils.muscriptor_soundfont_downloader import (
+    MUSCRIPTOR_SF2_EXACT_BYTES,
+    MUSCRIPTOR_SF2_FILENAME,
+    MUSCRIPTOR_SF2_SHA256,
+)
+
+model_dir = Path(r'$MuscriptorModelBundle')
+assets_dir = Path(r'$MuscriptorAssetsBundle')
+validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=MUSCRIPTOR_MODEL_EXACT_BYTES, expected_sha256=MUSCRIPTOR_MODEL_SHA256, label='staged MuScriptor model')
+validate_file_identity(model_dir / MUSCRIPTOR_CONFIG_FILENAME, expected_size=MUSCRIPTOR_CONFIG_EXACT_BYTES, expected_sha256=MUSCRIPTOR_CONFIG_SHA256, label='staged MuScriptor config')
+validate_file_identity(assets_dir / MUSCRIPTOR_SF2_FILENAME, expected_size=MUSCRIPTOR_SF2_EXACT_BYTES, expected_sha256=MUSCRIPTOR_SF2_SHA256, label='staged MuScriptor SoundFont')
+print('MuScriptor portable assets verified')
+"@
+& $Python -c $muscriptorPortableCheck
+if ($LASTEXITCODE -ne 0) {
+    throw "MuScriptor portable assets failed exact identity validation."
+}
+& (Join-Path $FluidSynthBundle "bin\fluidsynth.exe") --version
+if ($LASTEXITCODE -ne 0) {
+    throw "Staged FluidSynth runtime failed to execute."
+}
 Assert-PortableModelIdentities `
     -AudioSeparatorDir $AudioSeparatorBundle `
     -YourMt3Dir $YourMt3Bundle `
@@ -434,6 +496,9 @@ $env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR = $AriaAmtBundle
 $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
 $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR = $TransKunV2AugBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR = $MuscriptorModelBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR = $MuscriptorAssetsBundle
+$env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR = $FluidSynthBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 
 $PyInstallerExitCode = 0
@@ -447,6 +512,9 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
 }
 

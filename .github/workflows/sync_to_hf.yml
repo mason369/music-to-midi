@@ -21,6 +21,9 @@ on:
       - 'download_miros_model.py'
       - 'download_aria_amt_model.py'
       - 'download_bytedance_piano_model.py'
+      - 'download_muscriptor_model.py'
+      - 'download_fluidsynth_runtime.py'
+      - 'packages.txt'
       - 'pyproject.toml'
       - 'LICENSE'
       - 'THIRD_PARTY_NOTICES.md'
@@ -62,6 +65,9 @@ jobs:
           cp download_miros_model.py "$WORK/"
           cp download_aria_amt_model.py "$WORK/"
           cp download_bytedance_piano_model.py "$WORK/"
+          cp download_muscriptor_model.py "$WORK/"
+          cp download_fluidsynth_runtime.py "$WORK/"
+          cp packages.txt          "$WORK/"
           cp pyproject.toml        "$WORK/"
           cp LICENSE               "$WORK/"
           cp THIRD_PARTY_NOTICES.md "$WORK/"

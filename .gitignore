@@ -98,9 +98,15 @@ logs/
 /CProgram Filesnodejsnode_cache
 CLAUDE.md
 /docs
+!/docs/
+/docs/*
+!/docs/muscriptor-model.md
 .tmp/ai4m-miros/
 /external/ai4m-miros/
 /.tmp/
 /MusicToMidi-Windows-Portable.7z.*
 /MusicToMidi-*-Portable*
 /.playwright-cli/
+uv.lock
+/tmp
+outputs/MuScriptor_项目技术介绍_无声配音版.mp4

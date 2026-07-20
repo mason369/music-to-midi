@@ -1,17 +1,20 @@
 """
 音乐转MIDI应用的数据模型
 """
+
 import logging
-from dataclasses import dataclass, field, fields as dataclass_fields
+from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from enum import Enum
-from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class TrackType(Enum):
     """音源分离后的音轨类型 (已弃用，请使用 InstrumentType)"""
+
     DRUMS = "drums"
     BASS = "bass"
     VOCALS = "vocals"
@@ -20,29 +23,30 @@ class TrackType(Enum):
 
 class InstrumentType(Enum):
     """乐器类型枚举"""
+
     PIANO = "piano"
     DRUMS = "drums"
     BASS = "bass"
     GUITAR = "guitar"
     VOCALS = "vocals"
     STRINGS = "strings"
-    BRASS = "brass"       # 铜管乐器（小号、长号等）
-    WOODWIND = "woodwind" # 木管乐器（长笛、萨克斯等）
-    SYNTH = "synth"       # 合成器
-    ORGAN = "organ"       # 风琴
-    HARP = "harp"         # 竖琴
+    BRASS = "brass"  # 铜管乐器（小号、长号等）
+    WOODWIND = "woodwind"  # 木管乐器（长笛、萨克斯等）
+    SYNTH = "synth"  # 合成器
+    ORGAN = "organ"  # 风琴
+    HARP = "harp"  # 竖琴
     # 新增乐器类型（YourMT3+ 支持）
     PERCUSSION = "percussion"  # 非套鼓打击乐
-    CHOIR = "choir"            # 合唱（区别于独唱）
+    CHOIR = "choir"  # 合唱（区别于独唱）
     LEAD_SYNTH = "lead_synth"  # 主奏合成器
-    PAD_SYNTH = "pad_synth"    # 铺底合成器
+    PAD_SYNTH = "pad_synth"  # 铺底合成器
     # 层次化鼓分离
-    KICK = "kick"              # 底鼓
-    SNARE = "snare"            # 军鼓
-    HIHAT = "hihat"            # 踩镲
-    TOM = "tom"                # 嗵鼓
-    CYMBAL = "cymbal"          # 镲片
-    RIDE = "ride"              # 叮叮镲
+    KICK = "kick"  # 底鼓
+    SNARE = "snare"  # 军鼓
+    HIHAT = "hihat"  # 踩镲
+    TOM = "tom"  # 嗵鼓
+    CYMBAL = "cymbal"  # 镲片
+    RIDE = "ride"  # 叮叮镲
     OTHER = "other"
 
     @classmethod
@@ -59,28 +63,28 @@ class InstrumentType(Enum):
     def to_program_number(self) -> int:
         """获取 General MIDI 音色编号"""
         programs = {
-            InstrumentType.PIANO: 0,      # Acoustic Grand Piano
-            InstrumentType.DRUMS: 0,      # 鼓使用通道10，不需要音色
-            InstrumentType.BASS: 32,      # Acoustic Bass
-            InstrumentType.GUITAR: 24,    # Acoustic Guitar (nylon)
-            InstrumentType.VOCALS: 0,     # Acoustic Grand Piano
-            InstrumentType.STRINGS: 48,   # String Ensemble 1
-            InstrumentType.BRASS: 56,     # Trumpet
+            InstrumentType.PIANO: 0,  # Acoustic Grand Piano
+            InstrumentType.DRUMS: 0,  # 鼓使用通道10，不需要音色
+            InstrumentType.BASS: 32,  # Acoustic Bass
+            InstrumentType.GUITAR: 24,  # Acoustic Guitar (nylon)
+            InstrumentType.VOCALS: 0,  # Acoustic Grand Piano
+            InstrumentType.STRINGS: 48,  # String Ensemble 1
+            InstrumentType.BRASS: 56,  # Trumpet
             InstrumentType.WOODWIND: 73,  # Flute
-            InstrumentType.SYNTH: 80,     # Lead 1 (square)
-            InstrumentType.ORGAN: 16,     # Drawbar Organ
-            InstrumentType.HARP: 46,      # Orchestral Harp
-            InstrumentType.PERCUSSION: 0, # 打击乐使用通道10
-            InstrumentType.CHOIR: 52,     # Choir Aahs
-            InstrumentType.LEAD_SYNTH: 80,# Lead 1
-            InstrumentType.PAD_SYNTH: 88, # Pad 1 (new age)
-            InstrumentType.KICK: 0,       # 底鼓（通道10）
-            InstrumentType.SNARE: 0,      # 军鼓（通道10）
-            InstrumentType.HIHAT: 0,      # 踩镲（通道10）
-            InstrumentType.TOM: 0,        # 嗵鼓（通道10）
-            InstrumentType.CYMBAL: 0,     # 镲片（通道10）
-            InstrumentType.RIDE: 0,       # 叮叮镲（通道10）
-            InstrumentType.OTHER: 0,      # 默认钢琴
+            InstrumentType.SYNTH: 80,  # Lead 1 (square)
+            InstrumentType.ORGAN: 16,  # Drawbar Organ
+            InstrumentType.HARP: 46,  # Orchestral Harp
+            InstrumentType.PERCUSSION: 0,  # 打击乐使用通道10
+            InstrumentType.CHOIR: 52,  # Choir Aahs
+            InstrumentType.LEAD_SYNTH: 80,  # Lead 1
+            InstrumentType.PAD_SYNTH: 88,  # Pad 1 (new age)
+            InstrumentType.KICK: 0,  # 底鼓（通道10）
+            InstrumentType.SNARE: 0,  # 军鼓（通道10）
+            InstrumentType.HIHAT: 0,  # 踩镲（通道10）
+            InstrumentType.TOM: 0,  # 嗵鼓（通道10）
+            InstrumentType.CYMBAL: 0,  # 镲片（通道10）
+            InstrumentType.RIDE: 0,  # 叮叮镲（通道10）
+            InstrumentType.OTHER: 0,  # 默认钢琴
         }
         return programs.get(self, 0)
 
@@ -154,14 +158,15 @@ class InstrumentType(Enum):
 
 class ProcessingMode(Enum):
     """处理模式枚举"""
-    SMART = "smart"         # YourMT3+ 多乐器转写
+
+    SMART = "smart"  # YourMT3+ 多乐器转写
     VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
     SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
     PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
     PIANO_TRANSKUN_V2_AUG = "piano_transkun_v2_aug"  # TransKun V2 Aug 钢琴专用转写
     PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写
     PIANO_BYTEDANCE_PEDAL = "piano_bytedance_pedal"  # ByteDance 带踏板钢琴转写
-    PIANO = "piano"         # 已弃用，保留以兼容旧配置文件，等同于 SMART
+    PIANO = "piano"  # 已弃用，保留以兼容旧配置文件，等同于 SMART
 
 
 class MultiInstrumentModel(Enum):
@@ -169,6 +174,7 @@ class MultiInstrumentModel(Enum):
 
     YOURMT3 = "yourmt3"
     MIROS = "miros"
+    MUSCRIPTOR = "muscriptor"
 
 
 class TranscriptionBackend(Enum):
@@ -177,6 +183,7 @@ class TranscriptionBackend(Enum):
     ARIA_AMT = "aria_amt"
     YOURMT3 = MultiInstrumentModel.YOURMT3.value
     MIROS = MultiInstrumentModel.MIROS.value
+    MUSCRIPTOR = MultiInstrumentModel.MUSCRIPTOR.value
 
 
 FIXED_TRANSCRIPTION_QUALITY = "best"
@@ -202,6 +209,7 @@ class YourMT3Model(Enum):
 
 class ProcessingStage(Enum):
     """处理流水线中的阶段"""
+
     PREPROCESSING = "preprocessing"
     SEPARATION = "separation"
     TRANSCRIPTION = "transcription"
@@ -213,11 +221,12 @@ class ProcessingStage(Enum):
 @dataclass
 class NoteEvent:
     """表示一个MIDI音符事件"""
-    pitch: int           # MIDI音高 (0-127)
-    start_time: float    # 开始时间（秒）
-    end_time: float      # 结束时间（秒）
-    velocity: int = 80   # 音符力度 (0-127)
-    program: int = 0     # GM 程序号 (0-127)，用于精确乐器识别
+
+    pitch: int  # MIDI音高 (0-127)
+    start_time: float  # 开始时间（秒）
+    end_time: float  # 结束时间（秒）
+    velocity: int = 80  # 音符力度 (0-127)
+    program: int = 0  # GM 程序号 (0-127)，用于精确乐器识别
 
     @property
     def duration(self) -> float:
@@ -228,8 +237,9 @@ class NoteEvent:
 @dataclass
 class PedalEvent:
     """表示一个踏板事件（延音踏板或柔音踏板）"""
-    start_time: float    # 踩下时间（秒）
-    end_time: float      # 抬起时间（秒）
+
+    start_time: float  # 踩下时间（秒）
+    end_time: float  # 抬起时间（秒）
     pedal_type: str = "sustain"  # "sustain" (CC64) 或 "soft" (CC67)
 
     @property
@@ -241,22 +251,24 @@ class PedalEvent:
 @dataclass
 class BeatInfo:
     """节拍和速度信息"""
-    bpm: float                                # 每分钟节拍数
+
+    bpm: float  # 每分钟节拍数
     beat_times: List[float] = field(default_factory=list)  # 所有节拍时间
     downbeats: Optional[List[float]] = None  # 重拍时间
-    time_signature: Tuple[int, int] = (4, 4)           # 拍号（分子/分母）
+    time_signature: Tuple[int, int] = (4, 4)  # 拍号（分子/分母）
 
 
 @dataclass
 class TrackConfig:
     """单个轨道的配置"""
-    id: str                         # 轨道ID，如 "piano_1", "drums"
-    instrument: InstrumentType      # 乐器类型
-    name: str                       # 显示名称
-    enabled: bool = True            # 是否启用
-    midi_channel: int = 0           # MIDI通道 (0-15)
-    program: Optional[int] = None   # General MIDI 音色编号，None 表示自动选择
-    source: str = "original"        # 分离轨道来源 (original, vocals, accompaniment, guitar, other)
+
+    id: str  # 轨道ID，如 "piano_1", "drums"
+    instrument: InstrumentType  # 乐器类型
+    name: str  # 显示名称
+    enabled: bool = True  # 是否启用
+    midi_channel: int = 0  # MIDI通道 (0-15)
+    program: Optional[int] = None  # General MIDI 音色编号，None 表示自动选择
+    source: str = "original"  # 分离轨道来源 (original, vocals, accompaniment, guitar, other)
 
     def __post_init__(self):
         # 自动设置默认音色编号（仅当未显式指定时）
@@ -264,15 +276,11 @@ class TrackConfig:
             self.program = self.instrument.to_program_number()
         # 验证 MIDI 通道范围
         if not (0 <= self.midi_channel <= 15):
-            logger.warning(
-                f"MIDI 通道 {self.midi_channel} 超出范围 0-15，重置为 0"
-            )
+            logger.warning(f"MIDI 通道 {self.midi_channel} 超出范围 0-15，重置为 0")
             self.midi_channel = 0
         # 验证程序号范围
         if self.program is not None and not (0 <= self.program <= 127):
-            logger.warning(
-                f"GM 程序号 {self.program} 超出范围 0-127，重置为 0"
-            )
+            logger.warning(f"GM 程序号 {self.program} 超出范围 0-127，重置为 0")
             self.program = 0
         # 鼓轨道固定使用通道9（GM标准）
         if self.instrument == InstrumentType.DRUMS:
@@ -282,6 +290,7 @@ class TrackConfig:
 @dataclass
 class TrackLayout:
     """轨道布局配置"""
+
     mode: ProcessingMode
     tracks: List[TrackConfig] = field(default_factory=list)
 
@@ -298,45 +307,42 @@ class TrackLayout:
         count = max(1, min(count, 4))  # 限制为 1-4
 
         PIANO_TRACK_TEMPLATES = {
-            1: [
-                {"id": "piano_full", "name": "钢琴", "source": "original"}
-            ],
+            1: [{"id": "piano_full", "name": "钢琴", "source": "original"}],
             2: [
                 {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
-                {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"}
+                {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"},
             ],
             3: [
                 {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
                 {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"},
-                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"}
+                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"},
             ],
             4: [
                 {"id": "piano_accompaniment", "name": "钢琴（伴奏）", "source": "accompaniment"},
                 {"id": "piano_vocals", "name": "钢琴（人声）", "source": "vocals"},
                 {"id": "piano_guitar", "name": "钢琴（吉他）", "source": "guitar"},
-                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"}
-            ]
+                {"id": "piano_other", "name": "钢琴（其他）", "source": "other"},
+            ],
         }
 
         template = PIANO_TRACK_TEMPLATES[count]
         tracks = []
         for i, t in enumerate(template):
-            tracks.append(TrackConfig(
-                id=t["id"],
-                instrument=InstrumentType.PIANO,
-                name=t["name"],
-                enabled=True,
-                midi_channel=i,
-                program=0,  # Acoustic Grand Piano
-                source=t["source"]
-            ))
+            tracks.append(
+                TrackConfig(
+                    id=t["id"],
+                    instrument=InstrumentType.PIANO,
+                    name=t["name"],
+                    enabled=True,
+                    midi_channel=i,
+                    program=0,  # Acoustic Grand Piano
+                    source=t["source"],
+                )
+            )
         return cls(mode=ProcessingMode.SMART, tracks=tracks)
 
     @classmethod
-    def from_detected_instruments(
-        cls,
-        instruments: List[InstrumentType]
-    ) -> "TrackLayout":
+    def from_detected_instruments(cls, instruments: List[InstrumentType]) -> "TrackLayout":
         """从检测到的乐器列表创建轨道布局"""
         tracks = []
         channel = 0
@@ -349,14 +355,16 @@ class TrackLayout:
                 if channel == 9:
                     channel = 10  # 跳过鼓通道
 
-            tracks.append(TrackConfig(
-                id=f"{inst.value}_{i + 1}",
-                instrument=inst,
-                name=inst.get_display_name(),
-                enabled=True,
-                midi_channel=midi_channel,
-                program=inst.to_program_number()
-            ))
+            tracks.append(
+                TrackConfig(
+                    id=f"{inst.value}_{i + 1}",
+                    instrument=inst,
+                    name=inst.get_display_name(),
+                    enabled=True,
+                    midi_channel=midi_channel,
+                    program=inst.to_program_number(),
+                )
+            )
         return cls(mode=ProcessingMode.SMART, tracks=tracks)
 
     def get_enabled_tracks(self) -> List[TrackConfig]:
@@ -378,7 +386,7 @@ class TrackLayout:
                     "source": t.source,
                 }
                 for t in self.tracks
-            ]
+            ],
         }
 
     @classmethod
@@ -399,23 +407,26 @@ class TrackLayout:
             except (ValueError, KeyError):
                 logger.warning(f"未知乐器类型 '{t.get('instrument')}', 回退为 OTHER")
                 instrument = InstrumentType.OTHER
-            tracks.append(TrackConfig(
-                id=t["id"],
-                instrument=instrument,
-                name=t["name"],
-                enabled=t.get("enabled", True),
-                midi_channel=t.get("midi_channel", 0),
-                program=t.get("program"),
-                source=t.get("source", "original"),
-            ))
+            tracks.append(
+                TrackConfig(
+                    id=t["id"],
+                    instrument=instrument,
+                    name=t["name"],
+                    enabled=t.get("enabled", True),
+                    midi_channel=t.get("midi_channel", 0),
+                    program=t.get("program"),
+                    source=t.get("source", "original"),
+                )
+            )
         return cls(mode=mode, tracks=tracks)
 
 
 @dataclass
 class Track:
     """表示一个分离的音轨"""
+
     type: TrackType
-    audio_path: str              # 分离音频文件路径
+    audio_path: str  # 分离音频文件路径
     notes: List[NoteEvent] = field(default_factory=list)
 
     @property
@@ -426,38 +437,47 @@ class Track:
 @dataclass
 class ProcessingProgress:
     """处理过程中的进度信息"""
-    stage: ProcessingStage       # 当前处理阶段
-    stage_progress: float        # 当前阶段进度 (0-1)
-    overall_progress: float      # 总体进度 (0-1)
-    message: str                 # 状态消息
+
+    stage: ProcessingStage  # 当前处理阶段
+    stage_progress: float  # 当前阶段进度 (0-1)
+    overall_progress: float  # 总体进度 (0-1)
+    message: str  # 状态消息
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "stage": self.stage.value,
             "stage_progress": self.stage_progress,
             "overall_progress": self.overall_progress,
-            "message": self.message
+            "message": self.message,
         }
 
 
 @dataclass
 class ProcessingResult:
     """完整处理流水线的结果"""
-    midi_path: str                           # 输出MIDI文件路径
+
+    midi_path: str  # 输出MIDI文件路径
     tracks: List[Track] = field(default_factory=list)
     beat_info: Optional[BeatInfo] = None
-    processing_time: float = 0.0             # 总处理时间（秒）
-    total_notes: int = 0                     # 转写的总音符数
-    vocal_midi_path: Optional[str] = None    # 人声MIDI文件路径（人声分离模式）
+    processing_time: float = 0.0  # 总处理时间（秒）
+    total_notes: int = 0  # 转写的总音符数
+    vocal_midi_path: Optional[str] = None  # 人声MIDI文件路径（人声分离模式）
     accompaniment_midi_path: Optional[str] = None  # 伴奏MIDI文件路径（人声分离模式）
-    separated_audio: Optional[Dict[str, str]] = None  # 分离后的音频路径；键为 vocals/accompaniment 或六个 stem 名
+    separated_audio: Optional[Dict[str, str]] = (
+        None  # 分离后的音频路径；键为 vocals/accompaniment 或六个 stem 名
+    )
     stem_midi_paths: Optional[Dict[str, str]] = None  # 多 stem 模式下每个 stem 的 MIDI 路径
     merged_midi_path: Optional[str] = None  # 合并 MIDI 路径（人声分离可选合并）
+
+    transcription_backend: Optional[str] = None
+    selected_instruments: List[str] = field(default_factory=list)
+    detected_instruments: List[str] = field(default_factory=list)
 
 
 @dataclass
 class Config:
     """应用配置"""
+
     # 常规设置
     language: str = "zh_CN"
     theme: str = "dark"
@@ -473,22 +493,27 @@ class Config:
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
-    use_precise_instruments: bool = True     # 使用精确 GM 程序号（128种乐器）
-    preserve_all_notes: bool = True          # 保留所有音符
+    use_precise_instruments: bool = True  # 使用精确 GM 程序号（128种乐器）
+    preserve_all_notes: bool = True  # 保留所有音符
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
     yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
+    # Empty means official MuScriptor auto-detection. Non-empty is a hard
+    # decode-time allow-list and must never be treated as a display-only hint.
+    muscriptor_instruments: List[str] = field(default_factory=list)
 
     # MIDI设置
     ticks_per_beat: int = 480
     default_velocity: int = 80
 
     # MIDI后处理设置
-    quantize_notes: bool = True       # 音符量化
-    quantize_grid: str = "1/32"       # 量化网格：从1/16改为1/32，更精细
-    remove_duplicates: bool = True    # 去除重复音符
-    velocity_smoothing: bool = True   # 力度平滑
-    max_polyphony: int = 40           # 最大复音数：从25提高到40，更好支持钢琴
-    aggressive_post_processing: bool = False  # False = 轻量后处理（保留更多音符），True = 激进后处理（更简化）
+    quantize_notes: bool = True  # 音符量化
+    quantize_grid: str = "1/32"  # 量化网格：从1/16改为1/32，更精细
+    remove_duplicates: bool = True  # 去除重复音符
+    velocity_smoothing: bool = True  # 力度平滑
+    max_polyphony: int = 40  # 最大复音数：从25提高到40，更好支持钢琴
+    aggressive_post_processing: bool = (
+        False  # False = 轻量后处理（保留更多音符），True = 激进后处理（更简化）
+    )
 
     # 输出设置
     output_dir: str = ""
@@ -519,7 +544,9 @@ class Config:
         valid_backends = {backend.value for backend in TranscriptionBackend}
 
         normalized_backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
-        normalized_multi_model = str(getattr(self, "multi_instrument_model", "") or "").strip().lower()
+        normalized_multi_model = (
+            str(getattr(self, "multi_instrument_model", "") or "").strip().lower()
+        )
 
         if normalized_backend not in valid_backends:
             raise ValueError(f"invalid transcription_backend: {self.transcription_backend!r}")
@@ -540,9 +567,7 @@ class Config:
             # global backend.  The processing mode still selects Aria-AMT; retain
             # the saved multi-instrument choice for controls shared across modes.
             if normalized_multi_model not in valid_multi_models:
-                raise ValueError(
-                    f"invalid multi_instrument_model: {self.multi_instrument_model!r}"
-                )
+                raise ValueError(f"invalid multi_instrument_model: {self.multi_instrument_model!r}")
             normalized_backend = normalized_multi_model
         elif normalized_backend in valid_multi_models:
             normalized_multi_model = normalized_backend
@@ -563,6 +588,12 @@ class Config:
         if normalized_yourmt3_model not in valid_yourmt3_models:
             raise ValueError(f"invalid yourmt3_model: {self.yourmt3_model!r}")
         self.yourmt3_model = normalized_yourmt3_model
+
+        from src.models.muscriptor_instruments import validate_muscriptor_instruments
+
+        self.muscriptor_instruments = validate_muscriptor_instruments(
+            getattr(self, "muscriptor_instruments", [])
+        )
 
     def get_effective_multi_instrument_model(self) -> str:
         backend = str(getattr(self, "transcription_backend", "") or "").strip().lower()
@@ -594,6 +625,7 @@ class Config:
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,
             "yourmt3_model": self.yourmt3_model,
+            "muscriptor_instruments": list(self.muscriptor_instruments),
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
             "quantize_notes": self.quantize_notes,
@@ -622,8 +654,9 @@ class Config:
 @dataclass
 class Project:
     """表示一个转换项目"""
-    input_path: str                          # 输入音频文件路径
-    output_dir: str                          # 输出目录
+
+    input_path: str  # 输入音频文件路径
+    output_dir: str  # 输出目录
     config: Config = field(default_factory=Config)
     result: Optional[ProcessingResult] = None
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import math
 import os
 import platform
 import subprocess
@@ -18,6 +19,8 @@ from typing import Callable, Optional
 import torchaudio
 
 from src.i18n.translator import Translator
+from src.core.muscriptor_result_assets import read_midi_roll_notes
+from src.core.transcription_stream import snapshot_event
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import ensure_cuda_runtime_compatibility, rewrite_cuda_runtime_error
 from src.utils.midi_output import publish_midi_output
@@ -275,6 +278,22 @@ class AriaAmtTranscriber:
             model.eval()
             audio_transform = AudioTransform().cuda()
             audio_config = load_config()["audio"]
+            event_callback = getattr(self, "_event_callback", None)
+            duration_seconds = 0.0
+            total_windows = 0
+            if event_callback is not None:
+                audio_info = torchaudio.info(str(input_path))
+                duration_seconds = audio_info.num_frames / float(audio_info.sample_rate)
+                chunk_seconds = float(audio_config["chunk_len"])
+                stride_seconds = chunk_seconds / float(transcribe_module.STRIDE_FACTOR)
+                if duration_seconds <= chunk_seconds:
+                    total_windows = 1
+                else:
+                    stride_count = math.ceil(duration_seconds / stride_seconds)
+                    total_windows = max(
+                        1,
+                        stride_count - int(transcribe_module.STRIDE_FACTOR) + 2,
+                    )
 
             sequence = [tokenizer.bos_tok]
             concat_sequence = [tokenizer.bos_tok]
@@ -323,6 +342,53 @@ class AriaAmtTranscriber:
                     index * transcribe_module.CHUNK_LEN_MS,
                 )
                 sequence = [tokenizer.bos_tok] if len(next_sequence) == 1 else next_sequence
+
+                if event_callback is not None:
+                    completed = index + 1
+                    is_final = completed >= total_windows
+                    frontier = (
+                        duration_seconds
+                        if is_final
+                        else min(
+                            duration_seconds,
+                            completed * transcribe_module.CHUNK_LEN_MS / 1000.0,
+                        )
+                    )
+                    preview_notes = []
+                    preview_path = temp_dir / ".aria-stream-preview.mid"
+                    try:
+                        self._save_token_sequence_as_midi(
+                            tokenizer,
+                            concat_sequence,
+                            preview_path,
+                        )
+                    except RuntimeError as exc:
+                        if "onset token" not in str(exc):
+                            raise
+                    else:
+                        preview_notes = [
+                            {
+                                "instrument": note.instrument,
+                                "program": note.program,
+                                "is_drum": note.is_drum,
+                                "pitch": note.pitch,
+                                "velocity": note.velocity,
+                                "start": note.start,
+                                "end": note.end,
+                            }
+                            for note in read_midi_roll_notes(preview_path)
+                            if note.end <= frontier + 1e-6
+                        ]
+                    event_callback(
+                        snapshot_event(
+                            backend="Aria-AMT",
+                            completed=completed,
+                            total=total_windows,
+                            frontier_seconds=frontier,
+                            duration_seconds=duration_seconds,
+                            notes=preview_notes,
+                        )
+                    )
 
             if len(concat_sequence) < 10:
                 raise RuntimeError("Aria-AMT 推理结果为空或过短，未生成可保存的 MIDI")
@@ -458,7 +524,7 @@ class AriaAmtTranscriber:
             if progress_callback:
                 progress_callback(0.05, self._pt("progress.loading_aria_amt"))
 
-            if platform.system() == "Windows":
+            if platform.system() == "Windows" or getattr(self, "_event_callback", None) is not None:
                 self._run_transcription_windows_single_file(input_path, temp_dir, progress_callback)
             elif is_frozen_app():
                 self._run_transcription_in_process(input_path, temp_dir)
@@ -490,3 +556,6 @@ class AriaAmtTranscriber:
                 process.terminate()
             except ProcessLookupError:
                 logger.info("Aria-AMT 子进程已在终止请求前退出")
+
+    def set_event_callback(self, callback: Optional[Callable[[dict], None]]) -> None:
+        self._event_callback = callback

@@ -64,6 +64,10 @@ jobs:
             miros_source
             musicfm_pretrained
             miros_finetuned
+            muscriptor_source
+            muscriptor_checkpoint
+            musescore_general_soundfont
+            fluidsynth_runtime
             pytorch_cuda_runtime
             onnxruntime_gpu
             pyqt6_runtime
@@ -212,6 +216,7 @@ jobs:
           pip install -r .tmp/requirements-build.txt
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
+          pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip" --no-deps
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime-gpu==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
@@ -219,13 +224,14 @@ jobs:
 
       - name: 运行便携发布回归测试
         run: |
-          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_portable_model_asset_validator.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py tests/test_official_midi_routes.py
+          pytest -q tests/test_main_self_test.py tests/test_portable_release_contract.py tests/test_portable_model_asset_validator.py tests/test_runtime_paths.py tests/test_yourmt3_availability_messages.py tests/test_official_midi_routes.py tests/test_muscriptor_integration.py tests/test_sota_model_downloader.py
 
       - name: 下载 AI 模型（打包到便携版）
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           # Windows: 确保 choco 安装的 FFmpeg 在 PATH 中（bash shell 可能未继承）
           if [ -d "/c/ProgramData/chocolatey/bin" ]; then
@@ -262,8 +268,9 @@ jobs:
           test -f "$WORKSPACE_DIR/external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt"
           python download_miros_model.py
 
-          echo "=== Download all official YourMT3+ model modes; verify complete seven-mode assets: YourMT3+ (5 checkpoints), MIROS (source + pretrained + fine-tuned), BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun 2.0.1 default V2, TransKun V2 Aug, Aria-AMT, and ByteDance Piano ==="
+          echo "=== Download and verify the complete seven-mode asset set, including gated MuScriptor-large and its official playback SoundFont ==="
           python download_sota_models.py
+          python download_fluidsynth_runtime.py
 
           echo "=== Verify Leap XE 90-band vocals assets ==="
           python download_vocal_model.py
@@ -284,7 +291,7 @@ jobs:
           python download_bytedance_piano_model.py
 
           echo "=== Verify downloaded models ==="
-          echo "YourMT3+:"
+          echo "YourMT3+ (5 checkpoints):"
           find ~/.cache/music_ai_models/yourmt3_all -name "*.ckpt" -exec ls -lh {} \;
           echo "Audio-Separator:"
           find ~/.music-to-midi/models/audio-separator -maxdepth 3 -type f -exec ls -lh {} \;
@@ -292,11 +299,23 @@ jobs:
           find ~/.cache/music_ai_models/transkun_v2_aug -maxdepth 3 -type f -exec ls -lh {} \;
           echo "Aria-AMT:"
           ls -lh ~/.cache/music_ai_models/aria_amt/*
-          echo "ByteDance Piano:"
+          echo "ByteDance Pedal:"
           ls -lh ~/.cache/music_ai_models/bytedance_piano/*
-          echo "MIROS:"
+          echo "MIROS (source + pretrained + fine-tuned):"
           ls -lh external/ai4m-miros/model/musicfm/data/pretrained_msd.pt
           ls -lh external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
+          echo "MuScriptor-large (checkpoint + config + SoundFont + FluidSynth):"
+          python - <<'PY'
+          from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
+          from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+          from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+
+          weights, config = get_cached_muscriptor_paths(validate_hashes=True)
+          print(weights)
+          print(config)
+          print(download_muscriptor_soundfont(printer=lambda _message: None))
+          print(get_fluidsynth_executable())
+          PY
           python - <<'PY'
           from src.core.miros_transcriber import MirosTranscriber
           reason = MirosTranscriber.get_unavailable_reason()
@@ -331,6 +350,38 @@ jobs:
           cp -a "$HOME/.cache/music_ai_models/transkun_v2_aug" "$BUILD_ASSET_ROOT/transkun_v2_aug"
 
           cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
+
+          BUILD_ASSET_ROOT="$BUILD_ASSET_ROOT" python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
+          from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+
+          root = Path(os.environ["BUILD_ASSET_ROOT"])
+          model_dir = root / "muscriptor_large"
+          assets_dir = root / "muscriptor_assets"
+          model_dir.mkdir(parents=True, exist_ok=True)
+          assets_dir.mkdir(parents=True, exist_ok=True)
+          weights, config = get_cached_muscriptor_paths(validate_hashes=True)
+          shutil.copy2(weights, model_dir / weights.name)
+          shutil.copy2(config, model_dir / config.name)
+          soundfont = download_muscriptor_soundfont(printer=lambda _message: None)
+          shutil.copy2(soundfont, assets_dir / soundfont.name)
+          PY
+
+          FLUIDSYNTH_SOURCE="$(command -v fluidsynth)" || {
+            echo "Required FluidSynth executable is missing" >&2
+            exit 1
+          }
+          mkdir -p "$BUILD_ASSET_ROOT/fluidsynth/bin" "$BUILD_ASSET_ROOT/fluidsynth/lib"
+          cp "$FLUIDSYNTH_SOURCE" "$BUILD_ASSET_ROOT/fluidsynth/bin/fluidsynth"
+          ldd "$FLUIDSYNTH_SOURCE" | awk '/=> \/[^ ]+/ {print $3} /^\/[^( ]+/ {print $1}' | sort -u | while read -r library; do
+            test -f "$library" || { echo "FluidSynth dependency missing: $library" >&2; exit 1; }
+            cp -L "$library" "$BUILD_ASSET_ROOT/fluidsynth/lib/"
+          done
+          test -s "$BUILD_ASSET_ROOT/fluidsynth/bin/fluidsynth"
 
           python tools/validate_portable_model_assets.py \
             --audio-separator-dir "$BUILD_ASSET_ROOT/audio-separator" \
@@ -382,6 +433,9 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR=$BUILD_ASSET_ROOT/bytedance_piano" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR=$BUILD_ASSET_ROOT/transkun_v2_aug" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR=$BUILD_ASSET_ROOT/muscriptor_large" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR=$BUILD_ASSET_ROOT/muscriptor_assets" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR=$BUILD_ASSET_ROOT/fluidsynth" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
 
       - name: 生成第三方 SBOM
@@ -611,11 +665,12 @@ jobs:
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+ 或 MIROS。
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor-large。
             VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
 
-          内置资产：YourMT3+ 5 个固定 checkpoint、MIROS 源码/两组权重、SW Fixed、Leap XE、PolarFormer、
-            TransKun 默认 V2、TransKun V2 Aug、Aria-AMT 与 ByteDance Piano。
+          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor-large 固定权重与配置、
+            MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
+            TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
 
           无需安装 Python，解压即用
           "@
@@ -661,11 +716,12 @@ jobs:
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+ 或 MIROS。
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor-large。
             VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
 
-          内置资产：YourMT3+ 5 个固定 checkpoint、MIROS 源码/两组权重、SW Fixed、Leap XE、PolarFormer、
-            TransKun 默认 V2、TransKun V2 Aug、Aria-AMT 与 ByteDance Piano。
+          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor-large 固定权重与配置、
+            MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
+            TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
 
           无需安装 Python，解压即用
           HEREDOC
@@ -824,12 +880,14 @@ jobs:
           - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
           - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
-          - 当前包含 7 种处理模式：智能转写 / 人声分离 / 六声部分离 / TransKun 钢琴 / TransKun V2 Aug 钢琴 / Aria-AMT 钢琴 / ByteDance Pedal 钢琴
+          - 当前包含 7 种处理模式；三个多乐器模式均可选择 YourMT3+、MIROS 或 MuScriptor-large
+          - MuScriptor-large 固定权重、MuseScore General SoundFont 与 FluidSynth 已内置；MuScriptor 及其输出仅限符合 CC BY-NC 4.0 和模型页附加条件的用途
 
           ### 许可说明
           - 包内附带完整的 \`THIRD_PARTY_NOTICES.md\`（逐项来源、许可与署名）与 \`THIRD_PARTY_SBOM.txt\`（构建环境依赖清单）
           - 本包作为组合作品按 GPL-3.0 条款分发（含 PyQt6/Qt 组件），完整对应源代码与构建说明见本仓库
           - Aria-AMT checkpoint 按 CC BY-NC-SA 4.0 再分发（非商业用途、保留署名，见包内声明）
+          - MuScriptor-large checkpoint 按 CC BY-NC 4.0 再分发，并附带模型页的具体使用条件；使用者须确认拥有输入音乐所需权利
           - 个别未声明许可的上游权重（Leap XE、BS-RoFormer SW Fixed、MIROS）由维护者以署名方式分发，权利人可以随时通过 Issue 要求移除
 
           ### 系统要求

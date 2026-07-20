@@ -15,7 +15,7 @@ def test_readme_documents_bytedance_pedal_selection_guidance_and_model_class():
         "96.72% / 91.86%",
         "TransKun V2",
         "Aria-AMT",
-        "YourMT3+ / MIROS 属于多乐器后端",
+        "YourMT3+ / MuScriptor / MIROS 属于多乐器后端",
         "钢琴专精模型对比",
         "piano_bytedance_pedal",
         "download_bytedance_piano_model.py",
@@ -37,7 +37,7 @@ def test_english_readme_documents_bytedance_pedal_model_comparisons():
         "96.72% / 91.86%",
         "PIANO_TRANSKUN",
         "Aria-AMT",
-        "YourMT3+ / MIROS are multi-instrument backends",
+        "YourMT3+ / MuScriptor / MIROS are multi-instrument backends",
         "piano_bytedance_pedal",
         "download_bytedance_piano_model.py",
     ):
@@ -70,8 +70,8 @@ def test_readme_documents_official_yourmt3_mode_and_delivery_sync_status():
         "Slakh `multi_f = 0.7398`",
         "YPTF.MoE+Multi (PS) | 8 专家 | 有 | 可选 pitch-shift MoE checkpoint",
         "### 当前人声分离模型：Leap XE vocals + PolarFormer accompaniment",
-        "`BS-Rofo-SW-Fixed.ckpt` 六声部 WAV 分离",
-        "每个 stem 独立运行所选 YourMT3+ / MIROS",
+        "`BS-Rofo-SW-Fixed.ckpt` -> 六条 WAV",
+        "每条 WAV 独立选择 11 条转写路线",
         "`PIANO_TRANSKUN_V2_AUG`",
     ):
         assert expected in readme
@@ -116,7 +116,7 @@ def test_readmes_match_current_processing_routes_and_packaged_paths():
         "BS-Rofo-SW-Fixed.ckpt",
         "Leap XE 90-band",
         "PolarFormer accompaniment",
-        "每个 stem 独立运行所选 YourMT3+ / MIROS",
+        "每条 WAV 独立选择 11 条转写路线",
         "PIANO_TRANSKUN_V2_AUG",
         "download_transkun_v2_aug_model.py",
         "models/bytedance_piano",

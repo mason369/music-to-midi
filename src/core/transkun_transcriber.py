@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import math
 import multiprocessing
 import queue
+from collections import defaultdict
 from contextlib import ExitStack
 from importlib import metadata, resources
 from pathlib import Path
@@ -25,6 +27,7 @@ from src.utils.midi_output import (
     remove_temporary_midi,
     unique_midi_temp_path,
 )
+from src.core.transcription_stream import piano_notes_payload, snapshot_event
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +53,9 @@ def _transkun_worker(
         import moduleconf
         import soxr
         import torch
-        from transkun.Data import writeMidi
+        import torch.nn.functional as F
+        from transkun.Data import resolveOverlapping, writeMidi
+        from transkun.Util import makeFrame
         from transkun.transcribe import readAudio
 
         conf_manager = moduleconf.parseFromFile(str(conf_path))
@@ -70,11 +75,119 @@ def _transkun_worker(
         if fs != model.fs:
             audio = soxr.resample(audio, fs, model.fs)
 
+        source_duration = len(audio) / float(model.fs)
+        x = torch.from_numpy(audio).to(device).transpose(-1, -2)
+        step_seconds = model.segmentHopSizeInSecond
+        segment_seconds = model.segmentSizeInSecond
+        pad_time_begin = segment_seconds - step_seconds
+        x = F.pad(
+            x,
+            (
+                math.ceil(pad_time_begin * model.fs),
+                math.ceil(model.fs * pad_time_begin),
+            ),
+        )
+        n_sample = x.shape[-1]
+        events_by_type = defaultdict(list)
+        start_frame_index = math.floor(pad_time_begin * model.fs / model.hopSize)
+        start_positions = [start_frame_index] * len(model.targetMIDIPitch)
+        step_size = math.ceil(step_seconds * model.fs / model.hopSize) * model.hopSize
+        segment_size = math.ceil(segment_seconds * model.fs)
+        total_segments = len(range(0, n_sample, step_size))
+
         with torch.no_grad():
-            notes_est = model.transcribe(
-                torch.from_numpy(audio).to(device),
-                discardSecondHalf=False,
-            )
+            for segment_index, i in enumerate(range(0, n_sample, step_size), start=1):
+                j = min(i + segment_size, n_sample)
+                begin_time = i / model.fs - pad_time_begin
+                current_slice = x[:, i:j]
+                if current_slice.shape[-1] < segment_size:
+                    current_slice = F.pad(
+                        current_slice,
+                        (0, segment_size - current_slice.shape[-1]),
+                    )
+                current_frames = makeFrame(
+                    current_slice,
+                    model.hopSize,
+                    model.windowSize,
+                )
+                last_frame_index = round(segment_size / model.hopSize)
+                current_events, last_positions = model.transcribeFrames(
+                    current_frames.unsqueeze(0),
+                    forcedStartPos=start_positions,
+                    velocityCriteron="hamming",
+                    onsetBound=None,
+                    lastFrameIdx=last_frame_index,
+                )
+                current_events = current_events[0]
+                start_positions = [
+                    max(position - int(step_size / model.hopSize), 0) for position in last_positions
+                ]
+                for event in current_events:
+                    event.start = max(event.start + begin_time, 0)
+                    event.end = max(event.end + begin_time, event.start)
+                    if (
+                        events_by_type[event.pitch]
+                        and event.start < events_by_type[event.pitch][-1].end
+                    ):
+                        previous = events_by_type[event.pitch][-1]
+                        if event.hasOnset:
+                            events_by_type[event.pitch][-1] = event
+                        else:
+                            previous.hasOffset = event.hasOffset
+                            previous.end = max(event.end, previous.end)
+                        continue
+                    if event.hasOnset:
+                        events_by_type[event.pitch].append(event)
+
+                is_final = segment_index == total_segments
+                if is_final:
+                    for pitch_events in events_by_type.values():
+                        if pitch_events:
+                            pitch_events[-1].hasOffset = True
+                    frontier = source_duration
+                else:
+                    frontier = min(source_duration, max(0.0, i / model.fs))
+                stable_events = [
+                    event
+                    for pitch_events in events_by_type.values()
+                    for event in pitch_events
+                    if event.hasOffset and event.end <= frontier + 1e-6
+                ]
+                if not is_final:
+                    result_queue.put(
+                        {
+                            "event": snapshot_event(
+                                backend="TransKun",
+                                completed=segment_index,
+                                total=total_segments,
+                                frontier_seconds=frontier,
+                                duration_seconds=source_duration,
+                                notes=piano_notes_payload(
+                                    stable_events,
+                                    frontier_seconds=frontier,
+                                ),
+                            )
+                        }
+                    )
+
+        notes_est = [event for events in events_by_type.values() for event in events]
+        notes_est = [event for event in notes_est if event.hasOffset]
+        notes_est = resolveOverlapping(notes_est)
+        result_queue.put(
+            {
+                "event": snapshot_event(
+                    backend="TransKun",
+                    completed=total_segments,
+                    total=total_segments,
+                    frontier_seconds=source_duration,
+                    duration_seconds=source_duration,
+                    notes=piano_notes_payload(
+                        notes_est,
+                        frontier_seconds=source_duration,
+                    ),
+                )
+            }
+        )
 
         output_midi = writeMidi(notes_est)
         output_midi.write(str(output_path))
@@ -258,21 +371,37 @@ class TranskunTranscriber:
                 if progress_callback:
                     progress_callback(0.30, self._pt("progress.running_transkun"))
 
+                result = None
+                event_callback = getattr(self, "_event_callback", None)
+
+                def _consume(message) -> None:
+                    nonlocal result
+                    if "event" in message:
+                        if event_callback is not None:
+                            event_callback(message["event"])
+                        return
+                    result = message
+
                 while process.is_alive():
                     self._check_cancelled()
+                    while True:
+                        try:
+                            _consume(result_queue.get_nowait())
+                        except queue.Empty:
+                            break
                     process.join(timeout=0.2)
 
                 self._process = None
                 self._check_cancelled()
 
-                try:
-                    result = result_queue.get(timeout=2.0)
-                except queue.Empty as exc:
-                    exit_code = getattr(process, "exitcode", None)
-                    raise RuntimeError(
-                        "TransKun 子进程未返回结果 "
-                        f"(exit code: {exit_code})"
-                    ) from exc
+                while result is None:
+                    try:
+                        _consume(result_queue.get(timeout=2.0))
+                    except queue.Empty as exc:
+                        exit_code = getattr(process, "exitcode", None)
+                        raise RuntimeError(
+                            "TransKun 子进程未返回结果 " f"(exit code: {exit_code})"
+                        ) from exc
                 if "error" in result:
                     raise RuntimeError(result["error"])
                 if "ok" not in result:
@@ -318,3 +447,6 @@ class TranskunTranscriber:
 
         logger.info("TransKun output: %s", out_path)
         return str(out_path)
+
+    def set_event_callback(self, callback: Optional[Callable[[dict], None]]) -> None:
+        self._event_callback = callback

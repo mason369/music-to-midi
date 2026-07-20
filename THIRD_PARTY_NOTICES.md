@@ -43,6 +43,10 @@ PORTABLE_COMPONENT: bytedance_checkpoint | bundle=models/bytedance_piano | artif
 PORTABLE_COMPONENT: miros_source | bundle=external/ai4m-miros | artifact=patched-source-tree | revision=668a0aa6357bb3f09e767c9ece378956c2ffd182 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: musicfm_pretrained | bundle=external/ai4m-miros/model/musicfm/data/pretrained_msd.pt | artifact=checkpoint | revision=546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: miros_finetuned | bundle=external/ai4m-miros/logs/.../last.ckpt | artifact=checkpoint | revision=sha256:b1b8c167b3d2e3eaeb19202cd3fd366bb43492cd7720ff1516e1553c72e356e5 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
+PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=source+metadata | revision=302343e8992bdfc619f77f1988168374ed5d675d | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_checkpoint | bundle=models/muscriptor_large | artifact=model.safetensors+config.json | revision=8809fdfbed2affa7ade94a7059e746e3880720e7 | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
+PORTABLE_COMPONENT: musescore_general_soundfont | bundle=models/muscriptor_assets | artifact=MuseScore_General.sf2 | revision=7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: fluidsynth_runtime | bundle=resources/fluidsynth | artifact=official-Windows-binary-or-Ubuntu-binary+runtime-libraries | revision=2.5.6-or-Ubuntu-22.04-package-recorded-at-build | license=LGPL-2.1-or-later | status=VERIFIED
 PORTABLE_COMPONENT: pytorch_cuda_runtime | bundle=python+native-runtime | artifact=torch:2.7.0+torchaudio:2.7.0+torchvision:0.22.0+CUDA | revision=cu128 | license=BSD-3-Clause-and-NVIDIA-CUDA-EULA | status=VERIFIED
 PORTABLE_COMPONENT: onnxruntime_gpu | bundle=python/onnxruntime | artifact=source+native-runtime | revision=1.23.2 | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: pyqt6_runtime | bundle=python/PyQt6+Qt6 | artifact=source+native-runtime | revision=requirements-range | license=GPL-3.0 | status=VERIFIED
@@ -56,6 +60,37 @@ OWNER_ACCEPTED_NOTICE: miros_source
 OWNER_ACCEPTED_NOTICE: miros_finetuned
 
 ## Verified declarations and owner-accepted artifacts
+
+### MuScriptor public runtime, gated large checkpoint, and demo playback assets
+
+- Runtime source: [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor/tree/302343e8992bdfc619f77f1988168374ed5d675d),
+  pinned commit `302343e8992bdfc619f77f1988168374ed5d675d`, package version
+  `0.2.2a1`; declared source license: MIT.
+- Model: [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large),
+  pinned revision `8809fdfbed2affa7ade94a7059e746e3880720e7`; declared model
+  license: CC BY-NC 4.0. The model repository is gated. Users must accept its
+  terms and authenticate with Hugging Face before `download_muscriptor_model.py`
+  can retrieve it.
+- The portable GPU archives include the exact gated checkpoint after the maintainer's
+  authenticated release job has accepted the model conditions. Redistribution and use
+  remain non-commercial under CC BY-NC 4.0, must retain attribution, and remain subject
+  to the model page's specific conditions. In particular, users must have all rights
+  required for every input recording and resulting transcription.
+- Playback SoundFont: `MuseScore_General.sf2` from
+  [MuScriptor/assets](https://huggingface.co/MuScriptor/assets/tree/7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f),
+  pinned revision `7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f`. The portable archives
+  include the exact MIT-licensed SF2 file and retain the upstream acknowledgements.
+  FluidR3 was created by Frank Wen (Copyright 2000-2002, 2008); the mono
+  conversion is Copyright 2014-2016 Michael Cowgill; the MuseScore adaptation is
+  Copyright 2018 S. Christian Collins; Temple Blocks were provided by Ethan Winer
+  (Copyright 2002), and Drumline Percussion by Michael Schorsch (Copyright 2016).
+  The upstream MIT grant permits use, copying, modification, publication,
+  distribution, sublicensing, and sale provided the copyright and permission
+  notices are retained. The work is supplied without warranty.
+- Synthesizer: [FluidSynth 2.5.6](https://github.com/FluidSynth/fluidsynth/tree/v2.5.6),
+  LGPL-2.1-or-later. Windows portable archives use the pinned official binary archive;
+  Linux portable archives carry the Ubuntu 22.04 executable and its resolved shared
+  libraries. Space/Colab and source installs use the system package.
 
 ### YourMT3+ source and five selectable checkpoints
 

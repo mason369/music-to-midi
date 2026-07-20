@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtTest import QSignalSpy
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -334,7 +335,7 @@ class AudioTrackMixerTests(unittest.TestCase):
 
         self.assertEqual(row.name_label.text(), "♪  reference")
         self.assertFalse(row.midi_enabled_checkbox.isChecked())
-        self.assertEqual(row.midi_model_selector.count(), 11)
+        self.assertEqual(row.midi_model_selector.count(), 12)
         self.assertFalse(row.convert_midi_button.isEnabled())
         self.assertIn("not converted", row.midi_status_label.text())
 
@@ -376,6 +377,40 @@ class AudioTrackMixerTests(unittest.TestCase):
             mixer._backends["reference"].waveform_loader,
             mixer._backends["guide"].waveform_loader,
         )
+
+    def test_track_save_button_exports_the_real_audio_file(self):
+        mixer, _players, _outputs = self._mixer()
+        destination = Path(self._temporary_directory.name) / "saved-vocals.wav"
+        completed = QSignalSpy(mixer.audio_export_succeeded)
+
+        with mock.patch(
+            "src.gui.widgets.audio_track_mixer.QFileDialog.getSaveFileName",
+            return_value=(str(destination), "WAV (*.wav)"),
+        ) as file_picker:
+            mixer._backends["vocals"].row.save_audio_button.click()
+
+        file_picker.assert_called_once()
+        self.assertTrue(completed.wait(3_000))
+        self.assertEqual(destination.read_bytes(), self.track_paths["vocals"].read_bytes())
+        self.assertIn("Saved 1 tracks", mixer.status_label.text())
+
+    def test_track_save_failure_is_visible_and_does_not_create_fake_output(self):
+        mixer, _players, _outputs = self._mixer()
+        source = self.track_paths["vocals"]
+        destination = Path(self._temporary_directory.name) / "missing-source.wav"
+        source.unlink()
+        failed = QSignalSpy(mixer.audio_export_failed)
+
+        with mock.patch(
+            "src.gui.widgets.audio_track_mixer.QFileDialog.getSaveFileName",
+            return_value=(str(destination), "WAV (*.wav)"),
+        ):
+            mixer._backends["vocals"].row.save_audio_button.click()
+
+        self.assertTrue(failed.wait(3_000))
+        self.assertTrue(mixer.error_label.isVisibleTo(mixer))
+        self.assertIn("FileNotFoundError", mixer.error_label.text())
+        self.assertFalse(destination.exists())
 
     def test_every_track_has_a_real_waveform_lane_and_shared_zoom(self):
         mixer, _players, _outputs = self._mixer()
@@ -431,6 +466,25 @@ class AudioTrackMixerTests(unittest.TestCase):
             mixer.track_names,
             ("bass", "drums", "guitar", "piano", "vocals", "other"),
         )
+        export_directory = root / "saved-six-stem-wavs"
+        export_directory.mkdir()
+        completed = QSignalSpy(mixer.audio_export_succeeded)
+        with mock.patch(
+            "src.gui.widgets.audio_track_mixer.QFileDialog.getExistingDirectory",
+            return_value=str(export_directory),
+        ) as directory_picker:
+            mixer.save_all_button.click()
+        directory_picker.assert_called_once()
+        self.assertTrue(completed.wait(3_000))
+        self.assertEqual(
+            {path.name for path in export_directory.iterdir()},
+            {f"{name}.wav" for name in ("bass", "drums", "guitar", "piano", "vocals", "other")},
+        )
+        for name in mixer.track_names:
+            self.assertEqual(
+                (export_directory / f"{name}.wav").read_bytes(),
+                (root / f"{name}.wav").read_bytes(),
+            )
         mixer.setFixedWidth(280)
         mixer.resize(280, 1800)
         mixer.show()
@@ -462,6 +516,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
         class _FakeMixer(QWidget):
             midi_conversion_requested = pyqtSignal(str, str, str)
             midi_open_requested = pyqtSignal(str)
+            playing_changed = pyqtSignal(bool)
 
             def __init__(self, tracks):
                 super().__init__()
@@ -500,6 +555,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
         class _FakeMixer(QWidget):
             midi_conversion_requested = pyqtSignal(str, str, str)
             midi_open_requested = pyqtSignal(str)
+            playing_changed = pyqtSignal(bool)
 
             def __init__(self, tracks):
                 super().__init__()
@@ -545,10 +601,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 self.assertEqual(len(created), 1)
                 self.assertEqual(
                     created[0].tracks,
-                    {
-                        name: Path(path).resolve()
-                        for name, path in result.separated_audio.items()
-                    },
+                    {name: Path(path).resolve() for name, path in result.separated_audio.items()},
                 )
                 self.assertEqual(created[0].shutdown_count, 0)
                 self.assertIs(created[0], window.audio_mixer)
@@ -575,6 +628,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
         class _FakeMixer(QWidget):
             midi_conversion_requested = pyqtSignal(str, str, str)
             midi_open_requested = pyqtSignal(str)
+            playing_changed = pyqtSignal(bool)
 
             def __init__(self, tracks):
                 super().__init__()
@@ -633,6 +687,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 )
             finally:
                 window.close()
+
     def test_direct_conversion_modes_do_not_create_source_audio_timeline(self):
         from src.gui.main_window import MainWindow
         from src.models.data_models import Config, ProcessingMode, ProcessingResult
@@ -700,9 +755,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 mode=ProcessingMode.VOCAL_SPLIT.value,
                 source_path=str(root / "source.wav"),
                 output_dir=str(root),
-                separated_audio={
-                    name: str(path) for name, path in track_paths.items()
-                },
+                separated_audio={name: str(path) for name, path in track_paths.items()},
                 processing_time=1.0,
             )
             try:
@@ -736,6 +789,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 self.assertEqual(reference_lane.path, reference_path.resolve())
             finally:
                 window.close()
+
     def test_finished_result_displays_timeline_construction_failure_in_the_dock(self):
         from src.core.separation_service import SeparationResult
         from src.gui.main_window import MainWindow
@@ -783,6 +837,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 self.assertFalse(window.audio_timeline_container.isHidden())
             finally:
                 window.close()
+
     def test_new_results_replace_tracks_and_language_updates_preserve_the_mixer(self):
         from src.core.separation_service import SeparationResult
         from src.gui.main_window import MainWindow
@@ -793,6 +848,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
         class _FakeMixer(QWidget):
             midi_conversion_requested = pyqtSignal(str, str, str)
             midi_open_requested = pyqtSignal(str)
+            playing_changed = pyqtSignal(bool)
 
             def __init__(self, tracks):
                 super().__init__()
@@ -865,5 +921,7 @@ class MainWindowAudioTimelineTests(unittest.TestCase):
                 window._playback_tracks_for_result(result)
         finally:
             window.close()
+
+
 if __name__ == "__main__":
     unittest.main()

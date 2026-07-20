@@ -26,6 +26,7 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 from src.utils.runtime_paths import get_bytedance_piano_dir
+from src.core.transcription_stream import piano_notes_payload, snapshot_event
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,91 @@ class ByteDancePianoTranscriber:
                 checkpoint_path=str(self.checkpoint_path),
             )
             self._check_cancelled()
-            transcriptor.transcribe(audio, str(temp_output_path))
+            event_callback = getattr(self, "_event_callback", None)
+            if event_callback is None:
+                transcriptor.transcribe(audio, str(temp_output_path))
+            else:
+                import numpy as np
+                import torch
+                from piano_transcription_inference.pytorch_utils import move_data_to_device
+                from piano_transcription_inference.utilities import (
+                    RegressionPostProcessor,
+                    write_events_to_midi,
+                )
+
+                framed_audio = audio[None, :]
+                audio_len = framed_audio.shape[1]
+                pad_len = (
+                    int(np.ceil(audio_len / transcriptor.segment_samples))
+                    * transcriptor.segment_samples
+                    - audio_len
+                )
+                framed_audio = np.concatenate(
+                    (framed_audio, np.zeros((1, pad_len))),
+                    axis=1,
+                )
+                segments = transcriptor.enframe(
+                    framed_audio,
+                    transcriptor.segment_samples,
+                )
+                total_segments = len(segments)
+                raw_outputs: dict[str, list] = {}
+                model_device = next(transcriptor.model.parameters()).device
+                post_processor = RegressionPostProcessor(
+                    transcriptor.frames_per_second,
+                    classes_num=transcriptor.classes_num,
+                    onset_threshold=transcriptor.onset_threshold,
+                    offset_threshold=transcriptor.offset_threshod,
+                    frame_threshold=transcriptor.frame_threshold,
+                    pedal_offset_threshold=transcriptor.pedal_offset_threshold,
+                )
+                final_note_events = []
+                final_pedal_events = None
+                segment_seconds = transcriptor.segment_samples / float(module.sample_rate)
+                for index, segment in enumerate(segments, start=1):
+                    self._check_cancelled()
+                    batch_waveform = move_data_to_device(segment[None, :], model_device)
+                    with torch.no_grad():
+                        transcriptor.model.eval()
+                        batch_output = transcriptor.model(batch_waveform)
+                    for key, value in batch_output.items():
+                        raw_outputs.setdefault(key, []).append(value.data.cpu().numpy())
+
+                    prefix_output = {
+                        key: transcriptor.deframe(np.concatenate(values, axis=0))[0:audio_len]
+                        for key, values in raw_outputs.items()
+                    }
+                    final_note_events, final_pedal_events = (
+                        post_processor.output_dict_to_midi_events(prefix_output)
+                    )
+                    frontier = (
+                        audio_duration_seconds
+                        if index == total_segments
+                        else min(
+                            audio_duration_seconds,
+                            index * segment_seconds / 2.0 + segment_seconds / 4.0,
+                        )
+                    )
+                    event_callback(
+                        snapshot_event(
+                            backend="ByteDance Pedal",
+                            completed=index,
+                            total=total_segments,
+                            frontier_seconds=frontier,
+                            duration_seconds=audio_duration_seconds,
+                            notes=piano_notes_payload(
+                                final_note_events,
+                                frontier_seconds=frontier,
+                            ),
+                        )
+                    )
+
+                write_events_to_midi(
+                    start_time=0,
+                    note_events=final_note_events,
+                    pedal_events=final_pedal_events,
+                    midi_path=str(temp_output_path),
+                )
             self._check_cancelled()
             if not temp_output_path.is_file() or temp_output_path.stat().st_size == 0:
                 raise RuntimeError(self._format_missing_output_error(input_path, out_path, device))
@@ -256,3 +341,6 @@ class ByteDancePianoTranscriber:
 
         logger.info("ByteDance Piano output: %s", out_path)
         return str(out_path)
+
+    def set_event_callback(self, callback: Optional[Callable[[dict], None]]) -> None:
+        self._event_callback = callback

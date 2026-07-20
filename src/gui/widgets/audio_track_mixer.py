@@ -12,8 +12,8 @@ from PyQt6.QtCore import (
     QElapsedTimer,
     QObject,
     QSignalBlocker,
-    QTimer,
     Qt,
+    QTimer,
     QUrl,
     pyqtSignal,
 )
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -32,16 +33,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.gui.layouts import FlowLayout
-from src.gui.widgets.audio_waveform import (
-    FfmpegWaveformLoader,
-    TimelineRuler,
-    WaveformEnvelope,
-    WaveformLane,
-)
-from src.gui.widgets.wheel_safe_controls import NoWheelComboBox, NoWheelSlider
 from src.core.manual_midi import (
     MIDI_ROUTE_MIROS,
+    MIDI_ROUTE_MUSCRIPTOR,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
@@ -49,6 +43,17 @@ from src.core.manual_midi import (
     MIDI_ROUTE_YOURMT3_PREFIX,
     YOURMT3_MANUAL_MODELS,
 )
+from src.gui.layouts import FlowLayout
+from src.gui.theme import DARK_DIRECTORY_DIALOG_OPTIONS, DARK_FILE_DIALOG_OPTIONS
+from src.gui.widgets.audio_waveform import (
+    FfmpegWaveformLoader,
+    TimelineRuler,
+    WaveformEnvelope,
+    WaveformLane,
+)
+from src.gui.widgets.muscriptor_instrument_selector import MuscriptorInstrumentSelector
+from src.gui.widgets.wheel_safe_controls import NoWheelComboBox, NoWheelSlider
+from src.gui.workers.audio_export_worker import AudioExportItem, AudioExportWorker
 from src.i18n.translator import t
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
@@ -97,6 +102,7 @@ def midi_route_label(route: str) -> str:
         return f"YourMT3+ · {model_label}"
     labels = {
         MIDI_ROUTE_MIROS: t("dialogs.complete.audio_tracks.manual_midi.models.miros"),
+        MIDI_ROUTE_MUSCRIPTOR: t("dialogs.complete.audio_tracks.manual_midi.models.muscriptor"),
         MIDI_ROUTE_PIANO_TRANSKUN: t(
             "dialogs.complete.audio_tracks.manual_midi.models.piano_transkun"
         ),
@@ -174,6 +180,7 @@ class _AudioTrackRow(QFrame):
     zoom_requested = pyqtSignal(int, int)
     midi_conversion_requested = pyqtSignal(str)
     midi_open_requested = pyqtSignal(str)
+    audio_export_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -232,6 +239,11 @@ class _AudioTrackRow(QFrame):
         self.remove_button.setProperty("audioTrackRemove", True)
         header.addWidget(self.remove_button)
 
+        self.save_audio_button = QPushButton()
+        self.save_audio_button.setObjectName(f"audioTrack_{safe_name}_saveAudio")
+        self.save_audio_button.setProperty("audioTrackExport", True)
+        header.addWidget(self.save_audio_button)
+
         self.midi_enabled_checkbox = QCheckBox()
         self.midi_enabled_checkbox.setObjectName(f"audioTrack_{safe_name}_midiEnabled")
         self.midi_enabled_checkbox.setProperty("audioTrackMidiEnabled", True)
@@ -259,6 +271,13 @@ class _AudioTrackRow(QFrame):
         self.open_midi_button.hide()
         header.addWidget(self.open_midi_button)
         layout.addLayout(header)
+
+        self.muscriptor_instrument_selector = MuscriptorInstrumentSelector(self)
+        self.muscriptor_instrument_selector.setObjectName(
+            f"audioTrack_{safe_name}_muscriptorInstruments"
+        )
+        self.muscriptor_instrument_selector.hide()
+        layout.addWidget(self.muscriptor_instrument_selector)
 
         self.path_label = QLabel(path.name)
         self.path_label.setObjectName(f"audioTrack_{safe_name}_path")
@@ -319,6 +338,7 @@ class _AudioTrackRow(QFrame):
         self.offset_slider.valueChanged.connect(self._on_offset_changed)
         self.offset_slider.sliderReleased.connect(self.offset_committed)
         self.remove_button.clicked.connect(self.remove_requested)
+        self.save_audio_button.clicked.connect(self.audio_export_requested)
         self.midi_enabled_checkbox.toggled.connect(self._on_midi_option_changed)
         self.midi_model_selector.currentIndexChanged.connect(self._on_midi_route_selected)
         self.convert_midi_button.clicked.connect(self._request_midi_conversion)
@@ -392,6 +412,10 @@ class _AudioTrackRow(QFrame):
                 f"{multi_label} · {midi_route_label(MIDI_ROUTE_MIROS)}",
                 MIDI_ROUTE_MIROS,
             )
+            self._add_midi_route_action(
+                f"{multi_label} · {midi_route_label(MIDI_ROUTE_MUSCRIPTOR)}",
+                MIDI_ROUTE_MUSCRIPTOR,
+            )
             for route in (
                 MIDI_ROUTE_PIANO_TRANSKUN,
                 MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
@@ -445,11 +469,20 @@ class _AudioTrackRow(QFrame):
     def _update_midi_action_state(self) -> None:
         editable = self._midi_controls_allowed and self._midi_state != "running"
         midi_enabled = self.midi_enabled_checkbox.isChecked()
+        is_muscriptor = self._selected_midi_route == MIDI_ROUTE_MUSCRIPTOR
         self.midi_enabled_checkbox.setEnabled(editable)
         self.midi_model_selector.setEnabled(editable and midi_enabled)
+        self.muscriptor_instrument_selector.setVisible(is_muscriptor)
+        self.muscriptor_instrument_selector.setEnabled(editable and midi_enabled and is_muscriptor)
         self.convert_midi_button.setEnabled(
             editable and midi_enabled and bool(self._selected_midi_route)
         )
+
+    def selected_muscriptor_instruments(self) -> list[str]:
+        """Return the official canonical constraint for this track row."""
+        if self._selected_midi_route != MIDI_ROUTE_MUSCRIPTOR:
+            return []
+        return self.muscriptor_instrument_selector.selected_instruments()
 
     def _open_generated_midi(self) -> None:
         if not self._midi_output_path:
@@ -459,6 +492,9 @@ class _AudioTrackRow(QFrame):
     def set_midi_controls_enabled(self, enabled: bool) -> None:
         self._midi_controls_allowed = bool(enabled)
         self._update_midi_action_state()
+
+    def set_audio_export_enabled(self, enabled: bool) -> None:
+        self.save_audio_button.setEnabled(bool(enabled))
 
     def set_midi_conversion_running(self, route: str) -> None:
         label = midi_route_label(route)
@@ -560,11 +596,16 @@ class _AudioTrackRow(QFrame):
         self.midi_status_label.show()
 
     def update_translations(self) -> None:
+        self.muscriptor_instrument_selector.update_translations()
         display_name = _display_track_name(self.track_name)
         self.name_label.setText(f"♪  {display_name}")
         self.mute_button.setText(t("dialogs.complete.audio_tracks.mute"))
         self.solo_button.setText(t("dialogs.complete.audio_tracks.solo"))
         self.remove_button.setText(t("dialogs.complete.audio_tracks.remove"))
+        audio_format = self.path.suffix.lstrip(".").upper() or "AUDIO"
+        self.save_audio_button.setText(
+            t("dialogs.complete.audio_tracks.export.save_track", format=audio_format)
+        )
         self.midi_enabled_checkbox.setText(t("dialogs.complete.audio_tracks.manual_midi.enable"))
         self.convert_midi_button.setText(t("dialogs.complete.audio_tracks.manual_midi.start"))
         self.open_midi_button.setText(t("dialogs.complete.audio_tracks.manual_midi.open"))
@@ -581,6 +622,10 @@ class _AudioTrackRow(QFrame):
         )
         self.remove_button.setAccessibleName(
             f"{display_name} {t('dialogs.complete.audio_tracks.remove')}"
+        )
+        self.save_audio_button.setAccessibleName(
+            f"{display_name} "
+            f"{t('dialogs.complete.audio_tracks.export.save_track', format=audio_format)}"
         )
         self.midi_enabled_checkbox.setAccessibleName(
             f"{display_name} " f"{t('dialogs.complete.audio_tracks.manual_midi.enable')}"
@@ -669,6 +714,8 @@ class AudioTrackMixerWidget(QWidget):
     playing_changed = pyqtSignal(bool)
     midi_conversion_requested = pyqtSignal(str, str, str)
     midi_open_requested = pyqtSignal(str)
+    audio_export_succeeded = pyqtSignal(object)
+    audio_export_failed = pyqtSignal(str)
 
     def __init__(
         self,
@@ -717,6 +764,7 @@ class AudioTrackMixerWidget(QWidget):
         self._view_start_ms = 0
         self._view_end_ms = 1
         self._clock = QElapsedTimer()
+        self._export_worker: AudioExportWorker | None = None
 
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(_SYNC_INTERVAL_MS)
@@ -813,6 +861,11 @@ class AudioTrackMixerWidget(QWidget):
         self.add_track_button.setObjectName("audioMixerAddTrackButton")
         self.add_track_button.clicked.connect(self._choose_audio_tracks)
         transport.addWidget(self.add_track_button)
+
+        self.save_all_button = QPushButton()
+        self.save_all_button.setObjectName("audioMixerSaveAllButton")
+        self.save_all_button.clicked.connect(self._choose_all_track_export)
+        transport.addWidget(self.save_all_button)
 
         self.zoom_out_button = QPushButton("−")
         self.zoom_out_button.setObjectName("audioMixerZoomOutButton")
@@ -988,6 +1041,7 @@ class AudioTrackMixerWidget(QWidget):
         )
         row.offset_committed.connect(lambda name=track_name: self._on_track_offset_committed(name))
         row.remove_requested.connect(lambda name=track_name: self.remove_track(name))
+        row.audio_export_requested.connect(lambda name=track_name: self._choose_track_export(name))
         row.midi_conversion_requested.connect(
             lambda route, name=track_name, track_path=path: (
                 self.midi_conversion_requested.emit(
@@ -1023,6 +1077,14 @@ class AudioTrackMixerWidget(QWidget):
     @property
     def track_names(self) -> tuple[str, ...]:
         return tuple(self._backends)
+
+    def track_muscriptor_instruments(self, track_name: str) -> list[str]:
+        """Return the selected hard constraint owned by one visible track row."""
+        try:
+            backend = self._backends[track_name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown audio track: {track_name!r}") from exc
+        return backend.row.selected_muscriptor_instruments()
 
     @property
     def is_ready(self) -> bool:
@@ -1096,6 +1158,185 @@ class AudioTrackMixerWidget(QWidget):
 
     def set_track_midi_cancelled(self, track_name: str) -> None:
         self._backend(track_name).row.set_midi_conversion_cancelled()
+
+    def _show_audio_export_error(self, error: str) -> None:
+        detail = t("dialogs.complete.audio_tracks.export.failed", error=str(error))
+        logger.error("Audio track export failed: %s", error)
+        self.status_label.setText(t("dialogs.complete.audio_tracks.export.failed_short"))
+        self.error_label.setText(detail)
+        self.error_label.setToolTip(str(error))
+        self.error_label.show()
+        self.audio_export_failed.emit(str(error))
+
+    def _choose_track_export(self, track_name: str) -> None:
+        try:
+            self._require_not_shutdown()
+            if self._export_worker is not None:
+                raise RuntimeError(t("dialogs.complete.audio_tracks.export.busy"))
+            backend = self._backend(track_name)
+            source = backend.path
+            suffix = source.suffix
+            audio_format = suffix.lstrip(".").upper() or "AUDIO"
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                t(
+                    "dialogs.complete.audio_tracks.export.save_track_title",
+                    track=_display_track_name(track_name),
+                ),
+                source.name,
+                f"{audio_format} (*{suffix})" if suffix else "Audio Files (*)",
+                options=DARK_FILE_DIALOG_OPTIONS,
+            )
+            if not destination:
+                return
+            destination_path = Path(destination).expanduser()
+            if not destination_path.suffix and suffix:
+                destination_path = destination_path.with_suffix(suffix)
+            if suffix and destination_path.suffix.casefold() != suffix.casefold():
+                raise ValueError(
+                    t(
+                        "dialogs.complete.audio_tracks.export.extension_mismatch",
+                        extension=suffix,
+                    )
+                )
+            item = AudioExportItem(
+                _display_track_name(track_name),
+                source,
+                destination_path,
+            )
+            if self._confirm_export_overwrite((item,)):
+                self._start_audio_export((item,))
+        except (FileNotFoundError, NotADirectoryError, OSError, RuntimeError, ValueError) as exc:
+            self._show_audio_export_error(str(exc))
+
+    def _choose_all_track_export(self) -> None:
+        try:
+            self._require_not_shutdown()
+            if self._export_worker is not None:
+                raise RuntimeError(t("dialogs.complete.audio_tracks.export.busy"))
+            if not self._backends:
+                raise RuntimeError(t("dialogs.complete.audio_tracks.empty_timeline"))
+            default_directory = str(next(iter(self._backends.values())).path.parent)
+            destination = QFileDialog.getExistingDirectory(
+                self,
+                t("dialogs.complete.audio_tracks.export.save_all_title"),
+                default_directory,
+                options=DARK_DIRECTORY_DIALOG_OPTIONS,
+            )
+            if not destination:
+                return
+            destination_dir = Path(destination).expanduser()
+            items = tuple(
+                AudioExportItem(
+                    _display_track_name(track_name),
+                    backend.path,
+                    destination_dir / backend.path.name,
+                )
+                for track_name, backend in self._backends.items()
+            )
+            if self._confirm_export_overwrite(items):
+                self._start_audio_export(items)
+        except (FileNotFoundError, NotADirectoryError, OSError, RuntimeError, ValueError) as exc:
+            self._show_audio_export_error(str(exc))
+
+    def _confirm_export_overwrite(self, items: tuple[AudioExportItem, ...]) -> bool:
+        conflicts = []
+        for item in items:
+            destination = Path(item.destination).expanduser()
+            if not destination.exists():
+                continue
+            source = Path(item.source).expanduser().resolve(strict=True)
+            if destination.is_file() and source.samefile(destination):
+                continue
+            conflicts.append(destination.name)
+        if not conflicts:
+            return True
+        answer = QMessageBox.question(
+            self,
+            t("dialogs.complete.audio_tracks.export.overwrite_title"),
+            t(
+                "dialogs.complete.audio_tracks.export.overwrite_message",
+                files="\n".join(conflicts),
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _set_audio_export_controls_enabled(self, enabled: bool) -> None:
+        self.save_all_button.setEnabled(bool(enabled) and bool(self._backends))
+        self.add_track_button.setEnabled(bool(enabled))
+        for backend in self._backends.values():
+            backend.row.set_audio_export_enabled(enabled)
+
+    def _start_audio_export(self, items: tuple[AudioExportItem, ...]) -> None:
+        if self._export_worker is not None:
+            raise RuntimeError(t("dialogs.complete.audio_tracks.export.busy"))
+        worker = AudioExportWorker(items, self)
+        self._export_worker = worker
+        self.error_label.clear()
+        self.error_label.hide()
+        self._set_audio_export_controls_enabled(False)
+        self.status_label.setText(
+            t("dialogs.complete.audio_tracks.export.starting", count=len(items))
+        )
+        worker.progress_updated.connect(self._on_audio_export_progress)
+        worker.export_succeeded.connect(self._on_audio_export_succeeded)
+        worker.export_failed.connect(self._on_audio_export_failed)
+        worker.export_cancelled.connect(self._on_audio_export_cancelled)
+        worker.finished.connect(
+            lambda active_worker=worker: self._on_audio_export_thread_finished(active_worker)
+        )
+        worker.start()
+
+    def _on_audio_export_progress(
+        self,
+        completed_bytes: int,
+        total_bytes: int,
+        label: str,
+    ) -> None:
+        if self._shutdown:
+            return
+        percent = min(100, round(100 * completed_bytes / max(1, total_bytes)))
+        self.status_label.setText(
+            t(
+                "dialogs.complete.audio_tracks.export.saving",
+                track=label,
+                percent=percent,
+            )
+        )
+
+    def _on_audio_export_succeeded(self, destinations: object) -> None:
+        paths = tuple(str(path) for path in destinations)
+        if not paths or self._shutdown:
+            return
+        self.status_label.setText(
+            t(
+                "dialogs.complete.audio_tracks.export.saved",
+                count=len(paths),
+                directory=str(Path(paths[0]).parent),
+            )
+        )
+        self.error_label.clear()
+        self.error_label.hide()
+        self.audio_export_succeeded.emit(paths)
+
+    def _on_audio_export_failed(self, error: str) -> None:
+        if not self._shutdown:
+            self._show_audio_export_error(error)
+
+    def _on_audio_export_cancelled(self) -> None:
+        if not self._shutdown:
+            self.status_label.setText(t("dialogs.complete.audio_tracks.export.cancelled"))
+
+    def _on_audio_export_thread_finished(self, worker: AudioExportWorker) -> None:
+        if worker is not self._export_worker:
+            worker.deleteLater()
+            return
+        self._export_worker = None
+        worker.deleteLater()
+        if not self._shutdown:
+            self._set_audio_export_controls_enabled(True)
 
     def add_audio_files(self, paths: Sequence[str | Path]) -> tuple[str, ...]:
         """Add local audio files and return their generated track names.
@@ -1239,6 +1480,12 @@ class AudioTrackMixerWidget(QWidget):
         if self._shutdown:
             return
         self._shutdown = True
+        export_worker = self._export_worker
+        if export_worker is not None:
+            export_worker.cancel()
+            export_worker.wait()
+            self._export_worker = None
+            export_worker.deleteLater()
         self._sync_timer.stop()
         self._load_timeout_timer.stop()
         self._sync_timer.timeout.disconnect(self._on_sync_tick)
@@ -1253,6 +1500,7 @@ class AudioTrackMixerWidget(QWidget):
         self.replay_button.setEnabled(False)
         self.align_button.setEnabled(False)
         self.add_track_button.setEnabled(False)
+        self.save_all_button.setEnabled(False)
         self.timeline.setEnabled(False)
         self.view_scroll.setEnabled(False)
 
@@ -1449,6 +1697,7 @@ class AudioTrackMixerWidget(QWidget):
             t("dialogs.complete.audio_tracks.add_track"),
             "",
             t("dialogs.complete.audio_tracks.file_filter", formats=formats),
+            options=DARK_FILE_DIALOG_OPTIONS,
         )
         if not paths:
             return
@@ -1688,6 +1937,7 @@ class AudioTrackMixerWidget(QWidget):
         self.replay_button.setText(t("dialogs.complete.audio_tracks.replay"))
         self.align_button.setText(t("dialogs.complete.audio_tracks.align"))
         self.add_track_button.setText(t("dialogs.complete.audio_tracks.add_track"))
+        self.save_all_button.setText(t("dialogs.complete.audio_tracks.export.save_all"))
         self.fit_button.setText(t("dialogs.complete.audio_tracks.fit"))
         self.zoom_out_button.setToolTip(t("dialogs.complete.audio_tracks.zoom_out"))
         self.zoom_in_button.setToolTip(t("dialogs.complete.audio_tracks.zoom_in"))
@@ -1698,6 +1948,8 @@ class AudioTrackMixerWidget(QWidget):
         self.timeline_ruler.update_translations()
         for backend in self._backends.values():
             backend.row.update_translations()
+        if self._export_worker is not None:
+            return
         if self._failed:
             self.status_label.setText(t("dialogs.complete.audio_tracks.failed"))
         elif self._ready:

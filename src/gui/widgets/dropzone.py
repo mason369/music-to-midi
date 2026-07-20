@@ -1,12 +1,12 @@
 """
 文件拖放区域组件 - 用于文件输入
 """
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QSizePolicy
-)
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtWidgets import QFileDialog, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
+from src.gui.theme import DARK_FILE_DIALOG_OPTIONS
 from src.i18n.translator import t
 from src.utils.audio_utils import get_supported_formats, is_supported_format
 
@@ -172,7 +172,8 @@ class DropZoneWidget(QWidget):
             self,
             t("dialogs.openFile.title"),
             "",
-            filter_str
+            filter_str,
+            options=DARK_FILE_DIALOG_OPTIONS,
         )
 
         if file_path:
@@ -184,6 +185,12 @@ class DropZoneWidget(QWidget):
         self.file_label.setText(f"{t('main.dropzone.selected')}: {_display_file_name(file_path)}")
         self.file_label.show()
         self.file_selected.emit(file_path)
+
+    def clear_selection(self) -> None:
+        """Return to the upload state for an explicit 'transcribe another' action."""
+        self._selected_file_path = None
+        self.file_label.clear()
+        self.file_label.hide()
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         """处理拖入事件"""

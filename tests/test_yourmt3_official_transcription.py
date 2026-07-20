@@ -179,3 +179,108 @@ def test_official_transcription_uses_torchaudio_nonoverlap_fixed_batch_and_write
     assert calls["detokenize"][1:] == ([0.0], True)
     assert calls["write"][3] is inverse_vocab
     assert mido.MidiFile(output_path).tracks[0][3].time == 1
+
+
+def test_official_transcription_emits_real_stable_prefix_snapshots_without_changing_writer(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeTaskManager:
+        num_decoding_channels = 1
+
+        def detokenize_list_batches(self, _batches, start_secs, return_events):
+            assert return_events is True
+            return list(start_secs), [], {}
+
+    class FakeModel:
+        task_manager = FakeTaskManager()
+        midi_output_inverse_vocab = {3: (24, "Guitar")}
+        test_pitch_shift_layer = None
+
+        def inference(self, x, _task_tokens):
+            return torch.zeros((len(x), 1, 1), dtype=torch.long)
+
+    fake_model = FakeModel()
+    waveform = torch.zeros((1, 36), dtype=torch.float32)
+    torchaudio = types.ModuleType("torchaudio")
+    torchaudio.load = lambda *, uri: (waveform, 4)
+    torchaudio.functional = types.SimpleNamespace(resample=lambda audio, _sr, _target: audio)
+
+    utils_package = types.ModuleType("utils")
+    utils_package.__path__ = []
+    audio_module = types.ModuleType("utils.audio")
+    event2note_module = types.ModuleType("utils.event2note")
+    note2event_module = types.ModuleType("utils.note2event")
+    utils_module = types.ModuleType("utils.utils")
+    audio_module.slice_padded_array = lambda *_args: np.zeros((9, 4), dtype=np.float32)
+    event2note_module.merge_zipped_note_events_and_ties_to_notes = lambda starts: (
+        [
+            types.SimpleNamespace(
+                is_drum=False,
+                program=3,
+                onset=float(start),
+                offset=float(start) + 0.5,
+                pitch=60,
+                velocity=1,
+            )
+            for start in starts
+        ],
+        {},
+    )
+    note2event_module.mix_notes = lambda notes_by_channel: list(notes_by_channel[0])
+
+    def fake_write(_notes, output_dir, track_name, _inverse_vocab):
+        path = Path(output_dir) / "model_output" / f"{track_name}.mid"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        midi = mido.MidiFile(type=1, ticks_per_beat=480)
+        track = mido.MidiTrack()
+        track.extend(
+            [
+                mido.Message("program_change", program=24, channel=0, time=0),
+                mido.Message("note_on", note=60, velocity=100, channel=0, time=0),
+                mido.Message("note_off", note=60, velocity=0, channel=0, time=240),
+            ]
+        )
+        midi.tracks.append(track)
+        midi.save(path)
+
+    utils_module.write_model_output_as_midi = fake_write
+    for name, module in {
+        "torchaudio": torchaudio,
+        "utils": utils_package,
+        "utils.audio": audio_module,
+        "utils.event2note": event2note_module,
+        "utils.note2event": note2event_module,
+        "utils.utils": utils_module,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    output_path = tmp_path / "streamed.mid"
+    attempt_path = tmp_path / ".streamed.yourmt3.tmp.mid"
+    monkeypatch.setattr(yourmt3_module, "unique_midi_temp_path", lambda *_args: attempt_path)
+    monkeypatch.setattr(YourMT3Transcriber, "_model", fake_model)
+    monkeypatch.setattr(
+        YourMT3Transcriber,
+        "_audio_cfg",
+        {"sample_rate": 4, "input_frames": 4},
+    )
+    transcriber = object.__new__(YourMT3Transcriber)
+    transcriber.device = "cpu"
+    transcriber._cancelled = False
+    transcriber._cancel_check_callback = None
+    monkeypatch.setattr(transcriber, "is_selected_model_available", lambda: True)
+    monkeypatch.setattr(transcriber, "_get_selected_model_name", lambda: "ymt3_plus")
+    monkeypatch.setattr(transcriber, "_load_model", lambda **_kwargs: None)
+    events = []
+    transcriber.set_event_callback(events.append)
+
+    result = transcriber.transcribe_to_midi("source.wav", str(output_path))
+
+    assert result == str(output_path.resolve())
+    assert [(event["completed"], event["total"]) for event in events] == [(8, 9), (9, 9)]
+    assert events[0]["frontier_seconds"] == pytest.approx(7.0)
+    assert len(events[0]["notes"]) == 7
+    assert events[0]["notes"][0]["instrument"] == "gm:024"
+    assert events[-1]["frontier_seconds"] == pytest.approx(9.0)
+    assert len(events[-1]["notes"]) == 9
+    assert mido.MidiFile(output_path).tracks[0][2].time == 240

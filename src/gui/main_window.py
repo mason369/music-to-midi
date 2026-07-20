@@ -2,62 +2,75 @@
 音乐转MIDI应用程序主窗口
 """
 
-import os
-import sys
-import platform
 import logging
+import os
+import platform
+import sys
 import time as _time
 from html import escape
 from pathlib import Path
+
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QMenuBar,
-    QMenu,
-    QToolBar,
-    QStatusBar,
-    QLabel,
-    QPushButton,
-    QCheckBox,
-    QLineEdit,
-    QGroupBox,
-    QFileDialog,
-    QMessageBox,
-    QFrame,
-    QSplitter,
-    QGraphicsDropShadowEffect,
-    QDialog,
-    QTextEdit,
     QApplication,
-    QSizePolicy,
+    QCheckBox,
+    QDialog,
+    QFileDialog,
     QFormLayout,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QLayout,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMenuBar,
+    QMessageBox,
+    QPushButton,
     QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QStatusBar,
+    QTextEdit,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QFont, QPalette, QColor, QPixmap
 
 from src import __version__
+from src.core.manual_midi import (
+    MIDI_ROUTE_MUSCRIPTOR,
+    MIDI_ROUTE_YOURMT3_PREFIX,
+    build_manual_midi_config,
+    manual_midi_output_dir,
+)
+from src.core.multi_stem_separator import STEM_KEYS
+from src.gui.layouts import FlowLayout
+from src.gui.theme import (
+    DARK_DIRECTORY_DIALOG_OPTIONS,
+    DARK_FILE_DIALOG_OPTIONS,
+    apply_dark_application_theme,
+)
+from src.gui.widgets.audio_track_mixer import AudioTrackMixerWidget, midi_route_label
+from src.gui.widgets.dropzone import DropZoneWidget
+from src.gui.widgets.muscriptor_result import MuscriptorResultWidget
+from src.gui.widgets.progress_widget import ProgressWidget
+from src.gui.widgets.track_panel import TrackPanel
+from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
+from src.gui.workers.processing_worker import ProcessingWorker
+from src.gui.workers.separation_worker import SeparationResult, SeparationWorker
+from src.i18n.translator import get_resource_path, get_translator, set_language, t
 from src.models.data_models import (
     Config,
+    MultiInstrumentModel,
     ProcessingMode,
     ProcessingProgress,
     ProcessingResult,
     ProcessingStage,
 )
-from src.core.manual_midi import build_manual_midi_config, manual_midi_output_dir
-from src.core.multi_stem_separator import STEM_KEYS
-from src.gui.widgets.dropzone import DropZoneWidget
-from src.gui.widgets.audio_track_mixer import AudioTrackMixerWidget, midi_route_label
-from src.gui.widgets.track_panel import TrackPanel
-from src.gui.widgets.progress_widget import ProgressWidget
-from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
-from src.gui.layouts import FlowLayout
-from src.gui.workers.processing_worker import ProcessingWorker
-from src.gui.workers.separation_worker import SeparationResult, SeparationWorker
-from src.i18n.translator import t, get_translator, set_language, get_resource_path
 from src.utils.gpu_utils import get_memory_info
 
 logger = logging.getLogger(__name__)
@@ -356,6 +369,9 @@ class MainWindow(QMainWindow):
         self.track_panel.set_yourmt3_model(
             getattr(self.config, "yourmt3_model", "yptf_moe_multi_nops")
         )
+        self.track_panel.set_muscriptor_instruments(
+            getattr(self.config, "muscriptor_instruments", [])
+        )
         self._add_shadow(self.track_panel)
 
         # 进度组件
@@ -406,6 +422,7 @@ class MainWindow(QMainWindow):
         result_layout.addWidget(self.result_info_label)
 
         self.audio_mixer = None
+        self.muscriptor_result_widget = None
         self._audio_mixer_tracks = None
         self.audio_mixer_error_label = None
         self.audio_timeline_container = QWidget(self.result_panel)
@@ -441,7 +458,10 @@ class MainWindow(QMainWindow):
             "QFrame#successResultPanel { background: #101a32; "
             "border: 1px solid #38547a; border-radius: 9px; }"
         )
-        self._add_shadow(self.result_panel)
+        # The result panel owns animated waveforms and the 60 FPS MIDI playhead.
+        # A QGraphicsEffect on this ancestor forces Qt to rasterize the complete
+        # (often several-thousand-pixel-high) subtree whenever any child repaints.
+        # Keep the native border surface here so child dirty regions remain local.
         self.result_panel.hide()
 
         # 添加组件
@@ -685,6 +705,10 @@ class MainWindow(QMainWindow):
 
     def _apply_modern_style(self):
         """应用现代化样式 - 专业音频软件风格"""
+        application = QApplication.instance()
+        if application is None:
+            raise RuntimeError("A QApplication is required before styling the main window")
+        apply_dark_application_theme(application)
         self.setStyleSheet("""
             QMainWindow {
                 background: #1a1a2e;
@@ -910,9 +934,9 @@ class MainWindow(QMainWindow):
             def run(self):
                 try:
                     from src.utils.gpu_utils import (
-                        is_gpu_available,
                         get_accelerator_label,
                         get_memory_info,
+                        is_gpu_available,
                     )
 
                     device_text = get_accelerator_label() if is_gpu_available() else "CPU"
@@ -1003,6 +1027,8 @@ class MainWindow(QMainWindow):
             mixer.hide()
             mixer.deleteLater()
 
+        self._clear_midi_workbench()
+
         if self.audio_mixer_error_label is not None:
             error_label = self.audio_mixer_error_label
             self.audio_mixer_error_label = None
@@ -1011,6 +1037,17 @@ class MainWindow(QMainWindow):
             error_label.deleteLater()
 
         self._audio_mixer_tracks = None
+
+    def _clear_midi_workbench(self) -> None:
+        """Release only the streamed MIDI result surface, preserving a mixer."""
+        if self.muscriptor_result_widget is None:
+            return
+        workbench = self.muscriptor_result_widget
+        self.muscriptor_result_widget = None
+        workbench.shutdown()
+        self.audio_timeline_layout.removeWidget(workbench)
+        workbench.hide()
+        workbench.deleteLater()
 
     def _set_audio_tracks(self, tracks, *, show_timeline: bool = True) -> None:
         """Replace the inline mixer with a fresh owner for the provided tracks."""
@@ -1038,6 +1075,7 @@ class MainWindow(QMainWindow):
             self.audio_mixer = mixer
             mixer.midi_conversion_requested.connect(self._start_track_midi_conversion)
             mixer.midi_open_requested.connect(self._open_output_folder)
+            mixer.playing_changed.connect(self._on_audio_mixer_playing_changed)
             self.audio_timeline_layout.addWidget(mixer)
 
         if show_timeline:
@@ -1064,6 +1102,118 @@ class MainWindow(QMainWindow):
         if hasattr(self, "save_action"):
             self.save_action.setEnabled(False)
         self._clear_audio_mixer()
+
+    def _transcribe_another(self) -> None:
+        """Clear the MuScriptor result and return focus to the upload surface."""
+        self._clear_completed_result()
+        self.current_file = None
+        self.dropzone.clear_selection()
+        self.start_btn.setEnabled(False)
+        self.status_label.setText(t("status.ready"))
+        self.content_scroll.verticalScrollBar().setValue(0)
+
+    def _show_muscriptor_streaming(
+        self,
+        audio_path: str,
+        selected_instruments: list[str],
+        *,
+        backend_label: str = "MuScriptor-large",
+        muscriptor_groups: bool = True,
+        preserve_mixer: bool = False,
+        source_track_name: str | None = None,
+    ) -> None:
+        """Reveal the shared real-time piano roll before inference begins."""
+        if preserve_mixer:
+            self._clear_midi_workbench()
+        else:
+            self._clear_audio_mixer()
+        workbench = MuscriptorResultWidget(
+            audio_path,
+            selected_instruments,
+            self.audio_timeline_container,
+            backend_label=backend_label,
+            muscriptor_groups=muscriptor_groups,
+            source_track_name=source_track_name,
+        )
+        workbench.playing_changed.connect(self._on_midi_workbench_playing_changed)
+        workbench.transcribe_another_requested.connect(
+            self._clear_midi_workbench if preserve_mixer else self._transcribe_another
+        )
+        self.muscriptor_result_widget = workbench
+        self.audio_timeline_layout.addWidget(workbench)
+        if not preserve_mixer:
+            self.result_title_label.setText(f"🎼  {backend_label}")
+            self.result_info_label.hide()
+            self._clear_widget_layout(self.result_actions_layout)
+        self.audio_timeline_container.show()
+        self.result_panel.show()
+        QTimer.singleShot(
+            0,
+            lambda: self.content_scroll.ensureWidgetVisible(self.result_panel, 0, 16),
+        )
+
+    def _on_audio_mixer_playing_changed(self, playing: bool) -> None:
+        """Keep the WAV mixer and linked MIDI detail from playing simultaneously."""
+        if playing and self.muscriptor_result_widget is not None:
+            self.muscriptor_result_widget.pause()
+
+    def _on_midi_workbench_playing_changed(self, playing: bool) -> None:
+        """Pause the WAV master view whenever its linked MIDI detail starts."""
+        if playing and self.audio_mixer is not None:
+            self.audio_mixer.pause()
+
+    def _on_muscriptor_event(self, payload: object) -> None:
+        workbench = self.muscriptor_result_widget
+        if workbench is not None and not self._stopping:
+            workbench.add_stream_event(payload)
+
+    def _show_muscriptor_result(
+        self,
+        result: ProcessingResult,
+        *,
+        reveal: bool,
+    ) -> None:
+        """Finalize the official-style workbench without replacing it."""
+        if not result.tracks or not result.tracks[0].audio_path:
+            raise RuntimeError("Transcription result does not identify its source audio")
+        workbench = self.muscriptor_result_widget
+        if workbench is None:
+            self._show_muscriptor_streaming(
+                result.tracks[0].audio_path,
+                result.selected_instruments,
+                backend_label=(result.transcription_backend or "MIDI"),
+                muscriptor_groups=(
+                    result.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
+                ),
+            )
+            workbench = self.muscriptor_result_widget
+        if workbench is None:
+            raise RuntimeError("Transcription result workbench could not be created")
+
+        bpm_text = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
+        self._last_result = result
+        self._last_separation_result = None
+        self.result_title_label.setText(f"✓  {workbench.backend_label}")
+        self.result_info_label.setText(
+            f"<b>{t('dialogs.complete.midi_file')}:</b> {escape(result.midi_path)}<br>"
+            f"<b>{t('dialogs.complete.note_count')}:</b> {result.total_notes}<br>"
+            f"<b>BPM:</b> {bpm_text}<br>"
+            f"<b>{t('dialogs.complete.processing_time')}:</b> "
+            f"{result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}"
+        )
+        self.result_info_label.show()
+        self._clear_widget_layout(self.result_actions_layout)
+        self.audio_timeline_container.show()
+        self.result_panel.show()
+        self.save_action.setEnabled(True)
+        workbench.update_translations()
+        if workbench.midi_path != str(Path(result.midi_path).resolve()):
+            workbench.finalize_result(result)
+        if reveal:
+            QTimer.singleShot(
+                0,
+                lambda: self.content_scroll.ensureWidgetVisible(self.result_panel, 0, 16),
+            )
 
     @staticmethod
     def _result_button_style(*, primary: bool = False) -> str:
@@ -1109,6 +1259,9 @@ class MainWindow(QMainWindow):
         replace_timeline: bool = True,
     ) -> None:
         """Render the completed-output summary and replace the persistent timeline."""
+        if self.muscriptor_result_widget is not None and not result.separated_audio:
+            self._show_muscriptor_result(result, reveal=reveal)
+            return
         self._last_result = result
         self._last_separation_result = None
         is_six_stem = bool(result.stem_midi_paths)
@@ -1260,14 +1413,12 @@ class MainWindow(QMainWindow):
             )
 
         ordered_paths = [
-            (name, Path(result.separated_audio[name]).resolve())
-            for name in expected_names
+            (name, Path(result.separated_audio[name]).resolve()) for name in expected_names
         ]
         for name, path in ordered_paths:
             if not path.is_file() or path.stat().st_size <= 0:
                 raise FileNotFoundError(
-                    "Separated audio does not exist or is empty: "
-                    f"track={name}, path={path}"
+                    "Separated audio does not exist or is empty: " f"track={name}, path={path}"
                 )
 
         self._last_result = None
@@ -1334,16 +1485,41 @@ class MainWindow(QMainWindow):
         filter_str = f"{t('dialogs.openFile.filter')} (*{' *'.join(formats)})"
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, t("dialogs.openFile.title"), "", filter_str
+            self,
+            t("dialogs.openFile.title"),
+            "",
+            filter_str,
+            options=DARK_FILE_DIALOG_OPTIONS,
         )
 
         if file_path:
             self._on_file_selected(file_path)
 
+    @staticmethod
+    def _transcription_backend_label(config: Config) -> str:
+        mode = config.processing_mode
+        piano_labels = {
+            ProcessingMode.PIANO_TRANSKUN.value: "TransKun V2",
+            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value: "TransKun V2 Aug",
+            ProcessingMode.PIANO_ARIA_AMT.value: "Aria-AMT",
+            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value: "ByteDance Pedal",
+        }
+        if mode in piano_labels:
+            return piano_labels[mode]
+        backend = config.get_effective_multi_instrument_model()
+        if backend == MultiInstrumentModel.MUSCRIPTOR.value:
+            return "MuScriptor-large"
+        if backend == MultiInstrumentModel.MIROS.value:
+            return "MIROS (MusicFM)"
+        return midi_route_label(f"{MIDI_ROUTE_YOURMT3_PREFIX}{config.yourmt3_model}")
+
     def _browse_output_dir(self):
         """浏览输出目录"""
         dir_path = QFileDialog.getExistingDirectory(
-            self, t("dialogs.selectDir.title"), self.output_dir_edit.text()
+            self,
+            t("dialogs.selectDir.title"),
+            self.output_dir_edit.text(),
+            options=DARK_DIRECTORY_DIALOG_OPTIONS,
         )
 
         if dir_path:
@@ -1379,7 +1555,9 @@ class MainWindow(QMainWindow):
         self.config.multi_instrument_model = self.track_panel.get_multi_instrument_model()
         self.config.midi_track_mode = self.track_panel.get_midi_track_mode()
         self.config.yourmt3_model = self.track_panel.get_yourmt3_model()
+        self.config.muscriptor_instruments = self.track_panel.get_muscriptor_instruments()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
+        self.config.validate()
 
         # 创建以音乐名命名的子文件夹（如果已存在则添加数字后缀）
         music_name = Path(self.current_file).stem
@@ -1420,6 +1598,19 @@ class MainWindow(QMainWindow):
             self.worker.progress_updated.connect(self._on_progress)
             self.worker.processing_finished.connect(self._on_finished)
             self.worker.error_occurred.connect(self._on_error)
+            is_muscriptor = (
+                self.config.get_effective_multi_instrument_model()
+                == MultiInstrumentModel.MUSCRIPTOR.value
+            )
+            self._show_muscriptor_streaming(
+                self.current_file,
+                self.config.muscriptor_instruments if is_muscriptor else [],
+                backend_label=self._transcription_backend_label(self.config),
+                muscriptor_groups=is_muscriptor,
+            )
+            transcription_event = getattr(self.worker, "transcription_event", None)
+            if transcription_event is not None:
+                transcription_event.connect(self._on_muscriptor_event)
         worker = self.worker
         self.worker.finished.connect(lambda worker=worker: self._on_worker_thread_finished(worker))
 
@@ -1435,9 +1626,18 @@ class MainWindow(QMainWindow):
         logger.info("处理已开始")
 
     @staticmethod
-    def _manual_midi_config(base_config: Config, route: str) -> Config:
+    def _manual_midi_config(
+        base_config: Config,
+        route: str,
+        *,
+        muscriptor_instruments: list[str] | None = None,
+    ) -> Config:
         """Build an isolated one-file config from the shared route contract."""
-        return build_manual_midi_config(base_config, route)
+        return build_manual_midi_config(
+            base_config,
+            route,
+            muscriptor_instruments=muscriptor_instruments,
+        )
 
     def _start_track_midi_conversion(
         self,
@@ -1471,7 +1671,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            manual_config = self._manual_midi_config(self.config, route)
+            manual_config = self._manual_midi_config(
+                self.config,
+                route,
+                muscriptor_instruments=mixer.track_muscriptor_instruments(track_name),
+            )
             output_dir = manual_midi_output_dir(resolved_audio, route)
             output_dir.mkdir(parents=True, exist_ok=True)
             manual_config.output_dir = str(output_dir)
@@ -1500,6 +1704,19 @@ class MainWindow(QMainWindow):
         self._stopping = False
         mixer.set_midi_controls_enabled(False)
         mixer.set_track_midi_running(track_name, route)
+        mixer.pause()
+        is_muscriptor = route == MIDI_ROUTE_MUSCRIPTOR
+        self._show_muscriptor_streaming(
+            str(resolved_audio),
+            manual_config.muscriptor_instruments if is_muscriptor else [],
+            backend_label=midi_route_label(route),
+            muscriptor_groups=is_muscriptor,
+            preserve_mixer=True,
+            source_track_name=track_name,
+        )
+        transcription_event = getattr(worker, "transcription_event", None)
+        if transcription_event is not None:
+            transcription_event.connect(self._on_muscriptor_event)
         worker.progress_updated.connect(
             lambda progress, name=track_name, selected_route=route: (
                 self._on_track_midi_progress(name, selected_route, progress)
@@ -1583,6 +1800,9 @@ class MainWindow(QMainWindow):
             route,
             result.midi_path,
         )
+        workbench = self.muscriptor_result_widget
+        if workbench is not None:
+            workbench.finalize_result(result)
         self.status_label.setText(f"{t('status.complete')} - {Path(result.midi_path).name}")
         logger.info(
             "逐轨 MIDI 转写完成: track=%s route=%s output=%s",
@@ -1610,6 +1830,8 @@ class MainWindow(QMainWindow):
                     error_message,
                 )
         if not self._stopping:
+            if self.muscriptor_result_widget is not None:
+                self.muscriptor_result_widget.mark_failed(error_message)
             self.status_label.setText(t("status.error"))
             logger.error(
                 "逐轨 MIDI 转写失败: track=%s route=%s error=%s",
@@ -1660,6 +1882,8 @@ class MainWindow(QMainWindow):
             return
 
         self._stopping = False
+        if self.muscriptor_result_widget is not None:
+            self.muscriptor_result_widget.mark_cancelled()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.track_panel.set_processing_controls_enabled(True)
@@ -1745,6 +1969,8 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.track_panel.set_processing_controls_enabled(False)
         self.status_label.setText(t("status.error"))
+        if self.muscriptor_result_widget is not None:
+            self.muscriptor_result_widget.mark_failed(error_msg)
 
         # 创建自定义错误对话框
         dialog = QDialog(self)
@@ -1844,14 +2070,19 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         """显示关于对话框"""
-        QMessageBox.about(
-            self,
-            t("dialogs.about.title"),
-            f"{t('app.name')} v{__version__}\n\n"
+        dialog = QMessageBox(self)
+        dialog.setObjectName("aboutDialog")
+        dialog.setWindowTitle(t("dialogs.about.title"))
+        dialog.setIconPixmap(self.windowIcon().pixmap(48, 48))
+        dialog.setText(f"{t('app.name')} v{__version__}")
+        dialog.setInformativeText(
             f"{t('dialogs.about.description')}\n\n"
             f"{t('dialogs.about.author')}: mason369\n"
-            f"{t('dialogs.about.license')}: MIT",
+            f"{t('dialogs.about.license')}: MIT"
         )
+        dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
 
     def _change_language(self, lang_code: str):
         """更改应用程序语言"""

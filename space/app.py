@@ -302,6 +302,7 @@ from gradio.components.base import Component
 from src.core.manual_midi import (
     MANUAL_MIDI_ROUTES,
     MIDI_ROUTE_MIROS,
+    MIDI_ROUTE_MUSCRIPTOR,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
@@ -312,9 +313,11 @@ from src.core.manual_midi import (
 )
 from src.core.multi_stem_separator import STEM_KEYS
 from src.core.separation_service import AudioSeparationService, SeparationResult
-from src.gui.web.track_mixer_runtime import (
-    TRACK_COLORS as _TRACK_COLORS,
+from src.gui.web.muscriptor_result_runtime import (
+    build_muscriptor_result_html,
+    muscriptor_result_head,
 )
+from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
     build_track_mixer_html,
     mixer_head,
@@ -326,6 +329,11 @@ from src.models.data_models import (
     ProcessingMode,
     ProcessingStage,
     YourMT3Model,
+)
+from src.models.muscriptor_instruments import (
+    MUSCRIPTOR_INSTRUMENTS,
+    muscriptor_instrument_label,
+    validate_muscriptor_instruments,
 )
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
@@ -387,6 +395,10 @@ MULTI_INSTRUMENT_MODE_IDS = {
 BACKEND_CHOICES = [
     (st("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
     (st("main.engine.miros"), MultiInstrumentModel.MIROS.value),
+    (st("main.engine.muscriptor"), MultiInstrumentModel.MUSCRIPTOR.value),
+]
+MUSCRIPTOR_INSTRUMENT_CHOICES = [
+    (muscriptor_instrument_label(name, SPACE_LANGUAGE), name) for name in MUSCRIPTOR_INSTRUMENTS
 ]
 YOURMT3_MODEL_CHOICES = [
     (YOURMT3_MODELS[model.value]["ui_label"], model.value)
@@ -436,6 +448,7 @@ def _manual_midi_route_label(route: str) -> str:
 
     route_labels = {
         MIDI_ROUTE_MIROS: st("dialogs.complete.audio_tracks.manual_midi.models.miros"),
+        MIDI_ROUTE_MUSCRIPTOR: st("dialogs.complete.audio_tracks.manual_midi.models.muscriptor"),
         MIDI_ROUTE_PIANO_TRANSKUN: st(
             "dialogs.complete.audio_tracks.manual_midi.models.piano_transkun"
         ),
@@ -455,7 +468,7 @@ def _manual_midi_route_label(route: str) -> str:
         raise ValueError(f"Unsupported manual MIDI route: {route!r}") from exc
     family_key = (
         "dialogs.complete.audio_tracks.manual_midi.multi_instrument"
-        if route == MIDI_ROUTE_MIROS
+        if route in {MIDI_ROUTE_MIROS, MIDI_ROUTE_MUSCRIPTOR}
         else "dialogs.complete.audio_tracks.manual_midi.piano"
     )
     return f"{st(family_key)} · {route_label}"
@@ -464,9 +477,9 @@ def _manual_midi_route_label(route: str) -> str:
 MANUAL_MIDI_ROUTE_CHOICES = [
     (_manual_midi_route_label(route), route) for route in MANUAL_MIDI_ROUTES
 ]
-if len(MANUAL_MIDI_ROUTE_CHOICES) != 10:
+if len(MANUAL_MIDI_ROUTE_CHOICES) != 11:
     raise RuntimeError(
-        "Space requires exactly ten explicit per-track MIDI routes; "
+        "Space requires exactly eleven explicit per-track MIDI routes; "
         f"received {len(MANUAL_MIDI_ROUTE_CHOICES)}"
     )
 
@@ -524,6 +537,93 @@ def _require_owned_request_output_dir(
     return candidate
 
 
+def _normalize_midi_result_state(
+    raw_state,
+    request_root: Path,
+    *,
+    expected_audio_path: str | Path,
+) -> dict:
+    """Validate one linked MIDI workbench before exposing its files to Gradio."""
+    if not isinstance(raw_state, dict):
+        raise RuntimeError("Linked MIDI result state must be a dictionary")
+    if raw_state.get("kind") not in {"midi_result", "muscriptor_result"}:
+        raise RuntimeError("Linked MIDI result state has an unsupported kind")
+    audio_path = _require_owned_request_file(
+        request_root,
+        raw_state.get("audio_path", ""),
+        "Linked MIDI source audio",
+    )
+    if audio_path != Path(expected_audio_path).resolve():
+        raise RuntimeError("Linked MIDI result does not belong to its source WAV track")
+
+    def owned_file(key: str, label: str) -> str:
+        return str(
+            _require_owned_request_file(
+                request_root,
+                raw_state.get(key, ""),
+                label,
+            )
+        )
+
+    raw_notes = raw_state.get("notes")
+    if not isinstance(raw_notes, list) or not raw_notes:
+        raise RuntimeError("Linked MIDI result does not contain playable notes")
+    notes = []
+    for raw_note in raw_notes:
+        if not isinstance(raw_note, dict):
+            raise RuntimeError("Linked MIDI note entries must be dictionaries")
+        note = {
+            "instrument": str(raw_note.get("instrument", "")).strip(),
+            "pitch": int(raw_note.get("pitch", -1)),
+            "velocity": int(raw_note.get("velocity", -1)),
+            "start": float(raw_note.get("start", -1.0)),
+            "end": float(raw_note.get("end", -1.0)),
+        }
+        if (
+            not note["instrument"]
+            or not 0 <= note["pitch"] <= 127
+            or not 0 <= note["velocity"] <= 127
+            or note["start"] < 0
+            or note["end"] <= note["start"]
+        ):
+            raise RuntimeError(f"Linked MIDI result contains an invalid note: {note!r}")
+        notes.append(note)
+
+    instrument_wavs = {}
+    raw_instrument_wavs = raw_state.get("instrument_wavs")
+    if not isinstance(raw_instrument_wavs, dict) or not raw_instrument_wavs:
+        raise RuntimeError("Linked MIDI result does not contain instrument audio buses")
+    for instrument, path in raw_instrument_wavs.items():
+        instrument_name = str(instrument).strip()
+        if not instrument_name:
+            raise RuntimeError("Linked MIDI result contains an empty instrument id")
+        instrument_wavs[instrument_name] = str(
+            _require_owned_request_file(
+                request_root,
+                path,
+                f"Linked MIDI instrument audio {instrument_name}",
+            )
+        )
+
+    duration = float(raw_state.get("duration", 0.0))
+    if duration <= 0:
+        raise RuntimeError("Linked MIDI result has no playable duration")
+    return {
+        "kind": "midi_result",
+        "audio_path": str(audio_path),
+        "midi_path": owned_file("midi_path", "Linked MIDI file"),
+        "selected_instruments": [str(item) for item in raw_state.get("selected_instruments", [])],
+        "detected_instruments": [str(item) for item in raw_state.get("detected_instruments", [])],
+        "notes": notes,
+        "duration": duration,
+        "transcription_wav": owned_file("transcription_wav", "Linked MIDI transcription audio"),
+        "stereo_mix_wav": owned_file("stereo_mix_wav", "Linked MIDI stereo audio"),
+        "instrument_wavs": instrument_wavs,
+        "backend_label": str(raw_state.get("backend_label", "")).strip(),
+        "source_track_name": str(raw_state.get("source_track_name", "")).strip(),
+    }
+
+
 def _normalize_track_state(track_state) -> dict:
     if not track_state:
         return {}
@@ -573,6 +673,9 @@ def _normalize_track_state(track_state) -> dict:
                 "color": str(raw_track.get("color", "#5eb1ff")),
                 "midi_enabled": bool(raw_track.get("midi_enabled", False)),
                 "route": route,
+                "muscriptor_instruments": validate_muscriptor_instruments(
+                    raw_track.get("muscriptor_instruments", [])
+                ),
                 "status": str(
                     raw_track.get("status")
                     or st("dialogs.complete.audio_tracks.manual_midi.not_selected")
@@ -580,12 +683,32 @@ def _normalize_track_state(track_state) -> dict:
                 "midi_path": midi_path,
             }
         )
+    active_track_id = str(track_state.get("active_midi_track_id", "")).strip()
+    active_result = None
+    if active_track_id:
+        active_track = next(
+            (track for track in normalized_tracks if track["id"] == active_track_id),
+            None,
+        )
+        if active_track is None:
+            raise RuntimeError("Linked MIDI result references an unknown WAV track")
+        active_result = _normalize_midi_result_state(
+            track_state.get("active_midi_result"),
+            request_root,
+            expected_audio_path=active_track["audio_path"],
+        )
+        active_result["source_track_name"] = active_track["name"]
+    elif track_state.get("active_midi_result"):
+        raise RuntimeError("Linked MIDI result is missing its source WAV track id")
+
     return {
-        "version": 1,
+        "version": 2,
         "mode": mode,
         "request_dir": str(request_root),
         "processing_time": float(track_state.get("processing_time", 0.0)),
         "tracks": normalized_tracks,
+        "active_midi_track_id": active_track_id,
+        "active_midi_result": active_result,
     }
 
 
@@ -625,6 +748,7 @@ def _build_track_state(result: SeparationResult, request_dir: str | Path) -> dic
                 "color": _TRACK_COLORS[index % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
+                "muscriptor_instruments": [],
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -632,13 +756,68 @@ def _build_track_state(result: SeparationResult, request_dir: str | Path) -> dic
 
     return _normalize_track_state(
         {
-            "version": 1,
+            "version": 2,
             "mode": result.mode,
             "request_dir": str(request_root),
             "processing_time": result.processing_time,
             "tracks": tracks,
+            "active_midi_track_id": "",
+            "active_midi_result": None,
         }
     )
+
+
+def _build_midi_result_state(
+    result,
+    audio_path: str | Path,
+    output_dir: str | Path,
+    *,
+    backend_label: str,
+    source_track_name: str = "",
+    muscriptor_groups: bool = False,
+    progress_callback=None,
+) -> dict:
+    """Build the shared playable MIDI workbench for any transcription backend."""
+    from src.core.muscriptor_result_assets import prepare_midi_playback_assets
+
+    assets = prepare_midi_playback_assets(
+        result.midi_path,
+        audio_path,
+        output_dir,
+        progress_callback=progress_callback,
+        muscriptor_groups=muscriptor_groups,
+    )
+    detected = list(dict.fromkeys(note.instrument for note in assets.notes))
+    selected = list(result.selected_instruments) if muscriptor_groups else detected
+    return {
+        "kind": "midi_result",
+        "audio_path": str(Path(audio_path).resolve()),
+        "midi_path": str(Path(result.midi_path).resolve()),
+        "selected_instruments": selected,
+        "detected_instruments": detected,
+        "notes": [
+            {
+                "instrument": note.instrument,
+                "pitch": note.pitch,
+                "velocity": note.velocity,
+                "start": note.start,
+                "end": note.end,
+            }
+            for note in assets.notes
+        ],
+        "duration": assets.duration,
+        "transcription_wav": str(assets.transcription_wav),
+        "stereo_mix_wav": str(assets.stereo_mix_wav),
+        "instrument_wavs": {name: str(path) for name, path in assets.instrument_wavs.items()},
+        "backend_label": str(backend_label),
+        "source_track_name": str(source_track_name),
+    }
+
+
+def _result_backend_label(config: Config) -> str:
+    if config.processing_mode == ProcessingMode.SMART.value:
+        return {value: label for label, value in BACKEND_CHOICES}[config.transcription_backend]
+    return MODE_LABELS[config.processing_mode]
 
 
 def ensure_model_weights(model_key: str):
@@ -716,6 +895,63 @@ def ensure_miros_weights():
 
     repo_dir = prepare_miros_model(printer=logger.info)
     logger.info("MIROS source and weights ready: %s", repo_dir)
+
+
+def ensure_muscriptor_runtime():
+    """Install and verify the exact public commit that implements hard masking."""
+    from src.core.muscriptor_transcriber import (
+        MUSCRIPTOR_SOURCE_COMMIT,
+        MUSCRIPTOR_SOURCE_REQUIREMENT,
+        MuscriptorTranscriber,
+    )
+
+    unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
+    if not unavailable:
+        return
+    logger.info("Installing pinned MuScriptor runtime: %s", unavailable)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            "--no-deps",
+            "--force-reinstall",
+            MUSCRIPTOR_SOURCE_REQUIREMENT,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.stdout:
+        logger.info("MuScriptor installer output:\n%s", completed.stdout.rstrip())
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Pinned MuScriptor runtime installation failed "
+            f"for commit {MUSCRIPTOR_SOURCE_COMMIT} (exit={completed.returncode})"
+        )
+    importlib.invalidate_caches()
+    unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
+    if unavailable:
+        raise RuntimeError(
+            "Pinned MuScriptor installation completed but identity/API validation failed: "
+            f"{unavailable}"
+        )
+
+
+def ensure_muscriptor_weights():
+    """Download the gated, pinned large checkpoint and verify its exact hashes."""
+    from src.utils.muscriptor_downloader import download_muscriptor_large_model
+
+    ensure_muscriptor_runtime()
+    weights, config = download_muscriptor_large_model(printer=logger.info)
+    logger.info("MuScriptor-large checkpoint ready: %s", weights)
+    logger.info("MuScriptor-large config ready: %s", config)
 
 
 def ensure_transkun_v2_aug_weights():
@@ -860,6 +1096,7 @@ def _build_space_request_config(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_instruments=None,
     *,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
@@ -873,6 +1110,7 @@ def _build_space_request_config(
     config.transcription_backend = transcription_backend
     config.multi_instrument_model = transcription_backend
     config.yourmt3_model = yourmt3_model
+    config.muscriptor_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
     config.vocal_split_merge_midi = bool(
         config.processing_mode == ProcessingMode.VOCAL_SPLIT.value and vocal_split_merge_midi
     )
@@ -881,13 +1119,19 @@ def _build_space_request_config(
     return config
 
 
-def _prepare_request_models(mode, transcription_backend, yourmt3_model) -> None:
+def _prepare_request_models(
+    mode,
+    transcription_backend,
+    yourmt3_model,
+    muscriptor_instruments=None,
+) -> None:
     """Strictly prepare only the assets selected for the current job."""
 
     config = _build_space_request_config(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_instruments,
     )
     if config.processing_mode == ProcessingMode.PIANO_ARIA_AMT.value:
         ensure_aria_amt_weights()
@@ -900,6 +1144,8 @@ def _prepare_request_models(mode, transcription_backend, yourmt3_model) -> None:
             ensure_model_weights(config.yourmt3_model)
         elif config.transcription_backend == MultiInstrumentModel.MIROS.value:
             ensure_miros_weights()
+        elif config.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value:
+            ensure_muscriptor_weights()
         else:
             raise RuntimeError(
                 "Unsupported multi-instrument backend: " f"{config.transcription_backend!r}"
@@ -948,6 +1194,7 @@ def _convert_impl(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_instruments,
     progress=gr.Progress(),
 ):
     """Run one direct audio-to-MIDI mode without creating a track workbench."""
@@ -969,6 +1216,7 @@ def _convert_impl(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_instruments,
         vocal_split_merge_midi=False,
         save_separated_tracks=True,
     )
@@ -988,6 +1236,21 @@ def _convert_impl(
             progress_callback=on_progress,
         )
         output_files = _validate_processing_outputs(result, config, output_dir)
+        is_muscriptor = (
+            config.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
+            and config.processing_mode == ProcessingMode.SMART.value
+        )
+        result_state = _build_midi_result_state(
+            result,
+            audio_path,
+            Path(output_dir) / "midi-playback",
+            backend_label=_result_backend_label(config),
+            muscriptor_groups=is_muscriptor,
+            progress_callback=lambda value, message: progress(
+                0.95 + value * 0.05,
+                desc=message,
+            ),
+        )
     except InterruptedError:
         logger.info("Direct conversion cancelled by user")
         try:
@@ -1033,7 +1296,7 @@ def _convert_impl(
         ),
     ]
     logger.info(st("space.log.complete"))
-    return output_files, "\n".join(status_lines), {}
+    return output_files, "\n".join(status_lines), result_state
 
 
 def _separate_impl(
@@ -1109,8 +1372,7 @@ def _separate_impl(
 
     output_files = [track["audio_path"] for track in track_state["tracks"]]
     wav_lines = [
-        f"  • {track['name']}: {Path(track['audio_path']).name}"
-        for track in track_state["tracks"]
+        f"  • {track['name']}: {Path(track['audio_path']).name}" for track in track_state["tracks"]
     ]
     status_lines = [
         st("dialogs.complete.audio_tracks.separation_result_title"),
@@ -1125,9 +1387,7 @@ def _separate_impl(
             hours=SPACE_OUTPUT_RETENTION_SECONDS / 3600,
         ),
     ]
-    logger.info(
-        st("progress.separation_only_complete", seconds=f"{result.processing_time:.1f}")
-    )
+    logger.info(st("progress.separation_only_complete", seconds=f"{result.processing_time:.1f}"))
     return output_files, "\n".join(status_lines), track_state
 
 
@@ -1150,6 +1410,7 @@ ZERO_GPU_MODE_RUNTIME_MULTIPLIERS = {
 ZERO_GPU_MULTI_BACKEND_RUNTIME_FACTORS = {
     MultiInstrumentModel.YOURMT3.value: 1.0,
     MultiInstrumentModel.MIROS.value: 2.5,
+    MultiInstrumentModel.MUSCRIPTOR.value: 3.0,
 }
 ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS = {
     YourMT3Model.YMT3_PLUS.value: 1.0,
@@ -1165,6 +1426,7 @@ def _estimate_zerogpu_duration(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_instruments=None,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
     progress=None,
@@ -1175,7 +1437,7 @@ def _estimate_zerogpu_duration(
     daily quota or queue capacity is available.  Long songs must use Colab,
     the desktop build, or dedicated GPU hardware.
     """
-    del vocal_split_merge_midi, save_separated_tracks, progress
+    del muscriptor_instruments, vocal_split_merge_midi, save_separated_tracks, progress
     if audio_path is None:
         return 60
     if mode not in MODE_IDS:
@@ -1226,6 +1488,7 @@ if ZERO_GPU:
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_instruments,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1242,6 +1505,7 @@ if ZERO_GPU:
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_instruments,
             progress=progress,
         )
 
@@ -1252,6 +1516,7 @@ else:
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_instruments,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1268,6 +1533,7 @@ else:
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_instruments,
             progress=progress,
         )
 
@@ -1277,6 +1543,7 @@ def convert_audio_to_midi(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_instruments=None,
     progress=gr.Progress(),
 ):
     """Prepare exactly one selected primary job before requesting a GPU slot."""
@@ -1290,14 +1557,21 @@ def convert_audio_to_midi(
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_instruments,
             progress=progress,
         )
-    _prepare_request_models(mode, transcription_backend, yourmt3_model)
+    _prepare_request_models(
+        mode,
+        transcription_backend,
+        yourmt3_model,
+        muscriptor_instruments,
+    )
     return _convert_audio_to_midi_on_gpu(
         audio_path,
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_instruments,
         progress=progress,
     )
 
@@ -1306,12 +1580,16 @@ if ZERO_GPU:
     setattr(convert_audio_to_midi, "zerogpu", None)
 
 
-def _manual_route_config(route: str) -> Config:
+def _manual_route_config(route: str, muscriptor_instruments=None) -> Config:
     if route not in MANUAL_MIDI_ROUTES:
         raise RuntimeError(f"Unsupported manual MIDI route: {route!r}")
     base_config = Config()
     base_config.language = SPACE_LANGUAGE
-    return build_manual_midi_config(base_config, route)
+    return build_manual_midi_config(
+        base_config,
+        route,
+        muscriptor_instruments=validate_muscriptor_instruments(muscriptor_instruments or []),
+    )
 
 
 def _estimate_manual_zerogpu_duration(
@@ -1319,6 +1597,7 @@ def _estimate_manual_zerogpu_duration(
     request_dir,
     track_id,
     route,
+    muscriptor_instruments=None,
     progress=None,
 ):
     del progress
@@ -1329,12 +1608,13 @@ def _estimate_manual_zerogpu_duration(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route))
+    config = _manual_route_config(str(route), muscriptor_instruments)
     return _estimate_zerogpu_duration(
         str(audio_file),
         config.processing_mode,
         config.transcription_backend,
         config.yourmt3_model,
+        config.muscriptor_instruments,
     )
 
 
@@ -1343,6 +1623,7 @@ def _convert_manual_midi_impl(
     request_dir,
     track_id,
     route,
+    muscriptor_instruments,
     progress=gr.Progress(),
 ):
     from src.core.pipeline import MusicToMidiPipeline
@@ -1354,7 +1635,7 @@ def _convert_manual_midi_impl(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route))
+    config = _manual_route_config(str(route), muscriptor_instruments)
     output_dir = _require_owned_request_output_dir(
         request_root,
         manual_midi_output_dir(audio_file, str(route)),
@@ -1378,7 +1659,19 @@ def _convert_manual_midi_impl(
             raise RuntimeError(
                 f"Manual MIDI conversion returned {len(output_files)} files instead of one"
             )
-        return output_files[0]
+        is_muscriptor = config.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
+        result_state = _build_midi_result_state(
+            result,
+            audio_file,
+            output_dir / "midi-playback",
+            backend_label=_manual_midi_route_label(str(route)),
+            muscriptor_groups=is_muscriptor,
+            progress_callback=lambda value, message: progress(
+                0.95 + value * 0.05,
+                desc=message,
+            ),
+        )
+        return output_files[0], result_state
     finally:
         _unregister_active_job(pipeline)
         try:
@@ -1395,15 +1688,17 @@ if ZERO_GPU:
         request_dir,
         track_id,
         route,
+        muscriptor_instruments,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route))
+        config = _manual_route_config(str(route), muscriptor_instruments)
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
             request_dir,
             track_id,
             route,
+            muscriptor_instruments,
             progress=progress,
         )
 
@@ -1414,15 +1709,17 @@ else:
         request_dir,
         track_id,
         route,
+        muscriptor_instruments,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route))
+        config = _manual_route_config(str(route), muscriptor_instruments)
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
             request_dir,
             track_id,
             route,
+            muscriptor_instruments,
             progress=progress,
         )
 
@@ -1432,6 +1729,7 @@ def _convert_one_track(
     track_id,
     midi_enabled,
     route,
+    muscriptor_instruments,
     progress=gr.Progress(),
 ):
     state = _normalize_track_state(track_state)
@@ -1448,7 +1746,8 @@ def _convert_one_track(
     if route not in MANUAL_MIDI_ROUTES:
         raise gr.Error(st("dialogs.complete.audio_tracks.manual_midi.model_required"))
 
-    config = _manual_route_config(str(route))
+    selected_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
+    config = _manual_route_config(str(route), selected_instruments)
     try:
         if ZERO_GPU:
             _estimate_manual_zerogpu_duration(
@@ -1456,18 +1755,21 @@ def _convert_one_track(
                 state["request_dir"],
                 selected_track["id"],
                 route,
+                selected_instruments,
                 progress=progress,
             )
         _prepare_request_models(
             config.processing_mode,
             config.transcription_backend,
             config.yourmt3_model,
+            config.muscriptor_instruments,
         )
-        midi_path = _convert_manual_midi_on_gpu(
+        midi_path, midi_result = _convert_manual_midi_on_gpu(
             selected_track["audio_path"],
             state["request_dir"],
             selected_track["id"],
             route,
+            selected_instruments,
             progress=progress,
         )
     except InterruptedError:
@@ -1476,9 +1778,7 @@ def _convert_one_track(
         for track in state["tracks"]:
             updated = dict(track)
             if track["id"] == selected_track["id"]:
-                updated["status"] = st(
-                    "dialogs.complete.audio_tracks.manual_midi.cancelled"
-                )
+                updated["status"] = st("dialogs.complete.audio_tracks.manual_midi.cancelled")
             cancelled_tracks.append(updated)
         return _normalize_track_state({**state, "tracks": cancelled_tracks})
     except Exception as exc:
@@ -1493,6 +1793,9 @@ def _convert_one_track(
                 {
                     "midi_enabled": True,
                     "route": str(route),
+                    "muscriptor_instruments": (
+                        selected_instruments if str(route) == MIDI_ROUTE_MUSCRIPTOR else []
+                    ),
                     "midi_path": str(midi_path),
                     "status": st(
                         "dialogs.complete.audio_tracks.manual_midi.complete",
@@ -1501,7 +1804,17 @@ def _convert_one_track(
                 }
             )
         updated_tracks.append(updated)
-    return _normalize_track_state({**state, "tracks": updated_tracks})
+    return _normalize_track_state(
+        {
+            **state,
+            "tracks": updated_tracks,
+            "active_midi_track_id": selected_track["id"],
+            "active_midi_result": {
+                **midi_result,
+                "source_track_name": selected_track["name"],
+            },
+        }
+    )
 
 
 if ZERO_GPU:
@@ -1524,6 +1837,10 @@ def _track_control_updates(enabled, route):
         gr.update(interactive=is_enabled),
         gr.update(interactive=is_enabled and normalized_route in MANUAL_MIDI_ROUTES),
         status,
+        gr.update(
+            visible=normalized_route == MIDI_ROUTE_MUSCRIPTOR,
+            interactive=is_enabled and normalized_route == MIDI_ROUTE_MUSCRIPTOR,
+        ),
     )
 
 
@@ -1596,6 +1913,7 @@ def _add_audio_tracks(uploaded_files, track_state):
                 "color": _TRACK_COLORS[(len(tracks)) % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
+                "muscriptor_instruments": [],
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -1617,7 +1935,28 @@ def _remove_track(track_state, track_id):
     remaining = [track for track in state["tracks"] if track["id"] != target_id]
     if len(remaining) == len(state["tracks"]):
         raise gr.Error(f"Unknown audio track: {target_id!r}")
-    return _normalize_track_state({**state, "tracks": remaining})
+    updates = {**state, "tracks": remaining}
+    if state.get("active_midi_track_id") == target_id:
+        updates["active_midi_track_id"] = ""
+        updates["active_midi_result"] = None
+    return _normalize_track_state(updates)
+
+
+def _close_active_midi_detail(track_state):
+    state = _normalize_track_state(track_state)
+    if not state:
+        return {}
+    return _normalize_track_state(
+        {
+            **state,
+            "active_midi_track_id": "",
+            "active_midi_result": None,
+        }
+    )
+
+
+def _clear_result_state():
+    return {}
 
 
 def update_mode_info(mode):
@@ -1648,10 +1987,14 @@ def update_mode_controls(mode, transcription_backend):
     shows_yourmt3_model = (
         uses_global_backend and transcription_backend == MultiInstrumentModel.YOURMT3.value
     )
+    shows_muscriptor_instruments = (
+        uses_global_backend and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
+    )
     return (
         update_mode_info(mode),
         gr.update(visible=uses_global_backend),
         gr.update(visible=shows_yourmt3_model),
+        gr.update(visible=shows_muscriptor_instruments),
         gr.update(value=_main_action_label(mode)),
     )
 
@@ -1661,11 +2004,14 @@ def update_backend_controls(mode, transcription_backend):
         raise RuntimeError(f"Unsupported processing mode: {mode}")
     if transcription_backend not in {model.value for model in MultiInstrumentModel}:
         raise RuntimeError(f"Unsupported multi-instrument backend: {transcription_backend!r}")
-    return gr.update(
-        visible=(
-            mode == ProcessingMode.SMART.value
-            and transcription_backend == MultiInstrumentModel.YOURMT3.value
-        )
+    uses_smart = mode == ProcessingMode.SMART.value
+    return (
+        gr.update(
+            visible=(uses_smart and transcription_backend == MultiInstrumentModel.YOURMT3.value)
+        ),
+        gr.update(
+            visible=(uses_smart and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value)
+        ),
     )
 
 
@@ -1766,7 +2112,8 @@ CUSTOM_CSS = """
 .track-midi-status {
     color: #9fbde2 !important;
     font-size: 12px !important;
-}.footer-info {
+}
+.footer-info {
     text-align: center;
     color: #6a7a8a !important;
     font-size: 12px;
@@ -1812,7 +2159,7 @@ ZERO_GPU_NOTE = st("space.ui.zerogpu_note") if ZERO_GPU else ""
 with gr.Blocks(
     title=st("space.app.title"),
     css=CUSTOM_CSS,
-    head=LOG_POLL_HEAD + mixer_head(),
+    head=LOG_POLL_HEAD + mixer_head() + muscriptor_result_head(),
     delete_cache=(3600, SPACE_OUTPUT_RETENTION_SECONDS),
     theme=gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
@@ -1877,6 +2224,16 @@ with gr.Blocks(
                 label=st("main.engine.yourmt3_model_label"),
                 visible=True,
             )
+            muscriptor_instruments = gr.Dropdown(
+                choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
+                value=[],
+                multiselect=True,
+                filterable=True,
+                label=st("main.engine.muscriptor_instruments_title"),
+                info=st("main.engine.muscriptor_instruments_desc"),
+                visible=False,
+                elem_classes=["muscriptor-instrument-selector"],
+            )
 
             with gr.Row():
                 convert_btn = gr.Button(
@@ -1900,6 +2257,7 @@ with gr.Blocks(
                     mode_info,
                     transcription_backend,
                     yourmt3_model,
+                    muscriptor_instruments,
                     convert_btn,
                 ],
                 api_name=False,
@@ -1908,7 +2266,7 @@ with gr.Blocks(
             transcription_backend.change(
                 fn=update_backend_controls,
                 inputs=[mode_radio, transcription_backend],
-                outputs=[yourmt3_model],
+                outputs=[yourmt3_model, muscriptor_instruments],
                 api_name=False,
                 queue=False,
             )
@@ -1955,7 +2313,34 @@ with gr.Blocks(
 
     @gr.render(inputs=[track_state, mode_radio])
     def render_track_workbench(current_state, selected_mode):
-        if selected_mode not in SPLIT_MODE_IDS or not current_state:
+        if not current_state:
+            return
+        if current_state.get("kind") in {"midi_result", "muscriptor_result"}:
+            if selected_mode in SPLIT_MODE_IDS:
+                return
+            with gr.Group(elem_classes="track-workbench"):
+                gr.Markdown(f"### {current_state.get('backend_label', MODE_LABELS[selected_mode])}")
+                gr.HTML(
+                    build_muscriptor_result_html(
+                        current_state,
+                        st,
+                        SPACE_LANGUAGE,
+                    ),
+                    key="muscriptor-result-workbench",
+                )
+                another = gr.Button(
+                    st("muscriptor_result.another"),
+                    key="muscriptor-transcribe-another",
+                )
+                another.click(
+                    fn=_clear_result_state,
+                    inputs=None,
+                    outputs=[track_state],
+                    api_name=False,
+                    queue=False,
+                )
+            return
+        if selected_mode not in SPLIT_MODE_IDS:
             return
         state = _normalize_track_state(current_state)
         if state["mode"] != selected_mode:
@@ -2027,6 +2412,20 @@ with gr.Blocks(
                             interactive=bool(track["midi_enabled"] and route_selected),
                             key=f"midi-start-{track['id']}",
                         )
+                    midi_instruments = gr.Dropdown(
+                        choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
+                        value=track.get("muscriptor_instruments", []),
+                        multiselect=True,
+                        filterable=True,
+                        label=st("main.engine.muscriptor_instruments_title"),
+                        info=st("main.engine.muscriptor_instruments_desc"),
+                        visible=track["route"] == MIDI_ROUTE_MUSCRIPTOR,
+                        interactive=bool(
+                            track["midi_enabled"] and track["route"] == MIDI_ROUTE_MUSCRIPTOR
+                        ),
+                        elem_classes=["muscriptor-instrument-selector"],
+                        key=f"midi-instruments-{track['id']}",
+                    )
                     midi_status = gr.Markdown(
                         track["status"],
                         elem_classes="track-midi-status",
@@ -2049,14 +2448,24 @@ with gr.Blocks(
                     midi_enabled.change(
                         fn=_track_control_updates,
                         inputs=[midi_enabled, midi_route],
-                        outputs=[midi_route, start_midi, midi_status],
+                        outputs=[
+                            midi_route,
+                            start_midi,
+                            midi_status,
+                            midi_instruments,
+                        ],
                         api_name=False,
                         queue=False,
                     )
                     midi_route.change(
                         fn=_track_control_updates,
                         inputs=[midi_enabled, midi_route],
-                        outputs=[midi_route, start_midi, midi_status],
+                        outputs=[
+                            midi_route,
+                            start_midi,
+                            midi_status,
+                            midi_instruments,
+                        ],
                         api_name=False,
                         queue=False,
                     )
@@ -2067,11 +2476,36 @@ with gr.Blocks(
                             track_id_state,
                             midi_enabled,
                             midi_route,
+                            midi_instruments,
                         ],
                         outputs=[track_state],
                         api_name=False,
                         concurrency_limit=1,
                         concurrency_id=GPU_CONCURRENCY_ID,
+                    )
+
+            active_midi_result = state.get("active_midi_result")
+            if active_midi_result:
+                with gr.Group(elem_classes=["track-card", "linked-midi-detail"]):
+                    gr.HTML(
+                        build_muscriptor_result_html(
+                            active_midi_result,
+                            st,
+                            SPACE_LANGUAGE,
+                        ),
+                        key="linked-midi-result-workbench",
+                    )
+                    close_detail = gr.Button(
+                        st("muscriptor_result.close_detail"),
+                        size="sm",
+                        key="close-linked-midi-detail",
+                    )
+                    close_detail.click(
+                        fn=_close_active_midi_detail,
+                        inputs=[track_state],
+                        outputs=[track_state],
+                        api_name=False,
+                        queue=False,
                     )
 
     convert_btn.click(
@@ -2081,6 +2515,7 @@ with gr.Blocks(
             mode_radio,
             transcription_backend,
             yourmt3_model,
+            muscriptor_instruments,
         ],
         outputs=[file_output, status_output, track_state],
         api_name="convert",

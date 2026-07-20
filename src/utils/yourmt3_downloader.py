@@ -4,6 +4,7 @@ YourMT3+ 模型下载工具
 处理模型的下载、缓存和验证
 支持 Hugging Face 镜像站点和断点续传
 """
+
 import hashlib
 import logging
 import os
@@ -13,7 +14,11 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Callable
 
-from src.utils.runtime_paths import get_runtime_data_dir, get_yourmt3_download_root, get_yourmt3_search_roots
+from src.utils.runtime_paths import (
+    get_runtime_data_dir,
+    get_yourmt3_download_root,
+    get_yourmt3_search_roots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,7 @@ def _fix_ssl_if_needed():
     # 尝试 certifi
     try:
         import certifi
+
         os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
         req = urllib.request.Request(test_url, method="HEAD")
@@ -67,6 +73,7 @@ def _fix_ssl_if_needed():
     os.environ["CURL_CA_BUNDLE"] = ""
     try:
         import urllib3
+
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     except Exception:
         pass
@@ -81,12 +88,12 @@ HF_MIRRORS = [
 
 # 模型配置 - YourMT3+ (2024年7月发布，MLSP2024论文)
 YOURMT3_MODELS = {
-    # 官方 Colab / Space 中展示的模型族，顺序与官方演示保持一致。
+    # YourMT3+ 模型族。
     "ymt3_plus": {
         "name": "YMT3+",
         "ui_label": "YMT3+",
         "description": "YourMT3+ 基线模型，使用原始 YMT3+ 风格配置。",
-        "ui_description": "Baseline YourMT3+ checkpoint from the official Colab family. Useful for comparison with older YourMT3+ results.",
+        "ui_description": "Baseline YourMT3+ model using MT3 tokens with singing extension.",
         "checkpoint": "YMT3+",
         "size_mb": 2000,
         "features": ["YourMT3+ baseline", "MT3 tokens with singing extension"],
@@ -96,7 +103,7 @@ YOURMT3_MODELS = {
         "name": "YPTF+Single (noPS)",
         "ui_label": "YPTF+Single (noPS)",
         "description": "Perceiver-TF 编码器 + 单解码器，不使用音高偏移增强。",
-        "ui_description": "Single-decoder Perceiver-TF checkpoint from the official Colab modes. Lighter architecture, no pitch-shift augmentation.",
+        "ui_description": "Single-decoder Perceiver-TF model without pitch-shift augmentation.",
         "checkpoint": "YPTF+Single (noPS)",
         "size_mb": 2000,
         "features": ["Perceiver-TF", "single decoder", "no pitch-shift augmentation"],
@@ -109,37 +116,41 @@ YOURMT3_MODELS = {
         "ui_description": "Multi-channel Perceiver-TF checkpoint using multi-t5 / mc13_full_plus_256 style decoding with pitch-shift augmentation.",
         "checkpoint": "YPTF+Multi (PS)",
         "size_mb": 2000,
-        "features": ["Perceiver-TF", "multi-t5", "multi-channel decoding", "pitch-shift augmentation"],
+        "features": [
+            "Perceiver-TF",
+            "multi-t5",
+            "multi-channel decoding",
+            "pitch-shift augmentation",
+        ],
         "features_zh": ["Perceiver-TF", "multi-t5", "多通道解码", "使用音高偏移增强"],
     },
     "yptf_moe_multi_nops": {
         "name": "YPTF.MoE+Multi (noPS)",
         "ui_label": "YPTF.MoE+Multi (noPS)",
-        "description": "本项目默认模型，对齐官方 Hugging Face Space 默认展示项，MoE + multi-t5，不使用音高偏移增强。",
-        "ui_description": "Project default, aligned with the official Hugging Face Space default: Perceiver-TF + MoE + multi-channel decoding, no pitch-shift augmentation.",
+        "description": "本项目默认模型，采用 Perceiver-TF、MoE 与 multi-t5 多通道解码，不使用音高偏移增强。",
+        "ui_description": "Project default using Perceiver-TF, MoE, and multi-channel decoding without pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (noPS)",
         "size_mb": 2500,
         "recommended": True,
-        "features": ["MoE", "Perceiver-TF", "multi-t5", "official Hugging Face Space default"],
-        "features_zh": ["MoE", "Perceiver-TF", "multi-t5", "官方 Hugging Face Space 默认模型"],
+        "features": ["MoE", "Perceiver-TF", "multi-t5", "multi-channel decoding"],
+        "features_zh": ["MoE", "Perceiver-TF", "multi-t5", "多通道解码"],
     },
     "yptf_moe_multi_ps": {
         "name": "YPTF.MoE+Multi (PS)",
         "ui_label": "YPTF.MoE+Multi (PS)",
-        "description": "可选高性能 MoE + multi-t5 模型，使用音高偏移增强。",
-        "ui_description": "Optional high-performance MoE Multi checkpoint: Perceiver-TF + MoE + multi-channel decoding with pitch-shift augmentation.",
+        "description": "Perceiver-TF + MoE + multi-t5 多通道解码，使用音高偏移增强。",
+        "ui_description": "Perceiver-TF, MoE, and multi-channel decoding with pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (PS)",
         "size_mb": 2500,
         "features": ["MoE", "Perceiver-TF", "multi-t5", "pitch-shift augmentation"],
         "features_zh": ["MoE", "Perceiver-TF", "multi-t5", "使用音高偏移增强"],
     },
-
     # 传统checkpoint名称格式（兼容旧版）
     "mc13_256_all_cross_v6": {
         "name": "YourMT3+ 全乐器模型 (传统版)",
         "ui_label": "YourMT3+ legacy multi",
         "description": "支持多种乐器的通用转写模型",
-        "ui_description": "Legacy YourMT3+ multi-instrument checkpoint kept for older saved configurations.",
+        "ui_description": "General multi-instrument YourMT3+ model with cross-dataset augmentation.",
         "checkpoint": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k@model.ckpt",
         "size_mb": 2000,
         "default": True,  # 保持向后兼容
@@ -202,9 +213,7 @@ YOURMT3_MODEL_IDENTITIES = {
         "sha256": "7427055b51c3c8c86f6a35493cf0741d8db29186052055b59193590a82e6ec01",
     },
 }
-YOURMT3_MODEL_IDENTITIES["mc13_256_all_cross_v6"] = YOURMT3_MODEL_IDENTITIES[
-    "yptf_multi_ps"
-]
+YOURMT3_MODEL_IDENTITIES["mc13_256_all_cross_v6"] = YOURMT3_MODEL_IDENTITIES["yptf_multi_ps"]
 
 # Checkpoint 名称到实际目录名的映射表
 # 用于将 Hugging Face 上的模型名称映射到本地文件系统结构
@@ -217,7 +226,7 @@ CHECKPOINT_FILENAME_MAP = {
     "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k@model.ckpt": "mc13_256_all_cross_v6_xk5_amp0811_edr005_attend_c_full_plus_2psn_nl26_sb_b26r_800k",
 }
 
-# 默认模型 - 对齐官方 Hugging Face Space 展示项
+# 项目默认模型
 DEFAULT_MODEL = "yptf_moe_multi_nops"
 
 
@@ -358,7 +367,7 @@ def is_model_available(model_name: str = DEFAULT_MODEL) -> bool:
 
 def download_model(
     model_name: str = DEFAULT_MODEL,
-    progress_callback: Optional[Callable[[float, str], None]] = None
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> Path:
     """
     下载 YourMT3+ 模型 (支持镜像站点和断点续传)
@@ -457,6 +466,7 @@ def download_model(
                     # 创建配置文件
                     config_path = model_dir / "config.json"
                     import json
+
                     config = {
                         "model_name": model_name,
                         "repo_id": YOURMT3_REPO_ID,
@@ -468,7 +478,7 @@ def download_model(
                         "version": "YourMT3+ (MLSP2024)",
                         "paper": "arXiv:2407.04822",
                     }
-                    with open(config_path, 'w', encoding='utf-8') as f:
+                    with open(config_path, "w", encoding="utf-8") as f:
                         json.dump(config, f, indent=2, ensure_ascii=False)
 
                     if progress_callback:
@@ -524,7 +534,7 @@ def download_model(
 
 def ensure_model_available(
     model_name: str = DEFAULT_MODEL,
-    progress_callback: Optional[Callable[[float, str], None]] = None
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> Path:
     """
     确保模型可用，如果不存在则下载

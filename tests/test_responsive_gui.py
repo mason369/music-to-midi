@@ -32,7 +32,6 @@ from src.gui.widgets.track_panel import TrackPanel
 from src.i18n.translator import set_language
 from src.models.data_models import Config, ProcessingMode, ProcessingStage
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -41,6 +40,7 @@ class _ResizableFakeAudioTrackMixer(QWidget):
 
     midi_conversion_requested = pyqtSignal(str, str, str)
     midi_open_requested = pyqtSignal(str)
+    playing_changed = pyqtSignal(bool)
 
     def __init__(self, tracks):
         super().__init__()
@@ -252,9 +252,7 @@ class ResponsiveGuiTests(unittest.TestCase):
                 window.output_group,
             ):
                 with self.subTest(widget=type(widget).__name__):
-                    self.assertGreaterEqual(
-                        widget.height(), widget.minimumSizeHint().height()
-                    )
+                    self.assertGreaterEqual(widget.height(), widget.minimumSizeHint().height())
         finally:
             window.close()
 
@@ -299,9 +297,7 @@ class ResponsiveGuiTests(unittest.TestCase):
                 panel.yourmt3_model_combo,
             ):
                 with self.subTest(combo=combo.objectName() or combo.currentText()):
-                    self.assertLessEqual(
-                        combo.geometry().right(), panel.contentsRect().right()
-                    )
+                    self.assertLessEqual(combo.geometry().right(), panel.contentsRect().right())
         finally:
             panel.close()
 
@@ -321,6 +317,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             )
         finally:
             widget.close()
+
     def test_all_modes_and_languages_keep_content_inside_narrow_viewport(self):
         modes = (
             "smart",
@@ -344,9 +341,7 @@ class ResponsiveGuiTests(unittest.TestCase):
 
                     scroll = window.content_scroll
                     with self.subTest(language=language, mode=mode):
-                        self.assertLessEqual(
-                            scroll.widget().width(), scroll.viewport().width()
-                        )
+                        self.assertLessEqual(scroll.widget().width(), scroll.viewport().width())
                         self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
                 finally:
                     if window is not None:
@@ -358,17 +353,13 @@ class ResponsiveGuiTests(unittest.TestCase):
         captured = []
         try:
             window.resize(480, 360)
-            with mock.patch.object(
-                QDialog, "exec", lambda dialog: captured.append(dialog)
-            ):
+            with mock.patch.object(QDialog, "exec", lambda dialog: captured.append(dialog)):
                 window._on_error("failure details")
 
             dialog = captured[0]
             self.assertEqual(dialog.maximumHeight(), QWidget().maximumHeight())
             self.assertLessEqual(dialog.minimumWidth(), 320)
-            self.assertLessEqual(
-                dialog.width(), window.screen().availableGeometry().width()
-            )
+            self.assertLessEqual(dialog.width(), window.screen().availableGeometry().width())
             original = dialog.size()
             dialog.resize(original.width() + 20, original.height() + 20)
             self.assertGreater(dialog.width(), original.width())
@@ -385,10 +376,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             buttons = dialog.findChildren(QPushButton)
             self.assertLess(
                 error_text.mapTo(content, error_text.rect().bottomLeft()).y(),
-                min(
-                    button.mapTo(content, button.rect().topLeft()).y()
-                    for button in buttons
-                ),
+                min(button.mapTo(content, button.rect().topLeft()).y() for button in buttons),
             )
         finally:
             window.close()
@@ -409,10 +397,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             )
             self.assertEqual(
                 window.audio_mixer.tracks,
-                {
-                    name: Path(path).resolve()
-                    for name, path in result.separated_audio.items()
-                },
+                {name: Path(path).resolve() for name, path in result.separated_audio.items()},
             )
 
             buttons = window.result_panel.findChildren(QPushButton)
@@ -432,13 +417,23 @@ class ResponsiveGuiTests(unittest.TestCase):
                 )
         finally:
             window.close()
+
+    def test_animated_result_panel_has_no_subtree_graphics_effect(self):
+        window = self._window("en_US")
+        try:
+            # The result panel contains continuously repainted waveform and MIDI
+            # widgets. An ancestor graphics effect would re-rasterize the whole
+            # result subtree for every playhead frame.
+            self.assertIsNone(window.result_panel.graphicsEffect())
+            self.assertIn("QFrame#successResultPanel", window.result_panel.styleSheet())
+        finally:
+            window.close()
+
     def test_error_dialog_keeps_dark_surface_and_top_alignment(self):
         window = self._window("en_US")
         error_dialogs = []
         try:
-            with mock.patch.object(
-                QDialog, "exec", lambda dialog: error_dialogs.append(dialog)
-            ):
+            with mock.patch.object(QDialog, "exec", lambda dialog: error_dialogs.append(dialog)):
                 window._on_error("failure details")
 
             dialog = error_dialogs[0]
@@ -453,9 +448,7 @@ class ResponsiveGuiTests(unittest.TestCase):
                 self._grabbed_pixel_name(content.grab(), QPoint(5, 5)),
                 "#1a1a2e",
             )
-            self.assertTrue(
-                content.layout().alignment() & Qt.AlignmentFlag.AlignTop
-            )
+            self.assertTrue(content.layout().alignment() & Qt.AlignmentFlag.AlignTop)
 
             first_item = content.layout().itemAt(0)
             first_widget = first_item.widget()
@@ -551,8 +544,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             window.close()
 
     def test_inline_result_and_timeline_have_no_overflow_at_fractional_scales(self):
-        probe = textwrap.dedent(
-            """
+        probe = textwrap.dedent("""
             import json
             from pathlib import Path
             from tempfile import TemporaryDirectory
@@ -571,6 +563,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             class FakeAudioTrackMixer(QWidget):
                 midi_conversion_requested = pyqtSignal(str, str, str)
                 midi_open_requested = pyqtSignal(str)
+                playing_changed = pyqtSignal(bool)
 
                 def __init__(self, tracks):
                     super().__init__()
@@ -644,8 +637,7 @@ class ResponsiveGuiTests(unittest.TestCase):
             }))
             window.close()
             temporary_directory.cleanup()
-            """
-        )
+            """)
 
         for scale in ("1", "1.25", "1.5", "2"):
             env = os.environ.copy()
@@ -663,27 +655,20 @@ class ResponsiveGuiTests(unittest.TestCase):
             with self.subTest(scale=scale):
                 self.assertTrue(measured["result_visible"])
                 self.assertTrue(measured["timeline_visible"])
-                self.assertLessEqual(
-                    measured["content_width"], measured["viewport_width"]
-                )
+                self.assertLessEqual(measured["content_width"], measured["viewport_width"])
                 self.assertEqual(measured["horizontal_maximum"], 0)
                 for left, right in measured["button_bounds"]:
                     self.assertGreaterEqual(left, 0)
                     self.assertLessEqual(right, measured["panel_right"])
                 self.assertGreaterEqual(measured["container_bounds"][0], 0)
-                self.assertLessEqual(
-                    measured["container_bounds"][1], measured["panel_right"]
-                )
+                self.assertLessEqual(measured["container_bounds"][1], measured["panel_right"])
                 self.assertGreaterEqual(measured["mixer_bounds"][0], 0)
-                self.assertLessEqual(
-                    measured["mixer_bounds"][1], measured["container_right"]
-                )
+                self.assertLessEqual(measured["mixer_bounds"][1], measured["container_right"])
                 self.assertTrue(measured["container_parent_is_panel"])
                 self.assertTrue(measured["container_window_is_main"])
 
     def test_initial_window_fits_available_geometry_at_fractional_scales(self):
-        probe = textwrap.dedent(
-            """
+        probe = textwrap.dedent("""
             import json
             from unittest import mock
             from PyQt6.QtWidgets import QApplication
@@ -701,8 +686,7 @@ class ResponsiveGuiTests(unittest.TestCase):
                 "available": [available.width(), available.height()],
             }))
             window.close()
-            """
-        )
+            """)
 
         for scale in ("1", "1.25", "1.5", "2"):
             env = os.environ.copy()

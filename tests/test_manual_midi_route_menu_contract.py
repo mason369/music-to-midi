@@ -28,6 +28,7 @@ EXPECTED_ROUTE_COPY = {
         "piano_group": "钢琴专用转写",
         "other_routes": (
             ("miros", "MIROS (MusicFM)（多乐器）"),
+            ("muscriptor", "MuScriptor-large（多乐器，支持乐器硬约束）"),
             ("piano_transkun", "TransKun V2（钢琴）"),
             ("piano_transkun_v2_aug", "TransKun V2 Aug（钢琴）"),
             ("piano_aria_amt", "Aria-AMT（钢琴）"),
@@ -40,6 +41,7 @@ EXPECTED_ROUTE_COPY = {
         "piano_group": "Dedicated Piano Transcription",
         "other_routes": (
             ("miros", "MIROS (MusicFM) (Multi-Instrument)"),
+            ("muscriptor", "MuScriptor-large (Multi-Instrument, hard constraints)"),
             ("piano_transkun", "TransKun V2 (Piano)"),
             ("piano_transkun_v2_aug", "TransKun V2 Aug (Piano)"),
             ("piano_aria_amt", "Aria-AMT (Piano)"),
@@ -67,6 +69,7 @@ EXPECTED_MANUAL_MIDI_KEYS = {
     "busy",
     "models.yourmt3",
     "models.miros",
+    "models.muscriptor",
     "models.piano_transkun",
     "models.piano_transkun_v2_aug",
     "models.piano_aria_amt",
@@ -122,7 +125,7 @@ def test_per_track_midi_menu_lists_every_route_with_localized_labels(
         expected_copy = EXPECTED_ROUTE_COPY[language]
         selector = row.midi_model_selector
         assert row.convert_midi_button.menu() is None
-        assert selector.count() == 11
+        assert selector.count() == 12
         assert selector.itemData(0) == ""
         assert selector.currentIndex() == 0
         assert row.midi_enabled_checkbox.isChecked() is False
@@ -141,14 +144,14 @@ def test_per_track_midi_menu_lists_every_route_with_localized_labels(
                 route,
                 f"{expected_copy['multi_group']} · {localized_label}",
             )
-            for route, localized_label in expected_copy["other_routes"][:1]
+            for route, localized_label in expected_copy["other_routes"][:2]
         )
         expected_options.extend(
             (
                 route,
                 f"{expected_copy['piano_group']} · {localized_label}",
             )
-            for route, localized_label in expected_copy["other_routes"][1:]
+            for route, localized_label in expected_copy["other_routes"][2:]
         )
         assert [
             (selector.itemData(index), selector.itemText(index))
@@ -159,8 +162,8 @@ def test_per_track_midi_menu_lists_every_route_with_localized_labels(
         assert all_routes == [route for route, _label in EXPECTED_YOURMT3_ROUTES] + [
             route for route, _label in expected_copy["other_routes"]
         ]
-        assert len(all_routes) == 10
-        assert len(set(all_routes)) == 10
+        assert len(all_routes) == 11
+        assert len(set(all_routes)) == 11
 
         conversions = QSignalSpy(row.midi_conversion_requested)
         row.midi_enabled_checkbox.setChecked(True)
@@ -302,6 +305,7 @@ def test_manual_midi_translation_keys_and_placeholders_match_between_languages()
     } == {
         "yourmt3",
         "miros",
+        "muscriptor",
         "piano_transkun",
         "piano_transkun_v2_aug",
         "piano_aria_amt",

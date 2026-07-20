@@ -26,6 +26,7 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 from src.utils.runtime_paths import get_miros_source_dir, is_frozen_app
+from src.core.transcription_stream import read_new_jsonl_events
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +492,7 @@ class MirosTranscriber:
         input_path: Path,
         out_path: Path,
         status_path: Optional[Path] = None,
+        events_path: Optional[Path] = None,
     ) -> List[str]:
         if is_frozen_app():
             command = [
@@ -503,7 +505,23 @@ class MirosTranscriber:
             ]
             if status_path is not None:
                 command.extend(["--status-json", str(status_path)])
+            if events_path is not None:
+                command.extend(["--events-jsonl", str(events_path)])
             return command
+        if events_path is not None:
+            return [
+                sys.executable,
+                "-m",
+                "src.core.miros_stream_worker",
+                "--repo-dir",
+                str(entrypoint.parent),
+                "-i",
+                str(input_path),
+                "-o",
+                str(out_path),
+                "--events-jsonl",
+                str(events_path),
+            ]
         return [
             sys.executable,
             str(entrypoint),
@@ -535,6 +553,10 @@ class MirosTranscriber:
         attempt_path = unique_midi_temp_path(out_path, "miros")
 
         status_path = attempt_path.with_suffix(".status.json") if is_frozen_app() else None
+        event_callback = getattr(self, "_event_callback", None)
+        events_path = (
+            attempt_path.with_suffix(".events.jsonl") if event_callback is not None else None
+        )
         if status_path is not None and status_path.exists():
             status_path.unlink()
 
@@ -543,6 +565,11 @@ class MirosTranscriber:
             if status_path is not None:
                 try:
                     status_path.unlink()
+                except FileNotFoundError:
+                    pass
+            if events_path is not None:
+                try:
+                    events_path.unlink()
                 except FileNotFoundError:
                     pass
 
@@ -557,7 +584,13 @@ class MirosTranscriber:
             else:
                 process.wait(timeout=0)
 
-        command = self._build_command(entrypoint, input_path, attempt_path, status_path)
+        command = self._build_command(
+            entrypoint,
+            input_path,
+            attempt_path,
+            status_path,
+            events_path,
+        )
 
         if progress_callback:
             progress_callback(0.05, self._pt("progress.preparing_miros"))
@@ -570,6 +603,12 @@ class MirosTranscriber:
             "PYTORCH_CUDA_ALLOC_CONF",
             "expandable_segments:True",
         )
+        if events_path is not None and not is_frozen_app():
+            project_root = str(Path(__file__).resolve().parents[2])
+            existing_pythonpath = process_env.get("PYTHONPATH", "")
+            process_env["PYTHONPATH"] = os.pathsep.join(
+                value for value in (project_root, existing_pythonpath) if value
+            )
         process = subprocess.Popen(
             command,
             cwd=str(repo_dir),
@@ -586,6 +625,16 @@ class MirosTranscriber:
         stdout = ""
         stderr = ""
         started_at = time.monotonic()
+        event_offset = 0
+
+        def _forward_new_events() -> None:
+            nonlocal event_offset
+            if events_path is None or event_callback is None:
+                return
+            events, event_offset = read_new_jsonl_events(events_path, event_offset)
+            for payload in events:
+                event_callback(payload)
+
         try:
             if progress_callback:
                 progress_callback(0.50, self._pt("progress.running_miros"))
@@ -601,9 +650,13 @@ class MirosTranscriber:
                 while True:
                     self._check_cancelled()
                     try:
-                        stdout, stderr = process.communicate(timeout=5.0)
+                        stdout, stderr = process.communicate(
+                            timeout=0.5 if events_path is not None else 5.0
+                        )
+                        _forward_new_events()
                         break
                     except subprocess.TimeoutExpired:
+                        _forward_new_events()
                         elapsed_seconds = int(time.monotonic() - started_at)
                         logger.info(
                             "MIROS inference still running: elapsed=%ss output=%s",
@@ -646,6 +699,7 @@ class MirosTranscriber:
             )
             _cleanup_attempt_files()
             raise RuntimeError(f"MIROS 转写失败:\n{detail}")
+        _forward_new_events()
         if not attempt_path.exists():
             detail = self._format_missing_output_error(
                 out_path,
@@ -674,6 +728,9 @@ class MirosTranscriber:
         if progress_callback:
             progress_callback(1.0, self._pt("progress.miros_complete"))
         return published_path
+
+    def set_event_callback(self, callback: Optional[Callable[[dict], None]]) -> None:
+        self._event_callback = callback
 
     def transcribe_precise(
         self,

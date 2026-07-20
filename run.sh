@@ -201,6 +201,30 @@ exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_availabl
     NEED_INSTALL=true
 fi
 
+if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
+import sys; sys.path.insert(0, '${REPO_DIR}')
+from src.core.muscriptor_transcriber import MuscriptorTranscriber
+from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
+from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+reason = MuscriptorTranscriber._runtime_unavailable_reason()
+if reason:
+    raise RuntimeError(reason)
+# The actual model load performs the full SHA-256 gate. Avoid reading the 5.4 GB
+# checkpoint twice by keeping launcher preflight to exact path/size validation.
+weights, config = get_cached_muscriptor_paths(validate_hashes=False)
+soundfont = download_muscriptor_soundfont(printer=print)
+fluidsynth = get_fluidsynth_executable()
+print('MuScriptor model:', weights)
+print('MuScriptor config:', config)
+print('MuScriptor SoundFont:', soundfont)
+print('FluidSynth:', fluidsynth)
+"; then
+    warn "MuScriptor-large or its real SoundFont playback assets are missing/invalid"
+    warn "  Accept the Hugging Face model terms, then run: python download_sota_models.py"
+    NEED_INSTALL=true
+fi
+
 if $NEED_INSTALL; then
     info "Dependencies are incomplete, running installer..."
     bash "${REPO_DIR}/install.sh"

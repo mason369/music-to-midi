@@ -1,12 +1,14 @@
 """
 处理工作线程 - 后台执行处理任务
 """
+
 import logging
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from src.core.pipeline import MusicToMidiPipeline
 from src.i18n.translator import Translator
 from src.models.data_models import Config, ProcessingProgress, ProcessingResult
-from src.core.pipeline import MusicToMidiPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,10 @@ class ProcessingWorker(QThread):
     progress_updated = pyqtSignal(ProcessingProgress)
     processing_finished = pyqtSignal(ProcessingResult)
     error_occurred = pyqtSignal(str)
+    transcription_event = pyqtSignal(object)
+    # Compatibility signal for callers written before the workbench became
+    # backend-neutral.
+    muscriptor_event = pyqtSignal(object)
 
     def __init__(
         self,
@@ -46,6 +52,23 @@ class ProcessingWorker(QThread):
         self.config = config
         self._translator = Translator(config.language)
         self.pipeline = MusicToMidiPipeline(config)
+        for attr_name in (
+            "yourmt3_transcriber",
+            "miros_transcriber",
+            "muscriptor_transcriber",
+            "transkun_transcriber",
+            "transkun_v2_aug_transcriber",
+            "aria_amt_transcriber",
+            "bytedance_piano_transcriber",
+        ):
+            transcriber = getattr(self.pipeline, attr_name, None)
+            setter = getattr(transcriber, "set_event_callback", None)
+            if callable(setter):
+                setter(self._emit_transcription_event)
+
+    def _emit_transcription_event(self, payload: object) -> None:
+        self.transcription_event.emit(payload)
+        self.muscriptor_event.emit(payload)
 
     def run(self):
         """在后台线程中执行处理"""
@@ -73,7 +96,11 @@ class ProcessingWorker(QThread):
             # 确保 GPU 资源被清理
             try:
                 if self.pipeline:
-                    for attr_name in ("yourmt3_transcriber", "miros_transcriber"):
+                    for attr_name in (
+                        "yourmt3_transcriber",
+                        "miros_transcriber",
+                        "muscriptor_transcriber",
+                    ):
                         transcriber = getattr(self.pipeline, attr_name, None)
                         if transcriber and hasattr(transcriber, "unload_model"):
                             transcriber.unload_model()
@@ -81,6 +108,7 @@ class ProcessingWorker(QThread):
                 logger.warning(f"工作线程清理模型失败: {e}")
             try:
                 from src.utils.gpu_utils import clear_gpu_memory
+
                 clear_gpu_memory()
             except Exception as e:
                 logger.warning(f"工作线程清理GPU内存失败: {e}")

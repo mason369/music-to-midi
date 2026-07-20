@@ -72,6 +72,7 @@ SYSTEM_PKGS=(
     curl
     # 音频处理
     ffmpeg
+    fluidsynth
     libsndfile1
     libportaudio2
     portaudio19-dev
@@ -315,6 +316,19 @@ PY
 "$PIP" install "audio-separator==0.44.1" --no-deps
 success "audio-separator 安装完成"
 
+info "安装并校验固定 MuScriptor 公共源码（不改写固定 PyTorch 运行时）..."
+MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip"
+"$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
+"$PYTHON" - <<'PY'
+from src.core.muscriptor_transcriber import MuscriptorTranscriber
+
+reason = MuscriptorTranscriber._runtime_unavailable_reason()
+if reason:
+    raise RuntimeError(reason)
+print("MuScriptor public runtime identity/API verified")
+PY
+success "MuScriptor 固定公共源码与硬乐器约束 API 校验通过"
+
 validate_default_transkun_runtime() {
     "$PYTHON" - <<'PY'
 from download_sota_models import validate_default_transkun_runtime
@@ -439,12 +453,12 @@ fi
 success "YourMT3+ 源码身份检查通过"
 
 # ───────────────────────── 下载统一模型集合 ─────────────────────────
-info "下载 YourMT3+、BS-RoFormer SW Fixed、Leap XE、PolarFormer 与 TransKun V2 Aug 模型..."
+info "下载并校验全部公开工作流模型（含 MuScriptor-large 与 SoundFont）..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_sota_models.py"; then
     error "统一模型集合下载或校验失败"
 fi
-success "YourMT3+、六声部、人声分离与 TransKun V2 Aug 模型下载完成"
+success "YourMT3+、MIROS、分离/钢琴模型、MuScriptor-large 与 SoundFont 全部准备完成"
 
 info "Verifying/downloading Leap XE 90-band vocals assets..."
 
@@ -504,6 +518,8 @@ echo -e "  ${GREEN}✔${NC} BS-RoFormer SW Fixed 六声部模型"
 echo -e "  ${GREEN}✔${NC} Leap XE 人声 + PolarFormer 伴奏模型"
 echo -e "  ${GREEN}✔${NC} TransKun V2 Aug 模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
+echo -e "  ${GREEN}✔${NC} MuScriptor-large 固定权重与 MuseScore General SoundFont"
+echo -e "  ${GREEN}✔${NC} FluidSynth 真实 MIDI 播放链"
 echo ""
 echo -e "  ${BOLD}模型维护命令：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
@@ -512,6 +528,7 @@ echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_accompaniment_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_transkun_v2_aug_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_muscriptor_model.py${NC}"
 echo ""
 if $IS_WSL; then
     echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"

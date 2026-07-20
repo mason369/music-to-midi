@@ -11,8 +11,7 @@ def _find_function(source_text, function_name):
     matches = [
         node
         for node in ast.parse(source_text).body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == function_name
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name
     ]
     if len(matches) != 1:
         raise AssertionError(
@@ -45,8 +44,7 @@ def _assigned_collection(source_text, assignment_name):
         if not isinstance(node, ast.Assign):
             continue
         if not any(
-            isinstance(target, ast.Name) and target.id == assignment_name
-            for target in node.targets
+            isinstance(target, ast.Name) and target.id == assignment_name for target in node.targets
         ):
             continue
         value = node.value
@@ -186,10 +184,9 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn("yourmt3_model_dropdown = gr.Dropdown", source_text)
         self.assertIn("yourmt3_model_info = gr.Markdown", source_text)
         self.assertIn("def update_yourmt3_model_info", source_text)
-        self.assertIn(
-            'config_kwargs = {"processing_mode": mode, "yourmt3_model": yourmt3_model_key}',
-            source_text,
-        )
+        self.assertIn('"processing_mode": mode,', source_text)
+        self.assertIn('"yourmt3_model": yourmt3_model_key,', source_text)
+        self.assertIn('"muscriptor_instruments": selected_instruments,', source_text)
         self.assertIn(
             'if mode == "smart":',
             source_text,
@@ -236,20 +233,21 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertFalse(direct_modes & split_modes)
         self.assertEqual(set(mode_ids), set(direct_modes) | set(split_modes))
 
-        self.assertIn(
-            'MULTI_BACKEND_LABEL_TO_KEY = {"YourMT3+": "yourmt3", "MIROS": "miros"}',
-            source_text,
-        )
+        self.assertIn('"YourMT3+": "yourmt3"', source_text)
+        self.assertIn('"MIROS": "miros"', source_text)
+        self.assertIn('"MuScriptor Large": "muscriptor"', source_text)
         self.assertIn("backend_dropdown = gr.Dropdown", source_text)
         self.assertIn("yourmt3_model_dropdown = gr.Dropdown", source_text)
         self.assertIn("def update_backend_controls", source_text)
         self.assertIn("inputs=[mode_radio, backend_dropdown]", source_text)
         self.assertIn('is_smart = mode == "smart"', source_text)
-        self.assertIn(
-            'uses_yourmt3 = is_smart and backend_key == "yourmt3"', source_text
-        )
+        self.assertIn('uses_yourmt3 = is_smart and backend_key == "yourmt3"', source_text)
         self.assertIn(
             'uses_yourmt3 = mode == "smart" and backend_key == "yourmt3"',
+            source_text,
+        )
+        self.assertIn(
+            'uses_muscriptor = mode == "smart" and backend_key == "muscriptor"',
             source_text,
         )
         self.assertNotIn(
@@ -280,8 +278,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             for node in ast.walk(handler)
             if isinstance(node, ast.If)
             and any(
-                isinstance(name, ast.Name)
-                and name.id == "SPLIT_PROCESSING_MODES"
+                isinstance(name, ast.Name) and name.id == "SPLIT_PROCESSING_MODES"
                 for name in ast.walk(node.test)
             )
             and any(isinstance(operator, ast.In) for operator in ast.walk(node.test))
@@ -301,10 +298,17 @@ class TestColabNotebookDependencies(unittest.TestCase):
         handler_calls = _called_names(handler)
         self.assertEqual(handler_calls.count("_build_track_state"), 1)
         self.assertEqual(handler_calls.count("MusicToMidiPipeline"), 1)
+        handler_source = _node_source(source_text, handler)
         self.assertIn(
-            'return output_files, "\\n".join(status_lines), {}',
-            _node_source(source_text, handler),
+            'return output_files, "\\n".join(status_lines), track_state',
+            handler_source,
         )
+        self.assertIn(
+            'return output_files, "\\n".join(status_lines), result_state',
+            handler_source,
+        )
+        self.assertIn("_build_midi_result_state", handler_source)
+        self.assertNotIn('if backend_key == "muscriptor"', handler_source)
         self.assertIn(
             "from src.core.separation_service import AudioSeparationService, SeparationResult",
             source_text,
@@ -337,8 +341,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         from src.core.manual_midi import MANUAL_MIDI_ROUTES
 
-        self.assertEqual(len(MANUAL_MIDI_ROUTES), 10)
-        self.assertEqual(len(set(MANUAL_MIDI_ROUTES)), 10)
+        self.assertEqual(len(MANUAL_MIDI_ROUTES), 11)
+        self.assertEqual(len(set(MANUAL_MIDI_ROUTES)), 11)
         self.assertIn(
             "MANUAL_MIDI_ROUTE_CHOICES = [(label, route) for label, route in "
             "MANUAL_MIDI_ROUTE_LABEL_TO_KEY.items()]",
@@ -356,11 +360,15 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn("build_track_mixer_html", source_text)
         self.assertIn("display_track_name", source_text)
         self.assertIn("mixer_head", source_text)
-        self.assertIn("head=LOG_POLL_JS + mixer_head()", source_text)
-        self.assertIn("mixer_html = gr.HTML(", source_text)
-        self.assertIn('COLAB_TRANSLATOR = Translator(COLAB_LANGUAGE)', source_text)
         self.assertIn(
-            "demo.launch(share=True, server_name=\"0.0.0.0\", server_port=7860, "
+            "head=LOG_POLL_JS + mixer_head() + muscriptor_result_head()",
+            source_text,
+        )
+        self.assertIn("build_muscriptor_result_html", source_text)
+        self.assertIn("mixer_html = gr.HTML(", source_text)
+        self.assertIn("COLAB_TRANSLATOR = Translator(COLAB_LANGUAGE)", source_text)
+        self.assertIn(
+            'demo.launch(share=True, server_name="0.0.0.0", server_port=7860, '
             "allowed_paths=[str(COLAB_OUTPUT_ROOT)])",
             source_text,
         )
@@ -380,8 +388,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
                 and isinstance(node.iter.func, ast.Name)
                 and node.iter.func.id == "range"
                 and any(
-                    isinstance(argument, ast.Name)
-                    and argument.id == "MAX_MANUAL_TRACK_ROWS"
+                    isinstance(argument, ast.Name) and argument.id == "MAX_MANUAL_TRACK_ROWS"
                     for argument in node.iter.args
                 )
             ):
@@ -415,21 +422,20 @@ class TestColabNotebookDependencies(unittest.TestCase):
             namespace,
         )
         empty_updates = namespace["_render_track_rows"]({})
-        self.assertEqual(len(empty_updates), 2 + 6 * 12)
+        self.assertEqual(len(empty_updates), 4 + 7 * 12)
         self.assertEqual(empty_updates[0], {"visible": False})
         self.assertEqual(empty_updates[1], {"value": "", "visible": False})
         for row_index in range(12):
-            row_updates = empty_updates[2 + 6 * row_index : 2 + 6 * (row_index + 1)]
-            self.assertEqual(len(row_updates), 6)
+            start = 4 + 7 * row_index
+            row_updates = empty_updates[start : start + 7]
+            self.assertEqual(len(row_updates), 7)
             self.assertEqual(row_updates[0], {"visible": False})
 
     def test_colab_track_selection_is_inert_until_the_explicit_start_click(self):
         source_text = self._load_notebook_source_text()
         bindings = _event_bindings(source_text)
-        self.assertEqual(bindings.count(("change", "selection_handler")), 2)
-        self.assertEqual(
-            bindings.count(("click", "_make_track_conversion_handler")), 1
-        )
+        self.assertEqual(bindings.count(("change", "selection_handler")), 3)
+        self.assertEqual(bindings.count(("click", "_make_track_conversion_handler")), 1)
         self.assertNotIn(("change", "_make_track_conversion_handler"), bindings)
         self.assertNotIn(("select", "_make_track_conversion_handler"), bindings)
 
@@ -443,9 +449,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         ):
             self.assertNotIn(forbidden_call, selection_calls)
 
-        selection_wrapper = _find_function(
-            source_text, "_make_track_selection_handler"
-        )
+        selection_wrapper = _find_function(source_text, "_make_track_selection_handler")
         self.assertIn("_update_track_selection", _called_names(selection_wrapper))
         self.assertNotIn("convert_track_to_midi", _called_names(selection_wrapper))
 
@@ -460,9 +464,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('if not track["enabled"]:', _node_source(source_text, conversion_node))
 
         preparation_node = _find_function(source_text, "prepare_manual_midi_route")
-        self.assertEqual(
-            _called_names(preparation_node).count("build_manual_midi_config"), 1
-        )
+        self.assertEqual(_called_names(preparation_node).count("build_manual_midi_config"), 1)
 
     def test_colab_added_audio_is_copied_into_the_active_request(self):
         source_text = self._load_notebook_source_text()
@@ -640,19 +642,20 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertNotIn("_vocal_accompaniment_merged.mid", source_text)
         self.assertNotIn("_vocal.mid", source_text)
         self.assertNotIn("_accompaniment.mid", source_text)
+        self.assertIn("muscriptor_instruments", source_text)
         self.assertIn(
-            "inputs=[audio_input, mode_radio, backend_dropdown, "
-            "yourmt3_model_dropdown]",
+            "inputs=[\n            audio_input,\n            mode_radio,\n"
+            "            backend_dropdown,\n            yourmt3_model_dropdown,\n"
+            "            muscriptor_instruments,\n        ]",
             source_text,
         )
 
     def test_colab_backend_change_only_refreshes_the_smart_mode_card(self):
         source_text = self._load_notebook_source_text()
 
-        self.assertIn(
-            'COLAB_BACKEND_ROUTE_NAMES = {"yourmt3": "YourMT3+", "miros": "MIROS"}',
-            source_text,
-        )
+        self.assertIn('"yourmt3": "YourMT3+"', source_text)
+        self.assertIn('"miros": "MIROS"', source_text)
+        self.assertIn('"muscriptor": "MuScriptor Large"', source_text)
         self.assertIn(
             "def update_mode_info(mode, backend_label=DEFAULT_MULTI_BACKEND_LABEL):",
             source_text,
@@ -662,10 +665,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             source_text,
         )
         self.assertIn("update_mode_info(mode, backend_label),", source_text)
-        self.assertIn(
-            "outputs=[mode_info, yourmt3_model_dropdown, yourmt3_model_info]",
-            source_text,
-        )
+        self.assertIn("muscriptor_instruments", source_text)
         self.assertNotIn('"model_family": "YourMT3+"', source_text)
 
         selected_names = {
@@ -741,10 +741,9 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('"error.unknown_mode": "Unknown processing mode: {mode}"', source_text)
         self.assertIn("if mode not in COLAB_MODE_IDS:", source_text)
         self.assertIn('raise gr.Error(ct("error.unknown_mode", mode=mode))', source_text)
-        self.assertIn(
-            'config_kwargs = {"processing_mode": mode, "yourmt3_model": yourmt3_model_key}',
-            source_text,
-        )
+        self.assertIn('"processing_mode": mode,', source_text)
+        self.assertIn('"yourmt3_model": yourmt3_model_key,', source_text)
+        self.assertIn('"muscriptor_instruments": selected_instruments,', source_text)
         self.assertNotIn(
             'config.processing_mode = mode if mode in COLAB_MODE_IDS else "smart"', source_text
         )
@@ -813,7 +812,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "SMART 与四种钢琴模式",
             "主按钮只生成 2/6 个 WAV",
             "分离完成后显示真实波形音轨",
-            "10 种转写路线",
+            "11 种转写路线",
             "选择或滚动控件本身不会触发转换",
             "The two split modes create WAV files only",
         ):
@@ -822,7 +821,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         # Mode labels come from the same shared catalog as desktop and Space.
         self.assertIn(
-            "COLAB_MODE_CHOICES = [(COLAB_TRANSLATOR.t(f\"main.mode.{mode_id}\"), mode_id) for mode_id in COLAB_MODE_IDS]",
+            'COLAB_MODE_CHOICES = [(COLAB_TRANSLATOR.t(f"main.mode.{mode_id}"), mode_id) for mode_id in COLAB_MODE_IDS]',
             code_source_text,
         )
         self.assertNotIn("完整混音多乐器转写（SMART）", all_source_text)
@@ -831,7 +830,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "输出说明",
             "主按钮只分离并保留 vocals/accompaniment 两个 WAV",
             "不会自动生成 MIDI 或合并 MIDI",
-            "每条音轨可独立勾选、选择 10 种转写路线之一",
+            "每条音轨可独立勾选、选择 11 种转写路线之一",
             "only separates and keeps vocals/accompaniment WAV files",
             "does not generate stem or merged MIDI automatically",
             "converted only by an explicit Start click",
@@ -845,9 +844,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             flags=re.S,
         )
         self.assertIsNotNone(text_table_match)
-        colab_i18n = ast.literal_eval(
-            "{\n" + text_table_match.group("table") + "\n}"
-        )
+        colab_i18n = ast.literal_eval("{\n" + text_table_match.group("table") + "\n}")
         zh_copy = colab_i18n["zh_CN"]
         en_copy = colab_i18n["en_US"]
         for direct_key in (

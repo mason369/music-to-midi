@@ -14,9 +14,11 @@ from src.models.data_models import (
     ProcessingMode,
     YourMT3Model,
 )
+from src.models.muscriptor_instruments import validate_muscriptor_instruments
 
 MIDI_ROUTE_YOURMT3_PREFIX = f"{MultiInstrumentModel.YOURMT3.value}:"
 MIDI_ROUTE_MIROS = MultiInstrumentModel.MIROS.value
+MIDI_ROUTE_MUSCRIPTOR = MultiInstrumentModel.MUSCRIPTOR.value
 MIDI_ROUTE_PIANO_TRANSKUN = ProcessingMode.PIANO_TRANSKUN.value
 MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG = ProcessingMode.PIANO_TRANSKUN_V2_AUG.value
 MIDI_ROUTE_PIANO_ARIA_AMT = ProcessingMode.PIANO_ARIA_AMT.value
@@ -31,10 +33,10 @@ YOURMT3_MANUAL_MODELS = (
 )
 
 MANUAL_MIDI_ROUTES = tuple(
-    f"{MIDI_ROUTE_YOURMT3_PREFIX}{model.value}"
-    for model in YOURMT3_MANUAL_MODELS
+    f"{MIDI_ROUTE_YOURMT3_PREFIX}{model.value}" for model in YOURMT3_MANUAL_MODELS
 ) + (
     MIDI_ROUTE_MIROS,
+    MIDI_ROUTE_MUSCRIPTOR,
     MIDI_ROUTE_PIANO_TRANSKUN,
     MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
     MIDI_ROUTE_PIANO_ARIA_AMT,
@@ -49,10 +51,18 @@ def _validate_manual_midi_route(route: str) -> str:
     return normalized
 
 
-def build_manual_midi_config(base_config: Config, route: str) -> Config:
+def build_manual_midi_config(
+    base_config: Config,
+    route: str,
+    *,
+    muscriptor_instruments: list[str] | None = None,
+) -> Config:
     """Build an isolated direct-transcription config for one selected WAV."""
     selected_route = _validate_manual_midi_route(route)
     config = Config.from_dict(base_config.to_dict())
+    # A selection belongs only to the clicked MuScriptor route. Never leak a
+    # previous direct-job constraint into YourMT3, MIROS, or a piano backend.
+    config.muscriptor_instruments = []
 
     if selected_route.startswith(MIDI_ROUTE_YOURMT3_PREFIX):
         model_name = selected_route.removeprefix(MIDI_ROUTE_YOURMT3_PREFIX)
@@ -64,6 +74,13 @@ def build_manual_midi_config(base_config: Config, route: str) -> Config:
         config.processing_mode = ProcessingMode.SMART.value
         config.transcription_backend = MultiInstrumentModel.MIROS.value
         config.multi_instrument_model = MultiInstrumentModel.MIROS.value
+    elif selected_route == MIDI_ROUTE_MUSCRIPTOR:
+        config.processing_mode = ProcessingMode.SMART.value
+        config.transcription_backend = MultiInstrumentModel.MUSCRIPTOR.value
+        config.multi_instrument_model = MultiInstrumentModel.MUSCRIPTOR.value
+        config.muscriptor_instruments = validate_muscriptor_instruments(
+            muscriptor_instruments or []
+        )
     else:
         config.processing_mode = selected_route
 

@@ -10,7 +10,7 @@ The current product surface syncs seven processing modes: full-mix multi-instrum
 
 ## Unified Interface Gallery
 
-The desktop app, Gradio Web interface, and Google Colab use the same seven-mode workflow and interaction semantics. The gallery follows the core flow from the main interface to completed separation and per-track processing.
+The desktop app, Gradio Web interface, and Google Colab use the same seven-mode workflow and interaction semantics. The gallery follows the core flow from the main interface to completed separation, per-track processing, and MuScriptor's progressive MIDI preview.
 
 ### 1. Main interface and full-mix transcription
 
@@ -24,19 +24,24 @@ The desktop app, Gradio Web interface, and Google Colab use the same seven-mode 
 
 ![Six-stem waveforms and per-track MIDI controls](../resources/screenshots/03-six-stem-track-controls.png)
 
+### 4. MuScriptor progressive transcription and MIDI preview
+
+![MuScriptor chunked transcription, playable progress, and piano-roll preview](../resources/screenshots/04-muscriptor-progressive-midi-preview.png)
+
 ## Use Cases
 
 Use it when you want to turn a vocal line, piano recording, full mix, or separated stem into MIDI you can edit in a DAW. It is designed for users who want more control than a simple upload-and-download converter, while still keeping the common audio-to-MIDI path approachable.
 
 ## Current Capabilities
 
-- **Full-mix transcription**: `SMART` mode sends the whole song to the selected multi-instrument backend and exports MIDI with notes, drums, and GM instrument tracks.
-- **Vocal/accompaniment split transcription**: `VOCAL_SPLIT` uses BS-RoFormer Leap XE 90-band for vocals and BS PolarFormer for accompaniment, then runs the selected YourMT3+ or MIROS backend independently on both stems. It can optionally export one merged MIDI.
-- **Six-stem split transcription**: `SIX_STEM_SPLIT` uses `BS-Rofo-SW-Fixed.ckpt` to separate `bass / drums / guitar / piano / vocals / other`. Each real stem is independently transcribed by the selected YourMT3+ or MIROS backend before the six MIDI files are merged.
+- **Full-mix transcription**: `SMART` mode sends the whole song to YourMT3+, MIROS, or MuScriptor Large and exports MIDI with notes, drums, and instrument tracks.
+- **Vocal/accompaniment separation and per-track transcription**: `VOCAL_SPLIT` uses BS-RoFormer Leap XE 90-band for vocals and BS PolarFormer for accompaniment, and first delivers two real WAV tracks. Each track can then select one of 11 explicit MIDI routes in the track workbench.
+- **Six-stem separation and per-track transcription**: `SIX_STEM_SPLIT` uses `BS-Rofo-SW-Fixed.ckpt` to deliver six real `bass / drums / guitar / piano / vocals / other` WAV tracks. Separation does not silently transcribe or merge MIDI.
 - **Dedicated piano transcription**: `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` target pure piano audio through TransKun default V2, the official V2 Aug checkpoint, Aria-AMT, or ByteDance's pedal-aware model.
-- **Default backend semantics**: the multi-instrument default is the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint. `SMART`, `VOCAL_SPLIT`, and `SIX_STEM_SPLIT` all allow an explicit YourMT3+ / MIROS choice; when YourMT3+ is selected, all five official checkpoint modes are available.
-- **Optional MIROS backend**: desktop, Space, and Colab can route all three multi-instrument workflows through the pinned MusicFM / AI4Musician Challenge SOTA implementation, with source and weights verified before use.
-- **Official notes and tempo**: all three multi-instrument modes preserve the notes, programs, velocities, controllers, and pitch-wheel messages produced by the YourMT3+ / MIROS official writer. The project no longer applies note quantization, de-duplication, sparse-program or short-note filtering, velocity smoothing, polyphony limiting, or local `NoteEvent` regeneration. When the official file has no `set_tempo`, detected BPM is added while preserving absolute seconds; beat-detection failure is explicit.
+- **Default backend semantics**: the multi-instrument default remains the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint. `SMART` can explicitly select YourMT3+, MIROS, or MuScriptor Large, and every separated WAV can select the same three multi-instrument families independently.
+- **Real MuScriptor constraints**: an empty instrument list enables model detection. A non-empty list is passed to the official `instruments` plus `prelude_forcing` decoding path, masks every unselected instrument token during generation, and is validated again against streamed events and final MIDI.
+- **Explicit multi-instrument routes**: `SMART` and every separated WAV can select YourMT3+, MIROS, or MuScriptor Large. The per-track menu also exposes four piano-specialized routes, for 11 routes in total.
+- **Official transcription output**: YourMT3+ and MIROS preserve their official writer results; MuScriptor uses its official events and MIDI writer plus strict selected-instrument validation. The project does not add quantization, de-duplication, short-note filtering, velocity smoothing, polyphony limiting, or local `NoteEvent` regeneration.
 - **Common audio formats**: `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted. Non-WAV input must be converted to 44.1 kHz PCM WAV through FFmpeg; FFmpeg failures stop processing and show the stderr root cause.
 - **Consistent mode set**: desktop, Space, and Colab expose the same seven processing modes.
 
@@ -44,9 +49,9 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 
 | Interface | Modes | Backend Selection | Best For |
 |-----------|-------|-------------------|----------|
-| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | The three multi-instrument modes select YourMT3+ / MIROS explicitly and expose the five checkpoint choices when YourMT3+ is selected; piano modes use their dedicated backend | Local GPU use, persistent output folders, and dedicated piano transcription |
-| Gradio Space | Same seven modes as desktop | Same YourMT3+ / MIROS and YourMT3 checkpoint selection for all three multi-instrument modes | Browser-based use or hosted demos |
-| Google Colab | Same seven modes as desktop | Same YourMT3+ / MIROS and YourMT3 checkpoint selection for all three multi-instrument modes | Temporary Colab GPU sessions |
+| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | `SMART` selects YourMT3+ / MIROS / MuScriptor; separated WAV tracks expose 11 routes; piano modes use their dedicated backend | Local GPU use, persistent output folders, and dedicated piano transcription |
+| Gradio Space | Same seven modes as desktop | MuScriptor instrument search/multi-select, hard decoding constraint, and real MIDI workbench are synchronized | Browser-based use or hosted demos |
+| Google Colab | Same seven modes as desktop | Same MuScriptor constraint and linked WAV/MIDI result workbench as Space | Temporary Colab GPU sessions |
 
 ## Entry And Dependency Sync Status
 
@@ -54,7 +59,7 @@ This repository keeps project workflows separate from official YourMT3+ checkpoi
 
 - `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` are this project's seven processing workflows.
 - `YMT3+`, `YPTF+Single (noPS)`, `YPTF+Multi (PS)`, `YPTF.MoE+Multi (noPS)`, and `YPTF.MoE+Multi (PS)` are the five checkpoint / architecture modes exposed by the official YourMT3 demo.
-- Desktop, Gradio Space, and Colab expose the same seven workflows. The three workflows that need multi-instrument transcription explicitly select YourMT3+ or MIROS; selecting YourMT3+ also exposes the five official checkpoint modes.
+- Desktop, Gradio Space, and Colab expose the same seven workflows. `SMART` selects YourMT3+, MIROS, or MuScriptor Large; both separation workflows first deliver WAV tracks, and each track then exposes 11 explicit MIDI routes.
 
 Current synchronization coverage:
 
@@ -65,15 +70,15 @@ Current synchronization coverage:
 | `install.ps1` / `install.sh` | Installs PyTorch 2.7, NumPy 1.26, audio-separator 0.44.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging-contract checks only | They produce no portable artifact and never use empty directories or fake models to bypass mandatory bundle validation. |
 | `.github/workflows/release.yml` | The target complete portable-build pipeline; it is designed to download and strictly verify every YourMT3+, separator, MIROS, TransKun, Aria-AMT, and ByteDance asset | A closed third-party-license gate currently stops the workflow before any build; no portable artifact is produced or published until every component is cleared. The target GPU runtime is PyTorch 2.7 + CUDA 12.8. |
-| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | All three multi-instrument modes expose YourMT3+ / MIROS and the YourMT3 checkpoint selector. |
+| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large; the per-track menu also includes four piano routes. |
 
 ## Processing Modes
 
 | Mode | Internal Pipeline | Main Output | Notes |
 |------|-------------------|-------------|-------|
-| `SMART` | Audio -> official YourMT3+ / MIROS MIDI output | `<song>.mid` | No source separation. Suitable for most full mixes, instrumentals, and short multi-instrument clips. |
-| `VOCAL_SPLIT` | Audio -> Leap XE 90-band vocals + PolarFormer accompaniment -> run the selected YourMT3+ / MIROS backend on both stems -> MIDI generation | `<song>_accompaniment.mid`, `<song>_vocal.mid`, optional `<song>_vocal_accompaniment_merged.mid` | The two separation models target different stems directly; either model or transcription failure stops the workflow. |
-| `SIX_STEM_SPLIT` | Audio -> `BS-Rofo-SW-Fixed.ckpt` six-stem WAV separation -> run the selected YourMT3+ / MIROS backend independently on every stem -> merge stem MIDI | `<song>_<stem>.mid`, `<song>_all_stems_merged.mid` | The original mix is not used as a substitute for per-stem transcription. All six real stems use the same explicitly selected multi-instrument backend. |
+| `SMART` | Audio -> selected YourMT3+ / MIROS / MuScriptor Large -> MIDI | `<song>.mid` | No source separation. A non-empty MuScriptor instrument selection is a real decoding constraint. |
+| `VOCAL_SPLIT` | Audio -> Leap XE vocals + PolarFormer accompaniment -> two WAV tracks -> explicit per-track MIDI | `<song>_vocals.wav`, `<song>_accompaniment.wav`; per-track MIDI on request | Separation does not auto-transcribe. Each WAV independently selects one of 11 routes. |
+| `SIX_STEM_SPLIT` | Audio -> `BS-Rofo-SW-Fixed.ckpt` -> six WAV tracks -> explicit per-track MIDI | `<song>_<stem>.wav`; per-track MIDI on request | Each real WAV independently selects its route and whether to convert; MIDI is not auto-merged. |
 | `PIANO_TRANSKUN` | Audio -> TransKun default V2 model -> MIDI | `<song>_piano_transkun.mid` | Best for pure piano audio; uses the checkpoint resources bundled with the PyPI package. |
 | `PIANO_TRANSKUN_V2_AUG` | Audio -> official TransKun V2 Aug checkpoint -> MIDI | `<song>_piano_transkun_v2_aug.mid` | Independent mode with a separately downloaded and verified checkpoint; it is not a fallback for default V2. |
 | `PIANO_ARIA_AMT` | Audio -> Aria-AMT piano model -> MIDI | `<song>_piano_aria.mid` | Best for pure piano audio; expects the Aria-AMT checkpoint to be bundled or present in the model directory. |
@@ -116,7 +121,7 @@ song_piano.wav
 song_other.wav
 ```
 
-The exact files depend on the selected mode, whether merged MIDI is enabled, and whether separated WAV retention is enabled. Vocal split exposes canonical `vocals` and `accompaniment` WAV files; six-stem mode produces MIDI from all six actual separated WAV stems.
+The exact files depend on the selected mode and the per-track conversions the user explicitly starts. Vocal split exposes canonical `vocals` and `accompaniment` WAV files; six-stem mode delivers six real separated WAV files. MIDI is generated only for tracks whose conversion action is triggered.
 
 ## Backends
 
@@ -147,6 +152,30 @@ Default model search roots include:
 runtime/models/yourmt3_all
 models/yourmt3_all
 ```
+
+### MuScriptor Large
+
+The project pins public `muscriptor` commit `302343e8992bdfc619f77f1988168374ed5d675d` (package `0.2.2a1`) and gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
+
+```bash
+hf auth login
+python download_muscriptor_model.py
+```
+
+Large is a decoder-only Transformer with roughly 1.3B parameters (the current code README rounds it to 1.4B), 48 layers, and hidden dimension 1536. It consumes 5-second 16 kHz mono chunks and emits MT3-style onset, offset, pitch, and 36-group instrument events. Training combines about 1.45 million MIDI files for synthetic pretraining, 170,000 real recordings / about 11,000 hours for fine-tuning, and 300 curated tracks for RL post-training.
+
+The official model card reports the following scores on the authors' 372-track real multi-instrument `D_Test` set, using the full training pipeline and CFG=2:
+
+| Model | Onset F1 | Frame F1 | Offset F1 | Drums F1 | Multi F1 |
+|---|---:|---:|---:|---:|---:|
+| YourMT3+ `YPTF.MoE+Multi (noPS)` | 32.5 | 45.5 | 17.8 | 41.4 | 21.9 |
+| MuScriptor Large | **60.4** | **72.4** | **48.6** | **49.6** | **47.8** |
+
+This is strong evidence that MuScriptor is a leading public full-mix candidate, but not proof of universal SOTA: `D_Test` is an author-held set without a public download path, and MuScriptor wins Multi F1 on six of the paper's eight public cross-domain datasets while losing on RWC-C and RWC-R. It also does not emit velocity, uses a fixed 36-group instrument taxonomy, and the weights are non-commercial.
+
+The release chronology is also explicit: the [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) records repository creation on 2026-06-30; the [paper](https://arxiv.org/abs/2607.08168) and [Mirelo article](https://mirelo.ai/blog/turning-audio-to-midi) were published on 2026-07-09; the GitHub release and current public weight revision followed on 2026-07-10. Repository timestamps are publishing metadata, not model-training dates.
+
+Mirelo separately says that Studio hosts a more accurate version trained on more data. No public checkpoint, revision, parameter count, or comparable score has been published for that service model, so it is not the same verifiable artifact as `muscriptor-large` and is not integrated here. Full ablations, all eight public-dataset comparisons, scale results, conditioning gains, and the frontier watchlist are documented in [the MuScriptor research note](muscriptor-model.md).
 
 ### MIROS
 
@@ -181,9 +210,9 @@ The downloader checks out a pinned `amt-os/ai4m-miros` source commit and applies
 - [BS-RoFormer Leap XE](https://huggingface.co/pcunwa/BS-Roformer-Leap) uses `Xe/bs_leap_xe_voc.ckpt` with `Xe/leap_xe_config_voc.yaml` to produce vocals.
 - [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer) uses `bs_polarformer.onnx` with `model_bs_polarformer_float16.yaml` to produce accompaniment.
 
-The canonical separated outputs are `vocals` and `accompaniment`. Each is then independently transcribed by the user's selected YourMT3+ or MIROS backend. The two separation calls are not substitutes for one another, and a failure in either route is surfaced instead of synthesizing a missing stem.
+The canonical separated outputs are `vocals` and `accompaniment`. Each enters the track workbench with 11 explicit routes: five YourMT3+ checkpoints, MIROS, MuScriptor Large, and four piano-specialized backends. The two separation calls are not substitutes for one another, and a failure in either route is surfaced instead of synthesizing a missing stem.
 
-TelkNet boundary: with authorization, this audit inspected private `mason369/telknet` dev commit `52be6fec179be492f5229ba149545ac2833b284a`. This project aligns its core YourMT3/MIROS rule—official writer output followed only by tempo metadata, with no generic note cleanup. The desktop product still keeps its own seven-mode contract: `VOCAL_SPLIT` and `SIX_STEM_SPLIT` continue to produce per-stem MIDI, whereas the corresponding standalone private-dev tools are WAV-only. There is no evidence that this dev commit is the deployed production revision, and no line-for-line routing, environment, or bit-identical-output claim is made.
+TelkNet boundary: with authorization, this audit inspected private `mason369/telknet` dev commit `52be6fec179be492f5229ba149545ac2833b284a`. This project only aligns its core YourMT3/MIROS rule—official writer output followed only by tempo metadata, with no generic note cleanup. Both separation workflows likewise deliver WAV first; MIDI is explicitly triggered in this project's per-track workbench. There is no evidence that this dev commit is the deployed production revision, and no line-for-line routing, environment, or bit-identical-output claim is made.
 
 Prepare the assets explicitly:
 
@@ -292,8 +321,9 @@ This section separates public benchmark claims from project integration status. 
 
 | Backend / Model | Type | Project Entry | Public Quality Signal | Selection Notes |
 |-----------------|------|---------------|-----------------------|-----------------|
-| YourMT3+ | Multi-instrument AMT | All three multi-instrument modes use official-writer notes; `VOCAL_SPLIT` transcribes two real stems and `SIX_STEM_SPLIT` transcribes six real stems independently, followed only by tempo/merge metadata | Official Space default noPS result: Slakh `multi_f = 0.7398`; YourMT3+ paper table: Slakh2100 `Multi F1 = 74.84`, same table `MT3 = 62.0` | Default multi-instrument backend; the project default checkpoint is `YPTF.MoE+Multi (noPS)`, aligned with the official Hugging Face Space default. |
-| MIROS | Multi-instrument AMT | Selectable in `SMART`, `VOCAL_SPLIT`, and `SIX_STEM_SPLIT` | Upstream repository describes it as a 2025 AI4Musician winning model | Optional pinned MusicFM backend; source and weights must pass identity checks before use. |
+| YourMT3+ | Multi-instrument AMT | Selectable directly in `SMART` and as five official checkpoint routes per separated WAV; conversion preserves official-writer notes and only adds required tempo metadata | Official Space default noPS result: Slakh `multi_f = 0.7398`; YourMT3+ paper table: Slakh2100 `Multi F1 = 74.84`, same table `MT3 = 62.0` | Default multi-instrument backend; the project default checkpoint is `YPTF.MoE+Multi (noPS)`, aligned with the official Hugging Face Space default. |
+| MuScriptor Large | Multi-instrument AMT | Selectable in `SMART` and per separated WAV, with model-native hard instrument constraints and the official writer | Author `D_Test`: Onset / Frame / Offset / Drums / Multi F1 = **60.4 / 72.4 / 48.6 / 49.6 / 47.8**; YourMT3+ Multi F1 is 21.9 in the same table | Strong public full-mix candidate; author-set scores do not form a universal leaderboard, and weights are non-commercial. |
+| MIROS | Multi-instrument AMT | Selectable in `SMART` and per separated WAV | 2025 AMT Challenge F1 **0.5998**, versus YourMT3-YPTF-MoE-M 0.5938 and MT3 0.3932 | Pinned MusicFM backend; the challenge used 76 constrained synthetic clips, so its score is not comparable to MuScriptor `D_Test` or Slakh. |
 | TransKun default V2 | Piano-specialized | `PIANO_TRANSKUN` | The V2 / pip checkpoints publish MAESTRO V3 F1 values | Project default TransKun route with package-bundled resources. |
 | TransKun V2 Aug | Piano-specialized | `PIANO_TRANSKUN_V2_AUG` | Official augmented checkpoint; this README does not transfer metrics from a different checkpoint | Separate, fixed-asset A/B route; never a fallback for default V2. |
 | Aria-AMT | Piano-specialized | `PIANO_ARIA_AMT` | Public checkpoint; this README does not invent a missing same-protocol F1 score | Integrated pure-piano A/B option. |
@@ -301,7 +331,16 @@ This section separates public benchmark claims from project integration status. 
 | Leap XE + PolarFormer | Vocal/accompaniment separation | Pre-separation for `VOCAL_SPLIT` | The two public models target different outputs, so no combined benchmark is claimed | Leap XE produces vocals; PolarFormer produces accompaniment; both stems then use the selected transcription backend. |
 | BS-RoFormer SW Fixed | Six-stem separation | Pre-separation for `SIX_STEM_SPLIT` | MVSEP 6-stem SDR protocol | `BS-Rofo-SW-Fixed.ckpt` produces six WAV stems; separation SDR is not end-to-end MIDI F1. |
 
-YourMT3+ / MIROS are multi-instrument backends, TransKun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and Leap XE / PolarFormer / BS-RoFormer SW Fixed are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
+YourMT3+ / MuScriptor / MIROS are multi-instrument backends, TransKun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and Leap XE / PolarFormer / BS-RoFormer SW Fixed are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
+
+#### MuScriptor and Frontier Watchlist (verified 2026-07-19)
+
+| Model / Direction | Public Evidence | Status | Project Decision |
+|---|---|---|---|
+| MuScriptor Small / Medium | Official 103M / 307M weights; `D_Real`-only Multi F1 38.2 / 39.7, versus Large 40.5 in the same scale ablation | Public, not integrated | Closest deployable future candidates for lower VRAM or CPU. Require same-audio local quality, speed, latency, and memory tests before adding a selector. |
+| Mirelo Studio improved model | Mirelo says it uses more training data and is more accurate | Private service | Watch only. No public weights, revision, license mapping, or comparable score; it cannot be relabeled as `muscriptor-large`. |
+| MIROS / MusicFM | 2025 AMT Challenge winner at F1 0.5998 on its own 76-clip protocol | Integrated | Keep as a separate backend and protocol, not as a numeric MuScriptor replacement. |
+| Dense polyphony and instrument detection | The challenge paper reports MIROS F-measure dropping from 0.7193 for one instrument to 0.4367 for three and identifies leakage, similar timbres, and polyphonic confusion as persistent failures | Research priority | Prefer future models that publish instrument-aware F1, leakage, polyphony degradation, real jazz/pop coverage, weights, licensing, speed, and VRAM—not just one incompatible note score. |
 
 #### YourMT3+ Official Checkpoint Modes
 
@@ -338,13 +377,13 @@ Known differences from the official demo:
 | Aria-AMT | `PIANO_ARIA_AMT` | Public checkpoint, but no fully matching published TransKun-style benchmark table | No unified F1 written here | Compare with local A/B audio. |
 | ByteDance Pedal | `PIANO_BYTEDANCE_PEDAL` | MAESTRO `note onset F1 / pedal onset F1` | **96.72% / 91.86%** | Its same-type advantage is pedal output; generated MIDI preserves sustain pedal `CC64`. |
 
-YourMT3+ / MIROS are multi-instrument backends and should not be directly ranked against the piano-specialized F1 scores above. ByteDance Pedal's `pedal onset F1` is also not equivalent to TransKun's `onset+offset+velocity F1`.
+YourMT3+ / MuScriptor / MIROS are multi-instrument backends and should not be directly ranked against the piano-specialized F1 scores above. ByteDance Pedal's `pedal onset F1` is also not equivalent to TransKun's `onset+offset+velocity F1`.
 
 ## Default Processing Strategy
 
-The desktop, Space, and Colab interfaces no longer expose a user-adjustable quality preset. The YourMT3+ product route uses official non-overlapping slices, fixed `bsz=8`, per-channel detokenization/merge, `mix_notes`, and the official MIDI writer. The project no longer adds overlap de-duplication, sparse-program filtering, or local MIDI regeneration. MIROS likewise keeps the official CLI writer result and only adds tempo metadata.
+The desktop, Space, and Colab interfaces no longer expose a user-adjustable quality preset. YourMT3+ uses official non-overlapping slices, fixed `bsz=8`, per-channel detokenization/merge, `mix_notes`, and its MIDI writer; MIROS preserves the official CLI writer result; MuScriptor uses its official segmented generation, events, and MIDI writer. The project does not add overlap de-duplication, sparse-program filtering, or local MIDI regeneration.
 
-For `SIX_STEM_SPLIT`, `BS-Rofo-SW-Fixed.ckpt` produces six real WAV stems and the selected YourMT3+ or MIROS backend is invoked once per stem. No cross-stem note redistribution is performed.
+For `SIX_STEM_SPLIT`, `BS-Rofo-SW-Fixed.ckpt` produces six real WAV stems. Each stem keeps an independent route selector and explicit conversion action; no MIDI backend is invoked merely because separation completed.
 
 ## Requirements
 

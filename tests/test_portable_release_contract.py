@@ -91,6 +91,21 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", spec)
         self.assertIn("ai4m-miros", spec)
 
+    def test_pyinstaller_spec_bundles_complete_muscriptor_runtime(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        for expected in (
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR",
+            "models/muscriptor_large",
+            "models/muscriptor_assets",
+            "resources/fluidsynth",
+            "copy_metadata('muscriptor')",
+            "collect_all('muscriptor')",
+        ):
+            self.assertIn(expected, spec)
+
     def test_pyinstaller_spec_bundles_miros_dynamic_runtime_dependencies(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
@@ -114,9 +129,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertNotIn("GTX 750 Ti 及以上", workflow)
 
     def test_release_workflow_checks_version_tag_parity_before_mutating_release(self):
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
-            encoding="utf-8"
-        )
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("Version contract verified:", workflow)
         self.assertIn('Path("pyproject.toml")', workflow)
@@ -128,9 +141,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         )
 
     def test_portable_usage_and_asset_log_cover_all_seven_routes_and_backends(self):
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
-            encoding="utf-8"
-        )
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         for mode in (
             "SMART",
@@ -142,10 +153,14 @@ class PortableReleaseContractTests(unittest.TestCase):
             "PIANO_BYTEDANCE_PEDAL",
         ):
             self.assertGreaterEqual(workflow.count(mode), 2)
-        self.assertIn("YourMT3+ 或 MIROS", workflow)
+        self.assertIn("YourMT3+、MIROS 或 MuScriptor-large", workflow)
         self.assertIn("都会各自调用所选后端", workflow)
         self.assertIn("YourMT3+ (5 checkpoints)", workflow)
         self.assertIn("MIROS (source + pretrained + fine-tuned)", workflow)
+        self.assertIn(
+            "MuScriptor-large (checkpoint + config + SoundFont + FluidSynth)",
+            workflow,
+        )
         self.assertIn("TransKun 2.0.1 default V2", workflow)
 
     def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
@@ -192,7 +207,32 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("download_miros_model.py", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
-        self.assertIn("Download all official YourMT3+ model modes", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR", workflow)
+        self.assertIn("gated MuScriptor-large", workflow)
+
+    def test_release_workflow_downloads_and_packages_gated_muscriptor_assets(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn("HF_TOKEN: ${{ secrets.HF_TOKEN }}", workflow)
+        self.assertIn("python download_sota_models.py", workflow)
+        self.assertIn("python download_fluidsynth_runtime.py", workflow)
+        self.assertIn("get_cached_muscriptor_paths(validate_hashes=True)", workflow)
+        self.assertIn("download_muscriptor_soundfont", workflow)
+        self.assertIn("command -v fluidsynth", workflow)
+
+    def test_build_portable_collects_and_validates_muscriptor_assets(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        for expected in (
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR",
+            "MuScriptor portable assets verified",
+            "download_sota_models.py after accepting the Hugging Face terms",
+        ):
+            self.assertIn(expected, script)
 
     def test_release_workflow_prepares_miros_from_packaged_release_assets(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -416,9 +456,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('test -s "$BUILD_ASSET_ROOT/ffmpeg/bin/ffprobe"', workflow)
 
     def test_release_records_exact_ffmpeg_license_build_and_hash_evidence(self):
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
-            encoding="utf-8"
-        )
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         for expected in (
             "FFMPEG_BUILD_AUDIT.txt",

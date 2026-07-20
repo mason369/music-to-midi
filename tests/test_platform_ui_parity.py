@@ -13,9 +13,7 @@ from pathlib import Path
 def _colab_source() -> str:
     notebook = json.loads(Path("colab_notebook.ipynb").read_text(encoding="utf-8"))
     return "\n".join(
-        "".join(cell["source"])
-        for cell in notebook["cells"]
-        if cell.get("cell_type") == "code"
+        "".join(cell["source"]) for cell in notebook["cells"] if cell.get("cell_type") == "code"
     )
 
 
@@ -184,10 +182,7 @@ def test_web_platforms_source_shared_labels_from_the_catalog():
         "dialogs.complete.audio_tracks.add_track",
         "dialogs.complete.audio_tracks.manual_midi.select_model",
     ):
-        assert (
-            f'COLAB_TRANSLATOR.t("{key}")' in colab
-            or f"COLAB_TRANSLATOR.t('{key}')" in colab
-        )
+        assert f'COLAB_TRANSLATOR.t("{key}")' in colab or f"COLAB_TRANSLATOR.t('{key}')" in colab
 
     # Retired Colab-only duplicates stay removed.
     for stale in (
@@ -236,3 +231,27 @@ def test_colab_notebook_remains_valid_json_and_python():
     for cell in notebook["cells"]:
         if cell.get("cell_type") == "code":
             ast.parse("".join(cell["source"]))
+
+
+def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
+    desktop = _desktop_source()
+    space = _space_source()
+    colab = _colab_source()
+
+    assert "else:\n            self.worker = ProcessingWorker(" in desktop
+    assert "self._show_muscriptor_streaming(" in desktop
+    for source in (space, colab):
+        assert "def _build_midi_result_state(" in source
+        assert '"kind": "midi_result"' in source
+        assert "active_midi_track_id" in source
+        assert "active_midi_result" in source
+        assert "source_track_name" in source
+        assert "build_muscriptor_result_html(" in source
+        assert "prepare_midi_playback_assets" in source
+
+    assert "preserve_mixer=True" in desktop
+    assert "source_track_name=track_name" in desktop
+    assert "_on_audio_mixer_playing_changed" in desktop
+    assert "_on_midi_workbench_playing_changed" in desktop
+    assert "fn=_close_active_midi_detail" in space
+    assert "fn=close_midi_detail" in colab

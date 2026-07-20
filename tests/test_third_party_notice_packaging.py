@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -59,9 +58,7 @@ def test_notice_covers_every_bundled_model_family_with_pinned_provenance():
 def test_machine_inventory_is_closed_over_every_current_portable_component():
     notice = _read("THIRD_PARTY_NOTICES.md")
     workflow = _read(".github/workflows/release.yml")
-    rows = [
-        line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")
-    ]
+    rows = [line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")]
     component_ids = {line.split(" |", 1)[0].split(": ", 1)[1] for line in rows}
     expected_ids = {
         "zfturbo_adapted_source",
@@ -81,6 +78,10 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         "miros_source",
         "musicfm_pretrained",
         "miros_finetuned",
+        "muscriptor_source",
+        "muscriptor_checkpoint",
+        "musescore_general_soundfont",
+        "fluidsynth_runtime",
         "pytorch_cuda_runtime",
         "onnxruntime_gpu",
         "pyqt6_runtime",
@@ -111,9 +112,7 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
     # with declared license evidence or OWNER_ACCEPTED with a distribution record.
     assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE:" not in notice
 
-    rows = [
-        line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")
-    ]
+    rows = [line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")]
     owner_accepted = {
         line.split(" |", 1)[0].split(": ", 1)[1]
         for line in rows

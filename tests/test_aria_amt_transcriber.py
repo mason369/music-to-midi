@@ -386,6 +386,49 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             popen.assert_not_called()
             import_module.assert_not_called()
 
+    def test_event_callback_uses_windowed_streaming_path_on_non_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio_path = root / "song.wav"
+            output_path = root / "out" / "song.mid"
+            checkpoint_path = root / "checkpoint.safetensors"
+            audio_path.write_bytes(b"wav")
+            checkpoint_path.write_bytes(b"weights")
+            events = []
+
+            def fake_streaming(input_path, temp_dir, progress_callback=None):
+                events.append(
+                    {
+                        "type": "snapshot",
+                        "completed": 1,
+                        "total": 1,
+                        "frontier_seconds": 1.0,
+                        "duration_seconds": 1.0,
+                        "notes": [],
+                    }
+                )
+                _write_valid_midi(temp_dir / "song.mid")
+
+            transcriber = AriaAmtTranscriber(checkpoint_path=checkpoint_path)
+            transcriber.set_event_callback(events.append)
+            with (
+                patch.object(AriaAmtTranscriber, "is_available", return_value=True),
+                patch.object(transcriber, "is_model_available", return_value=True),
+                patch("src.core.aria_amt_transcriber.platform.system", return_value="Linux"),
+                patch.object(
+                    transcriber,
+                    "_run_transcription_windows_single_file",
+                    side_effect=fake_streaming,
+                ) as stream_path,
+                patch.object(transcriber, "_run_transcription_subprocess") as subprocess_path,
+            ):
+                result = transcriber.transcribe(str(audio_path), str(output_path))
+
+            self.assertEqual(result, str(output_path))
+            stream_path.assert_called_once()
+            subprocess_path.assert_not_called()
+            self.assertEqual(events[0]["type"], "snapshot")
+
     def test_windows_segment_reader_does_not_use_torchaudio_stream_reader(self):
         waveform = torch.arange(0, 8, dtype=torch.float32).unsqueeze(0)
         with (

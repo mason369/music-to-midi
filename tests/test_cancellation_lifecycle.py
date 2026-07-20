@@ -148,6 +148,7 @@ class CancellationLifecycleTests(unittest.TestCase):
         for name in (
             "yourmt3_transcriber",
             "miros_transcriber",
+            "muscriptor_transcriber",
             "aria_amt_transcriber",
             "bytedance_piano_transcriber",
             "transkun_transcriber",

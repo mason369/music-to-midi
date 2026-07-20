@@ -82,6 +82,19 @@ miros_source_dir = _resolve_existing_dir(
     os.path.join(ROOT_DIR, "ai4m-miros"),
     os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
 )
+muscriptor_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_large"),
+)
+muscriptor_assets_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_assets"),
+)
+fluidsynth_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "fluidsynth", "2.5.6"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "fluidsynth"),
+)
 ffmpeg_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR"),
     os.path.join(ROOT_DIR, "tools", "ffmpeg"),
@@ -131,6 +144,9 @@ datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
 datas += _collect_tree(transkun_v2_aug_models_dir, "models/transkun_v2_aug")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
+datas += _collect_tree(muscriptor_models_dir, "models/muscriptor_large")
+datas += _collect_tree(muscriptor_assets_dir, "models/muscriptor_assets")
+datas += _collect_tree(fluidsynth_dir, "resources/fluidsynth")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')
@@ -138,6 +154,7 @@ datas += copy_metadata('aria-amt')
 datas += copy_metadata('piano-transcription-inference')
 datas += copy_metadata('transkun')
 datas += copy_metadata('torchlibrosa')
+datas += copy_metadata('muscriptor')
 
 hiddenimports = [
     # PyQt6 相关
@@ -170,6 +187,10 @@ hiddenimports = [
     'torchlibrosa',
     'matplotlib',
     'matplotlib.pyplot',
+    # MuScriptor large multi-instrument transcription
+    'muscriptor',
+    'muscriptor.events',
+    'muscriptor.tokenizer.mt3',
     # 数值计算
     'numpy',
     'scipy',
@@ -195,6 +216,7 @@ onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all
 pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
 transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
+muscriptor_datas, muscriptor_binaries, muscriptor_hiddenimports = collect_all('muscriptor')
 aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
 torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
@@ -219,6 +241,7 @@ datas += (
     + pil_datas
     + mir_eval_datas
     + transkun_datas
+    + muscriptor_datas
     + aria_amt_datas
     + bytedance_piano_datas
     + torchlibrosa_datas
@@ -244,6 +267,7 @@ hiddenimports += (
     + pil_hiddenimports
     + mir_eval_hiddenimports
     + transkun_hiddenimports
+    + muscriptor_hiddenimports
     + aria_amt_hiddenimports
     + bytedance_piano_hiddenimports
     + torchlibrosa_hiddenimports
@@ -270,6 +294,7 @@ all_binaries = (
     + pil_binaries
     + mir_eval_binaries
     + transkun_binaries
+    + muscriptor_binaries
     + aria_amt_binaries
     + bytedance_piano_binaries
     + torchlibrosa_binaries

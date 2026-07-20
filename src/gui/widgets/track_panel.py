@@ -1,12 +1,13 @@
 """
 轨道面板组件 - 支持模式选择与多乐器后端选择。
 """
+
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFrame,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -15,8 +16,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.i18n.translator import get_translator, t
+from src.gui.widgets.muscriptor_instrument_selector import MuscriptorInstrumentSelector
 from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
+from src.i18n.translator import get_translator, t
 from src.models.data_models import (
     MidiTrackMode,
     MultiInstrumentModel,
@@ -81,9 +83,9 @@ class TrackPanel(QGroupBox):
     """轨道面板：处理模式 + 多乐器后端 + 模式说明。"""
 
     layout_changed = pyqtSignal(object)  # TrackLayout
-    mode_changed = pyqtSignal(str)       # processing_mode 字符串
-    model_changed = pyqtSignal(str)      # selected backend 字符串
-    backend_changed = pyqtSignal(str)    # backward-compatible alias
+    mode_changed = pyqtSignal(str)  # processing_mode 字符串
+    model_changed = pyqtSignal(str)  # selected backend 字符串
+    backend_changed = pyqtSignal(str)  # backward-compatible alias
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,9 +125,7 @@ class TrackPanel(QGroupBox):
         combo.setStyleSheet(cls._combo_style())
         combo.setMinimumWidth(0)
         combo.setMinimumContentsLength(0)
-        combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     @staticmethod
@@ -211,7 +211,9 @@ class TrackPanel(QGroupBox):
 
         self._yourmt3_model_label = QLabel(t("main.engine.yourmt3_model_label") + ":")
         self._yourmt3_model_label.setWordWrap(True)
-        self._yourmt3_model_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
+        self._yourmt3_model_label.setStyleSheet(
+            "font-size: 11px; color: #b0b8c8; font-weight: normal;"
+        )
 
         self.yourmt3_model_combo = NoWheelComboBox()
         self._configure_combo(self.yourmt3_model_combo)
@@ -261,18 +263,8 @@ class TrackPanel(QGroupBox):
         yourmt3_model_card_layout.addWidget(self.yourmt3_model_hint_label)
         main_layout.addWidget(self.yourmt3_model_card)
 
-        self.model_hint_label = QLabel()
-        self.model_hint_label.setWordWrap(True)
-        self.model_hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.model_hint_label.setStyleSheet("""
-            QLabel {
-                font-size: 10px;
-                color: #d2c07a;
-                padding: 2px 6px 4px 6px;
-                line-height: 135%;
-            }
-        """)
-        main_layout.addWidget(self.model_hint_label)
+        self.muscriptor_instrument_selector = MuscriptorInstrumentSelector()
+        main_layout.addWidget(self.muscriptor_instrument_selector)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -326,7 +318,9 @@ class TrackPanel(QGroupBox):
         vocal_layout.setSpacing(4)
         self._vocal_split_merge_check = WrappedCheckBox(t("main.mode.vocal_split_merge_midi"))
         self._vocal_split_merge_check.setChecked(False)
-        self._vocal_split_merge_check.setStyleSheet("font-size: 10px; color: #b0b8c8; spacing: 4px;")
+        self._vocal_split_merge_check.setStyleSheet(
+            "font-size: 10px; color: #b0b8c8; spacing: 4px;"
+        )
         vocal_layout.addWidget(self._vocal_split_merge_check)
         main_layout.addWidget(self._vocal_split_options)
 
@@ -371,6 +365,8 @@ class TrackPanel(QGroupBox):
     def _model_tooltip(self) -> str:
         mode = self.get_processing_mode()
         backend = self.get_transcription_backend()
+        if backend == MultiInstrumentModel.MUSCRIPTOR.value:
+            return t("main.engine.muscriptor_tooltip")
         if backend == MultiInstrumentModel.MIROS.value:
             return t("main.engine.miros_tooltip")
         if mode in {ProcessingMode.VOCAL_SPLIT.value, ProcessingMode.SIX_STEM_SPLIT.value}:
@@ -401,6 +397,8 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_bytedance_pedal_desc")
         if self.get_multi_instrument_model() == MultiInstrumentModel.MIROS.value:
             return t("main.mode.smart_miros_desc")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.MUSCRIPTOR.value:
+            return t("main.mode.smart_muscriptor_desc")
         if self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value:
             return t("main.mode.smart_yourmt3_desc")
         return t("main.mode.smart_desc")
@@ -421,29 +419,11 @@ class TrackPanel(QGroupBox):
             return t("main.mode.piano_bytedance_pedal_hint")
         if self.get_multi_instrument_model() == MultiInstrumentModel.MIROS.value:
             return t("main.mode.smart_miros_hint")
+        if self.get_multi_instrument_model() == MultiInstrumentModel.MUSCRIPTOR.value:
+            return t("main.mode.smart_muscriptor_hint")
         if self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value:
             return t("main.mode.smart_yourmt3_hint")
         return t("main.mode.smart_hint")
-
-    def _model_hint_text(self) -> str:
-        mode = self.get_processing_mode()
-        if mode in {
-            ProcessingMode.VOCAL_SPLIT.value,
-            ProcessingMode.SIX_STEM_SPLIT.value,
-        }:
-            return t("main.engine.manual_split_midi_hint")
-        multi_model = self.get_multi_instrument_model()
-
-        if mode in {
-            ProcessingMode.PIANO_TRANSKUN.value,
-            ProcessingMode.PIANO_TRANSKUN_V2_AUG.value,
-            ProcessingMode.PIANO_ARIA_AMT.value,
-            ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
-        }:
-            return t("main.engine.dedicated_mode_hint")
-        if multi_model == MultiInstrumentModel.MIROS.value:
-            return t("main.engine.miros_general_hint")
-        return t("main.engine.yourmt3_general_hint")
 
     def _yourmt3_model_hint_text(self) -> str:
         model_info = YOURMT3_MODELS.get(self.get_yourmt3_model(), {})
@@ -455,21 +435,17 @@ class TrackPanel(QGroupBox):
             description = model_info.get("ui_description") or model_info.get("description") or ""
             feature_items = model_info.get("features_en") or model_info.get("features") or []
         features = "，".join(feature_items) if is_zh else ", ".join(feature_items)
-        checkpoint = model_info.get("checkpoint", "")
-        if checkpoint:
-            separator = "：" if is_zh else ": "
-            checkpoint_line = f"{t('main.engine.checkpoint_label')}{separator}{checkpoint}"
-        else:
-            checkpoint_line = ""
         if features:
             separator = "：" if is_zh else ": "
             feature_line = f"{t('main.engine.model_traits_label')}{separator}{features}"
-            return "\n".join(part for part in [description, checkpoint_line, feature_line] if part)
-        return "\n".join(part for part in [description, checkpoint_line] if part)
+            return "\n".join(part for part in [description, feature_line] if part)
+        return description
 
     def _yourmt3_model_title_text(self) -> str:
         model_info = YOURMT3_MODELS.get(self.get_yourmt3_model(), {})
-        model_label = model_info.get("ui_label") or model_info.get("name") or self.get_yourmt3_model()
+        model_label = (
+            model_info.get("ui_label") or model_info.get("name") or self.get_yourmt3_model()
+        )
         return f"♪ YourMT3+ — {model_label}"
 
     def _model_options(self, mode: str | None = None) -> list[tuple[str, str]]:
@@ -478,15 +454,18 @@ class TrackPanel(QGroupBox):
             return [
                 (t("main.engine.yourmt3_midi"), MultiInstrumentModel.YOURMT3.value),
                 (t("main.engine.miros_midi"), MultiInstrumentModel.MIROS.value),
+                (t("main.engine.muscriptor_midi"), MultiInstrumentModel.MUSCRIPTOR.value),
             ]
         if mode == ProcessingMode.VOCAL_SPLIT.value:
             return [
                 (t("main.engine.yourmt3_midi"), MultiInstrumentModel.YOURMT3.value),
                 (t("main.engine.miros_midi"), MultiInstrumentModel.MIROS.value),
+                (t("main.engine.muscriptor_midi"), MultiInstrumentModel.MUSCRIPTOR.value),
             ]
         return [
             (t("main.engine.yourmt3"), MultiInstrumentModel.YOURMT3.value),
             (t("main.engine.miros"), MultiInstrumentModel.MIROS.value),
+            (t("main.engine.muscriptor"), MultiInstrumentModel.MUSCRIPTOR.value),
         ]
 
     def _sync_model_options(self, preferred_backend: str | None = None) -> None:
@@ -545,7 +524,6 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_hint_label.setText(self._yourmt3_model_hint_text())
         self.mode_desc_label.setText(self._mode_text())
         self.hint_label.setText(self._hint_text())
-        self.model_hint_label.setText(self._model_hint_text())
 
     def get_processing_mode(self) -> str:
         mode = self.mode_combo.currentData()
@@ -571,14 +549,20 @@ class TrackPanel(QGroupBox):
 
     def get_multi_instrument_model(self) -> str:
         preferred = self.get_transcription_backend()
-        if preferred in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
+        if preferred in {model.value for model in MultiInstrumentModel}:
             return preferred
         raise ValueError(f"Unsupported multi-instrument backend: {preferred!r}")
 
     def set_multi_instrument_model(self, model_name: str):
-        if model_name not in {MultiInstrumentModel.YOURMT3.value, MultiInstrumentModel.MIROS.value}:
+        if model_name not in {model.value for model in MultiInstrumentModel}:
             raise ValueError(f"Unsupported multi-instrument backend: {model_name!r}")
         self._selected_multi_instrument_model = model_name
+
+    def get_muscriptor_instruments(self) -> list[str]:
+        return self.muscriptor_instrument_selector.selected_instruments()
+
+    def set_muscriptor_instruments(self, instruments: list[str]) -> None:
+        self.muscriptor_instrument_selector.set_selected_instruments(instruments)
 
     def get_yourmt3_model(self) -> str:
         model_name = self.yourmt3_model_combo.currentData()
@@ -610,12 +594,17 @@ class TrackPanel(QGroupBox):
             uses_model_selector
             and self.get_multi_instrument_model() == MultiInstrumentModel.YOURMT3.value
         )
+        shows_muscriptor_instruments = (
+            uses_model_selector
+            and self.get_multi_instrument_model() == MultiInstrumentModel.MUSCRIPTOR.value
+        )
 
         self._model_row.setVisible(uses_model_selector)
         self._yourmt3_model_row.setVisible(shows_yourmt3_model)
         self.yourmt3_model_card.setVisible(shows_yourmt3_model)
         self.yourmt3_model_title_label.setVisible(shows_yourmt3_model)
         self.yourmt3_model_hint_label.setVisible(shows_yourmt3_model)
+        self.muscriptor_instrument_selector.setVisible(shows_muscriptor_instruments)
         self._vocal_split_options.setVisible(False)
 
         self.mode_combo.setEnabled(self._controls_enabled)
@@ -628,6 +617,9 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_card.setEnabled(self._controls_enabled and shows_yourmt3_model)
         self.yourmt3_model_title_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
         self.yourmt3_model_hint_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
+        self.muscriptor_instrument_selector.setEnabled(
+            self._controls_enabled and shows_muscriptor_instruments
+        )
         self._refresh_labels()
 
     def set_processing_controls_enabled(self, enabled: bool):
@@ -664,5 +656,6 @@ class TrackPanel(QGroupBox):
             self.mode_combo.setItemText(index, t(translation_key))
         self._sync_model_options(self.get_transcription_backend())
         self._sync_yourmt3_model_options(self.get_yourmt3_model())
+        self.muscriptor_instrument_selector.update_translations()
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))
         self._refresh_labels()

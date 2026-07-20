@@ -23,9 +23,7 @@ def test_space_ui_uses_shared_i18n_labels():
     assert "Component.api_info = _patched_component_api_info" in source_text
     assert 'if __name__ == "__main__":' in source_text
     assert (
-        "    demo.launch("
-        'server_name="0.0.0.0", allowed_paths=[str(SPACE_OUTPUT_INSTANCE)]'
-        ")"
+        "    demo.launch(" 'server_name="0.0.0.0", allowed_paths=[str(SPACE_OUTPUT_INSTANCE)]' ")"
     ) in source_text
 
 
@@ -37,8 +35,32 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
     assert en["space"]["ui"]["download_section"] == "Download Output Files"
     for catalog in (zh, en):
         vocal_info = catalog["space"]["mode"]["vocal_split_info"]
-        assert "TelkNet" in vocal_info
-        assert "server" in vocal_info.lower() or "服务端" in vocal_info
+        six_stem_info = catalog["space"]["mode"]["six_stem_split_info"]
+        assert "WAV" in vocal_info
+        assert "MIDI" in vocal_info
+        assert "WAV" in six_stem_info
+        assert "MIDI" in six_stem_info
+
+        product_copy = "\n".join(
+            [
+                *catalog["main"]["mode"].values(),
+                *catalog["main"]["engine"].values(),
+                *catalog["space"]["mode"].values(),
+            ]
+        ).lower()
+        for banned_phrase in (
+            "telknet",
+            "对齐",
+            "落后",
+            "不声称",
+            "逐行",
+            "challenge-sota",
+            "source parity",
+            "line for line",
+            "line-for-line",
+            "website contract",
+        ):
+            assert banned_phrase not in product_copy
 
 
 def test_space_ui_exposes_restored_modes_and_dependencies():
@@ -48,7 +70,7 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     searchable_text = source_text + "\n" + zh_text
 
     for restored_text in (
-        "六声部分离 + 分别转写",
+        "六声部分离",
         "钢琴专用转写 (TransKun)",
         "钢琴专用转写 (Aria-AMT)",
         "钢琴专用转写 (ByteDance Pedal)",
@@ -237,11 +259,11 @@ def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes()
 
     # The workbench renders real waveforms through the shared browser mixer
     # runtime instead of per-track Gradio audio players.
-    assert "build_track_mixer_html(state[\"tracks\"], st)" in source_text
-    assert "head=LOG_POLL_HEAD + mixer_head()" in source_text
+    assert 'build_track_mixer_html(state["tracks"], st)' in source_text
+    assert "head=LOG_POLL_HEAD + mixer_head() + muscriptor_result_head()" in source_text
     assert "from src.gui.web.track_mixer_runtime import (" in source_text
     assert "waveform_options=gr.WaveformOptions(" not in source_text
-    assert 'key=f"waveform-{track[\'id\']}"' not in source_text
+    assert "key=f\"waveform-{track['id']}\"" not in source_text
     assert 'sources=["upload"]' in source_text
 
     # Per-track removal mirrors the desktop mixer row contract.
@@ -253,9 +275,10 @@ def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes()
     assert "MANUAL_MIDI_ROUTE_CHOICES" in source_text
     assert "build_manual_midi_config" in source_text
     assert "manual_midi_output_dir" in source_text
-    assert "len(MANUAL_MIDI_ROUTE_CHOICES) != 10" in source_text
+    assert "len(MANUAL_MIDI_ROUTE_CHOICES) != 11" in source_text
     assert "YOURMT3_MANUAL_MODELS" in manual_source
     assert "MIDI_ROUTE_MIROS" in manual_source
+    assert "MIDI_ROUTE_MUSCRIPTOR" in manual_source
     assert "MIDI_ROUTE_PIANO_TRANSKUN" in manual_source
     assert "MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG" in manual_source
     assert "MIDI_ROUTE_PIANO_ARIA_AMT" in manual_source
@@ -307,7 +330,15 @@ def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
 
     assert "两个分离模式只先生成 WAV" in readme
     assert "选择复选框或模型不会开始推理" in readme
-    assert "十个明确路线" in readme
+    assert "十一个明确路线" in readme
+    assert "models:" in readme
+    assert "MuScriptor/muscriptor-large" in readme
+    assert "mimbres/YourMT3" in readme
+    assert "minzwon/MusicFM" in readme
+    assert "顶部 `license: mit` **只表示本 Space 自有应用代码使用 MIT**" in readme
+    assert "必须在模型页接受条款" in readme
+    assert "`SMART` + MuScriptor Large" in readme
+    assert "约 0.833 秒" in readme
     assert "开始分离" in readme
     assert "不会自动生成 vocal、accompaniment 或 merged MIDI" in readme
     assert "不会自动生成六个 stem MIDI 或 merged MIDI" in readme

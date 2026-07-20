@@ -49,6 +49,12 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_result = Path("/tmp/transkun-v2-aug/checkpointMSimplerAug")
         aria_result = Path("/tmp/aria-amt/piano-medium-double-1.0.safetensors")
         bytedance_result = Path("/tmp/bytedance/note_F1=0.9677_pedal_F1=0.9186.pth")
+        muscriptor_result = (
+            Path("/tmp/muscriptor/model.safetensors"),
+            Path("/tmp/muscriptor/config.json"),
+        )
+        soundfont_result = Path("/tmp/muscriptor-assets/MuseScore_General.sf2")
+        fluidsynth_result = Path("/tmp/fluidsynth/bin/fluidsynth")
 
         with (
             mock.patch.object(
@@ -96,6 +102,21 @@ class SotaModelDownloaderTests(unittest.TestCase):
                 "download_bytedance_piano_model",
                 return_value=bytedance_result,
             ) as bytedance_mock,
+            mock.patch.object(
+                download_sota_models,
+                "download_muscriptor_large_model",
+                return_value=muscriptor_result,
+            ) as muscriptor_mock,
+            mock.patch.object(
+                download_sota_models,
+                "download_muscriptor_soundfont",
+                return_value=soundfont_result,
+            ) as soundfont_mock,
+            mock.patch.object(
+                download_sota_models,
+                "download_fluidsynth_windows",
+                return_value=fluidsynth_result,
+            ) as fluidsynth_mock,
         ):
             result = download_sota_models.download_sota_models()
 
@@ -108,6 +129,9 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_mock.assert_called_once_with()
         aria_mock.assert_called_once_with()
         bytedance_mock.assert_called_once_with()
+        muscriptor_mock.assert_called_once_with()
+        soundfont_mock.assert_called_once_with()
+        fluidsynth_mock.assert_called_once_with()
         self.assertEqual(result["transkun"], transkun_result)
         self.assertEqual(result["yourmt3"], yourmt3_result)
         self.assertEqual(result["miros"]["repo_dir"], miros_result)
@@ -124,6 +148,10 @@ class SotaModelDownloaderTests(unittest.TestCase):
             result["bytedance_piano"]["checkpoint"],
             bytedance_result,
         )
+        self.assertEqual(result["muscriptor"]["weights"], muscriptor_result[0])
+        self.assertEqual(result["muscriptor"]["config"], muscriptor_result[1])
+        self.assertEqual(result["muscriptor"]["soundfont"], soundfont_result)
+        self.assertEqual(result["muscriptor"]["fluidsynth"], fluidsynth_result)
 
     def test_default_transkun_validation_rejects_unavailable_or_wrong_package(self):
         reason = "Transkun package version mismatch: expected 2.0.1, got 2.0.0"

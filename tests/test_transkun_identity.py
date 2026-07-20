@@ -146,6 +146,53 @@ def test_transkun_parent_uses_blocking_queue_read_with_timeout():
     assert "result_queue.get(timeout=2.0)" in source
 
 
+def test_transkun_parent_forwards_worker_snapshot_before_publishing(tmp_path):
+    audio_path = tmp_path / "piano.wav"
+    output_path = tmp_path / "out.mid"
+    weight_path = tmp_path / "2.0.pt"
+    conf_path = tmp_path / "2.0.conf"
+    audio_path.write_bytes(b"audio")
+    weight_path.write_bytes(b"weight")
+    conf_path.write_text("{}", encoding="utf-8")
+
+    def get_resource(name: str) -> Path:
+        return weight_path if name == "2.0.pt" else conf_path
+
+    event = {
+        "type": "snapshot",
+        "backend": "TransKun",
+        "completed": 1,
+        "total": 2,
+        "frontier_seconds": 8.0,
+        "duration_seconds": 16.0,
+        "notes": [],
+    }
+
+    def streamed_worker(_audio, output, _weight, _conf, _device, result_queue):
+        result_queue.put({"event": event})
+        _write_valid_midi(Path(output))
+        result_queue.put({"ok": output})
+
+    events = []
+    transcriber = TranskunTranscriber()
+    transcriber.set_event_callback(events.append)
+    with (
+        patch.object(transcriber, "get_unavailable_reason", return_value=""),
+        patch.object(transcriber, "is_model_available", return_value=True),
+        patch.object(transcriber, "_get_packaged_resource", side_effect=get_resource),
+        patch.object(transcriber, "_resolve_runtime_device", return_value="cpu"),
+        patch.object(transkun_module.multiprocessing, "Queue", _FakeQueue),
+        patch.object(transkun_module.multiprocessing, "Process", _SynchronousProcess),
+        patch.object(transkun_module, "_transkun_worker", streamed_worker),
+        patch.object(transkun_module, "clear_gpu_memory", return_value=None),
+    ):
+        result = transcriber.transcribe(str(audio_path), str(output_path))
+
+    assert result == str(output_path)
+    assert events == [event]
+    assert output_path.is_file()
+
+
 def test_transkun_does_not_accept_a_stale_final_when_worker_writes_nothing(tmp_path):
     audio_path = tmp_path / "piano.wav"
     output_path = tmp_path / "out.mid"

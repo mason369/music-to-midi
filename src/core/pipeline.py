@@ -11,37 +11,39 @@
 7. PIANO_BYTEDANCE_PEDAL: ByteDance 钢琴与踏板转写
 """
 
-import logging
 import inspect
+import logging
 import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional, Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
+from src.core.aria_amt_transcriber import ARIA_AMT_SOURCE_REQUIREMENT, AriaAmtTranscriber
+from src.core.beat_detector import BeatDetector
+from src.core.bytedance_piano_transcriber import (
+    BYTEDANCE_PIANO_PACKAGE_VERSION,
+    ByteDancePianoTranscriber,
+)
+from src.core.midi_generator import MidiGenerator
+from src.core.muscriptor_midi import validate_muscriptor_midi_constraint
+from src.core.muscriptor_transcriber import MuscriptorTranscriber
+from src.core.transkun_transcriber import TRANSKUN_PACKAGE_VERSION, TranskunTranscriber
+from src.core.transkun_v2_aug_transcriber import TranskunV2AugTranscriber
+from src.core.yourmt3_transcriber import YourMT3Transcriber
+from src.i18n.translator import Translator
 from src.models.data_models import (
+    BeatInfo,
     Config,
-    ProcessingResult,
+    MultiInstrumentModel,
+    NoteEvent,
+    ProcessingMode,
     ProcessingProgress,
+    ProcessingResult,
     ProcessingStage,
     Track,
     TrackType,
-    ProcessingMode,
-    MultiInstrumentModel,
-    BeatInfo,
-    NoteEvent,
 )
-from src.core.aria_amt_transcriber import AriaAmtTranscriber, ARIA_AMT_SOURCE_REQUIREMENT
-from src.core.bytedance_piano_transcriber import (
-    ByteDancePianoTranscriber,
-    BYTEDANCE_PIANO_PACKAGE_VERSION,
-)
-from src.core.transkun_transcriber import TranskunTranscriber, TRANSKUN_PACKAGE_VERSION
-from src.core.transkun_v2_aug_transcriber import TranskunV2AugTranscriber
-from src.core.yourmt3_transcriber import YourMT3Transcriber
-from src.core.beat_detector import BeatDetector
-from src.core.midi_generator import MidiGenerator
-from src.i18n.translator import Translator
 from src.utils.gpu_utils import clear_gpu_memory
 from src.utils.midi_output import (
     publish_midi_output,
@@ -96,6 +98,7 @@ class MusicToMidiPipeline:
     def __init__(self, config: Config):
         self.config = config
         self.yourmt3_transcriber = YourMT3Transcriber(config)
+        self.muscriptor_transcriber = MuscriptorTranscriber(config)
         self.miros_transcriber = (
             MirosTranscriber(config)
             if MirosTranscriber is not None
@@ -120,6 +123,7 @@ class MusicToMidiPipeline:
 
         self.yourmt3_transcriber.set_cancel_check(lambda: self._cancelled)
         self.miros_transcriber.set_cancel_check(lambda: self._cancelled)
+        self.muscriptor_transcriber.set_cancel_check(lambda: self._cancelled)
 
     def set_progress_callback(self, callback: Callable[[ProcessingProgress], None]) -> None:
         self._progress_callback = callback
@@ -135,6 +139,7 @@ class MusicToMidiPipeline:
             cancel_separator()
         self.yourmt3_transcriber.cancel()
         self.miros_transcriber.cancel()
+        self.muscriptor_transcriber.cancel()
         if hasattr(self.aria_amt_transcriber, "cancel"):
             self.aria_amt_transcriber.cancel()
         if hasattr(self.bytedance_piano_transcriber, "cancel"):
@@ -171,6 +176,8 @@ class MusicToMidiPipeline:
 
     def _get_multi_instrument_transcriber(self):
         model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MUSCRIPTOR.value:
+            return self.muscriptor_transcriber
         if model_name == MultiInstrumentModel.MIROS.value:
             return self.miros_transcriber
         if model_name == MultiInstrumentModel.YOURMT3.value:
@@ -179,6 +186,8 @@ class MusicToMidiPipeline:
 
     def _get_multi_instrument_label(self) -> str:
         model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MUSCRIPTOR.value:
+            return "MuScriptor-large"
         if model_name == MultiInstrumentModel.MIROS.value:
             return "MIROS"
         if model_name == MultiInstrumentModel.YOURMT3.value:
@@ -602,7 +611,7 @@ class MusicToMidiPipeline:
         2. 所选 YourMT3+ / MIROS 后端分别转写每个 stem
         3. 输出六个 stem MIDI 和一个合并 MIDI
         """
-        from src.core.multi_stem_separator import SixStemSeparator, STEM_KEYS
+        from src.core.multi_stem_separator import STEM_KEYS, SixStemSeparator
 
         start_time = time.time()
         audio_path = str(audio_path)
@@ -1094,6 +1103,86 @@ class MusicToMidiPipeline:
             total_notes=total_notes,
         )
 
+    def _process_muscriptor_official(
+        self,
+        audio_path: str,
+        output_dir: str,
+    ) -> ProcessingResult:
+        """Run MuScriptor's official writer with hard instrument constraints."""
+
+        start_time = time.time()
+        audio_path = str(audio_path)
+        output_dir = str(output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        stem = Path(audio_path).stem
+        midi_path = str(Path(output_dir) / f"{stem}.mid")
+        selected = list(self.config.muscriptor_instruments)
+        self._require_multi_instrument_available()
+
+        self._report(
+            ProcessingStage.PREPROCESSING,
+            0.0,
+            0.0,
+            self._pt("progress.analyzing_audio"),
+        )
+        beat_info = self._detect_beat_or_raise(audio_path)
+        tempo = beat_info.bpm
+        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
+        self._check_cancelled()
+        self._report(
+            ProcessingStage.TRANSCRIPTION,
+            0.0,
+            0.1,
+            self._pt("progress.loading_model", model="MuScriptor-large"),
+        )
+
+        def _muscriptor_cb(progress: float, message: str) -> None:
+            overall = 0.1 + progress * 0.85
+            self._report(ProcessingStage.TRANSCRIPTION, progress, overall, message)
+
+        try:
+            midi_path = self.muscriptor_transcriber.transcribe_to_midi(
+                audio_path=audio_path,
+                output_path=midi_path,
+                progress_callback=_muscriptor_cb,
+            )
+            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo)
+            # Tempo normalization cannot add notes, but the published result is
+            # checked again so the user-visible artifact itself is the proof.
+            validate_muscriptor_midi_constraint(midi_path, selected)
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            logger.error("MuScriptor-large transcription failed: %s", exc, exc_info=True)
+            raise RuntimeError(
+                self._format_backend_error("MuScriptor-large", "转写失败", exc)
+            ) from exc
+        finally:
+            self._cleanup_multi_instrument_backend()
+
+        self._check_cancelled()
+        total_notes = self._count_midi_notes(midi_path)
+        self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
+        processing_time = time.time() - start_time
+        self._report(
+            ProcessingStage.COMPLETE,
+            1.0,
+            1.0,
+            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
+        )
+
+        return ProcessingResult(
+            midi_path=midi_path,
+            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
+            beat_info=beat_info,
+            processing_time=processing_time,
+            total_notes=total_notes,
+            transcription_backend=MultiInstrumentModel.MUSCRIPTOR.value,
+            selected_instruments=selected,
+            detected_instruments=list(self.muscriptor_transcriber.last_detected_instruments),
+        )
+
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
         """智能模式：直接对完整混音进行多乐器转写。"""
         audio_path = str(audio_path)
@@ -1101,6 +1190,8 @@ class MusicToMidiPipeline:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         model_name = self._get_multi_instrument_model_name()
+        if model_name == MultiInstrumentModel.MUSCRIPTOR.value:
+            return self._process_muscriptor_official(audio_path, output_dir)
         if model_name == MultiInstrumentModel.MIROS.value:
             return self._process_miros_official(audio_path, output_dir)
         if model_name == MultiInstrumentModel.YOURMT3.value:

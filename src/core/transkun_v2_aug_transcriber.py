@@ -197,20 +197,37 @@ class TranskunV2AugTranscriber(TranskunTranscriber):
             if progress_callback:
                 progress_callback(0.30, self._pt("progress.running_transkun"))
 
+            result = None
+            event_callback = getattr(self, "_event_callback", None)
+
+            def _consume(message) -> None:
+                nonlocal result
+                if "event" in message:
+                    if event_callback is not None:
+                        event_callback(message["event"])
+                    return
+                result = message
+
             while process.is_alive():
                 self._check_cancelled()
+                while True:
+                    try:
+                        _consume(result_queue.get_nowait())
+                    except queue.Empty:
+                        break
                 process.join(timeout=0.2)
 
             setattr(self, "_process", None)
             self._check_cancelled()
 
-            try:
-                result = result_queue.get(timeout=2.0)
-            except queue.Empty as exc:
-                exit_code = getattr(process, "exitcode", None)
-                raise RuntimeError(
-                    f"TransKun V2 Aug 子进程未返回结果（exit code: {exit_code}）"
-                ) from exc
+            while result is None:
+                try:
+                    _consume(result_queue.get(timeout=2.0))
+                except queue.Empty as exc:
+                    exit_code = getattr(process, "exitcode", None)
+                    raise RuntimeError(
+                        f"TransKun V2 Aug 子进程未返回结果（exit code: {exit_code}）"
+                    ) from exc
 
             if "error" in result:
                 raise RuntimeError(str(result["error"]))

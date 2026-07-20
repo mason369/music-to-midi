@@ -21,6 +21,117 @@ def _write_valid_midi(path: Path) -> None:
 
 
 class ByteDancePianoTranscriberTests(unittest.TestCase):
+    def test_streaming_branch_emits_model_derived_snapshots_and_writes_final_midi(self):
+        import numpy as np
+        import torch
+
+        from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
+
+        class FakeModel:
+            def __init__(self):
+                self.parameter = torch.nn.Parameter(torch.zeros(1))
+
+            def parameters(self):
+                yield self.parameter
+
+            def eval(self):
+                return self
+
+            def __call__(self, batch):
+                return {"frame_output": torch.ones((len(batch), 3, 1))}
+
+        class FakePianoTranscription:
+            segment_samples = 4
+            frames_per_second = 2
+            classes_num = 1
+            onset_threshold = 0.3
+            offset_threshod = 0.3
+            frame_threshold = 0.1
+            pedal_offset_threshold = 0.2
+
+            def __init__(self, device, checkpoint_path=None):
+                self.model = FakeModel()
+
+            def enframe(self, _audio, _segment_samples):
+                return np.zeros((2, 4), dtype=np.float32)
+
+            def deframe(self, output):
+                return output.reshape((-1, 1))
+
+        class FakePostProcessor:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def output_dict_to_midi_events(self, output):
+                end = len(output["frame_output"]) / 4.0
+                return (
+                    [
+                        {
+                            "onset_time": 0.1,
+                            "offset_time": end,
+                            "midi_note": 60,
+                            "velocity": 90,
+                        }
+                    ],
+                    [{"onset_time": 0.0, "offset_time": end}],
+                )
+
+        fake_module = types.ModuleType("piano_transcription_inference")
+        fake_module.__path__ = []
+        fake_module.PianoTranscription = FakePianoTranscription
+        fake_module.sample_rate = 2
+        fake_pytorch_utils = types.ModuleType("piano_transcription_inference.pytorch_utils")
+        fake_pytorch_utils.move_data_to_device = lambda value, _device: torch.tensor(value)
+        fake_utilities = types.ModuleType("piano_transcription_inference.utilities")
+        fake_utilities.RegressionPostProcessor = FakePostProcessor
+        fake_utilities.write_events_to_midi = (
+            lambda start_time, note_events, pedal_events, midi_path: _write_valid_midi(
+                Path(midi_path)
+            )
+        )
+        fake_librosa = types.ModuleType("librosa")
+        fake_librosa.load = lambda path, sr, mono: (np.zeros(8, dtype=np.float32), sr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = root / "checkpoint.pth"
+            checkpoint.write_bytes(b"weight")
+            audio = root / "piano.wav"
+            audio.write_bytes(b"audio")
+            output = root / "out.mid"
+            events = []
+            with (
+                patch.dict(
+                    sys.modules,
+                    {
+                        "piano_transcription_inference": fake_module,
+                        "piano_transcription_inference.pytorch_utils": fake_pytorch_utils,
+                        "piano_transcription_inference.utilities": fake_utilities,
+                        "librosa": fake_librosa,
+                    },
+                ),
+                patch.object(ByteDancePianoTranscriber, "is_available", return_value=True),
+                patch.object(ByteDancePianoTranscriber, "is_model_available", return_value=True),
+                patch(
+                    "src.core.bytedance_piano_transcriber.get_device",
+                    return_value="cpu",
+                ),
+            ):
+                transcriber = ByteDancePianoTranscriber(
+                    Config(use_gpu=False),
+                    checkpoint_path=checkpoint,
+                )
+                transcriber.set_event_callback(events.append)
+                result = transcriber.transcribe(str(audio), str(output))
+
+            self.assertEqual(result, str(output))
+            self.assertEqual(
+                [(event["completed"], event["total"]) for event in events],
+                [(1, 2), (2, 2)],
+            )
+            self.assertEqual(events[0]["notes"][0]["instrument"], "gm:000")
+            self.assertTrue(output.is_file())
+
     def test_pinned_package_and_checkpoint_identity_constants(self):
         from src.core.bytedance_piano_transcriber import (
             BYTEDANCE_PIANO_CHECKPOINT_SHA256,

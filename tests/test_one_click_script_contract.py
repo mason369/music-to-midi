@@ -26,6 +26,17 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("MirosTranscriber.is_available()", script)
         self.assertIn("download_miros_model.py", script)
 
+    def test_windows_launcher_checks_muscriptor_and_real_playback_assets(self):
+        script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
+
+        for expected in (
+            "MuscriptorTranscriber._runtime_unavailable_reason()",
+            "get_cached_muscriptor_paths(validate_hashes=False)",
+            "download_muscriptor_soundfont",
+            "get_fluidsynth_executable",
+        ):
+            self.assertIn(expected, script)
+
     def test_windows_launcher_checks_all_selectable_yourmt3_models(self):
         script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
 
@@ -176,6 +187,17 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("MirosTranscriber.is_available()", script)
         self.assertIn("download_miros_model.py", script)
 
+    def test_linux_launcher_checks_muscriptor_and_real_playback_assets(self):
+        script = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
+
+        for expected in (
+            "MuscriptorTranscriber._runtime_unavailable_reason()",
+            "get_cached_muscriptor_paths(validate_hashes=False)",
+            "download_muscriptor_soundfont",
+            "get_fluidsynth_executable",
+        ):
+            self.assertIn(expected, script)
+
     def test_linux_launcher_checks_all_selectable_yourmt3_models(self):
         script = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
 
@@ -269,8 +291,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         package_init = (REPO_ROOT / "src" / "__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('version = "1.0.18"', pyproject)
-        self.assertIn('__version__ = "1.0.18"', package_init)
+        self.assertIn('version = "1.1.0"', pyproject)
+        self.assertIn('__version__ = "1.1.0"', package_init)
         self.assertNotIn("Operating System :: OS Independent", pyproject)
         self.assertIn("Operating System :: Microsoft :: Windows", pyproject)
         self.assertIn("Operating System :: POSIX :: Linux", pyproject)

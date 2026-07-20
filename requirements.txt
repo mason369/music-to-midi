@@ -1,5 +1,5 @@
 # Music to MIDI - Python 依赖
-# 默认转写引擎：YourMT3+ MoE；Aria-AMT 为钢琴专用后端，MIROS 为本地可选后端
+# 默认转写引擎：YourMT3+ MoE；MuScriptor Large / MIROS 为可选多乐器后端
 
 # PyTorch 核心（三件套版本必须匹配）
 torch==2.7.0
@@ -67,3 +67,6 @@ onnxruntime==1.23.2; platform_system == "Darwin"
 tqdm>=4.66.0,<5
 pyyaml>=6.0.0,<7
 psutil>=5.9.0,<8
+
+# MuScriptor 的固定公共提交由 install.ps1 / install.sh 以 --no-deps
+# 单独安装，避免其 Web 服务依赖改写本项目固定的 Torch/FastAPI 运行时。

@@ -14,13 +14,13 @@ from PyQt6.QtWidgets import QApplication
 from src.core.pipeline import MusicToMidiPipeline
 from src.gui.main_window import MainWindow
 from src.gui.widgets.audio_track_mixer import (
+    _YOURMT3_MANUAL_MODELS,
     MIDI_ROUTE_MIROS,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
     MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
     MIDI_ROUTE_YOURMT3_PREFIX,
-    _YOURMT3_MANUAL_MODELS,
 )
 from src.gui.workers.separation_worker import SeparationResult, SeparationWorker
 from src.models.data_models import Config, MultiInstrumentModel, ProcessingMode
@@ -272,10 +272,14 @@ class _RecordingMixer:
         self.control_states = []
         self.running_calls = []
         self.failed_calls = []
+        self.pause_calls = 0
 
     def track_state(self, track_name):
         self.track_state_calls.append(track_name)
         return SimpleNamespace(path=self.tracks[track_name])
+
+    def track_muscriptor_instruments(self, _track_name):
+        return []
 
     def set_midi_controls_enabled(self, enabled):
         self.control_states.append(bool(enabled))
@@ -285,6 +289,9 @@ class _RecordingMixer:
 
     def set_track_midi_failed(self, track_name, error):
         self.failed_calls.append((track_name, str(error)))
+
+    def pause(self):
+        self.pause_calls += 1
 
 
 def test_main_window_starts_only_clicked_track_in_route_specific_directory(
@@ -327,6 +334,11 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
             assert first.config.transcription_backend == MultiInstrumentModel.MIROS.value
             assert mixer.track_state_calls == ["vocals"]
             assert mixer.running_calls == [("vocals", MIDI_ROUTE_MIROS)]
+            assert window.muscriptor_result_widget is not None
+            assert window.muscriptor_result_widget.backend_label == "MIROS (MusicFM)（多乐器）"
+            assert window.muscriptor_result_widget.muscriptor_groups is False
+            assert window.muscriptor_result_widget.source_track_name == "vocals"
+            assert mixer.pause_calls == 1
 
             window._start_track_midi_conversion(
                 "piano",
@@ -360,6 +372,11 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
                 "piano",
                 MIDI_ROUTE_PIANO_TRANSKUN,
             )
+            assert window.muscriptor_result_widget is not None
+            assert "TransKun" in window.muscriptor_result_widget.backend_label
+            assert window.muscriptor_result_widget.muscriptor_groups is False
+            assert window.muscriptor_result_widget.source_track_name == "piano"
+            assert mixer.pause_calls == 2
         finally:
             window.worker = None
             window._manual_midi_context = None

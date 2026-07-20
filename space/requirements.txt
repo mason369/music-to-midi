@@ -29,6 +29,9 @@ h5py>=3.10,<4
 # 模型下载
 huggingface_hub>=0.20.0
 
+# 固定 MuScriptor 公共提交由 space/app.py 以 --no-deps 按需安装；模型权重
+# 来自 gated MuScriptor/muscriptor-large，并在用户已获授权时按精确 revision 校验。
+
 # MIDI 处理（不需要 python-rtmidi，服务端不播放）
 mido>=1.3.0
 

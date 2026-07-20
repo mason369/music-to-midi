@@ -1,6 +1,7 @@
 """
 警告过滤器 - 抑制第三方库的英文警告并提供中文替代信息
 """
+
 import os
 import sys
 import logging
@@ -41,37 +42,37 @@ def suppress_third_party_warnings():
     在应用程序启动时调用此函数
     """
     # 抑制 TensorFlow 警告
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
     # 抑制 absl 日志（TensorFlow 使用）
-    os.environ['ABSL_MIN_LOG_LEVEL'] = '2'
+    os.environ["ABSL_MIN_LOG_LEVEL"] = "2"
 
     # 设置日志级别
     for logger_name in [
-        'tensorflow',
-        'tensorflow.python',
-        'keras',
-        'absl',
-        'h5py',
-        'numba',
-        'librosa',
-        'audioread',
-        'basic_pitch',
-        'root',
+        "tensorflow",
+        "tensorflow.python",
+        "keras",
+        "absl",
+        "h5py",
+        "numba",
+        "librosa",
+        "audioread",
+        "basic_pitch",
+        "root",
     ]:
         logging.getLogger(logger_name).setLevel(logging.ERROR)
 
     # 抑制 Python 警告
-    warnings.filterwarnings('ignore', category=UserWarning)
-    warnings.filterwarnings('ignore', category=FutureWarning)
-    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
 
     # 抑制特定模块的警告
-    warnings.filterwarnings('ignore', module='tensorflow')
-    warnings.filterwarnings('ignore', module='keras')
-    warnings.filterwarnings('ignore', module='basic_pitch')
-    warnings.filterwarnings('ignore', module='librosa')
+    warnings.filterwarnings("ignore", module="tensorflow")
+    warnings.filterwarnings("ignore", module="keras")
+    warnings.filterwarnings("ignore", module="basic_pitch")
+    warnings.filterwarnings("ignore", module="librosa")
 
 
 def translate_message(message: str) -> str:
@@ -153,9 +154,15 @@ def _normalize_text_stream(stream, backup_name: str):
     if _is_writable_stream(stream):
         return stream
 
-    backup_stream = getattr(sys, backup_name, None)
-    if _is_writable_stream(backup_stream):
-        return backup_stream
+    # On Windows, sys.__stdout__/sys.__stderr__ may retain a Python file object
+    # after the console has been detached.  The CRT handle can even pass an
+    # immediate probe and then fail with ERROR_INVALID_HANDLE on the first real
+    # write (notably under windowed PyInstaller and terminal capture).  Once the
+    # active stream is known-bad, do not reattach that stale backup object.
+    if os.name != "nt":
+        backup_stream = getattr(sys, backup_name, None)
+        if _is_writable_stream(backup_stream):
+            return backup_stream
 
     return _get_fallback_stream()
 
@@ -170,6 +177,33 @@ def _is_writable_stream(stream) -> bool:
         is_tty = getattr(stream, "isatty", lambda: False)
         if stream_name in {"<stdout>", "<stderr>"} and not is_tty():
             return False
+
+    # TextIOWrapper.write("") and flush() do not necessarily enter the Windows
+    # kernel when the buffer is empty.  A detached console can therefore leave
+    # sys.__stdout__/sys.__stderr__ looking writable even though their Win32
+    # HANDLE already returns ERROR_INVALID_HANDLE on the first real write.
+    if os.name == "nt":
+        try:
+            file_descriptor = stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            file_descriptor = None
+        if file_descriptor is not None:
+            try:
+                import ctypes
+                import msvcrt
+
+                handle = msvcrt.get_osfhandle(file_descriptor)
+                if handle == -1:
+                    return False
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.GetFileType.argtypes = [ctypes.c_void_p]
+                kernel32.GetFileType.restype = ctypes.c_uint32
+                ctypes.set_last_error(0)
+                file_type = kernel32.GetFileType(handle)
+                if file_type == 0 and ctypes.get_last_error() != 0:
+                    return False
+            except (OSError, ValueError):
+                return False
 
     try:
         stream.write("")
@@ -193,6 +227,7 @@ def patch_logging_output():
     """
     修补 logging 的 root 日志处理器，翻译警告消息
     """
+
     class TranslatingFilter(logging.Filter):
         def filter(self, record):
             # 抑制包含特定英文关键词的警告
@@ -212,7 +247,7 @@ def patch_logging_output():
     root_logger.addFilter(TranslatingFilter())
 
     # 同时添加到警告模块的 logger
-    warnings_logger = logging.getLogger('py.warnings')
+    warnings_logger = logging.getLogger("py.warnings")
     warnings_logger.addFilter(TranslatingFilter())
 
 

@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import QApplication
 from src.gui.widgets.track_panel import TrackPanel
 from src.i18n.translator import set_language
 from src.models.data_models import Config
+from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
 
 class TestBackendSelectorUi(unittest.TestCase):
@@ -54,7 +55,7 @@ class TestBackendSelectorUi(unittest.TestCase):
                 "piano_bytedance_pedal",
             ],
         )
-        self.assertEqual(backends, ["yourmt3", "miros"])
+        self.assertEqual(backends, ["yourmt3", "miros", "muscriptor"])
 
     def test_smart_mode_defaults_to_yourmt3_without_aria_amt_engine_display(self):
         panel = TrackPanel()
@@ -68,7 +69,7 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel._model_label.text(), "Multi-Instrument Backend:")
         self.assertEqual(
             [panel.model_combo.itemData(index) for index in range(panel.model_combo.count())],
-            ["yourmt3", "miros"],
+            ["yourmt3", "miros", "muscriptor"],
         )
         self.assertNotIn(
             "Aria-AMT",
@@ -85,14 +86,14 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_transcription_backend(), "yourmt3")
         self.assertEqual(
             [panel.model_combo.itemData(index) for index in range(panel.model_combo.count())],
-            ["yourmt3", "miros"],
+            ["yourmt3", "miros", "muscriptor"],
         )
 
     def test_restored_mode_and_backend_are_preserved(self):
         panel = TrackPanel()
 
         panel.set_processing_mode("six_stem_split")
-        for backend in ("yourmt3", "miros"):
+        for backend in ("yourmt3", "miros", "muscriptor"):
             with self.subTest(backend=backend):
                 panel.set_transcription_backend(backend)
                 self.assertEqual(panel.get_transcription_backend(), backend)
@@ -131,11 +132,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel._yourmt3_model_row.isHidden())
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertIn(
-            "does not automatically transcribe or merge MIDI",
+            "Split the audio into bass, drums, guitar, piano, vocals, and other WAV tracks",
             panel.hint_label.text(),
         )
         self.assertIn(
-            "choose any supported model per track afterward",
+            "convert each track to MIDI independently",
             panel.hint_label.text(),
         )
 
@@ -175,9 +176,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertFalse(hasattr(panel, "yourmt3_arch_hint_label"))
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
         self.assertIn("Leap XE + PolarFormer", panel.mode_desc_label.text())
-        self.assertIn("No MIDI model is loaded or run", panel.hint_label.text())
         self.assertIn(
-            "choose YourMT3+, MIROS, or a dedicated piano model independently",
+            "Extract vocals and accompaniment into two WAV tracks", panel.hint_label.text()
+        )
+        self.assertIn(
+            "convert each track to MIDI independently",
             panel.hint_label.text(),
         )
 
@@ -228,10 +231,29 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_yourmt3_model(), "yptf_moe_multi_nops")
         self.assertFalse(panel.yourmt3_model_card.isHidden())
         self.assertIn("YPTF.MoE+Multi (noPS)", panel.yourmt3_model_title_label.text())
-        self.assertIn("Checkpoint: YPTF.MoE+Multi (noPS)", panel.yourmt3_model_hint_label.text())
-        self.assertIn("Best for / traits:", panel.yourmt3_model_hint_label.text())
-        self.assertIn("official Hugging Face Space", panel.yourmt3_model_hint_label.text())
+        self.assertIn("Model structure:", panel.yourmt3_model_hint_label.text())
         self.assertIn("MoE", panel.yourmt3_model_hint_label.text())
+        self.assertNotIn("Checkpoint:", panel.yourmt3_model_hint_label.text())
+        self.assertNotIn("official", panel.yourmt3_model_hint_label.text().lower())
+        self.assertFalse(hasattr(panel, "model_hint_label"))
+
+    def test_yourmt3_model_cards_use_product_copy_only(self):
+        visible_copy = "\n".join(
+            str(value)
+            for model in YOURMT3_MODELS.values()
+            for key, value in model.items()
+            if key in {"description", "ui_description", "features", "features_en", "features_zh"}
+        ).lower()
+
+        for banned_phrase in (
+            "official hugging face space",
+            "official colab",
+            "aligned",
+            "older yourmt3+ results",
+            "对齐",
+            "落后",
+        ):
+            self.assertNotIn(banned_phrase, visible_copy)
 
     def test_track_panel_localizes_yourmt3_model_feature_card(self):
         set_language("zh_CN")
@@ -240,10 +262,10 @@ class TestBackendSelectorUi(unittest.TestCase):
         panel.set_yourmt3_model("yptf_multi_ps")
         text = panel.yourmt3_model_hint_label.text()
 
-        self.assertIn("检查点：YPTF+Multi (PS)", text)
-        self.assertIn("适合/特点：", text)
+        self.assertIn("模型结构：", text)
         self.assertIn("多通道解码", text)
         self.assertIn("使用音高偏移增强", text)
+        self.assertNotIn("检查点：", text)
         self.assertNotIn("Checkpoint:", text)
         self.assertNotIn("Features:", text)
         self.assertNotIn("multi-channel decoding", text)
@@ -258,6 +280,7 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertTrue(panel.yourmt3_model_title_label.isHidden())
         self.assertTrue(panel.yourmt3_model_hint_label.isHidden())
+        self.assertFalse(hasattr(panel, "model_hint_label"))
 
     def test_miros_backend_displays_independent_sota_route_copy(self):
         panel = TrackPanel()
@@ -269,14 +292,13 @@ class TestBackendSelectorUi(unittest.TestCase):
                 panel.mode_combo.currentText(),
                 panel.mode_desc_label.text(),
                 panel.hint_label.text(),
-                panel.model_hint_label.text(),
             ]
         )
 
         self.assertIn("MIROS", panel.mode_desc_label.text())
         self.assertIn("MusicFM multi-decoder", visible_copy)
-        self.assertIn("2025 AI4Musician", visible_copy)
         self.assertNotIn("YourMT3", visible_copy)
+        self.assertNotIn("SOTA", visible_copy)
 
     def test_track_panel_hides_midi_track_mode_for_non_yourmt3_backend(self):
         panel = TrackPanel()
@@ -302,11 +324,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
         self.assertIn("BS-RoFormer SW", panel.mode_desc_label.text())
         self.assertIn(
-            "does not automatically transcribe or merge MIDI",
+            "Split the audio into bass, drums, guitar, piano, vocals, and other WAV tracks",
             panel.hint_label.text(),
         )
         self.assertIn(
-            "choose any supported model per track afterward",
+            "convert each track to MIDI independently",
             panel.hint_label.text(),
         )
 
@@ -329,18 +351,18 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertIn("Pedal-Aware", panel.mode_desc_label.text())
         self.assertIn("CC64", panel.hint_label.text())
-        self.assertIn("Dedicated piano modes", panel.model_hint_label.text())
+        self.assertFalse(hasattr(panel, "model_hint_label"))
 
     def test_packaged_model_copy_does_not_prompt_download_in_track_panel(self):
         set_language("zh_CN")
         panel = TrackPanel()
 
         panel.set_processing_mode("piano_bytedance_pedal")
-        self.assertIn("模型目录可用", panel.hint_label.text())
+        self.assertIn("CC64", panel.hint_label.text())
         self.assertNotIn("下载", panel.hint_label.text())
 
         panel.set_processing_mode("piano_aria_amt")
-        self.assertIn("模型目录可用", panel.hint_label.text())
+        self.assertIn("直接输出钢琴 MIDI", panel.hint_label.text())
         self.assertNotIn("下载", panel.hint_label.text())
 
         panel.set_processing_mode("smart")

@@ -62,6 +62,76 @@ class _FakePrettyMIDI:
 
 
 class MirosTranscriberTests(unittest.TestCase):
+    def test_streamed_worker_events_are_tailed_before_final_midi_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "external" / "ai4m-miros"
+            repo.mkdir(parents=True)
+            entrypoint = repo / "main.py"
+            entrypoint.write_text("print('miros')", encoding="utf-8")
+            audio_path = root / "song.wav"
+            audio_path.write_bytes(b"wav")
+            captured = {}
+
+            class FakeProcess:
+                returncode = 0
+
+                def __init__(self, command, **kwargs):
+                    self.command = command
+                    self.calls = 0
+                    captured["command"] = command
+                    captured["env"] = kwargs["env"]
+
+                def communicate(self, timeout=None):
+                    self.calls += 1
+                    if self.calls == 1:
+                        events_path = Path(self.command[self.command.index("--events-jsonl") + 1])
+                        events_path.write_text(
+                            json.dumps(
+                                {
+                                    "type": "snapshot",
+                                    "backend": "MIROS",
+                                    "completed": 1,
+                                    "total": 2,
+                                    "frontier_seconds": 5.0,
+                                    "duration_seconds": 10.0,
+                                    "notes": [],
+                                }
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                        raise subprocess.TimeoutExpired(self.command, timeout)
+                    _write_valid_midi(Path(self.command[self.command.index("-o") + 1]))
+                    return "", ""
+
+            events = []
+            transcriber = MirosTranscriber(Config())
+            transcriber.set_event_callback(events.append)
+            with (
+                patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
+                patch.object(MirosTranscriber, "_entrypoint_path", return_value=entrypoint),
+                patch.object(MirosTranscriber, "get_unavailable_reason", return_value=""),
+                patch.object(
+                    subprocess,
+                    "Popen",
+                    side_effect=lambda command, **kwargs: FakeProcess(command, **kwargs),
+                ),
+            ):
+                result = transcriber.transcribe_to_midi(
+                    str(audio_path),
+                    str(root / "out" / "song.mid"),
+                )
+
+            self.assertEqual(result, str((root / "out" / "song.mid").resolve()))
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["completed"], 1)
+            self.assertEqual(captured["command"][1:3], ["-m", "src.core.miros_stream_worker"])
+            self.assertIn(
+                str(Path(miros_runtime.__file__).resolve().parents[2]),
+                captured["env"]["PYTHONPATH"],
+            )
+
     def test_subprocess_enables_expandable_cuda_segments_without_overriding_user_value(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

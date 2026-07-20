@@ -1,6 +1,7 @@
 """
 音乐转MIDI应用程序入口
 """
+
 import sys
 import os
 import logging
@@ -20,9 +21,9 @@ from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
 from src.utils.warnings_filter import ensure_standard_streams
 
 # 在导入其他模块之前抑制第三方库的警告
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制 TensorFlow 所有日志
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 警告
-os.environ['ABSL_MIN_LOG_LEVEL'] = '2'    # 抑制 absl 日志
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 抑制 TensorFlow 所有日志
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # 禁用 oneDNN 警告
+os.environ["ABSL_MIN_LOG_LEVEL"] = "2"  # 抑制 absl 日志
 
 # PyInstaller windowed/portable 模式下标准流可能为 None，先补成安全可写流
 ensure_standard_streams()
@@ -31,17 +32,17 @@ ensure_standard_streams()
 bootstrap_runtime_environment()
 
 # 抑制 Python 警告
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', category=FutureWarning)
-warnings.filterwarnings('ignore', category=DeprecationWarning)
-warnings.filterwarnings('ignore', module='tensorflow')
-warnings.filterwarnings('ignore', module='keras')
-warnings.filterwarnings('ignore', module='basic_pitch')
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", module="tensorflow")
+warnings.filterwarnings("ignore", module="keras")
+warnings.filterwarnings("ignore", module="basic_pitch")
 
 # 抑制特定库的日志
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('keras').setLevel(logging.ERROR)
-logging.getLogger('absl').setLevel(logging.ERROR)
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("keras").setLevel(logging.ERROR)
+logging.getLogger("absl").setLevel(logging.ERROR)
 logging.getLogger().setLevel(logging.ERROR)  # 根 logger
 
 from src.utils.logger import setup_logger
@@ -62,7 +63,9 @@ def _prepare_torch_runtime_before_pyqt() -> None:
             _spec = _ilu.find_spec("torch")
             if _spec and _spec.origin:
                 _torch_lib = os.path.join(os.path.dirname(_spec.origin), "lib")
-                if os.path.isdir(_torch_lib) and _re.search(r'[\s\(\)\[\]{}]|[^\x00-\x7F]', _torch_lib):
+                if os.path.isdir(_torch_lib) and _re.search(
+                    r"[\s\(\)\[\]{}]|[^\x00-\x7F]", _torch_lib
+                ):
                     import ctypes as _ct
                     import glob as _gl
 
@@ -95,6 +98,7 @@ def _prepare_torch_runtime_before_pyqt() -> None:
     # 在 PyQt6 之前预加载 torch，避免 PyQt6 DLL 与 torch DLL 冲突（WinError 1114）
     try:
         import torch  # noqa: F401
+
         # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
         # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
         import torchaudio
@@ -127,7 +131,9 @@ def _run_self_test(
         logger.info(t("startup.portable_self_test_starting"))
         if not transcriber_cls.is_available():
             reason_getter = getattr(transcriber_cls, "get_unavailable_reason", None)
-            reason = reason_getter() if callable(reason_getter) else t("startup.yourmt3_unavailable")
+            reason = (
+                reason_getter() if callable(reason_getter) else t("startup.yourmt3_unavailable")
+            )
             logger.error(t("startup.portable_self_test_failed", reason=reason))
             print(reason)
             return 1
@@ -188,6 +194,7 @@ def _run_miros_worker(argv=None) -> int:
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--status-json")
+    parser.add_argument("--events-jsonl")
     args = parser.parse_args(argv)
 
     def write_status(payload) -> None:
@@ -215,9 +222,19 @@ def _run_miros_worker(argv=None) -> int:
         # MIROS inference does not use those metrics, so keep onnxruntime isolated
         # while importing the upstream transcribe module.
         with _temporary_onnxruntime_stub():
-            from transcribe import transcribe
+            if args.events_jsonl:
+                from src.core.miros_stream_worker import run_miros_stream_worker
 
-        transcribe(str(input_path), args.output)
+                run_miros_stream_worker(
+                    repo_dir,
+                    input_path,
+                    args.output,
+                    args.events_jsonl,
+                )
+            else:
+                from transcribe import transcribe
+
+                transcribe(str(input_path), args.output)
         output_path = validate_midi_output(args.output, "MIROS worker")
         write_status(
             {
@@ -262,7 +279,7 @@ def main():
     multiprocessing.freeze_support()
     if "--miros-worker" in sys.argv:
         worker_index = sys.argv.index("--miros-worker")
-        exit_code = _run_miros_worker(sys.argv[worker_index + 1:])
+        exit_code = _run_miros_worker(sys.argv[worker_index + 1 :])
         if getattr(sys, "frozen", False):
             os._exit(exit_code)
             return
@@ -349,12 +366,17 @@ def main():
 
         # 设置中文字体和Emoji字体（确保中文及图标正确显示）
         import platform as _platform
+
         if _platform.system() != "Windows":
             available = QFontDatabase.families()
             # 主字体：优先支持CJK中文的字体
             ui_font_family = "sans-serif"
-            for family in ("Noto Sans CJK SC", "WenQuanYi Micro Hei",
-                           "WenQuanYi Zen Hei", "Ubuntu"):
+            for family in (
+                "Noto Sans CJK SC",
+                "WenQuanYi Micro Hei",
+                "WenQuanYi Zen Hei",
+                "Ubuntu",
+            ):
                 if family in available:
                     ui_font_family = family
                     logger.info(t("startup.app_font_selected", font=family))

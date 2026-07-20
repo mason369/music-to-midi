@@ -93,10 +93,7 @@ def display_track_name(track_name: str, translate: Callable[[str], str]) -> str:
 
 def track_mixer_strings(translate: Callable[[str], str]) -> dict[str, str]:
     """Collect every label the browser runtime needs from the i18n catalog."""
-    return {
-        key: translate(f"dialogs.complete.audio_tracks.{key}")
-        for key in _MIXER_STRING_KEYS
-    }
+    return {key: translate(f"dialogs.complete.audio_tracks.{key}") for key in _MIXER_STRING_KEYS}
 
 
 def track_file_url(path: str | Path) -> str:
@@ -333,6 +330,8 @@ TRACK_MIXER_JS = r"""
     this.pointerSeeking = false;
     this.seekDragging = false;
     this.resizeObserver = null;
+    this.ownerId = "audio-mixer-" + Math.random().toString(36).slice(2);
+    this.onExternalPlayback = this.handleExternalPlayback.bind(this);
   }
 
   MixerSession.prototype.init = function () {
@@ -357,6 +356,7 @@ TRACK_MIXER_JS = r"""
       return;
     }
     this.buildShell();
+    window.addEventListener("music-to-midi-playback-start", this.onExternalPlayback);
     var self = this;
     this.tracks = specs.map(function (spec) {
       return {
@@ -788,6 +788,9 @@ TRACK_MIXER_JS = r"""
     if (this.position >= this.duration) {
       this.position = 0;
     }
+    window.dispatchEvent(
+      new CustomEvent("music-to-midi-playback-start", { detail: { owner: this.ownerId } })
+    );
     this.playing = true;
     this.playStartPosition = this.position;
     this.playCtxTime = ctx.currentTime;
@@ -807,6 +810,12 @@ TRACK_MIXER_JS = r"""
     this.updateToolbar();
     this.updatePositionUI();
     this.layoutPlayhead();
+  };
+
+  MixerSession.prototype.handleExternalPlayback = function (event) {
+    if (event.detail && event.detail.owner !== this.ownerId) {
+      this.pause();
+    }
   };
 
   MixerSession.prototype.replay = function () {
@@ -1089,6 +1098,7 @@ TRACK_MIXER_JS = r"""
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
+    window.removeEventListener("music-to-midi-playback-start", this.onExternalPlayback);
     lastSnapshot = {
       urls: this.tracks.map(function (track) {
         return track.url;
@@ -1125,7 +1135,23 @@ TRACK_MIXER_JS = r"""
   }
 
   if (typeof document !== "undefined") {
-    var observer = new MutationObserver(scheduleScan);
+    var observer = new MutationObserver(function (changes) {
+      for (var index = 0; index < changes.length; index += 1) {
+        var nodes = Array.prototype.slice.call(changes[index].addedNodes).concat(
+          Array.prototype.slice.call(changes[index].removedNodes)
+        );
+        for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+          var node = nodes[nodeIndex];
+          if (
+            node.nodeType === 1 &&
+            (node.matches(".mtm-mixer-root") || node.querySelector(".mtm-mixer-root"))
+          ) {
+            scheduleScan();
+            return;
+          }
+        }
+      }
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", scheduleScan);
@@ -1139,7 +1165,4 @@ TRACK_MIXER_JS = r"""
 
 def mixer_head() -> str:
     """Return the ``Blocks(head=...)`` fragment with the runtime and styles."""
-    return (
-        f"<style>\n{TRACK_MIXER_CSS}\n</style>\n"
-        f"<script>\n{TRACK_MIXER_JS}\n</script>"
-    )
+    return f"<style>\n{TRACK_MIXER_CSS}\n</style>\n" f"<script>\n{TRACK_MIXER_JS}\n</script>"

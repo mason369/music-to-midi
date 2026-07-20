@@ -43,6 +43,15 @@ class CiWorkflowContractTests(unittest.TestCase):
             workflow,
         )
 
+    def test_build_workflow_installs_pinned_muscriptor_without_resolver_conflict(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            '"muscriptor @ https://github.com/muscriptor/muscriptor/archive/'
+            '302343e8992bdfc619f77f1988168374ed5d675d.zip" --no-deps',
+            workflow,
+        )
+
     def test_build_workflow_installs_audio_separator_runtime_pins(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
@@ -79,6 +88,9 @@ class CiWorkflowContractTests(unittest.TestCase):
             "BYTEDANCE_PIANO",
             "TRANSKUN_V2_AUG",
             "MIROS",
+            "MUSCRIPTOR",
+            "MUSCRIPTOR_ASSETS",
+            "FLUIDSYNTH",
             "FFMPEG",
         ):
             self.assertIn(
@@ -124,10 +136,15 @@ class CiWorkflowContractTests(unittest.TestCase):
             "download_vocal_harmony_model.py",
             "download_aria_amt_model.py",
             "download_bytedance_piano_model.py",
+            "download_muscriptor_model.py",
+            "download_fluidsynth_runtime.py",
         ):
             with self.subTest(script_name=script_name):
                 self.assertIn(f"- '{script_name}'", workflow)
                 self.assertIn(f"cp {script_name}", workflow)
+
+        self.assertIn("- 'packages.txt'", workflow)
+        self.assertIn('cp packages.txt          "$WORK/"', workflow)
 
     def test_hf_sync_workflow_ships_the_shared_web_mixer_runtime(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")

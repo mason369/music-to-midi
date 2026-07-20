@@ -5,8 +5,11 @@ from download_aria_amt_model import download_aria_model
 from download_bytedance_piano_model import download_bytedance_piano_model
 from download_miros_model import prepare_miros_model
 from download_multistem_model import download_multistem_model
+from download_muscriptor_model import download_muscriptor_large_model
 from download_transkun_v2_aug_model import download_transkun_v2_aug_model
 from download_vocal_model import download_vocal_model
+from src.utils.fluidsynth_runtime import download_fluidsynth_windows
+from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 from src.core.transkun_transcriber import (
     TRANSKUN_CONF_NAME,
     TRANSKUN_CONF_SHA256,
@@ -140,6 +143,18 @@ def download_sota_models() -> dict[str, object]:
     bytedance_checkpoint = download_bytedance_piano_model()
     print(f"ready: {bytedance_checkpoint}")
 
+    print("\n[10/12] Preparing gated MuScriptor-large checkpoint...")
+    muscriptor_weights, muscriptor_config = download_muscriptor_large_model()
+    print(f"ready: {muscriptor_weights}")
+
+    print("\n[11/12] Preparing MuScriptor official playback SoundFont...")
+    muscriptor_soundfont = download_muscriptor_soundfont()
+    print(f"ready: {muscriptor_soundfont}")
+
+    print("\n[12/12] Verifying the real FluidSynth playback runtime...")
+    fluidsynth_executable = download_fluidsynth_windows()
+    print(f"ready: {fluidsynth_executable}")
+
     return {
         "transkun": transkun_runtime,
         "yourmt3": yourmt3_models,
@@ -164,6 +179,12 @@ def download_sota_models() -> dict[str, object]:
         },
         "bytedance_piano": {
             "checkpoint": bytedance_checkpoint,
+        },
+        "muscriptor": {
+            "weights": muscriptor_weights,
+            "config": muscriptor_config,
+            "soundfont": muscriptor_soundfont,
+            "fluidsynth": fluidsynth_executable,
         },
         # Deprecated compatibility keys retained for aggregate-downloader callers.
         "vocal_rvc": {
