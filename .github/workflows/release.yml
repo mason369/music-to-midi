@@ -896,6 +896,25 @@ jobs:
           cat > release-notes.md << NOTES
           ## 音乐转MIDI转换器 ${TAG}
 
+          ### ${TAG} 主要更新
+
+          #### 新增 MuScriptor Large 多乐器转写
+          - 在完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换中，新增 MuScriptor Large 多乐器后端。
+          - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
+          - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI，不会显示尚不可播放的未来片段。
+          - 内置 MuseScore General SoundFont 与 FluidSynth，提供真实 MIDI 试听、原音/MIDI 混合、立体声、逐乐器静音/独奏，以及 MIDI、合成 WAV 和立体声结果下载。
+
+          #### 音轨工作台与播放体验
+          - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
+          - 修复连续分片生成/播放后的卡死、只有原声没有 MIDI 声、播放结束后重新循环、异常长音状态残留，以及切换歌曲时的线程与资源释放问题。
+          - 播放头改为连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时会退出自动跟随。
+          - 优化长音频波形和密集 MIDI 的缓存、增量更新与绘制路径，避免推理、音频合成和界面刷新互相阻塞。
+
+          #### 平台、文档与发布
+          - 桌面版、Hugging Face Space 和 Colab 同步七种处理模式、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
+          - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
+          - Windows/Linux GPU 便携包内置并校验完整模型资产、SoundFont、FluidSynth 与 FFmpeg；依赖或模型身份不匹配时显式失败，不静默切换后端或 CPU。
+
           ### 便携版下载
 
           | 文件 | 平台 | 推理方式 | 说明 |
@@ -919,6 +938,7 @@ jobs:
 
           ### 许可说明
           - 包内附带完整的 \`THIRD_PARTY_NOTICES.md\`（逐项来源、许可与署名）与 \`THIRD_PARTY_SBOM.txt\`（构建环境依赖清单）
+          - 包内同时附带 \`FFMPEG_BUILD_AUDIT.txt\`，记录实际打包的 FFmpeg/ffprobe 版本、构建参数、许可文本与 SHA-256
           - 本包作为组合作品按 GPL-3.0 条款分发（含 PyQt6/Qt 组件），完整对应源代码与构建说明见本仓库
           - Aria-AMT checkpoint 按 CC BY-NC-SA 4.0 再分发（非商业用途、保留署名，见包内声明）
           - MuScriptor-large checkpoint 按 CC BY-NC 4.0 再分发，并附带模型页的具体使用条件；使用者须确认拥有输入音乐所需权利

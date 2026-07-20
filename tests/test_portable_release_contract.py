@@ -395,6 +395,18 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_notes_describe_split_archives_generically(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
+        for expected_update in (
+            "新增 MuScriptor Large 多乐器转写",
+            r"\`SMART\` 模式",
+            "生成阶段的硬约束",
+            "按 5 秒分片边转写边预览",
+            "播放范围严格限制在已经生成的 MIDI",
+            "所有转 MIDI 路线统一使用钢琴卷帘与音轨控制",
+            r"\`Ctrl/Alt + 滚轮\`",
+            r"\`Shift + 滚轮\`",
+            "Hugging Face Space 和 Colab 同步七种处理模式",
+        ):
+            self.assertIn(expected_update, workflow)
         self.assertIn("MusicToMidi-Windows-GPU-Portable.*", workflow)
         self.assertIn("MusicToMidi-Linux-GPU-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
