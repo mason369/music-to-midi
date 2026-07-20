@@ -139,17 +139,50 @@ jobs:
 
       - name: 安装 FFmpeg (Windows)
         if: runner.os == 'Windows'
-        run: choco install ffmpeg -y
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseTag = "autobuild-2026-07-19-13-12"
+          $assetName = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
+          $expectedSha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+          $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$releaseTag/$assetName"
+          $archivePath = Join-Path $env:RUNNER_TEMP $assetName
+          $extractRoot = Join-Path $env:GITHUB_WORKSPACE ".tmp\ffmpeg-windows"
+
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "Pinned FFmpeg archive SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+          }
+
+          if (Test-Path -LiteralPath $extractRoot) {
+            Remove-Item -LiteralPath $extractRoot -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
+          $ffmpegExe = Get-ChildItem -LiteralPath $extractRoot -Recurse -File -Filter "ffmpeg.exe" | Select-Object -First 1
+          if (-not $ffmpegExe) {
+            throw "Pinned FFmpeg archive does not contain ffmpeg.exe"
+          }
+          $ffprobeExe = Join-Path $ffmpegExe.DirectoryName "ffprobe.exe"
+          if (-not (Test-Path -LiteralPath $ffprobeExe -PathType Leaf)) {
+            throw "Pinned FFmpeg archive does not contain ffprobe.exe beside ffmpeg.exe"
+          }
+
+          $ffmpegExe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "FFMPEG_RELEASE_BIN=$($ffmpegExe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFPROBE_RELEASE_BIN=$ffprobeExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFMPEG_PACKAGE_SOURCE=BtbN FFmpeg-Builds release: $downloadUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFMPEG_PACKAGE_VERSION=$assetName (sha256:$expectedSha256)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: 记录并校验实际打包的 FFmpeg
         shell: bash
         run: |
           mkdir -p .tmp
           if [ "${{ runner.os }}" = "Windows" ]; then
-            FFMPEG_BIN="/c/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffmpeg.exe"
-            FFPROBE_BIN="/c/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffprobe.exe"
-            PACKAGE_SOURCE="Chocolatey ffmpeg package: https://community.chocolatey.org/packages/ffmpeg"
-            PACKAGE_VERSION=$(choco list --exact ffmpeg --limit-output)
+            FFMPEG_BIN=$(cygpath -u "$FFMPEG_RELEASE_BIN")
+            FFPROBE_BIN=$(cygpath -u "$FFPROBE_RELEASE_BIN")
+            PACKAGE_SOURCE="$FFMPEG_PACKAGE_SOURCE"
+            PACKAGE_VERSION="$FFMPEG_PACKAGE_VERSION"
           else
             FFMPEG_BIN=$(readlink -f "$(command -v ffmpeg)")
             FFPROBE_BIN=$(readlink -f "$(command -v ffprobe)")
@@ -233,9 +266,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Windows: 确保 choco 安装的 FFmpeg 在 PATH 中（bash shell 可能未继承）
-          if [ -d "/c/ProgramData/chocolatey/bin" ]; then
-            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+          # Windows: use the exact hash-verified BtbN directory in Git Bash too.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            export PATH="$(dirname "$(cygpath -u "$FFMPEG_RELEASE_BIN")"):$PATH"
           fi
 
           echo "=== Restore and strictly verify pinned MIROS before the aggregate downloader ==="

@@ -472,6 +472,21 @@ class PortableReleaseContractTests(unittest.TestCase):
             self.assertIn(expected, workflow)
         self.assertGreaterEqual(workflow.count("FFMPEG_BUILD_AUDIT.txt"), 4)
 
+    def test_windows_ffmpeg_download_is_immutable_and_hash_verified(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        installer = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+        release_tag = "autobuild-2026-07-19-13-12"
+        asset_name = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
+        sha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+
+        for source in (workflow, installer):
+            self.assertIn(release_tag, source)
+            self.assertIn(asset_name, source)
+            self.assertIn(sha256, source)
+            self.assertIn("Get-FileHash", source)
+        self.assertNotIn("choco install ffmpeg", workflow)
+        self.assertNotIn("releases/download/latest/ffmpeg", installer)
+
     def test_build_portable_collects_aria_amt_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
 

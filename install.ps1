@@ -219,12 +219,19 @@ catch {
 
         if (-not (Test-Path $ffmpegExe)) {
             try {
-                $zipUrl  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-                $zipPath = Join-Path $env:TEMP "ffmpeg_dl.zip"
+                $ffmpegReleaseTag = "autobuild-2026-07-19-13-12"
+                $ffmpegAssetName = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
+                $ffmpegExpectedSha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+                $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegReleaseTag/$ffmpegAssetName"
+                $zipPath = Join-Path $env:TEMP $ffmpegAssetName
                 $extractPath = Join-Path $env:TEMP "ffmpeg_extract"
 
                 # 使用 Invoke-Download 显示实时进度
-                Invoke-Download -Url $zipUrl -OutFile $zipPath -Description "正在下载 ffmpeg（约 90 MB）..."
+                Invoke-Download -Url $zipUrl -OutFile $zipPath -Description "正在下载固定版本 ffmpeg（约 151 MB）..."
+                $ffmpegActualSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($ffmpegActualSha256 -ne $ffmpegExpectedSha256) {
+                    throw "FFmpeg 压缩包 SHA-256 不匹配：期望 $ffmpegExpectedSha256，实际 $ffmpegActualSha256"
+                }
 
                 Write-Info "  正在解压..."
                 if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
