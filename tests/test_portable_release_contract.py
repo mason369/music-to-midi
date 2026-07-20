@@ -221,6 +221,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("get_cached_muscriptor_paths(validate_hashes=True)", workflow)
         self.assertIn("download_muscriptor_soundfont", workflow)
         self.assertIn("command -v fluidsynth", workflow)
+        linux_system_packages = workflow.split("sudo apt-get install -y \\", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("fluidsynth \\", linux_system_packages)
 
     def test_build_portable_collects_and_validates_muscriptor_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
