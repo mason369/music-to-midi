@@ -508,7 +508,6 @@ class BeatDetector:
         logger.info(f"快速估算 BPM: {tempo:.1f}")
         return tempo
 
-
     # ---- 变速 tempo map 检测 ----
     # 双引擎：
     # 1) beat 引擎：逐拍间隔（分辨率高，可捕捉约 ±3% 的段落级速度流动），
