@@ -15,6 +15,21 @@ from src.core.vocal_separator import (
     VocalSeparator,
 )
 from src.i18n.translator import Translator
+from src.utils.inference_precision import PrecisionCapabilities
+
+
+def _fake_cuda_precision_capabilities() -> PrecisionCapabilities:
+    """CI has no GPU; probe results are mocked, the real POLARFORMER->FP32
+    selection logic still runs against these capabilities."""
+    return PrecisionCapabilities(
+        device="cuda:0",
+        device_name="CI FakeGPU",
+        compute_capability="8.9",
+        fp32=True,
+        fp16=True,
+        bf16=True,
+        tf32=True,
+    )
 
 
 class VocalSeparatorTwoLegTests(unittest.TestCase):
@@ -291,6 +306,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             patch(
                 "src.core.vocal_separator._resolve_onnx_providers",
                 return_value=[("CUDAExecutionProvider", {"device_id": 0, "use_tf32": 0})],
+            ),
+            patch(
+                "src.utils.inference_precision.probe_precision_capabilities",
+                return_value=_fake_cuda_precision_capabilities(),
             ),
             patch.dict("sys.modules", {"onnxruntime": fake_ort}),
             patch(
