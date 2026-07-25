@@ -106,7 +106,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     return "", ""
 
             events = []
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
             transcriber.set_event_callback(events.append)
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
@@ -131,6 +131,8 @@ class MirosTranscriberTests(unittest.TestCase):
                 str(Path(miros_runtime.__file__).resolve().parents[2]),
                 captured["env"]["PYTHONPATH"],
             )
+            self.assertEqual(captured["env"]["MUSIC_TO_MIDI_MIROS_DEVICE"], "cpu")
+            self.assertEqual(captured["env"]["MUSIC_TO_MIDI_MIROS_PRECISION"], "float32")
 
     def test_subprocess_enables_expandable_cuda_segments_without_overriding_user_value(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,7 +158,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     )
                     return "", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
                 patch.object(MirosTranscriber, "_entrypoint_path", return_value=entrypoint),
@@ -303,7 +305,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     )
                     return "", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
 
             previous_cwd = os.getcwd()
             os.chdir(root)
@@ -428,7 +430,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     captured["official_bytes"] = attempt_path.read_bytes()
                     return "official CLI complete", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
                 patch.object(
@@ -502,7 +504,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     )
                     return "", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
 
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
@@ -554,7 +556,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     )
                     return "", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
 
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
@@ -590,7 +592,7 @@ class MirosTranscriberTests(unittest.TestCase):
                 def communicate(self):
                     return "Transcribing song.wav -> song.mid\nstdout clue", "stderr clue"
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
 
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
@@ -624,7 +626,7 @@ class MirosTranscriberTests(unittest.TestCase):
                 def communicate(self):
                     return "worker exited without output", ""
 
-            transcriber = MirosTranscriber(Config())
+            transcriber = MirosTranscriber(Config(use_gpu=False))
             with (
                 patch.object(MirosTranscriber, "_repo_dir", return_value=repo),
                 patch.object(MirosTranscriber, "_entrypoint_path", return_value=entrypoint),

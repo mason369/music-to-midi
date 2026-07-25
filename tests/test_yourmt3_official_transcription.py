@@ -50,6 +50,7 @@ def test_official_checkpoint_arguments_match_published_space_modes(model_name, e
     assert actual == expected
     assert args.project == "2024"
     assert args.write_model_output is True
+    assert args.precision == "32"
 
 
 def test_official_transcription_uses_torchaudio_nonoverlap_fixed_batch_and_writer(

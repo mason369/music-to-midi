@@ -23,6 +23,13 @@ from src.core.muscriptor_result_assets import read_midi_roll_notes
 from src.core.transcription_stream import snapshot_event
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import ensure_cuda_runtime_compatibility, rewrite_cuda_runtime_error
+from src.utils.inference_precision import (
+    ARIA_AMT,
+    configure_torch_precision,
+    log_precision_plan,
+    select_inference_precision,
+    verify_float32_model_parameters,
+)
 from src.utils.midi_output import publish_midi_output
 from src.utils.runtime_paths import get_aria_amt_dir, is_frozen_app
 
@@ -258,7 +265,6 @@ class AriaAmtTranscriber:
         try:
             import torch
             from torch.cuda import is_available as cuda_is_available
-            from torch.cuda import is_bf16_supported
 
             from amt.audio import AudioTransform
             from amt.config import load_config
@@ -267,12 +273,24 @@ class AriaAmtTranscriber:
             if not cuda_is_available():
                 raise RuntimeError("CUDA device not found")
             ensure_cuda_runtime_compatibility("cuda:0")
+            precision_plan = select_inference_precision(
+                ARIA_AMT,
+                "cuda:0",
+                torch_module=torch,
+            )
+            configure_torch_precision(precision_plan, torch_module=torch)
+            log_precision_plan(logger, precision_plan)
 
             model, tokenizer = self._load_aria_model()
+            verify_float32_model_parameters(
+                model,
+                model_name="Aria-AMT",
+                torch_module=torch,
+            )
             model.decoder.setup_cache(
                 batch_size=1,
                 max_seq_len=transcribe_module.MAX_BLOCK_LEN,
-                dtype=torch.bfloat16 if is_bf16_supported() else torch.float,
+                dtype=precision_plan.torch_dtype(torch),
             )
             model.cuda()
             model.eval()

@@ -43,6 +43,7 @@ MIROS_ROPE_NEW_IMPORT = "from torch.amp import autocast"
 MIROS_ROPE_OLD_DECORATOR = "@autocast(enabled=False)"
 MIROS_ROPE_NEW_DECORATOR = '@autocast("cuda", enabled=False)'
 MIROS_TRANSCRIBE_REL_PATH = Path("transcribe.py")
+MIROS_MUSICFM_REL_PATH = Path("model/musicfm/model/musicfm_25hz.py")
 MIROS_AUDIO_SEGMENTS_GPU_BLOCK = (
     "    audio_segments = torch.from_numpy(audio_segments.astype('float32'))"
     ".to(device).unsqueeze(1) # (n_seg, 1, seg_sz)"
@@ -56,7 +57,7 @@ MIROS_AUDIO_SEGMENTS_CPU_BLOCK = "\n".join(
     )
 )
 MIROS_INFERENCE_CONTEXT_OLD = "    with torch.cuda.amp.autocast(dtype=torch.bfloat16):"
-MIROS_INFERENCE_CONTEXT_NEW = "\n".join(
+MIROS_INFERENCE_CONTEXT_PREVIOUS = "\n".join(
     (
         "    with torch.inference_mode(), torch.autocast(",
         "            device_type=device.type,",
@@ -64,11 +65,168 @@ MIROS_INFERENCE_CONTEXT_NEW = "\n".join(
         '            enabled=device.type == "cuda"):',
     )
 )
+MIROS_INFERENCE_CONTEXT_NEW = "\n".join(
+    (
+        "    inference_dtype, autocast_enabled = _resolve_runtime_precision(device)",
+        "    with torch.inference_mode(), torch.autocast(",
+        "            device_type=device.type,",
+        "            dtype=inference_dtype,",
+        "            enabled=autocast_enabled):",
+    )
+)
 MIROS_INFERENCE_BATCH_OLD = (
     "        pred_token_arr, _ = model.inference_file(bsz=8, " "audio_segments=audio_segments)"
 )
 MIROS_INFERENCE_BATCH_NEW = (
     "        pred_token_arr, _ = model.inference_file(bsz=1, " "audio_segments=audio_segments)"
+)
+MIROS_DEVICE_OLD = '    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")'
+MIROS_DEVICE_NEW = "    device = _resolve_runtime_device()"
+MIROS_MODEL_RETURN_OLD = "    return model.eval()"
+MIROS_MODEL_RETURN_NEW = "\n".join(
+    (
+        "    model.eval()",
+        "    parameter_dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}",
+        "    if parameter_dtypes != {torch.float32}:",
+        "        raise RuntimeError(",
+        '            "MIROS parameter dtype contract violated: "',
+        '            f"expected only torch.float32, got {sorted(map(str, parameter_dtypes))}"',
+        "        )",
+        "    return model",
+    )
+)
+MIROS_PRECISION_HELPERS = """
+MIROS_DEVICE_ENV = "MUSIC_TO_MIDI_MIROS_DEVICE"
+MIROS_PRECISION_ENV = "MUSIC_TO_MIDI_MIROS_PRECISION"
+
+
+def _resolve_runtime_device():
+    requested = os.environ.get(
+        MIROS_DEVICE_ENV,
+        "cuda:0" if torch.cuda.is_available() else "cpu",
+    )
+    device = torch.device(requested)
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"MIROS requested {device}, but CUDA is unavailable")
+        torch.cuda.set_device(device)
+    return device
+
+
+def _native_bf16_supported():
+    checker = getattr(torch.cuda, "is_bf16_supported", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker(including_emulation=False))
+    except TypeError:
+        major, _minor = torch.cuda.get_device_capability()
+        return major >= 8 and bool(checker())
+
+
+def _probe_runtime_dtype(device, dtype):
+    with torch.inference_mode():
+        left = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device=device, dtype=dtype)
+        result = torch.mm(left, left)
+        if result.dtype != dtype or not bool(torch.isfinite(result).all().item()):
+            raise RuntimeError(
+                f"MIROS precision probe failed for {dtype}: output={result.dtype}"
+            )
+    torch.cuda.synchronize(device)
+
+
+def _resolve_runtime_precision(device):
+    requested = os.environ.get(MIROS_PRECISION_ENV, "auto").strip().lower()
+    if device.type != "cuda":
+        if requested not in {"auto", "float32"}:
+            raise RuntimeError(
+                f"MIROS precision {requested!r} requires CUDA, got {device}"
+            )
+        print(
+            "MIROS precision plan | device=cpu parameters=float32 "
+            "compute=float32 autocast=false tf32=false"
+        )
+        return torch.float32, False
+
+    if requested == "auto":
+        requested = "bfloat16" if _native_bf16_supported() else "float16"
+    dtype_by_name = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }
+    if requested not in dtype_by_name:
+        raise RuntimeError(
+            f"Unsupported MIROS precision {requested!r}; "
+            "expected float16, bfloat16, or float32"
+        )
+    if requested == "bfloat16" and not _native_bf16_supported():
+        raise RuntimeError("MIROS requested native BF16 on a GPU without native BF16 support")
+
+    dtype = dtype_by_name[requested]
+    _probe_runtime_dtype(device, torch.float32)
+    if dtype != torch.float32:
+        _probe_runtime_dtype(device, dtype)
+
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    if hasattr(torch.backends.cuda.matmul, "allow_fp16_reduced_precision_reduction"):
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+    if hasattr(torch.backends.cuda.matmul, "allow_bf16_reduced_precision_reduction"):
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+
+    props = torch.cuda.get_device_properties(device)
+    major, minor = torch.cuda.get_device_capability(device)
+    print(
+        "MIROS precision plan | "
+        f"device={device} gpu={props.name} cc={major}.{minor} "
+        f"parameters=float32 compute={requested} "
+        f"autocast={dtype != torch.float32} tf32=false "
+        "reduced_precision_reduction=false"
+    )
+    return dtype, dtype != torch.float32
+""".strip()
+MIROS_PRECISION_HELPERS_ANCHOR = "import torchaudio"
+MIROS_MUSICFM_PRECISION_OLD = "\n".join(
+    (
+        "        if self.is_flash and (x.dtype != torch.bfloat16):",
+        "            x = x.to(torch.bfloat16)",
+        "",
+        "        # check precision",
+        "        if x.dtype == torch.bfloat16: #torch.float16:",
+        "            precision = 16",
+        "        else:",
+        "            precision = 32",
+        "",
+        "        out = {}",
+        "        for key in features:",
+        '            layer = getattr(self, "preprocessor_%s" % key)',
+        "            out[key] = layer.float()(x.float())[..., :-1]",
+        "            if precision == 16:",
+        "                out[key] = out[key].to(torch.bfloat16)",
+    )
+)
+MIROS_MUSICFM_PRECISION_NEW = "\n".join(
+    (
+        "        precision_dtype = x.dtype",
+        '        if self.is_flash and x.is_cuda and torch.is_autocast_enabled("cuda"):',
+        '            precision_dtype = torch.get_autocast_dtype("cuda")',
+        "            if precision_dtype not in {torch.float16, torch.bfloat16}:",
+        "                raise RuntimeError(",
+        '                    f"Unsupported MIROS flash autocast dtype: {precision_dtype}"',
+        "                )",
+        "            x = x.to(precision_dtype)",
+        "",
+        "        # Classic audio features are calculated in FP32, then returned in",
+        "        # the active verified autocast dtype for the flash conformer.",
+        "        out = {}",
+        "        for key in features:",
+        '            layer = getattr(self, "preprocessor_%s" % key)',
+        "            out[key] = layer.float()(x.float())[..., :-1]",
+        "            if precision_dtype in {torch.float16, torch.bfloat16}:",
+        "                out[key] = out[key].to(precision_dtype)",
+    )
 )
 
 
@@ -518,6 +676,27 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
     if not transcribe_path.is_file():
         raise RuntimeError(f"MIROS source is incomplete; missing {transcribe_path}")
     transcribe_text = transcribe_path.read_text(encoding="utf-8")
+    precision_helpers_count = transcribe_text.count(MIROS_PRECISION_HELPERS)
+    precision_anchor_count = transcribe_text.count(MIROS_PRECISION_HELPERS_ANCHOR)
+    if precision_helpers_count not in {0, 1}:
+        raise RuntimeError(
+            "Unexpected MIROS precision helper state: "
+            f"count={precision_helpers_count} ({transcribe_path})"
+        )
+    source_patch_applied = False
+    if precision_helpers_count == 0:
+        if precision_anchor_count != 1:
+            raise RuntimeError(
+                "Unexpected MIROS precision helper anchor state: "
+                f"count={precision_anchor_count} ({transcribe_path})"
+            )
+        transcribe_text = transcribe_text.replace(
+            MIROS_PRECISION_HELPERS_ANCHOR,
+            MIROS_PRECISION_HELPERS_ANCHOR + "\n\n\n" + MIROS_PRECISION_HELPERS,
+            1,
+        )
+        source_patch_applied = True
+
     inference_replacements = (
         (
             MIROS_AUDIO_SEGMENTS_GPU_BLOCK,
@@ -525,17 +704,16 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
             "audio segment residency",
         ),
         (
-            MIROS_INFERENCE_CONTEXT_OLD,
-            MIROS_INFERENCE_CONTEXT_NEW,
-            "inference mode",
-        ),
-        (
             MIROS_INFERENCE_BATCH_OLD,
             MIROS_INFERENCE_BATCH_NEW,
             "inference batch size",
         ),
+        (
+            MIROS_MODEL_RETURN_OLD,
+            MIROS_MODEL_RETURN_NEW,
+            "FP32 parameter verification",
+        ),
     )
-    memory_patch_applied = False
     for old_fragment, new_fragment, label in inference_replacements:
         old_count = transcribe_text.count(old_fragment)
         new_count = transcribe_text.count(new_fragment)
@@ -550,13 +728,75 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
                 new_fragment,
                 1,
             )
-            memory_patch_applied = True
-    if memory_patch_applied:
+            source_patch_applied = True
+
+    old_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_OLD)
+    previous_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_PREVIOUS)
+    new_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_NEW)
+    if old_context_count + previous_context_count + new_context_count != 1:
+        raise RuntimeError(
+            "Unexpected MIROS inference precision patch state: "
+            f"old={old_context_count}, previous={previous_context_count}, "
+            f"new={new_context_count} ({transcribe_path})"
+        )
+    if old_context_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_INFERENCE_CONTEXT_OLD,
+            MIROS_INFERENCE_CONTEXT_NEW,
+            1,
+        )
+        source_patch_applied = True
+    elif previous_context_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_INFERENCE_CONTEXT_PREVIOUS,
+            MIROS_INFERENCE_CONTEXT_NEW,
+            1,
+        )
+        source_patch_applied = True
+
+    old_device_count = transcribe_text.count(MIROS_DEVICE_OLD)
+    new_device_count = transcribe_text.count(MIROS_DEVICE_NEW)
+    if (old_device_count, new_device_count) not in {(2, 0), (0, 2)}:
+        raise RuntimeError(
+            "Unexpected MIROS runtime device patch state: "
+            f"old={old_device_count}, new={new_device_count} ({transcribe_path})"
+        )
+    if old_device_count == 2:
+        transcribe_text = transcribe_text.replace(
+            MIROS_DEVICE_OLD,
+            MIROS_DEVICE_NEW,
+            2,
+        )
+        source_patch_applied = True
+
+    if source_patch_applied:
         transcribe_path.write_text(transcribe_text, encoding="utf-8")
         _log(
             printer,
-            f"Patched MIROS bounded inference memory usage: {transcribe_path}",
+            f"Patched MIROS bounded adaptive-precision inference: {transcribe_path}",
         )
+
+    musicfm_path = repo_dir / MIROS_MUSICFM_REL_PATH
+    if not musicfm_path.is_file():
+        raise RuntimeError(f"MIROS source is incomplete; missing {musicfm_path}")
+    musicfm_text = musicfm_path.read_text(encoding="utf-8")
+    old_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_OLD)
+    new_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_NEW)
+    if (old_musicfm_count, new_musicfm_count) not in {(1, 0), (0, 1)}:
+        raise RuntimeError(
+            "Unexpected MIROS MusicFM precision patch state: "
+            f"old={old_musicfm_count}, new={new_musicfm_count} ({musicfm_path})"
+        )
+    if old_musicfm_count == 1:
+        musicfm_path.write_text(
+            musicfm_text.replace(
+                MIROS_MUSICFM_PRECISION_OLD,
+                MIROS_MUSICFM_PRECISION_NEW,
+                1,
+            ),
+            encoding="utf-8",
+        )
+        _log(printer, f"Patched MIROS MusicFM adaptive flash dtype: {musicfm_path}")
 
 
 def prepare_miros_model(

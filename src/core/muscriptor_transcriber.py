@@ -25,6 +25,13 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
+from src.utils.inference_precision import (
+    MUSCRIPTOR,
+    configure_torch_precision,
+    log_precision_plan,
+    select_inference_precision,
+    verify_float32_model_parameters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +147,44 @@ class MuscriptorTranscriber:
         else:
             device = "cpu"
 
+        precision_plan = select_inference_precision(
+            MUSCRIPTOR,
+            device,
+            torch_module=torch,
+        )
+        configure_torch_precision(precision_plan, torch_module=torch)
+        log_precision_plan(logger, precision_plan)
+
         self._check_cancelled()
         logger.info("Loading pinned MuScriptor-large on %s from %s", device, weights)
         self._model = TranscriptionModel.load_model(weights_path=weights, device=device)
+        runtime_model = getattr(self._model, "_model", None)
+        if runtime_model is None:
+            raise RuntimeError("MuScriptor runtime does not expose its verified LM model")
+        verify_float32_model_parameters(
+            runtime_model,
+            model_name="MuScriptor-large",
+            torch_module=torch,
+        )
+        runtime_autocast = getattr(runtime_model, "autocast", None)
+        actual_enabled = bool(getattr(runtime_autocast, "enabled", False))
+        actual_dtype = getattr(runtime_autocast, "dtype", None)
+        expected_dtype = precision_plan.torch_dtype(torch)
+        if actual_enabled != precision_plan.autocast:
+            raise RuntimeError(
+                "MuScriptor autocast contract mismatch: "
+                f"expected enabled={precision_plan.autocast}, got {actual_enabled}"
+            )
+        if precision_plan.autocast and actual_dtype != expected_dtype:
+            raise RuntimeError(
+                "MuScriptor autocast dtype mismatch: "
+                f"expected {expected_dtype}, got {actual_dtype}"
+            )
+        logger.info(
+            "MuScriptor runtime verified | parameters=float32 autocast=%s compute=%s",
+            actual_enabled,
+            precision_plan.compute_dtype,
+        )
         self._check_cancelled()
         return self._model
 

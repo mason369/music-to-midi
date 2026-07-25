@@ -49,11 +49,7 @@ from src.core.manual_midi import (
 )
 from src.core.multi_stem_separator import STEM_KEYS
 from src.gui.layouts import FlowLayout
-from src.gui.theme import (
-    DARK_DIRECTORY_DIALOG_OPTIONS,
-    DARK_FILE_DIALOG_OPTIONS,
-    apply_dark_application_theme,
-)
+from src.gui.theme import apply_dark_application_theme
 from src.gui.widgets.audio_track_mixer import AudioTrackMixerWidget, midi_route_label
 from src.gui.widgets.dropzone import DropZoneWidget
 from src.gui.widgets.muscriptor_result import MuscriptorResultWidget
@@ -423,6 +419,7 @@ class MainWindow(QMainWindow):
 
         self.audio_mixer = None
         self.muscriptor_result_widget = None
+        self._last_detected_bpm = None
         self._audio_mixer_tracks = None
         self.audio_mixer_error_label = None
         self.audio_timeline_container = QWidget(self.result_panel)
@@ -1140,6 +1137,8 @@ class MainWindow(QMainWindow):
             self._clear_midi_workbench if preserve_mixer else self._transcribe_another
         )
         self.muscriptor_result_widget = workbench
+        if self._last_detected_bpm:
+            workbench.set_detected_bpm(self._last_detected_bpm)
         self.audio_timeline_layout.addWidget(workbench)
         if not preserve_mixer:
             self.result_title_label.setText(f"🎼  {backend_label}")
@@ -1190,7 +1189,12 @@ class MainWindow(QMainWindow):
         if workbench is None:
             raise RuntimeError("Transcription result workbench could not be created")
 
-        bpm_text = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
+        if result.beat_info:
+            bpm_text = result.beat_info.bpm_display
+            if result.beat_info.is_variable_tempo:
+                bpm_text += f" ({t('dialogs.complete.bpm_variable')})"
+        else:
+            bpm_text = "N/A"
         self._last_result = result
         self._last_separation_result = None
         self.result_title_label.setText(f"✓  {workbench.backend_label}")
@@ -1310,7 +1314,12 @@ class MainWindow(QMainWindow):
             </p>
             """
         else:
-            bpm_text = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
+            if result.beat_info:
+                bpm_text = result.beat_info.bpm_display
+                if result.beat_info.is_variable_tempo:
+                    bpm_text += f" ({t('dialogs.complete.bpm_variable')})"
+            else:
+                bpm_text = "N/A"
             info_text = f"""
             <p style="color: #b0b8c8; line-height: 1.6;">
             <b>{t('dialogs.complete.midi_file')}:</b> {escape(str(result.midi_path))}<br>
@@ -1489,7 +1498,6 @@ class MainWindow(QMainWindow):
             t("dialogs.openFile.title"),
             "",
             filter_str,
-            options=DARK_FILE_DIALOG_OPTIONS,
         )
 
         if file_path:
@@ -1519,7 +1527,6 @@ class MainWindow(QMainWindow):
             self,
             t("dialogs.selectDir.title"),
             self.output_dir_edit.text(),
-            options=DARK_DIRECTORY_DIALOG_OPTIONS,
         )
 
         if dir_path:
@@ -1537,6 +1544,7 @@ class MainWindow(QMainWindow):
 
         self._clear_completed_result()
         self._stopping = False
+        self._last_detected_bpm = None
 
         # 从UI更新配置
         self.config.output_dir = self.output_dir_edit.text()
@@ -1895,6 +1903,10 @@ class MainWindow(QMainWindow):
         if self._stopping:
             return
         self.progress_widget.update_progress(progress)
+        if progress.bpm_display:
+            self._last_detected_bpm = progress.bpm_display
+            if self.muscriptor_result_widget is not None:
+                self.muscriptor_result_widget.set_detected_bpm(progress.bpm_display)
         # 节流内存标签更新（最多每 2 秒一次），避免阻塞 GUI 线程
         now = _time.monotonic()
         if now - self._last_memory_update >= 2.0:

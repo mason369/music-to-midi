@@ -84,6 +84,19 @@ class BeatDetector:
         tempo, all_tempos = self._detect_multi_method(y, sr)
         logger.info(f"多算法 BPM 检测完成: {tempo:.1f} BPM, 候选值: {all_tempos}")
 
+        # 倍频校正：tempogram 类算法存在系统性半频/倍频误检（错误值会占
+        # 多数候选而赢投票），以无先验跟拍的拍间隔中位数做校验
+        interval_median = self._beat_interval_median(librosa, y, sr)
+        corrected = self._resolve_octave_by_interval_median(tempo, interval_median)
+        if corrected != tempo:
+            logger.info(
+                "BPM 倍频校正: %.1f -> %.1f（拍间隔中位数 %.1f）",
+                tempo,
+                corrected,
+                interval_median,
+            )
+            tempo = corrected
+
         if progress_callback:
             progress_callback(0.5, self._pt("progress.finding_beats"))
 
@@ -102,11 +115,25 @@ class BeatDetector:
         if progress_callback:
             progress_callback(1.0, f"BPM: {tempo:.1f}")
 
+        # 变速 tempo map 默认关闭（config.enable_tempo_map）；开启时做高置信
+        # 分段检测，恒速或检测失败返回空列表（退回全局单一 BPM）
+        tempo_map = (
+            self._detect_tempo_map(y, sr)
+            if getattr(self.config, "enable_tempo_map", False)
+            else []
+        )
+        if tempo_map:
+            logger.info(
+                "检测到变速 tempo map: %s",
+                ", ".join(f"{t:.1f}s→{bpm:.1f}" for t, bpm in tempo_map),
+            )
+
         beat_info = BeatInfo(
             bpm=tempo,
             beat_times=beat_times.tolist(),
             downbeats=downbeats,
-            time_signature=(beats_per_bar, 4)
+            time_signature=(beats_per_bar, 4),
+            tempo_map=tempo_map,
         )
 
         logger.info(f"多算法检测 BPM: {tempo:.1f}, 候选值: {all_tempos}")
@@ -114,7 +141,54 @@ class BeatDetector:
 
         return beat_info
 
-    def _detect_multi_method(
+    _OCTAVE_CORRECT_MIN_RATIO = 1.9  # 严格倍频判定区间 [1.9, 2.1]
+    _OCTAVE_CORRECT_MAX_RATIO = 2.1
+
+    def _beat_interval_median(
+        self,
+        librosa_module,
+        y: np.ndarray,
+        sr: int,
+    ) -> Optional[float]:
+        """无先验 beat_track 的逐拍间隔中位数 BPM；跟拍不可靠时返回 None。"""
+        try:
+            onset_env = librosa_module.onset.onset_strength(y=y, sr=sr)
+            _, beat_frames = librosa_module.beat.beat_track(
+                onset_envelope=onset_env, sr=sr, trim=False
+            )
+            beat_times = librosa_module.frames_to_time(beat_frames, sr=sr)
+            intervals = np.diff(beat_times)
+            intervals = intervals[intervals > 0]
+            if len(intervals) < 16:
+                return None
+            median_bpm = 60.0 / float(np.median(intervals))
+            if not math.isfinite(median_bpm) or median_bpm <= 0:
+                return None
+            return self._correct_octave_error(median_bpm)
+        except Exception as exc:
+            logger.warning("拍间隔中位数估计失败: %s", exc)
+            return None
+
+    def _resolve_octave_by_interval_median(
+        self,
+        tempo: float,
+        interval_median: Optional[float],
+    ) -> float:
+        """投票结果与拍间隔中位数呈严格 2x/0.5x 关系时，以拍间隔为准。
+
+        仅倍频关系才替换；非倍频的合理分歧（如双峰歌 117.5/123.0）保持
+        投票结果不动，避免用另一种"合理"替换"合理"。
+        """
+        if interval_median is None or tempo <= 0:
+            return tempo
+        ratio = interval_median / tempo
+        if self._OCTAVE_CORRECT_MIN_RATIO <= ratio <= self._OCTAVE_CORRECT_MAX_RATIO:
+            return interval_median
+        if self._OCTAVE_CORRECT_MIN_RATIO <= 1.0 / ratio <= self._OCTAVE_CORRECT_MAX_RATIO:
+            return interval_median
+        return tempo
+
+    def _detect_multi_method(
         self,
         y: np.ndarray,
         sr: int
@@ -433,3 +507,240 @@ class BeatDetector:
 
         logger.info(f"快速估算 BPM: {tempo:.1f}")
         return tempo
+
+
+    # ---- 变速 tempo map 检测 ----
+    # 双引擎：
+    # 1) beat 引擎：逐拍间隔（分辨率高，可捕捉约 ±3% 的段落级速度流动），
+    #    要求 beat_track 跟拍覆盖充分；
+    # 2) frame 引擎：逐帧 tempo 分箱分段（无需跟拍，覆盖 beat_track
+    #    跟丢的突变型变速，但容忍阈值更高）。
+
+    _TEMPO_MAP_MIN_SECONDS = 12.0   # 音频太短不做变速分析
+
+    # beat 引擎参数
+    _TEMPO_MAP_BEAT_MIN_BEATS = 32      # 拍数太少不做 beat 分析
+    _TEMPO_MAP_BEAT_MIN_COVERAGE = 0.7  # 跟拍需覆盖至少 70% 时长
+    _TEMPO_MAP_BEAT_SMOOTH = 8          # 滑动中位数窗口（拍）
+    _TEMPO_MAP_BEAT_TOLERANCE = 0.02    # 段内允许的相对偏差
+    _TEMPO_MAP_BEAT_MIN_RUN = 16        # 连续偏离达到该拍数才确认变速
+    _TEMPO_MAP_BEAT_MAX_SECTIONS = 8    # 真变速通常只有几次变化
+    _TEMPO_MAP_BEAT_MIN_DWELL = 10.0    # 每段最短驻留（秒）
+    _TEMPO_MAP_BEAT_MIN_JUMP = 0.03     # 相邻段最小相对变化
+
+    # frame 引擎参数（兜底，容忍更大抖动）
+    _TEMPO_MAP_BIN_SECONDS = 0.5        # 逐帧 tempo 分箱宽度（秒）
+    _TEMPO_MAP_SMOOTH_BINS = 5          # 分箱滑动中位数窗口（约 2.5 秒）
+    _TEMPO_MAP_TOLERANCE = 0.05         # 段内允许的相对偏差
+    _TEMPO_MAP_MIN_RUN = 4              # 连续偏离达到该分箱数（约 2 秒）才确认变速
+    _TEMPO_MAP_MAX_SECTIONS = 6
+    _TEMPO_MAP_MIN_SECTION_SECONDS = 8.0
+    _TEMPO_MAP_MIN_SECTION_JUMP = 0.12
+
+    def _detect_tempo_map(
+        self,
+        y: np.ndarray,
+        sr: int,
+    ) -> List[Tuple[float, float]]:
+        """检测歌曲内部的速度变化，返回分段 tempo map。
+
+        返回 [(秒, BPM), ...]，首点为 0 秒；恒速歌曲返回空列表。
+        任何一步失败都返回空列表（退回恒速处理），绝不让变速分析影响主流程。
+        """
+        try:
+            import librosa
+
+            duration = len(y) / sr
+            if duration < self._TEMPO_MAP_MIN_SECONDS:
+                return []
+            onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+            sections = self._detect_beat_tempo_map(librosa, onset_env, sr, duration)
+            if sections:
+                return sections
+            return self._detect_frame_tempo_map(librosa, onset_env, sr, duration)
+        except Exception as exc:
+            logger.warning("变速 tempo map 检测失败，按恒速处理: %s", exc)
+            return []
+
+    def _detect_beat_tempo_map(
+        self,
+        librosa,
+        onset_env: np.ndarray,
+        sr: int,
+        duration: float,
+    ) -> List[Tuple[float, float]]:
+        """beat 引擎：逐拍间隔平滑分段，捕捉段落级速度流动。"""
+        _, beat_frames = librosa.beat.beat_track(
+            onset_envelope=onset_env, sr=sr, trim=False
+        )
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        if len(beat_times) < self._TEMPO_MAP_BEAT_MIN_BEATS:
+            return []
+        coverage = (beat_times[-1] - beat_times[0]) / duration if duration > 0 else 0.0
+        if coverage < self._TEMPO_MAP_BEAT_MIN_COVERAGE:
+            return []
+
+        intervals = np.diff(beat_times)
+        valid = intervals > 0
+        if not np.any(valid):
+            return []
+        instant_bpms = 60.0 / intervals[valid]
+        interval_end_times = beat_times[1:][valid]
+
+        smoothed = self._sliding_median(instant_bpms, self._TEMPO_MAP_BEAT_SMOOTH)
+        sections = self._segment_tempo_curve(
+            smoothed,
+            interval_end_times,
+            tolerance=self._TEMPO_MAP_BEAT_TOLERANCE,
+            min_run=self._TEMPO_MAP_BEAT_MIN_RUN,
+        )
+        return self._gate_tempo_map(
+            sections,
+            duration,
+            max_sections=self._TEMPO_MAP_BEAT_MAX_SECTIONS,
+            min_section_seconds=self._TEMPO_MAP_BEAT_MIN_DWELL,
+            min_section_jump=self._TEMPO_MAP_BEAT_MIN_JUMP,
+        )
+
+    def _detect_frame_tempo_map(
+        self,
+        librosa,
+        onset_env: np.ndarray,
+        sr: int,
+        duration: float,
+    ) -> List[Tuple[float, float]]:
+        """frame 引擎：逐帧 tempo 分箱分段，兜底突变型变速。"""
+        frame_tempos = _librosa_tempo(
+            librosa,
+            onset_envelope=onset_env,
+            sr=sr,
+            aggregate=None,
+        )
+        frame_tempos = np.asarray(frame_tempos, dtype=float).ravel()
+        if frame_tempos.size == 0:
+            return []
+        frame_times = librosa.frames_to_time(np.arange(frame_tempos.size), sr=sr)
+        if len(frame_times) == 0:
+            return []
+
+        frame_tempos = np.array(
+            [self._correct_octave_error(t) for t in frame_tempos], dtype=float
+        )
+
+        bin_sec = self._TEMPO_MAP_BIN_SECONDS
+        n_bins = int(np.ceil(frame_times[-1] / bin_sec))
+        bin_bpms: List[float] = []
+        bin_end_times: List[float] = []
+        for i in range(n_bins):
+            mask = (frame_times >= i * bin_sec) & (frame_times < (i + 1) * bin_sec)
+            if not np.any(mask):
+                continue
+            bin_bpms.append(float(np.median(frame_tempos[mask])))
+            bin_end_times.append(float((i + 1) * bin_sec))
+        if len(bin_bpms) < self._TEMPO_MAP_MIN_RUN * 2:
+            return []
+
+        smoothed = self._sliding_median(
+            np.array(bin_bpms), self._TEMPO_MAP_SMOOTH_BINS
+        )
+        sections = self._segment_tempo_curve(
+            smoothed,
+            np.array(bin_end_times),
+            tolerance=self._TEMPO_MAP_TOLERANCE,
+            min_run=self._TEMPO_MAP_MIN_RUN,
+        )
+        return self._gate_tempo_map(
+            sections,
+            duration,
+            max_sections=self._TEMPO_MAP_MAX_SECTIONS,
+            min_section_seconds=self._TEMPO_MAP_MIN_SECTION_SECONDS,
+            min_section_jump=self._TEMPO_MAP_MIN_SECTION_JUMP,
+        )
+
+    @staticmethod
+    def _gate_tempo_map(
+        sections: List[Tuple[float, float]],
+        duration: float,
+        *,
+        max_sections: int = 6,
+        min_section_seconds: float = 8.0,
+        min_section_jump: float = 0.12,
+    ) -> List[Tuple[float, float]]:
+        """高置信门控：只有"少而显著"的分段才采纳为变速。
+
+        检测信号在节奏密度变化时会产出倍频族抖动（如 70/92/144 快速
+        交替），把它们写进 MIDI 比固定 BPM 更糟糕。因此要求：段数不超过
+        上限、每段驻留不短于阈值、相邻段 BPM 相对差不小于阈值；任一不
+        满足即退回恒速（返回空列表）。
+        """
+        if len(sections) < 2 or len(sections) > max_sections:
+            return []
+        for (_, bpm_a), (_, bpm_b) in zip(sections, sections[1:]):
+            if abs(bpm_b - bpm_a) < min_section_jump * bpm_a:
+                return []
+        section_ends = [sec for sec, _ in sections[1:]] + [duration]
+        for (start, _), end in zip(sections, section_ends):
+            if end - start < min_section_seconds:
+                return []
+        return sections
+
+    @staticmethod
+    def _sliding_median(values: np.ndarray, window: int) -> np.ndarray:
+        """滑动窗口中位数平滑，抑制逐拍检测抖动。"""
+        half = window // 2
+        smoothed = np.empty(len(values), dtype=float)
+        for i in range(len(values)):
+            lo = max(0, i - half)
+            hi = min(len(values), i + half + 1)
+            smoothed[i] = float(np.median(values[lo:hi]))
+        return smoothed
+
+    @staticmethod
+    def _segment_tempo_curve(
+        smoothed_bpms,
+        interval_end_times,
+        *,
+        tolerance: float,
+        min_run: int,
+    ) -> List[Tuple[float, float]]:
+        """把平滑后的逐区间 BPM 曲线切成若干恒定段。
+
+        连续 min_run 个区间偏离当前段 BPM 超过 tolerance 才确认变速；
+        相邻段 BPM 差异不显著的变化点会被丢弃。返回 [(秒, BPM), ...]，
+        不足两段时返回空列表（恒速）。
+        """
+        n = len(smoothed_bpms)
+        if n < min_run * 2:
+            return []
+
+        change_indices: List[int] = []
+        current_bpm = float(np.median(smoothed_bpms[:min_run]))
+        run_start: Optional[int] = None
+        for i in range(n):
+            if abs(float(smoothed_bpms[i]) - current_bpm) <= tolerance * current_bpm:
+                run_start = None
+                continue
+            if run_start is None:
+                run_start = i
+            if i - run_start + 1 >= min_run:
+                change_indices.append(run_start)
+                current_bpm = float(np.median(smoothed_bpms[run_start : i + 1]))
+                run_start = None
+
+        if not change_indices:
+            return []
+
+        boundaries = [0] + change_indices + [n]
+        segment_bpms = [
+            float(np.median(smoothed_bpms[boundaries[k] : boundaries[k + 1]]))
+            for k in range(len(boundaries) - 1)
+        ]
+        tempo_map: List[Tuple[float, float]] = [(0.0, segment_bpms[0])]
+        for k, change_idx in enumerate(change_indices):
+            new_bpm = segment_bpms[k + 1]
+            last_bpm = tempo_map[-1][1]
+            if abs(new_bpm - last_bpm) <= tolerance * last_bpm:
+                continue  # 段间差异不显著，视为恒速抖动
+            # 变化点记为新段第一个区间的起始拍时刻
+            tempo_map.append((float(interval_end_times[change_idx - 1]), new_bpm))
+        return tempo_map if len(tempo_map) >= 2 else []

@@ -41,7 +41,6 @@ from src.core.muscriptor_result_assets import (
     prepare_midi_preview_assets,
     read_midi_roll_notes,
 )
-from src.gui.theme import DARK_FILE_DIALOG_OPTIONS
 from src.i18n.translator import get_translator, t
 from src.models.data_models import ProcessingResult
 from src.models.gm_instruments import get_instrument_name
@@ -829,7 +828,15 @@ class MuscriptorResultWidget(QFrame):
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
         controls.addWidget(self.clock_label)
-        controls.addStretch()
+        # 检测到的 BPM 显示（检出后由主窗口推入，未检出时隐藏）
+        self.bpm_label = QLabel()
+        self.bpm_label.setStyleSheet(
+            "font-family: Consolas; color: #c8d3e6; background: #16213e; "
+            "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
+        )
+        self.bpm_label.hide()
+        controls.addWidget(self.bpm_label)
+        controls.addStretch(1)
         self.original_label = QLabel()
         controls.addWidget(self.original_label)
         self.mix_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1495,6 +1502,14 @@ class MuscriptorResultWidget(QFrame):
             self.playing_changed.emit(True)
         self._update_play_label()
 
+    def set_detected_bpm(self, bpm_text: str) -> None:
+        """显示检测到的 BPM（恒速单值或变速范围），由主窗口在检出后推入。"""
+        text = (bpm_text or "").strip()
+        if not text:
+            return
+        self.bpm_label.setText(f"BPM {text}")
+        self.bpm_label.show()
+
     def pause(self) -> None:
         """Pause this workbench without changing its current play position."""
         was_playing = self._playing
@@ -1788,7 +1803,6 @@ class MuscriptorResultWidget(QFrame):
             t("muscriptor_result.download"),
             str(source.name),
             filter_text,
-            options=DARK_FILE_DIALOG_OPTIONS,
         )
         if destination:
             shutil.copy2(source, destination)

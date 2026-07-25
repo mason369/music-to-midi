@@ -44,7 +44,6 @@ from src.core.manual_midi import (
     YOURMT3_MANUAL_MODELS,
 )
 from src.gui.layouts import FlowLayout
-from src.gui.theme import DARK_DIRECTORY_DIALOG_OPTIONS, DARK_FILE_DIALOG_OPTIONS
 from src.gui.widgets.audio_waveform import (
     FfmpegWaveformLoader,
     TimelineRuler,
@@ -1185,7 +1184,6 @@ class AudioTrackMixerWidget(QWidget):
                 ),
                 source.name,
                 f"{audio_format} (*{suffix})" if suffix else "Audio Files (*)",
-                options=DARK_FILE_DIALOG_OPTIONS,
             )
             if not destination:
                 return
@@ -1221,7 +1219,6 @@ class AudioTrackMixerWidget(QWidget):
                 self,
                 t("dialogs.complete.audio_tracks.export.save_all_title"),
                 default_directory,
-                options=DARK_DIRECTORY_DIALOG_OPTIONS,
             )
             if not destination:
                 return
@@ -1697,7 +1694,6 @@ class AudioTrackMixerWidget(QWidget):
             t("dialogs.complete.audio_tracks.add_track"),
             "",
             t("dialogs.complete.audio_tracks.file_filter", formats=formats),
-            options=DARK_FILE_DIALOG_OPTIONS,
         )
         if not paths:
             return

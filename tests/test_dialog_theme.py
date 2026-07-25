@@ -9,10 +9,6 @@ from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.gui.main_window import MainWindow
-from src.gui.theme import (
-    DARK_DIRECTORY_DIALOG_OPTIONS,
-    DARK_FILE_DIALOG_OPTIONS,
-)
 from src.models.data_models import Config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -46,18 +42,15 @@ def test_about_dialog_uses_the_application_dark_surface():
         app.processEvents()
 
 
-def test_file_dialog_palette_and_options_are_project_dark_theme():
+def test_file_dialog_defaults_to_native_with_project_palette():
     app = _app()
     with mock.patch.object(MainWindow, "_start_gpu_detection", return_value=None):
         window = MainWindow(Config(language="en_US"))
     dialog = QFileDialog(window)
     try:
-        dialog.setOptions(DARK_FILE_DIALOG_OPTIONS)
-        assert dialog.testOption(QFileDialog.Option.DontUseNativeDialog)
+        assert not dialog.testOption(QFileDialog.Option.DontUseNativeDialog)
         assert dialog.palette().color(QPalette.ColorRole.Window).name() == "#1a1a2e"
         assert app.palette().color(QPalette.ColorRole.Base).name() == "#16213e"
-        assert DARK_DIRECTORY_DIALOG_OPTIONS & QFileDialog.Option.ShowDirsOnly
-        assert DARK_DIRECTORY_DIALOG_OPTIONS & QFileDialog.Option.DontUseNativeDialog
         assert "QFileDialog" in app.styleSheet()
     finally:
         dialog.close()
@@ -65,7 +58,7 @@ def test_file_dialog_palette_and_options_are_project_dark_theme():
         app.processEvents()
 
 
-def test_every_desktop_static_file_dialog_explicitly_disables_native_skin():
+def test_every_desktop_static_file_dialog_uses_the_native_system_dialog():
     paths = (
         REPO_ROOT / "src/gui/main_window.py",
         REPO_ROOT / "src/gui/widgets/dropzone.py",
@@ -88,6 +81,9 @@ def test_every_desktop_static_file_dialog_explicitly_disables_native_skin():
 
     assert len(calls) == 7
     for path, call in calls:
-        assert any(
-            keyword.arg == "options" for keyword in call.keywords
-        ), f"{path}:{call.lineno} does not opt into the project-themed file dialog"
+        for keyword in call.keywords:
+            if keyword.arg != "options":
+                continue
+            assert "DontUseNativeDialog" not in ast.unparse(keyword.value), (
+                f"{path}:{call.lineno} must use the native system file dialog"
+            )

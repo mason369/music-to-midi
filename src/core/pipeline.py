@@ -17,7 +17,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from src.core.aria_amt_transcriber import ARIA_AMT_SOURCE_REQUIREMENT, AriaAmtTranscriber
 from src.core.beat_detector import BeatDetector
@@ -150,7 +150,15 @@ class MusicToMidiPipeline:
             self.transkun_v2_aug_transcriber.cancel()
         logger.info("已请求取消；等待活动后端安全停止")
 
-    def _report(self, stage: ProcessingStage, sp: float, op: float, msg: str) -> None:
+    def _report(
+        self,
+        stage: ProcessingStage,
+        sp: float,
+        op: float,
+        msg: str,
+        *,
+        bpm_display: Optional[str] = None,
+    ) -> None:
         logger.info(
             "Progress | stage=%s %.0f%% | overall=%.0f%% | %s",
             stage.value,
@@ -160,8 +168,27 @@ class MusicToMidiPipeline:
         )
         if self._progress_callback:
             self._progress_callback(
-                ProcessingProgress(stage=stage, stage_progress=sp, overall_progress=op, message=msg)
+                ProcessingProgress(
+                    stage=stage,
+                    stage_progress=sp,
+                    overall_progress=op,
+                    message=msg,
+                    bpm_display=bpm_display,
+                )
             )
+
+    def _report_detected_bpm(self, beat_info: BeatInfo, sp: float, op: float) -> None:
+        """上报检测 BPM；变速歌曲显示范围并带变速标注。"""
+        bpm_text = beat_info.bpm_display
+        if beat_info.is_variable_tempo:
+            bpm_text += f" ({self._pt('dialogs.complete.bpm_variable')})"
+        self._report(
+            ProcessingStage.PREPROCESSING,
+            sp,
+            op,
+            f"BPM: {bpm_text}",
+            bpm_display=bpm_text,
+        )
 
     def _check_cancelled(self) -> None:
         if self._cancelled:
@@ -435,15 +462,23 @@ class MusicToMidiPipeline:
         tempo_bpm: float,
         *,
         force: bool = False,
+        tempo_map: Optional[List[Tuple[float, float]]] = None,
     ) -> str:
         """Add detected tempo without applying any note-level post-processing.
 
         YourMT3 and MIROS encode absolute seconds against the implicit Standard
         MIDI default tempo (120 BPM) but do not emit a ``set_tempo`` message.
+        MuScriptor and the piano backends (e.g. TransKun ``writeMidi``) do emit
+        a ``set_tempo``, but it is a fixed placeholder (120 BPM) rather than a
+        detected value, so product paths pass ``force=True`` to replace it.
         Match the authorized TelkNet dev contract by inserting the detected tempo
         and recomputing delta ticks from absolute seconds.  Pitch, program,
         velocity, controller, pitch-wheel, and note messages are copied unchanged.
+
+        ``tempo_map`` 为 [(秒, BPM), ...] 变速点（首点 0 秒）时按分段写入多个
+        ``set_tempo``；为空或单点时写入单一 tempo（原行为）。
         """
+        from bisect import bisect_right
         from math import isfinite
 
         from mido import MetaMessage, MidiFile, MidiTrack, bpm2tempo, second2tick, tick2second
@@ -461,39 +496,98 @@ class MusicToMidiPipeline:
         bpm = float(tempo_bpm)
         if not isfinite(bpm) or bpm <= 0.0:
             raise RuntimeError(f"检测到无效 MIDI 速度: {tempo_bpm!r}")
-        target_tempo = bpm2tempo(bpm)
-        output = MidiFile(type=source.type, ticks_per_beat=source.ticks_per_beat)
 
-        for track_index, source_track in enumerate(source.tracks):
-            target_track = MidiTrack()
-            if track_index == 0:
-                target_track.append(MetaMessage("set_tempo", tempo=target_tempo, time=0))
-
-            source_tempo = 500_000
-            absolute_seconds = 0.0
-            previous_target_tick = 0
-            for message in source_track:
-                if message.time:
-                    absolute_seconds += tick2second(
-                        message.time,
-                        source.ticks_per_beat,
-                        source_tempo,
-                    )
-                if message.is_meta and message.type == "set_tempo":
-                    source_tempo = message.tempo
+        # 规整变速点：按时间升序、首点 0 秒、BPM 有效、相邻同值合并
+        sections: List[Tuple[float, float]] = []
+        if tempo_map:
+            for sec, sec_bpm in sorted((float(t), float(b)) for t, b in tempo_map):
+                if not isfinite(sec_bpm) or sec_bpm <= 0.0:
+                    raise RuntimeError(f"检测到无效 MIDI 速度: {sec_bpm!r}")
+                sec = max(0.0, sec)
+                if sections and abs(sec_bpm - sections[-1][1]) < 1e-9:
                     continue
+                sections.append((sec, sec_bpm))
+        if not sections:
+            sections = [(0.0, bpm)]
+        if sections[0][0] > 0.0:
+            sections.insert(0, (0.0, sections[0][1]))
 
-                target_tick = int(
-                    round(
-                        second2tick(
-                            absolute_seconds,
-                            output.ticks_per_beat,
-                            target_tempo,
-                        )
-                    )
+        ticks_per_beat = source.ticks_per_beat
+
+        # 源端全局 tempo 事件：type 1 文件所有轨共享同一时间线，非 conductor
+        # 轨继承全局 tempo，绝不能每轨独立从 120 BPM 起算。
+        source_tempo_events: List[Tuple[int, int]] = []
+        for source_track in source.tracks:
+            track_tick = 0
+            for message in source_track:
+                track_tick += message.time
+                if message.is_meta and message.type == "set_tempo":
+                    source_tempo_events.append((track_tick, message.tempo))
+        source_tempo_events.sort()
+        # (tick, 该 tick 处的累计秒, tempo)；默认 120 BPM 的隐式全局 tempo
+        source_sections: List[Tuple[int, float, int]] = [(0, 0.0, 500_000)]
+        for event_tick, event_tempo in source_tempo_events:
+            prev_tick, prev_sec, prev_tempo = source_sections[-1]
+            if event_tempo == prev_tempo:
+                continue  # 多轨冗余同值
+            source_sections.append(
+                (
+                    event_tick,
+                    prev_sec + tick2second(event_tick - prev_tick, ticks_per_beat, prev_tempo),
+                    event_tempo,
                 )
-                if target_tick < previous_target_tick:
-                    raise RuntimeError("MIDI tempo normalization produced non-monotonic ticks")
+            )
+        source_section_ticks = [start_tick for start_tick, _, _ in source_sections]
+
+        def source_tick_to_seconds(tick: int) -> float:
+            index = bisect_right(source_section_ticks, tick) - 1
+            start_tick, start_sec, tempo_us = source_sections[index]
+            return start_sec + tick2second(tick - start_tick, ticks_per_beat, tempo_us)
+
+        # 预计算各段起点在目标时间轴上的累计 tick 与该段 tempo（微秒/拍）
+        section_starts: List[Tuple[float, int, int]] = []
+        tick_cursor = 0
+        previous_sec = 0.0
+        previous_tempo = bpm2tempo(sections[0][1])
+        for sec, sec_bpm in sections:
+            tempo_us = bpm2tempo(sec_bpm)
+            tick_cursor += int(
+                round(second2tick(sec - previous_sec, ticks_per_beat, previous_tempo))
+            )
+            section_starts.append((sec, tick_cursor, tempo_us))
+            previous_sec, previous_tempo = sec, tempo_us
+        section_secs = [start_sec for start_sec, _, _ in section_starts]
+
+        def seconds_to_target_tick(seconds: float) -> int:
+            index = bisect_right(section_secs, seconds) - 1
+            start_sec, start_tick, tempo_us = section_starts[index]
+            return int(
+                round(start_tick + second2tick(seconds - start_sec, ticks_per_beat, tempo_us))
+            )
+
+        output = MidiFile(type=source.type, ticks_per_beat=ticks_per_beat)
+        for track_index, source_track in enumerate(source.tracks):
+            absolute_tick = 0
+            # (tick, 排序键, message)；同 tick 时 set_tempo 先于其他消息
+            events: List[Tuple[int, int, object]] = []
+            for message in source_track:
+                absolute_tick += message.time
+                if message.is_meta and message.type == "set_tempo":
+                    continue
+                absolute_seconds = source_tick_to_seconds(absolute_tick)
+                events.append(
+                    (seconds_to_target_tick(absolute_seconds), 1, message.copy(time=0))
+                )
+            if track_index == 0:
+                for _sec, start_tick, tempo_us in section_starts:
+                    events.append(
+                        (start_tick, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0))
+                    )
+            events.sort(key=lambda event: (event[0], event[1]))
+
+            target_track = MidiTrack()
+            previous_target_tick = 0
+            for target_tick, _order, message in events:
                 target_track.append(message.copy(time=target_tick - previous_target_tick))
                 previous_target_tick = target_tick
             output.tracks.append(target_track)
@@ -638,12 +732,7 @@ class MusicToMidiPipeline:
         self._check_cancelled()
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
-        self._report(
-            ProcessingStage.PREPROCESSING,
-            1.0,
-            0.05,
-            f"BPM: {tempo:.1f}",
-        )
+        self._report_detected_bpm(beat_info, 1.0, 0.05)
 
         self._report(
             ProcessingStage.SEPARATION, 0.0, 0.05, self._pt("progress.six_stem_separating")
@@ -734,6 +823,8 @@ class MusicToMidiPipeline:
                     stem_midi_paths[stem_name] = self._normalize_midi_tempo_metadata(
                         stem_midi_paths[stem_name],
                         tempo,
+                        force=True,
+                        tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                     )
                 except InterruptedError:
                     raise
@@ -847,7 +938,7 @@ class MusicToMidiPipeline:
         beat_info = self._detect_beat_or_raise(audio_path, progress_callback=_beat_cb)
         tempo = beat_info.bpm
 
-        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.10, f"BPM: {tempo:.1f}")
+        self._report_detected_bpm(beat_info, 1.0, 0.10)
         self._check_cancelled()
 
         self._report(
@@ -866,6 +957,10 @@ class MusicToMidiPipeline:
             output_path=midi_path,
             progress_callback=_piano_cb,
         )
+        # 钢琴后端 writer 只写入占位 tempo（如 TransKun 固定 120 BPM），自身不做
+        # BPM 检测；必须用检测到的歌曲 BPM 强制替换。归一化按绝对秒重编码 ticks，
+        # 音符时间与 CC64 踏板等消息保持不变。
+        midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
 
         self._check_cancelled()
         self._report(
@@ -986,7 +1081,7 @@ class MusicToMidiPipeline:
         )
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
-        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
+        self._report_detected_bpm(beat_info, 1.0, 0.1)
         self._check_cancelled()
         self._report(
             ProcessingStage.TRANSCRIPTION,
@@ -1006,7 +1101,7 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_yourmt3_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo)
+            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
         except InterruptedError:
             raise
         except Exception as e:
@@ -1054,7 +1149,7 @@ class MusicToMidiPipeline:
         )
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
-        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
+        self._report_detected_bpm(beat_info, 1.0, 0.1)
         self._check_cancelled()
         self._report(
             ProcessingStage.TRANSCRIPTION,
@@ -1074,7 +1169,7 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_miros_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo)
+            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
         except InterruptedError:
             raise
         except Exception as e:
@@ -1128,7 +1223,7 @@ class MusicToMidiPipeline:
         )
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
-        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.1, f"BPM: {tempo:.1f}")
+        self._report_detected_bpm(beat_info, 1.0, 0.1)
         self._check_cancelled()
         self._report(
             ProcessingStage.TRANSCRIPTION,
@@ -1147,7 +1242,7 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_muscriptor_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo)
+            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
             # Tempo normalization cannot add notes, but the published result is
             # checked again so the user-visible artifact itself is the proof.
             validate_muscriptor_midi_constraint(midi_path, selected)
@@ -1233,7 +1328,7 @@ class MusicToMidiPipeline:
         self._check_cancelled()
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
-        self._report(ProcessingStage.PREPROCESSING, 1.0, 0.05, f"BPM: {tempo:.1f}")
+        self._report_detected_bpm(beat_info, 1.0, 0.05)
 
         # ── 阶段2：Leap XE + PolarFormer 人声/伴奏分离 (5-35%) ──
         self._report(
@@ -1327,6 +1422,8 @@ class MusicToMidiPipeline:
             accompaniment_midi_path = self._normalize_midi_tempo_metadata(
                 accompaniment_midi_path,
                 tempo,
+                force=True,
+                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
             )
         except InterruptedError:
             self._cleanup_multi_instrument_backend()
@@ -1368,6 +1465,8 @@ class MusicToMidiPipeline:
             vocal_midi_path = self._normalize_midi_tempo_metadata(
                 vocal_midi_path,
                 tempo,
+                force=True,
+                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
             )
         except InterruptedError:
             raise

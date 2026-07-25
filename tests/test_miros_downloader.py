@@ -43,8 +43,29 @@ def _write_source(repo: Path, *, patched: bool) -> None:
         if patched
         else download_miros_model.MIROS_INFERENCE_BATCH_OLD
     )
+    device_line = (
+        download_miros_model.MIROS_DEVICE_NEW if patched else download_miros_model.MIROS_DEVICE_OLD
+    )
+    model_return = (
+        download_miros_model.MIROS_MODEL_RETURN_NEW
+        if patched
+        else download_miros_model.MIROS_MODEL_RETURN_OLD
+    )
+    precision_helpers = download_miros_model.MIROS_PRECISION_HELPERS if patched else ""
     (repo / "transcribe.py").write_text(
-        "\n".join((audio_segments, inference_context, inference_batch, "")),
+        "\n".join(
+            (
+                download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR,
+                precision_helpers,
+                device_line,
+                model_return,
+                device_line,
+                audio_segments,
+                inference_context,
+                inference_batch,
+                "",
+            )
+        ),
         encoding="utf-8",
     )
 
@@ -86,6 +107,18 @@ def _write_source(repo: Path, *, patched: bool) -> None:
                 "",
             ]
         ),
+        encoding="utf-8",
+    )
+
+    musicfm = repo / download_miros_model.MIROS_MUSICFM_REL_PATH
+    musicfm.parent.mkdir(parents=True, exist_ok=True)
+    musicfm.write_text(
+        (
+            download_miros_model.MIROS_MUSICFM_PRECISION_NEW
+            if patched
+            else download_miros_model.MIROS_MUSICFM_PRECISION_OLD
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -145,9 +178,7 @@ class MirosDownloaderTests(unittest.TestCase):
     def test_runtime_source_uses_bounded_inference_memory_contract(self):
         repo = Path(__file__).resolve().parents[1] / "external" / "ai4m-miros"
         if not (repo / "transcribe.py").is_file():
-            self.skipTest(
-                "external/ai4m-miros checkout is not present in this environment"
-            )
+            self.skipTest("external/ai4m-miros checkout is not present in this environment")
         transcribe_text = (repo / "transcribe.py").read_text(encoding="utf-8")
 
         self.assertIn(
@@ -158,10 +189,16 @@ class MirosDownloaderTests(unittest.TestCase):
             download_miros_model.MIROS_INFERENCE_CONTEXT_NEW,
             transcribe_text,
         )
+        self.assertIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
+        self.assertEqual(2, transcribe_text.count(download_miros_model.MIROS_DEVICE_NEW))
         self.assertIn(
             download_miros_model.MIROS_INFERENCE_BATCH_NEW,
             transcribe_text,
         )
+        musicfm_text = (repo / download_miros_model.MIROS_MUSICFM_REL_PATH).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(download_miros_model.MIROS_MUSICFM_PRECISION_NEW, musicfm_text)
         self.assertEqual(
             miros_runtime.MIROS_PATCHED_SOURCE_SHA256,
             miros_runtime.compute_miros_source_tree_sha256(repo),
@@ -174,6 +211,10 @@ class MirosDownloaderTests(unittest.TestCase):
             (repo / "transcribe.py").write_text(
                 "\n".join(
                     (
+                        download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR,
+                        download_miros_model.MIROS_DEVICE_OLD,
+                        download_miros_model.MIROS_MODEL_RETURN_OLD,
+                        download_miros_model.MIROS_DEVICE_OLD,
                         download_miros_model.MIROS_AUDIO_SEGMENTS_GPU_BLOCK,
                         download_miros_model.MIROS_INFERENCE_CONTEXT_OLD,
                         download_miros_model.MIROS_INFERENCE_BATCH_OLD,
@@ -200,6 +241,8 @@ class MirosDownloaderTests(unittest.TestCase):
                 download_miros_model.MIROS_INFERENCE_BATCH_NEW,
                 transcribe_text,
             )
+            self.assertIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
+            self.assertEqual(2, transcribe_text.count(download_miros_model.MIROS_DEVICE_NEW))
 
     def test_source_patcher_allows_only_deterministic_decmod_and_rope_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,6 +266,7 @@ class MirosDownloaderTests(unittest.TestCase):
                 download_miros_model.MIROS_INFERENCE_CONTEXT_NEW,
                 transcribe_text,
             )
+            self.assertIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
             self.assertIn(
                 download_miros_model.MIROS_INFERENCE_BATCH_NEW,
                 transcribe_text,

@@ -898,17 +898,30 @@ jobs:
 
           ### ${TAG} 主要更新
 
+          #### MIDI 速度（BPM）识别与写入修复
+          - 修复全部七种模式输出 MIDI 的速度元数据：此前 TransKun 等钢琴后端与 MuScriptor 的官方 writer 会在文件中留下固定 120 BPM 占位 tempo，导入 DAW 后节拍网格与原曲不符；现统一以检测 BPM 按绝对秒重写，音符、力度与 CC64 踏板消息保持不变。
+          - 新增拍间隔中位数倍频校正：tempogram 投票结果与 beat_track 跟拍的逐拍间隔中位数呈严格 2x/0.5x 关系时以跟拍实测为准，修复半频误检（例如 78.3→161.5、46.1→92.3）。
+          - 变速 tempo map（默认关闭，\`enable_tempo_map=True\` 时启用）：beat 引擎逐拍间隔捕捉约 ±3% 段落级速度流动，frame 引擎逐帧 tempo 兜底突变型变速，经高置信门控后写入多个 set_tempo；恒速或低置信时保持单一 tempo。
+          - 处理中与完成摘要统一显示检测 BPM（变速时显示范围与"变速"标注）。
+
+          #### 推理精度策略
+          - 新增按模型家族的推理精度策略：模型参数始终保持 FP32，YourMT3/PolarFormer 全程 FP32，MuScriptor/Leap XE 使用 FP16 autocast，Aria-AMT/MIROS 优先原生 BF16。
+          - 以真实矩阵乘法探测替代 GPU 名称白名单；TF32 与 reduced-precision reduction 显式禁用，精度计划在日志中逐项记录。
+
+          #### 音轨工作台与播放体验
+          - 转写工作台新增可拖动、可点击跳转的播放进度条：拖动实时预览位置，松手或点击即跳转播放。
+          - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
+          - 播放头连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时退出自动跟随。
+
           #### 新增 MuScriptor Large 多乐器转写
+
+          ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/master/docs/MuScriptor_vs_YourMT3.png)
+          *MuScriptor Large 与 YourMT3+ 多乐器转写效果对比*
+
           - 在完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换中，新增 MuScriptor Large 多乐器后端。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI，不会显示尚不可播放的未来片段。
           - 内置 MuseScore General SoundFont 与 FluidSynth，提供真实 MIDI 试听、原音/MIDI 混合、立体声、逐乐器静音/独奏，以及 MIDI、合成 WAV 和立体声结果下载。
-
-          #### 音轨工作台与播放体验
-          - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
-          - 修复连续分片生成/播放后的卡死、只有原声没有 MIDI 声、播放结束后重新循环、异常长音状态残留，以及切换歌曲时的线程与资源释放问题。
-          - 播放头改为连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时会退出自动跟随。
-          - 优化长音频波形和密集 MIDI 的缓存、增量更新与绘制路径，避免推理、音频合成和界面刷新互相阻塞。
 
           #### 平台、文档与发布
           - 桌面版、Hugging Face Space 和 Colab 同步七种处理模式、MuScriptor 乐器约束、逐轨转换入口和中英文文案。

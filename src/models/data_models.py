@@ -256,6 +256,20 @@ class BeatInfo:
     beat_times: List[float] = field(default_factory=list)  # 所有节拍时间
     downbeats: Optional[List[float]] = None  # 重拍时间
     time_signature: Tuple[int, int] = (4, 4)  # 拍号（分子/分母）
+    # 变速点列表 [(秒, BPM), ...]，按时间升序且首点为 0 秒；空或单点表示恒速
+    tempo_map: List[Tuple[float, float]] = field(default_factory=list)
+
+    @property
+    def is_variable_tempo(self) -> bool:
+        return len(self.tempo_map) >= 2
+
+    @property
+    def bpm_display(self) -> str:
+        """恒速显示单一 BPM，变速显示最小-最大范围。"""
+        if self.is_variable_tempo:
+            bpms = [bpm for _, bpm in self.tempo_map]
+            return f"{min(bpms):.1f}–{max(bpms):.1f}"
+        return f"{self.bpm:.1f}"
 
 
 @dataclass
@@ -442,6 +456,7 @@ class ProcessingProgress:
     stage_progress: float  # 当前阶段进度 (0-1)
     overall_progress: float  # 总体进度 (0-1)
     message: str  # 状态消息
+    bpm_display: Optional[str] = None  # 节拍检测完成后的 BPM 显示文本
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -449,6 +464,7 @@ class ProcessingProgress:
             "stage_progress": self.stage_progress,
             "overall_progress": self.overall_progress,
             "message": self.message,
+            "bpm_display": self.bpm_display,
         }
 
 
@@ -490,6 +506,9 @@ class Config:
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
+    # 变速 tempo map（默认关闭）：开启后高置信变速会写入多个 set_tempo，
+    # 关闭时输出始终以全局检测 BPM 为准的单一 tempo
+    enable_tempo_map: bool = False
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
@@ -621,6 +640,7 @@ class Config:
             "multi_instrument_model": self.multi_instrument_model,
             "transcription_backend": self.transcription_backend,
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
+            "enable_tempo_map": self.enable_tempo_map,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,

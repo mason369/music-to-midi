@@ -1281,7 +1281,12 @@ def _convert_impl(
             logger.error("Unable to clear GPU memory after direct conversion: %s", cleanup_exc)
 
     device_label = get_device_label()
-    bpm_str = f"{result.beat_info.bpm:.1f}" if result.beat_info else "N/A"
+    if result.beat_info:
+        bpm_str = result.beat_info.bpm_display
+        if result.beat_info.is_variable_tempo:
+            bpm_str += f" ({st('dialogs.complete.bpm_variable')})"
+    else:
+        bpm_str = "N/A"
     status_lines = [
         st("space.status.complete_header"),
         f"{st('space.status.elapsed')}: {result.processing_time:.1f} {st('space.status.seconds')}",

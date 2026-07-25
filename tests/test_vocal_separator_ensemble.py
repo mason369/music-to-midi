@@ -18,6 +18,29 @@ from src.i18n.translator import Translator
 
 
 class VocalSeparatorTwoLegTests(unittest.TestCase):
+    def test_polarformer_cuda_provider_disables_tf32_for_strict_fp32(self):
+        fake_ort = SimpleNamespace(
+            get_available_providers=lambda: [
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider",
+            ]
+        )
+
+        providers = vocal_separator._resolve_onnx_providers("cuda:1", fake_ort)
+
+        self.assertEqual(
+            providers,
+            [
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "device_id": 1,
+                        "use_tf32": 0,
+                    },
+                )
+            ],
+        )
+
     def test_model_available_requires_leap_and_polarformer_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
@@ -138,6 +161,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         events = []
 
         class BlockingModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.precision_contract_weight = torch.nn.Parameter(torch.ones(1))
+
             def forward(self, _batch):
                 events.append(("forward", ""))
                 raise StopAfterFirstBatch
@@ -225,11 +252,19 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
 
             @staticmethod
             def get_inputs():
-                return [SimpleNamespace(name="stft_features")]
+                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
+
+            @staticmethod
+            def get_outputs():
+                return [SimpleNamespace(name="mask", type="tensor(float)")]
 
             @staticmethod
             def get_providers():
                 return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+            @staticmethod
+            def get_provider_options():
+                return {"CUDAExecutionProvider": {"use_tf32": "0"}}
 
             @staticmethod
             def run(_outputs, _feed, run_options=None):
@@ -255,7 +290,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             patch("src.core.vocal_separator._load_stereo_audio", return_value=audio),
             patch(
                 "src.core.vocal_separator._resolve_onnx_providers",
-                return_value=[("CUDAExecutionProvider", {"device_id": 0})],
+                return_value=[("CUDAExecutionProvider", {"device_id": 0, "use_tf32": 0})],
             ),
             patch.dict("sys.modules", {"onnxruntime": fake_ort}),
             patch(
@@ -405,7 +440,11 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
 
             @staticmethod
             def get_inputs():
-                return [SimpleNamespace(name="stft_features")]
+                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
+
+            @staticmethod
+            def get_outputs():
+                return [SimpleNamespace(name="mask", type="tensor(float)")]
 
             @staticmethod
             def get_providers():
@@ -505,7 +544,11 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
 
             @staticmethod
             def get_inputs():
-                return [SimpleNamespace(name="stft_features")]
+                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
+
+            @staticmethod
+            def get_outputs():
+                return [SimpleNamespace(name="mask", type="tensor(float)")]
 
             @staticmethod
             def get_providers():
@@ -603,6 +646,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         progress_messages = []
 
         class IdentitySeparator(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.precision_contract_weight = torch.nn.Parameter(torch.ones(1))
+
             def forward(self, batch):
                 observed_batch_sizes.append(batch.shape[0])
                 # audio-separator BSRoformer squeezes the stem axis when num_stems == 1.

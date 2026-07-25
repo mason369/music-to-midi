@@ -207,6 +207,70 @@ def _install_fake_event_module(monkeypatch):
     return ProgressEvent, NoteStartEvent, NoteEndEvent
 
 
+def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import torch
+
+    inner_model = torch.nn.Linear(4, 4)
+    inner_model.autocast = types.SimpleNamespace(
+        enabled=True,
+        dtype=torch.float16,
+    )
+    loaded_model = types.SimpleNamespace(_model=inner_model)
+    captured = {}
+
+    class FakeTranscriptionModel:
+        @classmethod
+        def load_model(cls, *, weights_path, device):
+            captured["weights_path"] = Path(weights_path)
+            captured["device"] = device
+            return loaded_model
+
+    fake_package = types.ModuleType("muscriptor")
+    fake_package.TranscriptionModel = FakeTranscriptionModel
+    weights = tmp_path / "model.safetensors"
+    weights.write_bytes(b"weights")
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    precision_plan = types.SimpleNamespace(
+        autocast=True,
+        compute_dtype="float16",
+        torch_dtype=lambda _torch_module: torch.float16,
+    )
+
+    monkeypatch.setitem(sys.modules, "muscriptor", fake_package)
+    monkeypatch.setattr(
+        MuscriptorTranscriber,
+        "_runtime_unavailable_reason",
+        staticmethod(lambda: ""),
+    )
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.get_cached_muscriptor_paths",
+        lambda **_kwargs: (weights, config_path),
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.select_inference_precision",
+        lambda *_args, **_kwargs: precision_plan,
+    )
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.configure_torch_precision",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.log_precision_plan",
+        lambda *_args, **_kwargs: None,
+    )
+
+    transcriber = MuscriptorTranscriber(Config(use_gpu=True, gpu_device=0))
+
+    assert transcriber.load_model() is loaded_model
+    assert captured == {"weights_path": weights, "device": "cuda:0"}
+    assert {parameter.dtype for parameter in inner_model.parameters()} == {torch.float32}
+
+
 def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
     tmp_path: Path, monkeypatch
 ):

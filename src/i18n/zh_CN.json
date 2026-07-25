@@ -220,6 +220,7 @@
       "track_count": "轨道数",
       "note_count": "音符数",
       "bpm": "BPM",
+      "bpm_variable": "变速",
       "device": "设备",
       "seconds_suffix": "秒",
       "accompaniment_midi": "伴奏MIDI",

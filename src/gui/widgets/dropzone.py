@@ -6,7 +6,6 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QFileDialog, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
-from src.gui.theme import DARK_FILE_DIALOG_OPTIONS
 from src.i18n.translator import t
 from src.utils.audio_utils import get_supported_formats, is_supported_format
 
@@ -173,7 +172,6 @@ class DropZoneWidget(QWidget):
             t("dialogs.openFile.title"),
             "",
             filter_str,
-            options=DARK_FILE_DIALOG_OPTIONS,
         )
 
         if file_path:

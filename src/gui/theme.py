@@ -1,14 +1,13 @@
-"""Application-wide desktop colors and themed dialog options."""
+"""Application-wide desktop colors and themed dialog styling.
+
+File dialogs intentionally use the native operating system dialogs; no
+DontUseNativeDialog option is applied anywhere in the desktop app.
+"""
 
 from __future__ import annotations
 
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication, QFileDialog
-
-DARK_FILE_DIALOG_OPTIONS = QFileDialog.Option.DontUseNativeDialog
-DARK_DIRECTORY_DIALOG_OPTIONS = (
-    QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ShowDirsOnly
-)
+from PyQt6.QtWidgets import QApplication
 
 _DIALOG_THEME_MARKER = "/* music-to-midi-dark-dialog-theme */"
 _DIALOG_STYLESHEET = f"""
@@ -175,7 +174,5 @@ def apply_dark_application_theme(application: QApplication) -> None:
 
 
 __all__ = [
-    "DARK_DIRECTORY_DIALOG_OPTIONS",
-    "DARK_FILE_DIALOG_OPTIONS",
     "apply_dark_application_theme",
 ]

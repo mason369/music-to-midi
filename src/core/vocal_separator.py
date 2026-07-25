@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -24,6 +25,14 @@ from src.utils.gpu_utils import (
     get_device,
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
+)
+from src.utils.inference_precision import (
+    LEAP_XE,
+    POLARFORMER,
+    configure_torch_precision,
+    log_precision_plan,
+    select_inference_precision,
+    verify_float32_model_parameters,
 )
 from src.utils.runtime_paths import (
     activate_audio_separator_runtime,
@@ -478,7 +487,20 @@ def _run_leap_vocals_leg(
     window[:fade_size] = torch.linspace(0.0, 1.0, fade_size)
     window[-fade_size:] = torch.linspace(1.0, 0.0, fade_size)
     device = _resolve_torch_device(requested_device)
-    use_amp = bool(training_config.get("use_amp", True)) and device.type == "cuda"
+    precision_plan = select_inference_precision(
+        LEAP_XE,
+        str(device),
+        torch_module=torch,
+    )
+    configure_torch_precision(precision_plan, torch_module=torch)
+    log_precision_plan(logger, precision_plan)
+    config_use_amp = bool(training_config.get("use_amp", True))
+    if device.type == "cuda" and precision_plan.autocast and not config_use_amp:
+        raise RuntimeError(
+            "Leap XE verified CUDA precision policy requires FP16 autocast, "
+            "but the pinned model config disables AMP"
+        )
+    use_amp = precision_plan.autocast and config_use_amp
     engine = f"PyTorch · {device} · {'AMP/FP16' if use_amp else 'FP32'} · batch={batch_size}"
     model = None
 
@@ -495,6 +517,11 @@ def _run_leap_vocals_leg(
                 ),
             )
         model = _build_leap_model(model_config, checkpoint_path, device)
+        verify_float32_model_parameters(
+            model,
+            model_name="Leap XE",
+            torch_module=torch,
+        )
         logger.info(
             "Leap XE vocals leg loaded on %s: chunk=%s step=%s chunks=%s batch=%s amp=%s",
             device,
@@ -507,7 +534,16 @@ def _run_leap_vocals_leg(
         batch_data = []
         batch_locations = []
         processed_chunks = 0
-        with torch.inference_mode(), torch.cuda.amp.autocast(enabled=use_amp):
+        autocast_context = (
+            torch.autocast(
+                device_type="cuda",
+                dtype=precision_plan.torch_dtype(torch),
+                enabled=True,
+            )
+            if use_amp
+            else nullcontext()
+        )
+        with torch.inference_mode(), autocast_context:
             for index, start in enumerate(starts):
                 cancel_check()
                 part = mix_tensor[:, start : start + chunk_size].to(device)
@@ -678,7 +714,15 @@ def _resolve_onnx_providers(requested_device: Optional[str], ort_module) -> list
             device_id = int(device_name.split(":", 1)[1]) if ":" in device_name else 0
         except ValueError as exc:
             raise ValueError(f"Invalid CUDA device: {device_name!r}") from exc
-        return [("CUDAExecutionProvider", {"device_id": device_id})]
+        return [
+            (
+                "CUDAExecutionProvider",
+                {
+                    "device_id": device_id,
+                    "use_tf32": 0,
+                },
+            )
+        ]
     raise ValueError(f"Unsupported PolarFormer ONNX device: {device_name!r}")
 
 
@@ -724,6 +768,21 @@ def _run_polarformer_accompaniment_leg(
     step = max(1, chunk_size // num_overlap)
     positions = list(range(0, total_samples, step))
     providers = _resolve_onnx_providers(requested_device, ort)
+    first_provider = providers[0]
+    if isinstance(first_provider, tuple):
+        precision_device = f"cuda:{int(first_provider[1]['device_id'])}"
+    else:
+        precision_device = "cpu"
+
+    import torch
+
+    precision_plan = select_inference_precision(
+        POLARFORMER,
+        precision_device,
+        torch_module=torch,
+    )
+    configure_torch_precision(precision_plan, torch_module=torch)
+    log_precision_plan(logger, precision_plan)
     requested_provider_names = " + ".join(
         str(provider[0] if isinstance(provider, tuple) else provider) for provider in providers
     )
@@ -741,13 +800,32 @@ def _run_polarformer_accompaniment_leg(
         )
     session = ort.InferenceSession(str(onnx_path), providers=providers)
     inputs = session.get_inputs()
-    if len(inputs) != 1 or inputs[0].name != "stft_features":
+    if (
+        len(inputs) != 1
+        or inputs[0].name != "stft_features"
+        or getattr(inputs[0], "type", None) != "tensor(float)"
+    ):
         raise RuntimeError(
-            "Unexpected PolarFormer ONNX input contract: " f"{[item.name for item in inputs]}"
+            "Unexpected PolarFormer ONNX input contract: "
+            f"{[(item.name, getattr(item, 'type', None)) for item in inputs]}"
         )
     actual_engine = f"ONNX Runtime · {' + '.join(session.get_providers())}"
+    outputs = session.get_outputs()
+    if len(outputs) != 1 or getattr(outputs[0], "type", None) != "tensor(float)":
+        raise RuntimeError(
+            "Unexpected PolarFormer ONNX output contract: "
+            f"{[(item.name, getattr(item, 'type', None)) for item in outputs]}"
+        )
+    if precision_device.startswith("cuda"):
+        provider_options = session.get_provider_options().get("CUDAExecutionProvider", {})
+        if str(provider_options.get("use_tf32")) != "0":
+            raise RuntimeError(
+                "PolarFormer CUDAExecutionProvider did not honor strict FP32: "
+                f"use_tf32={provider_options.get('use_tf32')!r}"
+            )
     logger.info(
-        "PolarFormer accompaniment leg loaded with providers=%s chunks=%s",
+        "PolarFormer accompaniment leg loaded with providers=%s chunks=%s "
+        "parameters=float32 compute=float32 tf32=false",
         session.get_providers(),
         len(positions),
     )

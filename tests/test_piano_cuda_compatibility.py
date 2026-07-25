@@ -9,7 +9,6 @@ import src.utils.gpu_utils as gpu_utils
 from src.core.aria_amt_transcriber import AriaAmtTranscriber
 from src.models.data_models import Config
 
-
 NO_KERNEL_IMAGE = "CUDA error: no kernel image is available for execution on the device"
 
 
@@ -30,13 +29,16 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
 
         transcriber = TranskunTranscriber(Config(use_gpu=True))
 
-        with patch(
-            "src.core.transkun_transcriber.get_device",
-            return_value="cuda:0",
-        ), patch(
-            "src.core.transkun_transcriber.ensure_cuda_runtime_compatibility",
-            side_effect=RuntimeError("friendly cuda architecture error"),
-        ) as ensure_compat:
+        with (
+            patch(
+                "src.core.transkun_transcriber.get_device",
+                return_value="cuda:0",
+            ),
+            patch(
+                "src.core.transkun_transcriber.ensure_cuda_runtime_compatibility",
+                side_effect=RuntimeError("friendly cuda architecture error"),
+            ) as ensure_compat,
+        ):
             with self.assertRaisesRegex(RuntimeError, "friendly cuda architecture error"):
                 transcriber._resolve_runtime_device()
 
@@ -47,13 +49,16 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
 
         transcriber = ByteDancePianoTranscriber(Config(use_gpu=True))
 
-        with patch(
-            "src.core.bytedance_piano_transcriber.get_device",
-            return_value="cuda:0",
-        ), patch(
-            "src.core.bytedance_piano_transcriber.ensure_cuda_runtime_compatibility",
-            side_effect=RuntimeError("friendly cuda architecture error"),
-        ) as ensure_compat:
+        with (
+            patch(
+                "src.core.bytedance_piano_transcriber.get_device",
+                return_value="cuda:0",
+            ),
+            patch(
+                "src.core.bytedance_piano_transcriber.ensure_cuda_runtime_compatibility",
+                side_effect=RuntimeError("friendly cuda architecture error"),
+            ) as ensure_compat,
+        ):
             with self.assertRaisesRegex(RuntimeError, "friendly cuda architecture error"):
                 transcriber._resolve_runtime_device()
 
@@ -78,9 +83,7 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_audio = types.ModuleType("amt.audio")
             fake_audio.AudioTransform = Mock()
             fake_config = types.ModuleType("amt.config")
-            fake_config.load_config = lambda: {
-                "audio": {"sample_rate": 16000, "chunk_len": 1}
-            }
+            fake_config.load_config = lambda: {"audio": {"sample_rate": 16000, "chunk_len": 1}}
             fake_inference = types.ModuleType("amt.inference")
             fake_transcribe = types.ModuleType("amt.inference.transcribe")
             fake_transcribe.MAX_BLOCK_LEN = 128
@@ -89,24 +92,28 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_transcribe.LEN_MS = 2000
             fake_inference.transcribe = fake_transcribe
 
-            with patch.dict(
-                sys.modules,
-                {
-                    "torch": fake_torch,
-                    "torch.cuda": fake_cuda,
-                    "amt": fake_amt,
-                    "amt.audio": fake_audio,
-                    "amt.config": fake_config,
-                    "amt.inference": fake_inference,
-                    "amt.inference.transcribe": fake_transcribe,
-                },
-            ), patch(
-                "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
-                side_effect=RuntimeError("friendly cuda architecture error"),
-            ) as ensure_compat, patch.object(
-                transcriber,
-                "_load_aria_model",
-                side_effect=AssertionError("model should not load when CUDA preflight fails"),
+            with (
+                patch.dict(
+                    sys.modules,
+                    {
+                        "torch": fake_torch,
+                        "torch.cuda": fake_cuda,
+                        "amt": fake_amt,
+                        "amt.audio": fake_audio,
+                        "amt.config": fake_config,
+                        "amt.inference": fake_inference,
+                        "amt.inference.transcribe": fake_transcribe,
+                    },
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
+                    side_effect=RuntimeError("friendly cuda architecture error"),
+                ) as ensure_compat,
+                patch.object(
+                    transcriber,
+                    "_load_aria_model",
+                    side_effect=AssertionError("model should not load when CUDA preflight fails"),
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "friendly cuda architecture error") as cm:
                     transcriber._run_transcription_windows_single_file(
@@ -151,9 +158,7 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_audio = types.ModuleType("amt.audio")
             fake_audio.AudioTransform = FakeAudioTransform
             fake_config = types.ModuleType("amt.config")
-            fake_config.load_config = lambda: {
-                "audio": {"sample_rate": 16000, "chunk_len": 1}
-            }
+            fake_config.load_config = lambda: {"audio": {"sample_rate": 16000, "chunk_len": 1}}
             fake_inference = types.ModuleType("amt.inference")
             fake_transcribe = types.ModuleType("amt.inference.transcribe")
             fake_transcribe.MAX_BLOCK_LEN = 128
@@ -166,29 +171,50 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_transcribe._truncate_seq = lambda sequence, *_args: sequence
             fake_transcribe._shift_onset = lambda sequence, _offset: sequence
             fake_inference.transcribe = fake_transcribe
+            precision_plan = types.SimpleNamespace(
+                torch_dtype=lambda _torch_module: fake_torch.float
+            )
 
-            with patch.dict(
-                sys.modules,
-                {
-                    "torch": fake_torch,
-                    "torch.cuda": fake_cuda,
-                    "amt": fake_amt,
-                    "amt.audio": fake_audio,
-                    "amt.config": fake_config,
-                    "amt.inference": fake_inference,
-                    "amt.inference.transcribe": fake_transcribe,
-                },
-            ), patch(
-                "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
-                return_value=None,
-            ), patch.object(
-                transcriber,
-                "_load_aria_model",
-                return_value=(FakeModel(), fake_tokenizer),
-            ), patch.object(
-                AriaAmtTranscriber,
-                "_iter_windows_wav_segments",
-                return_value=[object()],
+            with (
+                patch.dict(
+                    sys.modules,
+                    {
+                        "torch": fake_torch,
+                        "torch.cuda": fake_cuda,
+                        "amt": fake_amt,
+                        "amt.audio": fake_audio,
+                        "amt.config": fake_config,
+                        "amt.inference": fake_inference,
+                        "amt.inference.transcribe": fake_transcribe,
+                    },
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
+                    return_value=None,
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.select_inference_precision",
+                    return_value=precision_plan,
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.configure_torch_precision",
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.log_precision_plan",
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.verify_float32_model_parameters",
+                ),
+                patch.object(
+                    transcriber,
+                    "_load_aria_model",
+                    return_value=(FakeModel(), fake_tokenizer),
+                ),
+                patch.object(
+                    AriaAmtTranscriber,
+                    "_iter_windows_wav_segments",
+                    return_value=[object()],
+                ),
             ):
                 with self.assertRaises(RuntimeError) as cm:
                     transcriber._run_transcription_windows_single_file(

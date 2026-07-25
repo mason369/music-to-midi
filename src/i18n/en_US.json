@@ -220,6 +220,7 @@
       "track_count": "Track Count",
       "note_count": "Note Count",
       "bpm": "BPM",
+      "bpm_variable": "variable",
       "device": "Device",
       "seconds_suffix": "s",
       "accompaniment_midi": "Accompaniment MIDI",
