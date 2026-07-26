@@ -156,14 +156,15 @@ class _ChunkProgressEstimator:
             )
         if self.active and completed > self.completed:
             sample = (anchor_at - self.last_anchor_at) / (completed - self.completed)
-            if sample <= 0:
+            if sample < 0:
                 raise ValueError(f"Invalid MuScriptor chunk duration sample: {sample}")
-            self.ema_chunk_seconds = (
-                sample
-                if self.ema_chunk_seconds is None
-                else _PROGRESS_EMA_ALPHA * sample
-                + (1.0 - _PROGRESS_EMA_ALPHA) * self.ema_chunk_seconds
-            )
+            if sample > 0:
+                self.ema_chunk_seconds = (
+                    sample
+                    if self.ema_chunk_seconds is None
+                    else _PROGRESS_EMA_ALPHA * sample
+                    + (1.0 - _PROGRESS_EMA_ALPHA) * self.ema_chunk_seconds
+                )
         self.total = total
         self.completed = completed
         self.last_anchor_at = anchor_at

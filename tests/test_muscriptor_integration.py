@@ -472,6 +472,32 @@ def test_official_style_chunk_progress_interpolates_and_estimates_eta():
     assert estimator.elapsed_seconds(now=7.0) == pytest.approx(7.0)
 
 
+def test_chunk_progress_accepts_consecutive_anchors_in_same_clock_tick():
+    estimator = _ChunkProgressEstimator(started_at=100.0)
+
+    estimator.on_anchor(22, 42, now=101.0)
+    estimator.on_anchor(23, 42, now=101.0)
+
+    assert estimator.completed == 23
+    assert estimator.total == 42
+    assert estimator.ema_chunk_seconds is None
+    assert estimator.fraction(now=101.0) == pytest.approx(23 / 42)
+    assert estimator.eta_seconds(now=101.0) is None
+
+    estimator.on_anchor(24, 42, now=101.25)
+
+    assert estimator.ema_chunk_seconds == pytest.approx(0.25)
+    assert estimator.eta_seconds(now=101.25) == pytest.approx(4.5)
+
+
+def test_chunk_progress_still_rejects_a_clock_that_moves_backwards():
+    estimator = _ChunkProgressEstimator(started_at=100.0)
+    estimator.on_anchor(22, 42, now=101.0)
+
+    with pytest.raises(ValueError, match="duration sample"):
+        estimator.on_anchor(23, 42, now=100.9)
+
+
 def test_playhead_clock_interpolates_media_samples_and_stops_at_bounded_lead():
     clock = _SmoothPlaybackClock(max_lead_ms=120.0)
     clock.reset(8_300, now=0.0)
@@ -674,6 +700,31 @@ def test_stream_progress_queues_latest_completed_notes_and_exposes_timing(
     finally:
         widget.shutdown()
         widget.close()
+
+
+def test_stream_progress_does_not_crash_when_chunks_finish_in_same_clock_tick(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "same-tick-source.wav", 1.0)
+    module = sys.modules[MuscriptorResultWidget.__module__]
+    monkeypatch.setattr(module.time, "monotonic", lambda: 101.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    monkeypatch.setattr(widget, "_queue_preview", lambda *_args, **_kwargs: None)
+
+    try:
+        widget.add_stream_event({"type": "progress", "completed": 22, "total": 42})
+        widget.add_stream_event({"type": "progress", "completed": 23, "total": 42})
+
+        assert widget._progress_completed == 23
+        assert widget._progress_total == 42
+        assert widget._progress_estimator.ema_chunk_seconds is None
+        assert "23/42" in widget.status_label.text()
+    finally:
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
 
 
 def test_finished_asset_worker_is_detached_before_result_reset(tmp_path: Path, monkeypatch):
