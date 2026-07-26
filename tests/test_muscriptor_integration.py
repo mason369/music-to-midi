@@ -11,6 +11,7 @@ from pathlib import Path
 
 import mido
 import numpy as np
+import pretty_midi
 import pytest
 import soundfile as sf
 
@@ -51,6 +52,7 @@ from src.gui.widgets.muscriptor_result import (
     _ChunkProgressEstimator,
     _PianoRollCanvas,
     _SmoothPlaybackClock,
+    _export_midi_with_bpm,
 )
 from src.i18n.translator import t
 from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
@@ -1853,6 +1855,87 @@ def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
         abs=1e-6,
     )
     app.processEvents()
+
+
+def test_midi_download_aligns_note_onsets_without_changing_note_durations(
+    tmp_path: Path,
+):
+    source_midi = tmp_path / "unaligned-source.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(117.9), time=0))
+    midi.tracks.append(conductor)
+    notes = mido.MidiTrack()
+    notes.append(mido.Message("program_change", channel=0, program=0, time=0))
+    notes.append(mido.Message("note_on", channel=0, note=60, velocity=90, time=37))
+    notes.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=56))
+    notes.append(mido.Message("note_on", channel=9, note=36, velocity=90, time=122))
+    notes.append(mido.Message("note_off", channel=9, note=36, velocity=0, time=8))
+    notes.append(mido.Message("note_on", channel=0, note=64, velocity=90, time=143))
+    notes.append(mido.Message("note_off", channel=0, note=64, velocity=0, time=113))
+    midi.tracks.append(notes)
+    midi.save(source_midi)
+
+    destination = tmp_path / "notation-compatible.mid"
+    _export_midi_with_bpm(
+        source_midi,
+        destination,
+        77.9,
+        notation_compatible=True,
+    )
+
+    downloaded = mido.MidiFile(destination)
+    tempo_messages = [
+        message
+        for track in downloaded.tracks
+        for message in track
+        if message.is_meta and message.type == "set_tempo"
+    ]
+    assert len(tempo_messages) == 1
+    assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(77.9, abs=0.001)
+    assert downloaded.tracks[0][0].type == "set_tempo"
+    pretty_midi_result = pretty_midi.PrettyMIDI(str(destination))
+    tempo_times, tempo_values = pretty_midi_result.get_tempo_changes()
+    assert tempo_times.tolist() == [0.0]
+    assert tempo_values.tolist() == pytest.approx([77.9], abs=0.001)
+    assert sum(len(instrument.notes) for instrument in pretty_midi_result.instruments) == 3
+
+    grid_ticks = downloaded.ticks_per_beat // 6
+
+    def note_timings(path: Path) -> list[tuple[int, int, int, int]]:
+        timings: list[tuple[int, int, int, int]] = []
+        for track in mido.MidiFile(path).tracks:
+            absolute_tick = 0
+            active: dict[tuple[int, int], list[int]] = {}
+            for message in track:
+                absolute_tick += message.time
+                if message.is_meta:
+                    continue
+                if message.type == "note_on" and message.velocity > 0:
+                    key = (message.channel, message.note)
+                    active.setdefault(key, []).append(absolute_tick)
+                elif message.type == "note_off" or (
+                    message.type == "note_on" and message.velocity == 0
+                ):
+                    key = (message.channel, message.note)
+                    starts = active.get(key)
+                    if starts:
+                        start = starts.pop(0)
+                        timings.append(
+                            (message.channel, message.note, start, absolute_tick - start)
+                        )
+        return timings
+
+    source_timings = note_timings(source_midi)
+    downloaded_timings = note_timings(destination)
+    assert [(item[0], item[1], item[3]) for item in downloaded_timings] == [
+        (item[0], item[1], item[3]) for item in source_timings
+    ]
+    assert all(item[2] % grid_ticks == 0 for item in downloaded_timings)
+    assert all(
+        abs(downloaded_item[2] - source_item[2]) <= grid_ticks // 2
+        for source_item, downloaded_item in zip(source_timings, downloaded_timings)
+    )
 
 
 def _send_roll_wheel(widget: MuscriptorResultWidget, modifiers, *, delta: int) -> None:

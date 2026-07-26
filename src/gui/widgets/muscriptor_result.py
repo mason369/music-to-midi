@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import time
 from bisect import bisect_left, bisect_right
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -84,6 +84,8 @@ def _export_midi_with_bpm(
     source_path: str | Path,
     destination_path: str | Path,
     bpm: float,
+    *,
+    notation_compatible: bool = False,
 ) -> Path:
     """Publish a MIDI copy that plays at the user-visible result BPM."""
 
@@ -109,16 +111,43 @@ def _export_midi_with_bpm(
         ticks_per_beat=source_midi.ticks_per_beat,
     )
     tempo_us = bpm2tempo(export_bpm)
+    notation_grid_ticks = max(1, round(source_midi.ticks_per_beat / 6))
     for track_index, source_track in enumerate(source_midi.tracks):
         absolute_tick = 0
         events: list[tuple[int, int, object]] = []
+        note_shifts: dict[tuple[int, int], deque[int]] = {}
+        end_of_track_events: list[tuple[int, int, object]] = []
         for sequence, message in enumerate(source_track):
             absolute_tick += message.time
             if message.is_meta and message.type == "set_tempo":
                 continue
-            events.append((absolute_tick, sequence + 1, message.copy(time=0)))
+            if message.is_meta and message.type == "end_of_track":
+                end_of_track_events.append((absolute_tick, sequence + 1, message.copy(time=0)))
+                continue
+
+            target_tick = absolute_tick
+            if notation_compatible and not message.is_meta:
+                if message.type == "note_on" and message.velocity > 0:
+                    note_key = (message.channel, message.note)
+                    target_tick = (
+                        (absolute_tick + notation_grid_ticks // 2)
+                        // notation_grid_ticks
+                        * notation_grid_ticks
+                    )
+                    note_shifts.setdefault(note_key, deque()).append(target_tick - absolute_tick)
+                elif message.type == "note_off" or (
+                    message.type == "note_on" and message.velocity == 0
+                ):
+                    note_key = (message.channel, message.note)
+                    shifts = note_shifts.get(note_key)
+                    if shifts:
+                        target_tick = absolute_tick + shifts.popleft()
+            events.append((target_tick, sequence + 1, message.copy(time=0)))
         if track_index == 0 or source_midi.type == 2:
             events.append((0, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0)))
+        last_event_tick = max((event[0] for event in events), default=0)
+        for end_tick, sequence, message in end_of_track_events:
+            events.append((max(end_tick, last_event_tick), sequence, message))
         events.sort(key=lambda event: (event[0], event[1]))
 
         target_track = MidiTrack()
@@ -154,6 +183,25 @@ def _export_midi_with_bpm(
                 f"path={published_path}, expected_bpm={export_bpm:.1f}, "
                 f"tempo_messages={published_tempos!r}"
             )
+        if notation_compatible:
+            unaligned_note_onsets: list[tuple[int, int]] = []
+            for track_index, track in enumerate(published_midi.tracks):
+                absolute_tick = 0
+                for message in track:
+                    absolute_tick += message.time
+                    if (
+                        not message.is_meta
+                        and message.type == "note_on"
+                        and message.velocity > 0
+                        and absolute_tick % notation_grid_ticks
+                    ):
+                        unaligned_note_onsets.append((track_index, absolute_tick))
+            if unaligned_note_onsets:
+                raise RuntimeError(
+                    "Exported MIDI notation alignment verification failed: "
+                    f"path={published_path}, grid_ticks={notation_grid_ticks}, "
+                    f"unaligned_note_onsets={unaligned_note_onsets[:8]!r}"
+                )
         return published_path
     finally:
         remove_temporary_midi(temporary)
@@ -2197,6 +2245,7 @@ class MuscriptorResultWidget(QFrame):
                     source,
                     destination,
                     target_bpm,
+                    notation_compatible=True,
                 )
                 self.playback_status_label.setText(
                     t(
