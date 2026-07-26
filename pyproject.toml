@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "music-to-midi"
-version = "1.3.1"
+version = "1.3.0"
 description = "AI audio-to-MIDI converter with multi-instrument, stem, vocal, and piano transcription workflows"
 readme = "docs/README.md"
 license = {text = "MIT"}

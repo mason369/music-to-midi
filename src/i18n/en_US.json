@@ -536,6 +536,7 @@
     "solo": "Solo (mute every other instrument)",
     "mute": "Mute on the MIDI synthesis bus",
     "download": "Download",
+    "midi_saved": "MIDI saved and verified at {bpm} BPM: {path}",
     "download_midi": "MIDI file",
     "download_transcription": "Transcription-only WAV",
     "download_stereo": "Original left + MIDI right WAV",

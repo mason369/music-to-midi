@@ -1782,6 +1782,79 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
     app.processEvents()
 
 
+@pytest.mark.parametrize(
+    ("editor", "typed_text", "expected_bpm"),
+    [
+        ("bpm", "BPM 60.0", 60.0),
+        ("speed", "0.500x", 59.0),
+    ],
+)
+def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
+    tmp_path: Path,
+    monkeypatch,
+    editor: str,
+    typed_text: str,
+    expected_bpm: float,
+):
+    app = QApplication.instance() or QApplication([])
+    source_audio = _silent_wav(tmp_path / f"{editor}-source.wav", 1.0)
+    source_midi = tmp_path / f"{editor}-source.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(117.9), time=0))
+    track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(source_midi)
+    source_duration = mido.MidiFile(source_midi).length
+
+    destination = tmp_path / f"{editor}-downloaded.mid"
+    widget = MuscriptorResultWidget(str(source_audio), ["acoustic_piano"])
+    widget._midi_path = str(source_midi)
+    widget.set_bpm_context(117.9, 117.9)
+    control = widget.bpm_spin if editor == "bpm" else widget.speed_spin
+    control.lineEdit().setText(typed_text)
+    control.lineEdit().textEdited.emit(typed_text)
+    dialog_defaults: list[str] = []
+
+    def choose_destination(_parent, _title, default_path, _filter):
+        dialog_defaults.append(default_path)
+        return str(destination), "MIDI (*.mid)"
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        choose_destination,
+    )
+
+    try:
+        widget.download_midi_action.trigger()
+        assert dialog_defaults == [f"{source_midi.stem}_{expected_bpm:.1f}BPM.mid"]
+        assert f"{expected_bpm:.1f}" in widget.playback_status_label.text()
+        assert str(destination.resolve()) in widget.playback_status_label.text()
+    finally:
+        widget.shutdown()
+        widget.close()
+
+    downloaded = mido.MidiFile(destination)
+    tempo_messages = [
+        message
+        for midi_track in downloaded.tracks
+        for message in midi_track
+        if message.is_meta and message.type == "set_tempo"
+    ]
+    assert len(tempo_messages) == 1
+    assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(
+        expected_bpm,
+        abs=0.001,
+    )
+    assert downloaded.length == pytest.approx(
+        source_duration * 117.9 / expected_bpm,
+        abs=1e-6,
+    )
+    app.processEvents()
+
+
 def _send_roll_wheel(widget: MuscriptorResultWidget, modifiers, *, delta: int) -> None:
     viewport = widget.roll_scroll.viewport()
     local_point = viewport.rect().center()

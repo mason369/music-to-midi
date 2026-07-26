@@ -536,6 +536,7 @@
     "solo": "独奏（静音其他乐器）",
     "mute": "在 MIDI 合成总线上静音",
     "download": "下载",
+    "midi_saved": "MIDI 已按 {bpm} BPM 保存并验证：{path}",
     "download_midi": "MIDI 文件",
     "download_transcription": "仅转写合成 WAV",
     "download_stereo": "原音左声道 + MIDI 右声道 WAV",
