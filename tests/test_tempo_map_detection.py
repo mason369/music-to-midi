@@ -184,3 +184,39 @@ class TestOctaveCorrection:
         det = BeatDetector(Config())
         # 1.8x 不在 [1.9, 2.1] 窗口内：保持投票结果
         assert det._resolve_octave_by_interval_median(100.0, 180.0) == pytest.approx(100.0)
+
+
+def test_bpm_vote_does_not_give_equal_votes_to_synthetic_octaves():
+    detector = BeatDetector(Config())
+
+    # Simulate the old expanded 0.5x/1x/2x pool. Equal-size clusters must
+    # resolve to the cluster containing the primary beat_track result.
+    best = detector._vote_best_tempo(
+        [60.0, 60.5, 61.0, 119.0, 120.0, 121.0, 238.0, 240.0, 240.0],
+        [120.0, 119.0, 121.0],
+    )
+
+    assert best == pytest.approx(120.0)
+
+
+def test_unstable_beat_intervals_cannot_override_consensus_tempo():
+    detector = BeatDetector(Config())
+    intervals = np.tile([0.2, 1.0], 10)
+    beat_times = np.concatenate([[0.0], np.cumsum(intervals)])
+
+    class FakeLibrosa:
+        class onset:
+            @staticmethod
+            def onset_strength(**_kwargs):
+                return np.ones(100)
+
+        class beat:
+            @staticmethod
+            def beat_track(**_kwargs):
+                return 120.0, np.arange(len(beat_times))
+
+        @staticmethod
+        def frames_to_time(_frames, **_kwargs):
+            return beat_times
+
+    assert detector._beat_interval_median(FakeLibrosa, np.ones(100), 22050) is None

@@ -51,6 +51,12 @@ def test_notice_covers_every_bundled_model_family_with_pinned_provenance():
         "PyTorch, torchaudio, and torchvision",
         "PyQt6",
         "FFmpeg/ffprobe",
+        "MuScriptor/muscriptor-small",
+        "8c127f603b807520fa465c838e9bfee8a91ada4e",
+        "MuScriptor/muscriptor-medium",
+        "f32236969308476e01fd3aae67357de5feb05a2d",
+        "MuScriptor/muscriptor-large",
+        "8809fdfbed2affa7ade94a7059e746e3880720e7",
     ):
         assert expected in notice
 
@@ -79,7 +85,9 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         "musicfm_pretrained",
         "miros_finetuned",
         "muscriptor_source",
-        "muscriptor_checkpoint",
+        "muscriptor_small_checkpoint",
+        "muscriptor_medium_checkpoint",
+        "muscriptor_large_checkpoint",
         "musescore_general_soundfont",
         "fluidsynth_runtime",
         "pytorch_cuda_runtime",

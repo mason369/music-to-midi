@@ -180,7 +180,9 @@ class MusicToMidiPipeline:
     def _report_detected_bpm(self, beat_info: BeatInfo, sp: float, op: float) -> None:
         """上报检测 BPM；变速歌曲显示范围并带变速标注。"""
         bpm_text = beat_info.bpm_display
-        if beat_info.is_variable_tempo:
+        if self.config.custom_bpm is not None:
+            bpm_text += f" ({self._pt('dialogs.complete.bpm_custom')})"
+        elif beat_info.is_variable_tempo:
             bpm_text += f" ({self._pt('dialogs.complete.bpm_variable')})"
         self._report(
             ProcessingStage.PREPROCESSING,
@@ -214,7 +216,7 @@ class MusicToMidiPipeline:
     def _get_multi_instrument_label(self) -> str:
         model_name = self._get_multi_instrument_model_name()
         if model_name == MultiInstrumentModel.MUSCRIPTOR.value:
-            return "MuScriptor-large"
+            return f"MuScriptor-{self.config.muscriptor_model}"
         if model_name == MultiInstrumentModel.MIROS.value:
             return "MIROS"
         if model_name == MultiInstrumentModel.YOURMT3.value:
@@ -346,6 +348,16 @@ class MusicToMidiPipeline:
         audio_path: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> BeatInfo:
+        if self.config.custom_bpm is not None:
+            bpm = float(self.config.custom_bpm)
+            logger.info("使用用户指定的恒定速度：%.1f BPM；跳过自动速度检测", bpm)
+            if progress_callback is not None:
+                progress_callback(
+                    1.0,
+                    self._pt("progress.custom_bpm", bpm=f"{bpm:.1f}"),
+                )
+            return BeatInfo(bpm=bpm)
+
         try:
             detect_params = inspect.signature(self.beat_detector.detect).parameters
             if progress_callback is not None and "progress_callback" in detect_params:

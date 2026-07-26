@@ -41,11 +41,18 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
         assert "WAV" in six_stem_info
         assert "MIDI" in six_stem_info
 
+        def leaf_strings(value):
+            if isinstance(value, dict):
+                for nested in value.values():
+                    yield from leaf_strings(nested)
+            else:
+                yield value
+
         product_copy = "\n".join(
             [
-                *catalog["main"]["mode"].values(),
-                *catalog["main"]["engine"].values(),
-                *catalog["space"]["mode"].values(),
+                *leaf_strings(catalog["main"]["mode"]),
+                *leaf_strings(catalog["main"]["engine"]),
+                *leaf_strings(catalog["space"]["mode"]),
             ]
         ).lower()
         for banned_phrase in (
@@ -275,7 +282,7 @@ def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes()
     assert "MANUAL_MIDI_ROUTE_CHOICES" in source_text
     assert "build_manual_midi_config" in source_text
     assert "manual_midi_output_dir" in source_text
-    assert "len(MANUAL_MIDI_ROUTE_CHOICES) != 11" in source_text
+    assert "len(MANUAL_MIDI_ROUTE_CHOICES) != 13" in source_text
     assert "YOURMT3_MANUAL_MODELS" in manual_source
     assert "MIDI_ROUTE_MIROS" in manual_source
     assert "MIDI_ROUTE_MUSCRIPTOR" in manual_source
@@ -330,13 +337,13 @@ def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
 
     assert "两个分离模式只先生成 WAV" in readme
     assert "选择复选框或模型不会开始推理" in readme
-    assert "十一个明确路线" in readme
+    assert "十三个明确路线" in readme
     assert "models:" in readme
     assert "MuScriptor/muscriptor-large" in readme
     assert "mimbres/YourMT3" in readme
     assert "minzwon/MusicFM" in readme
     assert "顶部 `license: mit` **只表示本 Space 自有应用代码使用 MIT**" in readme
-    assert "必须在模型页接受条款" in readme
+    assert "必须逐项接受条款" in readme
     assert "`SMART` + MuScriptor Large" in readme
     assert "约 0.833 秒" in readme
     assert "开始分离" in readme

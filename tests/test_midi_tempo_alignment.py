@@ -4,6 +4,7 @@ import mido
 import pytest
 
 from src.core.pipeline import MusicToMidiPipeline
+from src.models.data_models import Config
 
 
 def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
@@ -30,6 +31,24 @@ def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
     )
     midi.tracks.append(track)
     midi.save(path)
+
+
+def test_custom_bpm_is_authoritative_and_skips_automatic_detection():
+    pipeline = MusicToMidiPipeline(Config(custom_bpm=97.5))
+    pipeline.beat_detector.detect = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("automatic detector must not run when custom BPM is set")
+    )
+
+    beat_info = pipeline._detect_beat_or_raise("unused.wav")
+
+    assert beat_info.bpm == pytest.approx(97.5)
+    assert beat_info.tempo_map == []
+
+
+@pytest.mark.parametrize("custom_bpm", [19.9, 400.1, float("nan"), float("inf")])
+def test_custom_bpm_validation_rejects_unusable_values(custom_bpm):
+    with pytest.raises(ValueError, match="BPM"):
+        Config(custom_bpm=custom_bpm).validate()
 
 
 def test_telknet_tempo_alignment_preserves_every_non_tempo_message_and_seconds(tmp_path):

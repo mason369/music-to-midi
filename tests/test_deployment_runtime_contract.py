@@ -181,6 +181,7 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
     function_source = _function_source("space/app.py", "_estimate_zerogpu_duration")
     fake_multi_model = types.SimpleNamespace(
         YOURMT3=types.SimpleNamespace(value="yourmt3"),
+        MUSCRIPTOR=types.SimpleNamespace(value="muscriptor"),
     )
     namespace = {
         "MODE_IDS": ("smart",),
@@ -195,6 +196,11 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
         },
         "ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS": {
             "yptf_moe_multi_nops": 1.25,
+        },
+        "ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS": {
+            "large": 3.0,
+            "medium": 1.2,
+            "small": 0.7,
         },
         "MultiInstrumentModel": fake_multi_model,
         "math": math,

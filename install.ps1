@@ -742,12 +742,12 @@ if ($LASTEXITCODE -ne 0) {
 Write-Ok "YourMT3+ 源码身份检查通过"
 
 # --- 第 11 步/共 12 步：下载统一模型集合 ---
-Write-Info "第 11 步/共 12 步  下载并校验全部公开工作流模型（含 MuScriptor-large 与 SoundFont）..."
+Write-Info "第 11 步/共 12 步  下载并校验全部公开工作流模型（含 MuScriptor Small/Medium/Large 与 SoundFont）..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_sota_models.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "YourMT3+、MIROS、分离/钢琴模型、MuScriptor-large 与 SoundFont 全部准备成功"
+    Write-Ok "YourMT3+、MIROS、分离/钢琴模型、MuScriptor Small/Medium/Large 与 SoundFont 全部准备成功"
 } else {
     Write-Err "统一模型集合下载或校验失败"
 }
@@ -794,6 +794,6 @@ Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor 
   Write-Host "  venv\Scripts\python.exe download_accompaniment_model.py" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_transkun_v2_aug_model.py" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_muscriptor_model.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_muscriptor_model.py --size all" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_fluidsynth_runtime.py" -ForegroundColor Yellow
 Write-Host ""

@@ -36,12 +36,15 @@ from PyQt6.QtWidgets import (
 from src.core.manual_midi import (
     MIDI_ROUTE_MIROS,
     MIDI_ROUTE_MUSCRIPTOR,
+    MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
+    MIDI_ROUTE_MUSCRIPTOR_SMALL,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
     MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
     MIDI_ROUTE_YOURMT3_PREFIX,
     YOURMT3_MANUAL_MODELS,
+    is_muscriptor_midi_route,
 )
 from src.gui.layouts import FlowLayout
 from src.gui.widgets.audio_waveform import (
@@ -101,7 +104,15 @@ def midi_route_label(route: str) -> str:
         return f"YourMT3+ · {model_label}"
     labels = {
         MIDI_ROUTE_MIROS: t("dialogs.complete.audio_tracks.manual_midi.models.miros"),
-        MIDI_ROUTE_MUSCRIPTOR: t("dialogs.complete.audio_tracks.manual_midi.models.muscriptor"),
+        MIDI_ROUTE_MUSCRIPTOR: t(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_large"
+        ),
+        MIDI_ROUTE_MUSCRIPTOR_MEDIUM: t(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_medium"
+        ),
+        MIDI_ROUTE_MUSCRIPTOR_SMALL: t(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_small"
+        ),
         MIDI_ROUTE_PIANO_TRANSKUN: t(
             "dialogs.complete.audio_tracks.manual_midi.models.piano_transkun"
         ),
@@ -411,10 +422,15 @@ class _AudioTrackRow(QFrame):
                 f"{multi_label} · {midi_route_label(MIDI_ROUTE_MIROS)}",
                 MIDI_ROUTE_MIROS,
             )
-            self._add_midi_route_action(
-                f"{multi_label} · {midi_route_label(MIDI_ROUTE_MUSCRIPTOR)}",
+            for route in (
                 MIDI_ROUTE_MUSCRIPTOR,
-            )
+                MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
+                MIDI_ROUTE_MUSCRIPTOR_SMALL,
+            ):
+                self._add_midi_route_action(
+                    f"{multi_label} · {midi_route_label(route)}",
+                    route,
+                )
             for route in (
                 MIDI_ROUTE_PIANO_TRANSKUN,
                 MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
@@ -468,7 +484,7 @@ class _AudioTrackRow(QFrame):
     def _update_midi_action_state(self) -> None:
         editable = self._midi_controls_allowed and self._midi_state != "running"
         midi_enabled = self.midi_enabled_checkbox.isChecked()
-        is_muscriptor = self._selected_midi_route == MIDI_ROUTE_MUSCRIPTOR
+        is_muscriptor = is_muscriptor_midi_route(self._selected_midi_route)
         self.midi_enabled_checkbox.setEnabled(editable)
         self.midi_model_selector.setEnabled(editable and midi_enabled)
         self.muscriptor_instrument_selector.setVisible(is_muscriptor)
@@ -479,7 +495,7 @@ class _AudioTrackRow(QFrame):
 
     def selected_muscriptor_instruments(self) -> list[str]:
         """Return the official canonical constraint for this track row."""
-        if self._selected_midi_route != MIDI_ROUTE_MUSCRIPTOR:
+        if not is_muscriptor_midi_route(self._selected_midi_route):
             return []
         return self.muscriptor_instrument_selector.selected_instruments()
 

@@ -31,7 +31,8 @@ class OneClickScriptContractTests(unittest.TestCase):
 
         for expected in (
             "MuscriptorTranscriber._runtime_unavailable_reason()",
-            "get_cached_muscriptor_paths(validate_hashes=False)",
+            'for model_size in ("small", "medium", "large")',
+            "validate_hashes=False",
             "download_muscriptor_soundfont",
             "get_fluidsynth_executable",
         ):
@@ -192,7 +193,8 @@ class OneClickScriptContractTests(unittest.TestCase):
 
         for expected in (
             "MuscriptorTranscriber._runtime_unavailable_reason()",
-            "get_cached_muscriptor_paths(validate_hashes=False)",
+            'for model_size in ("small", "medium", "large")',
+            "validate_hashes=False",
             "download_muscriptor_soundfont",
             "get_fluidsynth_executable",
         ):
@@ -291,8 +293,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         package_init = (REPO_ROOT / "src" / "__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('version = "1.2.0"', pyproject)
-        self.assertIn('__version__ = "1.2.0"', package_init)
+        self.assertIn('version = "1.3.0"', pyproject)
+        self.assertIn('__version__ = "1.3.0"', package_init)
         self.assertNotIn("Operating System :: OS Independent", pyproject)
         self.assertIn("Operating System :: Microsoft :: Windows", pyproject)
         self.assertIn("Operating System :: POSIX :: Linux", pyproject)

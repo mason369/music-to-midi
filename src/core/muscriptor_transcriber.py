@@ -1,4 +1,4 @@
-"""Strict wrapper for the public MuScriptor-large transcription model."""
+"""Strict wrapper for the public MuScriptor transcription checkpoints."""
 
 from __future__ import annotations
 
@@ -24,7 +24,11 @@ from src.utils.midi_output import (
     remove_temporary_midi,
     unique_midi_temp_path,
 )
-from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
+from src.utils.muscriptor_downloader import (
+    get_cached_muscriptor_paths,
+    get_muscriptor_artifact,
+    normalize_muscriptor_model,
+)
 from src.utils.inference_precision import (
     MUSCRIPTOR,
     configure_torch_precision,
@@ -44,7 +48,7 @@ MUSCRIPTOR_SOURCE_REQUIREMENT = (
 
 
 class MuscriptorTranscriber:
-    """Run MuScriptor-large with model-native hard instrument constraints."""
+    """Run an explicit MuScriptor size with model-native hard instrument constraints."""
 
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
@@ -93,24 +97,28 @@ class MuscriptorTranscriber:
             )
         return ""
 
-    @classmethod
-    def get_unavailable_reason(cls) -> str:
-        runtime_error = cls._runtime_unavailable_reason()
+    def _selected_model_size(self) -> str:
+        return normalize_muscriptor_model(getattr(self.config, "muscriptor_model", "large"))
+
+    def get_unavailable_reason(self) -> str:
+        runtime_error = self._runtime_unavailable_reason()
         if runtime_error:
             return runtime_error
         try:
-            get_cached_muscriptor_paths(validate_hashes=False)
+            get_cached_muscriptor_paths(
+                self._selected_model_size(),
+                validate_hashes=False,
+            )
         except Exception as exc:
             return str(exc)
         return ""
 
     @classmethod
     def is_available(cls) -> bool:
-        return cls.get_unavailable_reason() == ""
+        return cls(Config()).get_unavailable_reason() == ""
 
-    @classmethod
-    def is_selected_model_available(cls) -> bool:
-        return cls.is_available()
+    def is_selected_model_available(self) -> bool:
+        return self.get_unavailable_reason() == ""
 
     def set_cancel_check(self, callback: Callable[[], bool]) -> None:
         self._cancel_check = callback
@@ -132,7 +140,9 @@ class MuscriptorTranscriber:
         runtime_error = self._runtime_unavailable_reason()
         if runtime_error:
             raise RuntimeError(runtime_error)
-        weights, _config = get_cached_muscriptor_paths(validate_hashes=True)
+        model_size = self._selected_model_size()
+        artifact = get_muscriptor_artifact(model_size)
+        weights, _config = get_cached_muscriptor_paths(model_size, validate_hashes=True)
 
         import torch
         from muscriptor import TranscriptionModel
@@ -140,7 +150,7 @@ class MuscriptorTranscriber:
         if self.config.use_gpu:
             if not torch.cuda.is_available():
                 raise RuntimeError(
-                    "MuScriptor-large 已选择 GPU 推理，但当前 PyTorch 看不到 CUDA；"
+                    f"{artifact.display_name} 已选择 GPU 推理，但当前 PyTorch 看不到 CUDA；"
                     "不会静默切换到 CPU。"
                 )
             device = f"cuda:{int(self.config.gpu_device)}"
@@ -156,14 +166,14 @@ class MuscriptorTranscriber:
         log_precision_plan(logger, precision_plan)
 
         self._check_cancelled()
-        logger.info("Loading pinned MuScriptor-large on %s from %s", device, weights)
+        logger.info("Loading pinned %s on %s from %s", artifact.display_name, device, weights)
         self._model = TranscriptionModel.load_model(weights_path=weights, device=device)
         runtime_model = getattr(self._model, "_model", None)
         if runtime_model is None:
             raise RuntimeError("MuScriptor runtime does not expose its verified LM model")
         verify_float32_model_parameters(
             runtime_model,
-            model_name="MuScriptor-large",
+            model_name=artifact.display_name,
             torch_module=torch,
         )
         runtime_autocast = getattr(runtime_model, "autocast", None)
@@ -285,7 +295,11 @@ class MuscriptorTranscriber:
         try:
             temporary.write_bytes(midi_bytes)
             validate_muscriptor_midi_constraint(temporary, selected)
-            published = publish_midi_output(temporary, output_path, "MuScriptor-large")
+            published = publish_midi_output(
+                temporary,
+                output_path,
+                get_muscriptor_artifact(self._selected_model_size()).display_name,
+            )
         finally:
             remove_temporary_midi(temporary)
 

@@ -342,13 +342,22 @@ $MirosSource = Resolve-ExistingDir @(
     (Join-Path $Root "ai4m-miros"),
     (Join-Path $Root ".tmp\ai4m-miros")
 )
-$muscriptorModelSourceText = & $Python -c "from src.utils.muscriptor_downloader import get_cached_muscriptor_paths; print(get_cached_muscriptor_paths(validate_hashes=True)[0].parent)"
+$muscriptorModelSourceText = & $Python -c "from src.utils.muscriptor_downloader import get_cached_muscriptor_paths; [print(get_cached_muscriptor_paths(size, validate_hashes=True)[0].parent) for size in ('small', 'medium', 'large')]"
 if ($LASTEXITCODE -ne 0) {
-    throw "Pinned MuScriptor-large model is not available or failed identity validation. Run download_sota_models.py after accepting the Hugging Face terms."
+    throw "One or more pinned MuScriptor Small/Medium/Large models are unavailable or failed identity validation. Run download_sota_models.py after accepting all three Hugging Face model terms."
 }
-$MuscriptorModelSource = Resolve-ExistingDir @(
+$MuscriptorSmallSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR,
+    ($muscriptorModelSourceText | Select-Object -Index 0)
+)
+$MuscriptorMediumSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR,
+    ($muscriptorModelSourceText | Select-Object -Index 1)
+)
+$MuscriptorLargeSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR,
     $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR,
-    ($muscriptorModelSourceText | Select-Object -Last 1)
+    ($muscriptorModelSourceText | Select-Object -Index 2)
 )
 $muscriptorAssetsSourceText = & $Python -c "from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont; print(download_muscriptor_soundfont(printer=lambda _message: None).parent)"
 if ($LASTEXITCODE -ne 0) {
@@ -388,7 +397,9 @@ $AriaAmtBundle = Join-Path $BuildAssetRoot "aria_amt"
 $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
 $TransKunV2AugBundle = Join-Path $BuildAssetRoot "transkun_v2_aug"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
-$MuscriptorModelBundle = Join-Path $BuildAssetRoot "muscriptor_large"
+$MuscriptorSmallBundle = Join-Path $BuildAssetRoot "muscriptor_small"
+$MuscriptorMediumBundle = Join-Path $BuildAssetRoot "muscriptor_medium"
+$MuscriptorLargeBundle = Join-Path $BuildAssetRoot "muscriptor_large"
 $MuscriptorAssetsBundle = Join-Path $BuildAssetRoot "muscriptor_assets"
 $FluidSynthBundle = Join-Path $BuildAssetRoot "fluidsynth"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
@@ -426,19 +437,18 @@ if ($LASTEXITCODE -ne 0) {
     throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
-Copy-Tree -Source $MuscriptorModelSource -Destination $MuscriptorModelBundle -Label "MuScriptor-large model" -Required | Out-Null
+Copy-Tree -Source $MuscriptorSmallSource -Destination $MuscriptorSmallBundle -Label "MuScriptor-small model" -Required | Out-Null
+Copy-Tree -Source $MuscriptorMediumSource -Destination $MuscriptorMediumBundle -Label "MuScriptor-medium model" -Required | Out-Null
+Copy-Tree -Source $MuscriptorLargeSource -Destination $MuscriptorLargeBundle -Label "MuScriptor-large model" -Required | Out-Null
 Copy-Tree -Source $MuscriptorAssetsSource -Destination $MuscriptorAssetsBundle -Label "MuScriptor playback assets" -Required | Out-Null
 Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required | Out-Null
 $muscriptorPortableCheck = @"
 from pathlib import Path
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.muscriptor_downloader import (
-    MUSCRIPTOR_CONFIG_EXACT_BYTES,
     MUSCRIPTOR_CONFIG_FILENAME,
-    MUSCRIPTOR_CONFIG_SHA256,
-    MUSCRIPTOR_MODEL_EXACT_BYTES,
+    MUSCRIPTOR_ARTIFACTS,
     MUSCRIPTOR_MODEL_FILENAME,
-    MUSCRIPTOR_MODEL_SHA256,
 )
 from src.utils.muscriptor_soundfont_downloader import (
     MUSCRIPTOR_SF2_EXACT_BYTES,
@@ -446,12 +456,18 @@ from src.utils.muscriptor_soundfont_downloader import (
     MUSCRIPTOR_SF2_SHA256,
 )
 
-model_dir = Path(r'$MuscriptorModelBundle')
+model_dirs = {
+    'small': Path(r'$MuscriptorSmallBundle'),
+    'medium': Path(r'$MuscriptorMediumBundle'),
+    'large': Path(r'$MuscriptorLargeBundle'),
+}
 assets_dir = Path(r'$MuscriptorAssetsBundle')
-validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=MUSCRIPTOR_MODEL_EXACT_BYTES, expected_sha256=MUSCRIPTOR_MODEL_SHA256, label='staged MuScriptor model')
-validate_file_identity(model_dir / MUSCRIPTOR_CONFIG_FILENAME, expected_size=MUSCRIPTOR_CONFIG_EXACT_BYTES, expected_sha256=MUSCRIPTOR_CONFIG_SHA256, label='staged MuScriptor config')
+for model_size, model_dir in model_dirs.items():
+    artifact = MUSCRIPTOR_ARTIFACTS[model_size]
+    validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=artifact.model_bytes, expected_sha256=artifact.model_sha256, label=f'staged MuScriptor-{model_size} model')
+    validate_file_identity(model_dir / MUSCRIPTOR_CONFIG_FILENAME, expected_size=artifact.config_bytes, expected_sha256=artifact.config_sha256, label=f'staged MuScriptor-{model_size} config')
 validate_file_identity(assets_dir / MUSCRIPTOR_SF2_FILENAME, expected_size=MUSCRIPTOR_SF2_EXACT_BYTES, expected_sha256=MUSCRIPTOR_SF2_SHA256, label='staged MuScriptor SoundFont')
-print('MuScriptor portable assets verified')
+print('MuScriptor Small/Medium/Large portable assets verified')
 "@
 & $Python -c $muscriptorPortableCheck
 if ($LASTEXITCODE -ne 0) {
@@ -496,7 +512,10 @@ $env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR = $AriaAmtBundle
 $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
 $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR = $TransKunV2AugBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
-$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR = $MuscriptorModelBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR = $MuscriptorSmallBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR = $MuscriptorMediumBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR = $MuscriptorLargeBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR = $MuscriptorLargeBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR = $MuscriptorAssetsBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR = $FluidSynthBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
@@ -512,6 +531,9 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR -ErrorAction SilentlyContinue
@@ -523,15 +545,38 @@ if ($PyInstallerExitCode -ne 0) {
 }
 
 $DistDir = Join-Path $Root "dist\MusicToMidi"
-if (Test-Path $DistDir) {
-    foreach ($noticeName in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {
-        $noticeSource = Join-Path $Root $noticeName
-        if (-not (Test-Path -LiteralPath $noticeSource -PathType Leaf)) {
-            throw "Required distribution notice is missing: $noticeSource"
-        }
-        Copy-Item -LiteralPath $noticeSource -Destination (Join-Path $DistDir $noticeName) -Force
-    }
-    Write-Host ""
-    Write-Host "Portable build created: $DistDir"
-    Write-Host "Distribute the entire directory instead of a single exe."
+if (-not (Test-Path -LiteralPath $DistDir -PathType Container)) {
+    throw "PyInstaller reported success but the portable directory is missing: $DistDir"
 }
+
+$muscriptorDistCheck = @"
+from pathlib import Path
+from src.utils.artifact_identity import validate_file_identity
+from src.utils.muscriptor_downloader import (
+    MUSCRIPTOR_ARTIFACTS,
+    MUSCRIPTOR_CONFIG_FILENAME,
+    MUSCRIPTOR_MODEL_FILENAME,
+)
+
+models_root = Path(r'$DistDir') / '_internal' / 'models'
+for model_size, artifact in MUSCRIPTOR_ARTIFACTS.items():
+    model_dir = models_root / f'muscriptor_{model_size}'
+    validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=artifact.model_bytes, expected_sha256=artifact.model_sha256, label=f'packaged MuScriptor-{model_size} model')
+    validate_file_identity(model_dir / MUSCRIPTOR_CONFIG_FILENAME, expected_size=artifact.config_bytes, expected_sha256=artifact.config_sha256, label=f'packaged MuScriptor-{model_size} config')
+print('Packaged MuScriptor Small/Medium/Large assets verified')
+"@
+& $Python -c $muscriptorDistCheck
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged MuScriptor Small/Medium/Large assets failed exact identity validation."
+}
+
+foreach ($noticeName in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {
+    $noticeSource = Join-Path $Root $noticeName
+    if (-not (Test-Path -LiteralPath $noticeSource -PathType Leaf)) {
+        throw "Required distribution notice is missing: $noticeSource"
+    }
+    Copy-Item -LiteralPath $noticeSource -Destination (Join-Path $DistDir $noticeName) -Force
+}
+Write-Host ""
+Write-Host "Portable build created: $DistDir"
+Write-Host "Distribute the entire directory instead of a single exe."

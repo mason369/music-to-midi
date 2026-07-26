@@ -90,7 +90,7 @@
       "smart_yourmt3_hint": "Best for full mixes. Choose the model structure above and output GM multi-instrument MIDI.",
       "smart_miros_desc": "🎵  MIROS (MusicFM)  —  Multi-Instrument Transcription",
       "smart_miros_hint": "Best for full mixes. Uses a MusicFM multi-decoder to identify instruments and output GM MIDI.",
-      "smart_muscriptor_desc": "🎼  MuScriptor-large  —  Multi-Instrument Transcription",
+      "smart_muscriptor_desc": "🎼  MuScriptor  —  Multi-Instrument Transcription",
       "smart_muscriptor_hint": "Best for full mixes. Leave the instrument list empty for automatic detection; after selecting instruments, output contains only those instruments.",
       "vocal_split_desc": "🎤  Leap XE + PolarFormer  —  Vocal/Accompaniment Split",
       "vocal_split_hint": "Extract vocals and accompaniment into two WAV tracks. After separation, choose a model and convert each track to MIDI independently.",
@@ -125,9 +125,15 @@
       "miros_general_hint": "Convert a full mix directly to GM multi-instrument MIDI.",
       "miros_six_stem_hint": "Six-stem separation is fixed to BS-RoFormer SW Fixed. MIROS independently transcribes the real bass/drums/guitar/piano/vocals/other stems into their MIDI files.",
       "vocal_split_miros_midi_hint": "Vocal separation is fixed to Leap XE vocals + PolarFormer accompaniment. MIROS only transcribes the two real stems.",
-      "muscriptor": "MuScriptor-large",
-      "muscriptor_midi": "MuScriptor-large (MIDI only)",
-      "muscriptor_tooltip": "1.4B multi-instrument transcription model with automatic detection or instrument-limited output.",
+      "muscriptor": "MuScriptor",
+      "muscriptor_midi": "MuScriptor (MIDI only)",
+      "muscriptor_tooltip": "Explicitly choose Large, Medium, or Small, with automatic detection or instrument-limited output.",
+      "muscriptor_model_label": "MuScriptor model size",
+      "muscriptor_models": {
+        "large": "Large (1.4B, quality first)",
+        "medium": "Medium (307M, balanced)",
+        "small": "Small (103M, fastest/lowest VRAM)"
+      },
       "muscriptor_general_hint": "Leave the instrument list empty for automatic detection; after selecting instruments, output contains only those instruments.",
       "muscriptor_instruments_title": "What instruments are there in this track?",
       "muscriptor_instruments_desc": "Select one or more distinct instruments. Leave empty for automatic detection; output is limited to the selected instruments.",
@@ -137,6 +143,12 @@
       "yourmt3_model_tooltip": "Choose the model structure used by YourMT3+.",
       "checkpoint_label": "Checkpoint",
       "model_traits_label": "Model structure"
+    },
+    "tempo": {
+      "label": "Final MIDI tempo",
+      "auto": "Auto-detect",
+      "custom": "Custom",
+      "custom_tooltip": "A custom value skips automatic detection and becomes the constant BPM in every downloaded MIDI."
     },
     "tracks": {
       "title": "Processing Settings"
@@ -221,6 +233,7 @@
       "note_count": "Note Count",
       "bpm": "BPM",
       "bpm_variable": "variable",
+      "bpm_custom": "custom",
       "device": "Device",
       "seconds_suffix": "s",
       "accompaniment_midi": "Accompaniment MIDI",
@@ -312,6 +325,9 @@
             "yourmt3": "YourMT3+ (Multi-Instrument)",
             "miros": "MIROS (MusicFM) (Multi-Instrument)",
             "muscriptor": "MuScriptor-large (Multi-Instrument, hard constraints)",
+            "muscriptor_large": "MuScriptor Large (Multi-Instrument, quality first)",
+            "muscriptor_medium": "MuScriptor Medium (Multi-Instrument, balanced)",
+            "muscriptor_small": "MuScriptor Small (Multi-Instrument, fastest/lowest VRAM)",
             "piano_transkun": "TransKun V2 (Piano)",
             "piano_transkun_v2_aug": "TransKun V2 Aug (Piano)",
             "piano_aria_amt": "Aria-AMT (Piano)",
@@ -403,6 +419,7 @@
   "progress": {
     "loading_audio_for_beat": "Loading audio for beat detection...",
     "analyzing_tempo": "Analyzing tempo with multiple algorithms...",
+    "custom_bpm": "Using custom constant tempo {bpm} BPM; automatic detection skipped",
     "finding_beats": "Finding beat positions...",
     "detecting_downbeats": "Detecting downbeats...",
     "loading_aria_amt": "Loading Aria-AMT...",
@@ -485,6 +502,7 @@
     "complete_elapsed": "Complete, elapsed {seconds} seconds"
   },
   "muscriptor_result": {
+    "playback_progress_tooltip": "MIDI-master playback progress; dragging seeks MIDI and source audio together",
     "streaming": "MuScriptor is streaming notes into the piano roll…",
     "progress_waiting": "Waiting for the first transcription chunk…",
     "progress_timing": "{processed} / {total} · {elapsed} elapsed · done in about {remaining}",

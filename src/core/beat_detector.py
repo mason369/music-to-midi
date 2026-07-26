@@ -143,6 +143,7 @@ class BeatDetector:
 
     _OCTAVE_CORRECT_MIN_RATIO = 1.9  # 严格倍频判定区间 [1.9, 2.1]
     _OCTAVE_CORRECT_MAX_RATIO = 2.1
+    _MAX_INTERVAL_MAD_RATIO = 0.12
 
     def _beat_interval_median(
         self,
@@ -161,7 +162,18 @@ class BeatDetector:
             intervals = intervals[intervals > 0]
             if len(intervals) < 16:
                 return None
-            median_bpm = 60.0 / float(np.median(intervals))
+            median_interval = float(np.median(intervals))
+            interval_mad = float(np.median(np.abs(intervals - median_interval)))
+            if (
+                median_interval <= 0
+                or interval_mad / median_interval > self._MAX_INTERVAL_MAD_RATIO
+            ):
+                logger.warning(
+                    "拍间隔不稳定，拒绝用于 BPM 倍频校正（MAD/median=%.3f）",
+                    interval_mad / median_interval if median_interval > 0 else math.inf,
+                )
+                return None
+            median_bpm = 60.0 / median_interval
             if not math.isfinite(median_bpm) or median_bpm <= 0:
                 return None
             return self._correct_octave_error(median_bpm)
@@ -288,15 +300,11 @@ class BeatDetector:
         if not all_tempos:
             raise RuntimeError("所有 BPM 检测方法均失败，无法生成可靠 tempo。")
 
-        # 生成倍频候选（2x 和 0.5x）
-        candidates = []
-        for t in all_tempos:
-            candidates.append(t)
-            candidates.append(t * 2)
-            candidates.append(t / 2)
-
-        # 修正到合理范围 (60-200 BPM)
-        candidates = [self._correct_octave_error(t) for t in candidates]
+        # 只用各检测器的原始结果参与共识投票。旧实现把每个结果的
+        # 0.5x/1x/2x 同时投入投票，导致每个倍频簇天然获得相同票数，
+        # 最终可能靠排序顺序误选半速或双速。倍频歧义由后续独立的
+        # 拍间隔中位数校验解决，不能在这里人为复制票数。
+        candidates = [self._correct_octave_error(t) for t in all_tempos]
 
         # 统计候选值
         logger.debug(f"所有候选 BPM: {[f'{t:.1f}' for t in candidates]}")
@@ -344,9 +352,10 @@ class BeatDetector:
         通过聚类投票选择最佳 BPM
 
         策略：
-        1. 将相近的候选值聚类（阈值 8 BPM）
-        2. 选择包含原始检测值最多的聚类
-        3. 返回该聚类的中位数
+        1. 仅聚类各检测器真实返回的 BPM（阈值为 4% 或至少 3 BPM）
+        2. 选择得到最多独立检测器支持的聚类
+        3. 同票时优先包含 beat_track（original_tempos[0]）的聚类
+        4. 返回该聚类的中位数
 
         参数:
             candidates: 所有候选 BPM（包含倍频）
@@ -358,9 +367,6 @@ class BeatDetector:
         if not candidates:
             raise RuntimeError("BPM 候选列表为空，无法生成可靠 tempo。")
 
-        # 聚类阈值（BPM 差值在此范围内视为同一组）
-        cluster_threshold = 8.0
-
         # 按值排序
         sorted_candidates = sorted(candidates)
 
@@ -369,6 +375,8 @@ class BeatDetector:
         current_cluster: List[float] = [sorted_candidates[0]]
 
         for tempo in sorted_candidates[1:]:
+            cluster_center = float(np.median(current_cluster))
+            cluster_threshold = max(3.0, cluster_center * 0.04)
             if tempo - current_cluster[-1] <= cluster_threshold:
                 current_cluster.append(tempo)
             else:
@@ -376,20 +384,16 @@ class BeatDetector:
                 current_cluster = [tempo]
         clusters.append(current_cluster)
 
-        # 计算每个聚类包含多少原始检测值
-        def count_original_in_cluster(cluster: List[float]) -> int:
-            count = 0
-            for orig in original_tempos:
-                # 检查原始值或其倍频是否在聚类中
-                for mult in [1.0, 2.0, 0.5]:
-                    adjusted = self._correct_octave_error(orig * mult)
-                    if any(abs(adjusted - c) <= cluster_threshold for c in cluster):
-                        count += 1
-                        break
-            return count
+        primary_tempo = self._correct_octave_error(original_tempos[0])
 
-        # 选择包含原始值最多的聚类
-        best_cluster = max(clusters, key=lambda c: (count_original_in_cluster(c), len(c)))
+        def cluster_score(cluster: List[float]) -> Tuple[int, int, float]:
+            center = float(np.median(cluster))
+            contains_primary = int(
+                any(abs(primary_tempo - value) <= max(3.0, center * 0.04) for value in cluster)
+            )
+            return len(cluster), contains_primary, -abs(center - primary_tempo)
+
+        best_cluster = max(clusters, key=cluster_score)
 
         # 返回该聚类的中位数
         best_tempo = float(np.median(best_cluster))

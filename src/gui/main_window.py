@@ -42,9 +42,9 @@ from PyQt6.QtWidgets import (
 
 from src import __version__
 from src.core.manual_midi import (
-    MIDI_ROUTE_MUSCRIPTOR,
     MIDI_ROUTE_YOURMT3_PREFIX,
     build_manual_midi_config,
+    is_muscriptor_midi_route,
     manual_midi_output_dir,
 )
 from src.core.multi_stem_separator import STEM_KEYS
@@ -365,9 +365,13 @@ class MainWindow(QMainWindow):
         self.track_panel.set_yourmt3_model(
             getattr(self.config, "yourmt3_model", "yptf_moe_multi_nops")
         )
+        self.track_panel.set_muscriptor_model(
+            getattr(self.config, "muscriptor_model", "large")
+        )
         self.track_panel.set_muscriptor_instruments(
             getattr(self.config, "muscriptor_instruments", [])
         )
+        self.track_panel.set_custom_bpm(getattr(self.config, "custom_bpm", None))
         self._add_shadow(self.track_panel)
 
         # 进度组件
@@ -1516,7 +1520,7 @@ class MainWindow(QMainWindow):
             return piano_labels[mode]
         backend = config.get_effective_multi_instrument_model()
         if backend == MultiInstrumentModel.MUSCRIPTOR.value:
-            return "MuScriptor-large"
+            return f"MuScriptor-{config.muscriptor_model}"
         if backend == MultiInstrumentModel.MIROS.value:
             return "MIROS (MusicFM)"
         return midi_route_label(f"{MIDI_ROUTE_YOURMT3_PREFIX}{config.yourmt3_model}")
@@ -1563,7 +1567,9 @@ class MainWindow(QMainWindow):
         self.config.multi_instrument_model = self.track_panel.get_multi_instrument_model()
         self.config.midi_track_mode = self.track_panel.get_midi_track_mode()
         self.config.yourmt3_model = self.track_panel.get_yourmt3_model()
+        self.config.muscriptor_model = self.track_panel.get_muscriptor_model()
         self.config.muscriptor_instruments = self.track_panel.get_muscriptor_instruments()
+        self.config.custom_bpm = self.track_panel.get_custom_bpm()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
         self.config.validate()
 
@@ -1713,7 +1719,7 @@ class MainWindow(QMainWindow):
         mixer.set_midi_controls_enabled(False)
         mixer.set_track_midi_running(track_name, route)
         mixer.pause()
-        is_muscriptor = route == MIDI_ROUTE_MUSCRIPTOR
+        is_muscriptor = is_muscriptor_midi_route(route)
         self._show_muscriptor_streaming(
             str(resolved_audio),
             manual_config.muscriptor_instruments if is_muscriptor else [],

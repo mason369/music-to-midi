@@ -34,11 +34,13 @@
 
 ## 当前能力
 
-- **完整混音转写**：`SMART` 模式直接读取整首歌，可选 YourMT3+、MIROS 或 MuScriptor Large，把音符、鼓点和 GM 乐器轨道转成 MIDI。
-- **人声/伴奏分离与逐轨转写**：`VOCAL_SPLIT` 模式用 Leap XE 90-band 提取 vocals、PolarFormer 提取 accompaniment，主流程先交付两条真实 WAV；随后可在音轨工作台为每条 WAV 独立选择 11 条 MIDI 路线并显式开始转换。
-- **六声部分离与逐轨转写**：`SIX_STEM_SPLIT` 模式用 `BS-Rofo-SW-Fixed.ckpt` 分离 `bass / drums / guitar / piano / vocals / other` 六条真实 WAV；随后逐轨选择 11 条 MIDI 路线，不会在用户未选择时自动生成或合并 MIDI。
+- **完整混音转写**：`SMART` 模式直接读取整首歌，可选 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small，把音符、鼓点和 GM 乐器轨道转成 MIDI。
+- **人声/伴奏分离与逐轨转写**：`VOCAL_SPLIT` 模式用 Leap XE 90-band 提取 vocals、PolarFormer 提取 accompaniment，主流程先交付两条真实 WAV；随后可在音轨工作台为每条 WAV 独立选择 13 条 MIDI 路线并显式开始转换。
+- **六声部分离与逐轨转写**：`SIX_STEM_SPLIT` 模式用 `BS-Rofo-SW-Fixed.ckpt` 分离 `bass / drums / guitar / piano / vocals / other` 六条真实 WAV；随后逐轨选择 13 条 MIDI 路线，不会在用户未选择时自动生成或合并 MIDI。
 - **钢琴专用转写**：`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 面向纯钢琴音频，分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。
-- **默认后端语义**：多乐器默认后端为 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`；`SMART` 可显式切换 MIROS 或 MuScriptor Large，分离后的每条 WAV 也可独立选择这三类多乐器路线。
+- **默认后端语义**：多乐器默认后端为 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`；`SMART` 可显式切换 MIROS 或 MuScriptor，并为 MuScriptor 选择 Large、Medium 或 Small；分离后的每条 WAV 也可独立选择三档 MuScriptor 路线。
+- **速度与工程对齐**：自动 BPM 由独立检测器共识和稳定拍间隔倍频校验产生；也可设置 20–400 BPM 的自定义速度。只要设置了自定义值，所有最终下载 MIDI 的 `set_tempo` 都严格以该值为准，同时保持音符绝对秒位置不变。
+- **MIDI 主时钟播放进度**：MuScriptor 结果工作台的进度条以可播放 MIDI 合成轨为主时钟，统一控制 MIDI、原音和乐器分轨 seek，并在播放中校正超过 80 ms 的从轨漂移。
 - **MuScriptor 真约束**：MuScriptor 的乐器多选不是显示过滤器。空选表示模型自动检测；非空选择会传入官方 `instruments` + `prelude_forcing` 解码接口，未选乐器 token 在生成阶段被禁止，事件流和最终 MIDI 还会再次校验，发现越界就拒绝发布文件。
 - **MIROS 可选后端**：`SMART` 与分离结果的逐轨多乐器菜单都可显式选择本地 `ai4m-miros` 后端。
 - **官方转写结果**：YourMT3+ 与 MIROS 路线保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 路线直接使用官方事件与 MIDI writer，并额外执行所选乐器集合的严格一致性校验。项目不会对这些结果做量化、去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。
@@ -49,7 +51,7 @@
 
 | 入口 | 处理模式 | 后端选择 | 适合场景 |
 |------|----------|----------|----------|
-| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` | SMART 可选 YourMT3+ / MIROS / MuScriptor；分离结果逐轨选择 11 条路线；钢琴模式使用各自固定后端 | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
+| PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` | SMART 可选 YourMT3+ / MIROS / MuScriptor 三档；分离结果逐轨选择 13 条路线；钢琴模式使用各自固定后端 | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
 | Gradio Space | 同桌面七种模式 | 同步提供 MuScriptor 搜索式乐器多选、硬约束和官方式结果工作台 | 浏览器中快速试用或部署 |
 | Google Colab | 同桌面七种模式 | 与 Space 同样传递 MuScriptor 乐器约束并显示真实结果音频工作台 | 临时使用 Colab GPU |
 
@@ -59,7 +61,7 @@
 
 - `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` 是本项目的七种处理工作流。
 - `YMT3+`、`YPTF+Single (noPS)`、`YPTF+Multi (PS)`、`YPTF.MoE+Multi (noPS)`、`YPTF.MoE+Multi (PS)` 是官方 YourMT3 demo 暴露的五种 checkpoint / 架构模式。
-- 桌面版、Gradio Space 和 Colab 都暴露同一组七种处理工作流；`SMART` 可选 YourMT3+、MIROS 或 MuScriptor Large，两个分离工作流先输出 WAV，再为每条音轨独立提供 11 条显式 MIDI 路线。
+- 桌面版、Gradio Space 和 Colab 都暴露同一组七种处理工作流；`SMART` 可选 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small，两个分离工作流先输出 WAV，再为每条音轨独立提供 13 条显式 MIDI 路线。
 
 当前同步覆盖如下：
 
@@ -69,7 +71,7 @@
 | `run.ps1` / `run.sh` | 启动前检查全部官方 YourMT3+ 模式、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源当作可运行状态。 |
 | `install.ps1` / `install.sh` | 安装 PyTorch 2.7、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | 完整七模式要求 NVIDIA 驱动兼容 CUDA 12.8，并使用精确 `cu128` wheel；`audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
-| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 26 项第三方组件必须全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`，否则构建立即停止；目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
+| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 28 项第三方组件必须全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`，否则构建立即停止；目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
 | `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台同步提供 YourMT3+、MIROS、MuScriptor Large；逐轨菜单另含四条钢琴路线。 |
 
 ## 处理模式
@@ -153,7 +155,7 @@ runtime/models/yourmt3_all          # 便携版
 models/yourmt3_all                  # 打包资源
 ```
 
-### MuScriptor Large
+### MuScriptor Large / Medium / Small
 
 项目固定使用公开提交 `302343e8992bdfc619f77f1988168374ed5d675d`
 （包版本 `0.2.2a1`）及 gated 权重仓库
@@ -163,8 +165,12 @@ CC BY-NC 4.0；必须先在 Hugging Face 接受仓库条款并登录：
 
 ```bash
 hf auth login
-python download_muscriptor_model.py
+python download_muscriptor_model.py --size large
+python download_muscriptor_model.py --size medium
+python download_muscriptor_model.py --size small
 ```
+
+三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
 
 Windows 结果工作台还需要固定 FluidSynth 2.5.6；安装脚本会准备，也可单独运行：
 
@@ -173,7 +179,7 @@ python download_fluidsynth_runtime.py
 ```
 
 界面和官方公开演示保持同一功能语义：可搜索的标签多选与清除、空选自动检测、
-实时转写进度/音符、钢琴卷帘、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
+实时转写进度/音符、以 MIDI 为主时钟的可拖动播放进度条、钢琴卷帘、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
 逐乐器静音/独奏，以及 MIDI、合成 WAV、原音左声道/MIDI 右声道立体声下载。
 这些控制连接真实后端资产：逐乐器播放来自最终 MIDI 经官方 MuseScore General
 SoundFont 与 FluidSynth 合成，不是无效按钮或 UI 模拟。
@@ -634,7 +640,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 AMD/ROCm 当前不能完成七模式：即使 PyTorch 提供 ROCm wheel，PolarFormer 仍固定依赖 ONNX Runtime `CUDAExecutionProvider`。安装脚本会明确停止，不会静默改用 CPU；完整七模式目前只验收 NVIDIA CUDA。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 26 项第三方组件：22 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 28 项第三方组件：24 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -735,7 +741,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-> 发布门禁状态：当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 26 项闭集清单为 22 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
+> 发布门禁状态：当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 28 项闭集清单为 24 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
 
 Windows 目录式便携包：
 

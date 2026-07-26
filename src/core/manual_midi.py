@@ -11,6 +11,7 @@ from pathlib import Path
 from src.models.data_models import (
     Config,
     MultiInstrumentModel,
+    MuscriptorModel,
     ProcessingMode,
     YourMT3Model,
 )
@@ -18,7 +19,15 @@ from src.models.muscriptor_instruments import validate_muscriptor_instruments
 
 MIDI_ROUTE_YOURMT3_PREFIX = f"{MultiInstrumentModel.YOURMT3.value}:"
 MIDI_ROUTE_MIROS = MultiInstrumentModel.MIROS.value
+# Keep the original route id as the Large compatibility route so existing
+# result directories and saved track state remain valid.
 MIDI_ROUTE_MUSCRIPTOR = MultiInstrumentModel.MUSCRIPTOR.value
+MIDI_ROUTE_MUSCRIPTOR_MEDIUM = (
+    f"{MultiInstrumentModel.MUSCRIPTOR.value}:{MuscriptorModel.MEDIUM.value}"
+)
+MIDI_ROUTE_MUSCRIPTOR_SMALL = (
+    f"{MultiInstrumentModel.MUSCRIPTOR.value}:{MuscriptorModel.SMALL.value}"
+)
 MIDI_ROUTE_PIANO_TRANSKUN = ProcessingMode.PIANO_TRANSKUN.value
 MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG = ProcessingMode.PIANO_TRANSKUN_V2_AUG.value
 MIDI_ROUTE_PIANO_ARIA_AMT = ProcessingMode.PIANO_ARIA_AMT.value
@@ -32,16 +41,37 @@ YOURMT3_MANUAL_MODELS = (
     YourMT3Model.YPTF_MOE_MULTI_PS,
 )
 
+MUSCRIPTOR_MANUAL_ROUTES = (
+    MIDI_ROUTE_MUSCRIPTOR,
+    MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
+    MIDI_ROUTE_MUSCRIPTOR_SMALL,
+)
+
 MANUAL_MIDI_ROUTES = tuple(
     f"{MIDI_ROUTE_YOURMT3_PREFIX}{model.value}" for model in YOURMT3_MANUAL_MODELS
 ) + (
     MIDI_ROUTE_MIROS,
-    MIDI_ROUTE_MUSCRIPTOR,
+    *MUSCRIPTOR_MANUAL_ROUTES,
     MIDI_ROUTE_PIANO_TRANSKUN,
     MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
 )
+
+
+def is_muscriptor_midi_route(route: str) -> bool:
+    return str(route) in MUSCRIPTOR_MANUAL_ROUTES
+
+
+def muscriptor_model_for_route(route: str) -> str:
+    normalized = str(route)
+    if normalized == MIDI_ROUTE_MUSCRIPTOR:
+        return MuscriptorModel.LARGE.value
+    if normalized == MIDI_ROUTE_MUSCRIPTOR_MEDIUM:
+        return MuscriptorModel.MEDIUM.value
+    if normalized == MIDI_ROUTE_MUSCRIPTOR_SMALL:
+        return MuscriptorModel.SMALL.value
+    raise ValueError(f"Not a MuScriptor MIDI route: {normalized!r}")
 
 
 def _validate_manual_midi_route(route: str) -> str:
@@ -74,10 +104,11 @@ def build_manual_midi_config(
         config.processing_mode = ProcessingMode.SMART.value
         config.transcription_backend = MultiInstrumentModel.MIROS.value
         config.multi_instrument_model = MultiInstrumentModel.MIROS.value
-    elif selected_route == MIDI_ROUTE_MUSCRIPTOR:
+    elif is_muscriptor_midi_route(selected_route):
         config.processing_mode = ProcessingMode.SMART.value
         config.transcription_backend = MultiInstrumentModel.MUSCRIPTOR.value
         config.multi_instrument_model = MultiInstrumentModel.MUSCRIPTOR.value
+        config.muscriptor_model = muscriptor_model_for_route(selected_route)
         config.muscriptor_instruments = validate_muscriptor_instruments(
             muscriptor_instruments or []
         )

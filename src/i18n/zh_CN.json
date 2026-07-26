@@ -90,7 +90,7 @@
       "smart_yourmt3_hint": "适合完整混音；可在上方选择模型结构，输出 GM 多乐器 MIDI。",
       "smart_miros_desc": "🎵  MIROS (MusicFM)  —  多乐器转写",
       "smart_miros_hint": "适合完整混音；使用 MusicFM multi-decoder 识别多种乐器并输出 GM MIDI。",
-      "smart_muscriptor_desc": "🎼  MuScriptor-large  —  多乐器转写",
+      "smart_muscriptor_desc": "🎼  MuScriptor  —  多乐器转写",
       "smart_muscriptor_hint": "适合完整混音。乐器列表留空时自动识别；选择乐器后，输出只包含所选乐器。",
       "vocal_split_desc": "🎤  Leap XE + PolarFormer  —  人声/伴奏分离",
       "vocal_split_hint": "从原音频提取人声和伴奏，生成两条 WAV 音轨。完成后可为每条音轨单独选择模型并转换为 MIDI。",
@@ -125,9 +125,15 @@
       "miros_general_hint": "将完整混音直接转换为 GM 多乐器 MIDI。",
       "miros_six_stem_hint": "六声部音频分离固定使用 BS-RoFormer SW Fixed；MIROS 会分别转写 bass/drums/guitar/piano/vocals/other 六个真实 stem，再生成对应 MIDI。",
       "vocal_split_miros_midi_hint": "人声分离固定使用 Leap XE vocals + PolarFormer accompaniment；MIROS 只负责分别转写两个真实 stem。",
-      "muscriptor": "MuScriptor-large",
-      "muscriptor_midi": "MuScriptor-large（仅转 MIDI）",
-      "muscriptor_tooltip": "1.4B 多乐器转写模型，支持自动识别或按乐器限制输出。",
+      "muscriptor": "MuScriptor",
+      "muscriptor_midi": "MuScriptor（仅转 MIDI）",
+      "muscriptor_tooltip": "可显式选择 Large、Medium 或 Small；支持自动识别或按乐器限制输出。",
+      "muscriptor_model_label": "MuScriptor 模型大小",
+      "muscriptor_models": {
+        "large": "Large（1.4B，质量优先）",
+        "medium": "Medium（307M，速度/质量平衡）",
+        "small": "Small（103M，最快/最低显存）"
+      },
       "muscriptor_general_hint": "乐器列表留空时自动识别；选择乐器后，输出只包含所选乐器。",
       "muscriptor_instruments_title": "这首歌里用了哪些乐器？",
       "muscriptor_instruments_desc": "可多选不同乐器。留空时自动识别；选择后只输出所选乐器。",
@@ -137,6 +143,12 @@
       "yourmt3_model_tooltip": "选择 YourMT3+ 使用的模型结构。",
       "checkpoint_label": "检查点",
       "model_traits_label": "模型结构"
+    },
+    "tempo": {
+      "label": "最终 MIDI 速度",
+      "auto": "自动检测",
+      "custom": "自定义",
+      "custom_tooltip": "自定义值会跳过自动检测，并作为所有最终下载 MIDI 的恒定 BPM。"
     },
     "tracks": {
       "title": "处理设置"
@@ -221,6 +233,7 @@
       "note_count": "音符数",
       "bpm": "BPM",
       "bpm_variable": "变速",
+      "bpm_custom": "自定义",
       "device": "设备",
       "seconds_suffix": "秒",
       "accompaniment_midi": "伴奏MIDI",
@@ -312,6 +325,9 @@
             "yourmt3": "YourMT3+（多乐器）",
             "miros": "MIROS (MusicFM)（多乐器）",
             "muscriptor": "MuScriptor-large（多乐器，支持乐器硬约束）",
+            "muscriptor_large": "MuScriptor Large（多乐器，质量优先）",
+            "muscriptor_medium": "MuScriptor Medium（多乐器，速度/质量平衡）",
+            "muscriptor_small": "MuScriptor Small（多乐器，最快/最低显存）",
             "piano_transkun": "TransKun V2（钢琴）",
             "piano_transkun_v2_aug": "TransKun V2 Aug（钢琴）",
             "piano_aria_amt": "Aria-AMT（钢琴）",
@@ -403,6 +419,7 @@
   "progress": {
     "loading_audio_for_beat": "正在加载音频进行节拍检测...",
     "analyzing_tempo": "正在使用多算法分析速度...",
+    "custom_bpm": "使用自定义恒定速度 {bpm} BPM，跳过自动检测",
     "finding_beats": "正在查找节拍位置...",
     "detecting_downbeats": "正在检测下拍...",
     "loading_aria_amt": "正在加载 Aria-AMT...",
@@ -485,6 +502,7 @@
     "complete_elapsed": "处理完成，耗时 {seconds} 秒"
   },
   "muscriptor_result": {
+    "playback_progress_tooltip": "MIDI 主时钟播放进度；拖动会同时定位 MIDI 和原音频",
     "streaming": "MuScriptor 正在流式生成钢琴卷帘…",
     "progress_waiting": "等待首个转写分片…",
     "progress_timing": "{processed} / {total} · 已用 {elapsed} · 预计 {remaining} 后完成",

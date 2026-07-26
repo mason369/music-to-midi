@@ -453,12 +453,12 @@ fi
 success "YourMT3+ 源码身份检查通过"
 
 # ───────────────────────── 下载统一模型集合 ─────────────────────────
-info "下载并校验全部公开工作流模型（含 MuScriptor-large 与 SoundFont）..."
+info "下载并校验全部公开工作流模型（含 MuScriptor Small/Medium/Large 与 SoundFont）..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_sota_models.py"; then
     error "统一模型集合下载或校验失败"
 fi
-success "YourMT3+、MIROS、分离/钢琴模型、MuScriptor-large 与 SoundFont 全部准备完成"
+success "YourMT3+、MIROS、分离/钢琴模型、MuScriptor Small/Medium/Large 与 SoundFont 全部准备完成"
 
 info "Verifying/downloading Leap XE 90-band vocals assets..."
 
@@ -518,7 +518,7 @@ echo -e "  ${GREEN}✔${NC} BS-RoFormer SW Fixed 六声部模型"
 echo -e "  ${GREEN}✔${NC} Leap XE 人声 + PolarFormer 伴奏模型"
 echo -e "  ${GREEN}✔${NC} TransKun V2 Aug 模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
-echo -e "  ${GREEN}✔${NC} MuScriptor-large 固定权重与 MuseScore General SoundFont"
+echo -e "  ${GREEN}✔${NC} MuScriptor Small/Medium/Large 固定权重与 MuseScore General SoundFont"
 echo -e "  ${GREEN}✔${NC} FluidSynth 真实 MIDI 播放链"
 echo ""
 echo -e "  ${BOLD}模型维护命令：${NC}"
@@ -528,7 +528,7 @@ echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_accompaniment_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_transkun_v2_aug_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
-echo -e "  ${YELLOW}venv/bin/python download_muscriptor_model.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_muscriptor_model.py --size all${NC}"
 echo ""
 if $IS_WSL; then
     echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"

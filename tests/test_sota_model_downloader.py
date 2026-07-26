@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import mock
 
 import download_sota_models
+from src.models.data_models import MuscriptorModel
 from src.utils.yourmt3_downloader import OFFICIAL_YOURMT3_MODEL_KEYS
 
 
@@ -49,10 +50,13 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_result = Path("/tmp/transkun-v2-aug/checkpointMSimplerAug")
         aria_result = Path("/tmp/aria-amt/piano-medium-double-1.0.safetensors")
         bytedance_result = Path("/tmp/bytedance/note_F1=0.9677_pedal_F1=0.9186.pth")
-        muscriptor_result = (
-            Path("/tmp/muscriptor/model.safetensors"),
-            Path("/tmp/muscriptor/config.json"),
-        )
+        muscriptor_results = {
+            model_size.value: (
+                Path(f"/tmp/muscriptor-{model_size.value}/model.safetensors"),
+                Path(f"/tmp/muscriptor-{model_size.value}/config.json"),
+            )
+            for model_size in MuscriptorModel
+        }
         soundfont_result = Path("/tmp/muscriptor-assets/MuseScore_General.sf2")
         fluidsynth_result = Path("/tmp/fluidsynth/bin/fluidsynth")
 
@@ -104,8 +108,8 @@ class SotaModelDownloaderTests(unittest.TestCase):
             ) as bytedance_mock,
             mock.patch.object(
                 download_sota_models,
-                "download_muscriptor_large_model",
-                return_value=muscriptor_result,
+                "download_muscriptor_model",
+                side_effect=lambda model_size: muscriptor_results[model_size.value],
             ) as muscriptor_mock,
             mock.patch.object(
                 download_sota_models,
@@ -129,7 +133,10 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_mock.assert_called_once_with()
         aria_mock.assert_called_once_with()
         bytedance_mock.assert_called_once_with()
-        muscriptor_mock.assert_called_once_with()
+        self.assertEqual(
+            muscriptor_mock.call_args_list,
+            [mock.call(model_size) for model_size in MuscriptorModel],
+        )
         soundfont_mock.assert_called_once_with()
         fluidsynth_mock.assert_called_once_with()
         self.assertEqual(result["transkun"], transkun_result)
@@ -148,8 +155,23 @@ class SotaModelDownloaderTests(unittest.TestCase):
             result["bytedance_piano"]["checkpoint"],
             bytedance_result,
         )
-        self.assertEqual(result["muscriptor"]["weights"], muscriptor_result[0])
-        self.assertEqual(result["muscriptor"]["config"], muscriptor_result[1])
+        for model_size in MuscriptorModel:
+            self.assertEqual(
+                result["muscriptor"]["models"][model_size.value]["weights"],
+                muscriptor_results[model_size.value][0],
+            )
+            self.assertEqual(
+                result["muscriptor"]["models"][model_size.value]["config"],
+                muscriptor_results[model_size.value][1],
+            )
+        self.assertEqual(
+            result["muscriptor"]["weights"],
+            muscriptor_results[MuscriptorModel.LARGE.value][0],
+        )
+        self.assertEqual(
+            result["muscriptor"]["config"],
+            muscriptor_results[MuscriptorModel.LARGE.value][1],
+        )
         self.assertEqual(result["muscriptor"]["soundfont"], soundfont_result)
         self.assertEqual(result["muscriptor"]["fluidsynth"], fluidsynth_result)
 

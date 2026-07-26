@@ -5,11 +5,9 @@ from download_aria_amt_model import download_aria_model
 from download_bytedance_piano_model import download_bytedance_piano_model
 from download_miros_model import prepare_miros_model
 from download_multistem_model import download_multistem_model
-from download_muscriptor_model import download_muscriptor_large_model
+from download_muscriptor_model import download_muscriptor_model
 from download_transkun_v2_aug_model import download_transkun_v2_aug_model
 from download_vocal_model import download_vocal_model
-from src.utils.fluidsynth_runtime import download_fluidsynth_windows
-from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 from src.core.transkun_transcriber import (
     TRANSKUN_CONF_NAME,
     TRANSKUN_CONF_SHA256,
@@ -21,6 +19,9 @@ from src.core.transkun_transcriber import (
     TRANSKUN_WEIGHT_SIZE,
     TranskunTranscriber,
 )
+from src.models.data_models import MuscriptorModel
+from src.utils.fluidsynth_runtime import download_fluidsynth_windows
+from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 from src.utils.yourmt3_downloader import (
     OFFICIAL_YOURMT3_MODEL_KEYS,
     YOURMT3_MODELS,
@@ -143,9 +144,15 @@ def download_sota_models() -> dict[str, object]:
     bytedance_checkpoint = download_bytedance_piano_model()
     print(f"ready: {bytedance_checkpoint}")
 
-    print("\n[10/12] Preparing gated MuScriptor-large checkpoint...")
-    muscriptor_weights, muscriptor_config = download_muscriptor_large_model()
-    print(f"ready: {muscriptor_weights}")
+    print("\n[10/12] Preparing all gated MuScriptor checkpoints...")
+    muscriptor_models = {}
+    for model_size in MuscriptorModel:
+        muscriptor_weights, muscriptor_config = download_muscriptor_model(model_size)
+        muscriptor_models[model_size.value] = {
+            "weights": muscriptor_weights,
+            "config": muscriptor_config,
+        }
+        print(f"ready ({model_size.value}): {muscriptor_weights}")
 
     print("\n[11/12] Preparing MuScriptor official playback SoundFont...")
     muscriptor_soundfont = download_muscriptor_soundfont()
@@ -181,8 +188,11 @@ def download_sota_models() -> dict[str, object]:
             "checkpoint": bytedance_checkpoint,
         },
         "muscriptor": {
-            "weights": muscriptor_weights,
-            "config": muscriptor_config,
+            "models": muscriptor_models,
+            # Backward-compatible aliases for callers that still consume the
+            # original Large-only aggregate result.
+            "weights": muscriptor_models[MuscriptorModel.LARGE.value]["weights"],
+            "config": muscriptor_models[MuscriptorModel.LARGE.value]["config"],
             "soundfont": muscriptor_soundfont,
             "fluidsynth": fluidsynth_executable,
         },

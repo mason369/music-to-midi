@@ -44,7 +44,9 @@ PORTABLE_COMPONENT: miros_source | bundle=external/ai4m-miros | artifact=patched
 PORTABLE_COMPONENT: musicfm_pretrained | bundle=external/ai4m-miros/model/musicfm/data/pretrained_msd.pt | artifact=checkpoint | revision=546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: miros_finetuned | bundle=external/ai4m-miros/logs/.../last.ckpt | artifact=checkpoint | revision=sha256:b1b8c167b3d2e3eaeb19202cd3fd366bb43492cd7720ff1516e1553c72e356e5 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=source+metadata | revision=302343e8992bdfc619f77f1988168374ed5d675d | license=MIT | status=VERIFIED
-PORTABLE_COMPONENT: muscriptor_checkpoint | bundle=models/muscriptor_large | artifact=model.safetensors+config.json | revision=8809fdfbed2affa7ade94a7059e746e3880720e7 | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_small_checkpoint | bundle=models/muscriptor_small | artifact=model.safetensors+config.json | revision=8c127f603b807520fa465c838e9bfee8a91ada4e | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_medium_checkpoint | bundle=models/muscriptor_medium | artifact=model.safetensors+config.json | revision=f32236969308476e01fd3aae67357de5feb05a2d | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_large_checkpoint | bundle=models/muscriptor_large | artifact=model.safetensors+config.json | revision=8809fdfbed2affa7ade94a7059e746e3880720e7 | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: musescore_general_soundfont | bundle=models/muscriptor_assets | artifact=MuseScore_General.sf2 | revision=7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: fluidsynth_runtime | bundle=resources/fluidsynth | artifact=official-Windows-binary-or-Ubuntu-binary+runtime-libraries | revision=2.5.6-or-Ubuntu-22.04-package-recorded-at-build | license=LGPL-2.1-or-later | status=VERIFIED
 PORTABLE_COMPONENT: pytorch_cuda_runtime | bundle=python+native-runtime | artifact=torch:2.7.0+torchaudio:2.7.0+torchvision:0.22.0+CUDA | revision=cu128 | license=BSD-3-Clause-and-NVIDIA-CUDA-EULA | status=VERIFIED
@@ -61,18 +63,25 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
 
 ## Verified declarations and owner-accepted artifacts
 
-### MuScriptor public runtime, gated large checkpoint, and demo playback assets
+### MuScriptor public runtime, three gated checkpoints, and demo playback assets
 
 - Runtime source: [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor/tree/302343e8992bdfc619f77f1988168374ed5d675d),
   pinned commit `302343e8992bdfc619f77f1988168374ed5d675d`, package version
   `0.2.2a1`; declared source license: MIT.
-- Model: [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large),
-  pinned revision `8809fdfbed2affa7ade94a7059e746e3880720e7`; declared model
-  license: CC BY-NC 4.0. The model repository is gated. Users must accept its
-  terms and authenticate with Hugging Face before `download_muscriptor_model.py`
-  can retrieve it.
-- The portable GPU archives include the exact gated checkpoint after the maintainer's
-  authenticated release job has accepted the model conditions. Redistribution and use
+- Models:
+  [MuScriptor/muscriptor-small](https://huggingface.co/MuScriptor/muscriptor-small)
+  at pinned revision `8c127f603b807520fa465c838e9bfee8a91ada4e`,
+  [MuScriptor/muscriptor-medium](https://huggingface.co/MuScriptor/muscriptor-medium)
+  at pinned revision `f32236969308476e01fd3aae67357de5feb05a2d`, and
+  [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)
+  at pinned revision `8809fdfbed2affa7ade94a7059e746e3880720e7`.
+  All three model repositories declare CC BY-NC 4.0, are gated, and publish the
+  same additional conditions requiring users to hold all necessary rights for
+  input recordings and generated transcriptions. Users must accept each model's
+  terms and authenticate with Hugging Face before
+  `download_muscriptor_model.py --size all` can retrieve the complete set.
+- The portable GPU archives include all three exact gated checkpoints after the
+  maintainer's authenticated release job has accepted each model's conditions. Redistribution and use
   remain non-commercial under CC BY-NC 4.0, must retain attribution, and remain subject
   to the model page's specific conditions. In particular, users must have all rights
   required for every input recording and resulting transcription.

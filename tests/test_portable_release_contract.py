@@ -95,9 +95,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
         for expected in (
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR",
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR",
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR",
             "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR",
+            "models/muscriptor_small",
+            "models/muscriptor_medium",
             "models/muscriptor_large",
             "models/muscriptor_assets",
             "resources/fluidsynth",
@@ -153,12 +158,15 @@ class PortableReleaseContractTests(unittest.TestCase):
             "PIANO_BYTEDANCE_PEDAL",
         ):
             self.assertGreaterEqual(workflow.count(mode), 2)
-        self.assertIn("YourMT3+、MIROS 或 MuScriptor-large", workflow)
+        self.assertIn(
+            "YourMT3+、MIROS 或 MuScriptor Small / Medium / Large",
+            workflow,
+        )
         self.assertIn("都会各自调用所选后端", workflow)
         self.assertIn("YourMT3+ (5 checkpoints)", workflow)
         self.assertIn("MIROS (source + pretrained + fine-tuned)", workflow)
         self.assertIn(
-            "MuScriptor-large (checkpoint + config + SoundFont + FluidSynth)",
+            "MuScriptor Small/Medium/Large (three checkpoints + configs + SoundFont + FluidSynth)",
             workflow,
         )
         self.assertIn("TransKun 2.0.1 default V2", workflow)
@@ -207,10 +215,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("download_miros_model.py", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR", workflow)
-        self.assertIn("gated MuScriptor-large", workflow)
+        self.assertIn("gated MuScriptor Small/Medium/Large", workflow)
 
     def test_release_workflow_downloads_and_packages_gated_muscriptor_assets(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -218,10 +229,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("HF_TOKEN: ${{ secrets.HF_TOKEN }}", workflow)
         self.assertIn("python download_sota_models.py", workflow)
         self.assertIn("python download_fluidsynth_runtime.py", workflow)
-        self.assertIn("get_cached_muscriptor_paths(validate_hashes=True)", workflow)
+        self.assertIn('for model_size in ("small", "medium", "large")', workflow)
+        self.assertIn("validate_hashes=True", workflow)
+        self.assertIn("Packaged MuScriptor Small/Medium/Large assets verified", workflow)
         self.assertIn("download_muscriptor_soundfont", workflow)
         self.assertIn("command -v fluidsynth", workflow)
-        linux_system_packages = workflow.split("sudo apt-get install -y \\", 1)[1].split("\n\n", 1)[0]
+        linux_system_packages = workflow.split("sudo apt-get install -y \\", 1)[1].split("\n\n", 1)[
+            0
+        ]
         self.assertIn("fluidsynth \\", linux_system_packages)
         self.assertIn("pip install pyinstaller pytest pytest-timeout", workflow)
         self.assertIn("pytest -vv --timeout=60 --timeout-method=thread", workflow)
@@ -230,11 +245,15 @@ class PortableReleaseContractTests(unittest.TestCase):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
 
         for expected in (
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR",
+            "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR",
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR",
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR",
             "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR",
-            "MuScriptor portable assets verified",
-            "download_sota_models.py after accepting the Hugging Face terms",
+            "MuScriptor Small/Medium/Large portable assets verified",
+            "Packaged MuScriptor Small/Medium/Large assets verified",
+            "download_sota_models.py after accepting all three Hugging Face model terms",
         ):
             self.assertIn(expected, script)
 
@@ -396,7 +415,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         for expected_update in (
-            "新增 MuScriptor Large 多乐器转写",
+            "新增 MuScriptor Small / Medium / Large 多乐器转写",
             r"\`SMART\` 模式",
             "生成阶段的硬约束",
             "按 5 秒分片边转写边预览",

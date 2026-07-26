@@ -283,9 +283,9 @@ sys.exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_avai
     }
 }
 
-# 检查 13：MuScriptor-large 与真实 SoundFont 播放链
+# 检查 13：MuScriptor Small/Medium/Large 与真实 SoundFont 播放链
 if (-not $NEED_INSTALL) {
-    Write-Info "检查 MuScriptor-large 固定源码/权重、MuseScore General SoundFont 与 FluidSynth..."
+    Write-Info "检查 MuScriptor Small/Medium/Large 固定源码/权重、MuseScore General SoundFont 与 FluidSynth..."
     $checkMuscriptorScript = @"
 import sys
 sys.path.insert(0, r'$REPO_DIR')
@@ -296,23 +296,27 @@ from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundf
 reason = MuscriptorTranscriber._runtime_unavailable_reason()
 if reason:
     raise RuntimeError(reason)
-# Launcher preflight is intentionally size-only; the actual model load performs
-# the full SHA-256 gate before inference, avoiding a duplicate 5.4 GB read here.
-weights, config = get_cached_muscriptor_paths(validate_hashes=False)
+# Launcher preflight is intentionally size-only; each actual model load performs
+# its full SHA-256 gate before inference, avoiding a duplicate 7.1 GB read here.
+for model_size in ("small", "medium", "large"):
+    weights, config = get_cached_muscriptor_paths(
+        model_size,
+        validate_hashes=False,
+    )
+    print(f'MuScriptor {model_size} model:', weights)
+    print(f'MuScriptor {model_size} config:', config)
 soundfont = download_muscriptor_soundfont(printer=print)
 fluidsynth = get_fluidsynth_executable()
-print('MuScriptor model:', weights)
-print('MuScriptor config:', config)
 print('MuScriptor SoundFont:', soundfont)
 print('FluidSynth:', fluidsynth)
 "@
     & "$VENV_PYTHON" -c $checkMuscriptorScript
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "MuScriptor-large 或其真实 MIDI 播放资源缺失/身份校验失败"
+        Write-Warn "MuScriptor Small/Medium/Large 或其真实 MIDI 播放资源缺失/身份校验失败"
         Write-Warn "  请接受 Hugging Face 模型条款后运行: python download_sota_models.py"
         $NEED_INSTALL = $true
     } else {
-        Write-Ok "MuScriptor-large 与真实 SoundFont 播放链检查通过"
+        Write-Ok "MuScriptor Small/Medium/Large 与真实 SoundFont 播放链检查通过"
     }
 }
 

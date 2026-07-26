@@ -25,6 +25,8 @@ from src.core import muscriptor_result_assets
 from src.core.manual_midi import (
     MIDI_ROUTE_MIROS,
     MIDI_ROUTE_MUSCRIPTOR,
+    MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
+    MIDI_ROUTE_MUSCRIPTOR_SMALL,
     build_manual_midi_config,
 )
 from src.core.muscriptor_midi import validate_muscriptor_midi_constraint
@@ -51,7 +53,7 @@ from src.gui.widgets.muscriptor_result import (
     _SmoothPlaybackClock,
 )
 from src.i18n.translator import t
-from src.models.data_models import Config, MultiInstrumentModel, ProcessingResult
+from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
 from src.models.muscriptor_instruments import muscriptor_instrument_label
 from src.utils import muscriptor_downloader
 
@@ -106,6 +108,39 @@ def test_config_round_trip_preserves_canonical_muscriptor_constraint():
     assert restored.muscriptor_instruments == ["acoustic_piano", "drums"]
 
 
+def test_all_muscriptor_sizes_have_distinct_pinned_artifacts_and_manual_routes():
+    artifacts = muscriptor_downloader.MUSCRIPTOR_ARTIFACTS
+
+    assert set(artifacts) == {"small", "medium", "large"}
+    assert len({artifact.repo_id for artifact in artifacts.values()}) == 3
+    assert len({artifact.revision for artifact in artifacts.values()}) == 3
+    assert all(len(artifact.model_sha256) == 64 for artifact in artifacts.values())
+    assert all(len(artifact.config_sha256) == 64 for artifact in artifacts.values())
+
+    route_expectations = {
+        MIDI_ROUTE_MUSCRIPTOR: MuscriptorModel.LARGE.value,
+        MIDI_ROUTE_MUSCRIPTOR_MEDIUM: MuscriptorModel.MEDIUM.value,
+        MIDI_ROUTE_MUSCRIPTOR_SMALL: MuscriptorModel.SMALL.value,
+    }
+    for route, expected_size in route_expectations.items():
+        config = build_manual_midi_config(Config(), route)
+        assert config.muscriptor_model == expected_size
+        assert config.get_effective_multi_instrument_model() == "muscriptor"
+
+
+def test_config_round_trip_preserves_model_size_and_authoritative_bpm():
+    restored = Config.from_dict(
+        Config(
+            transcription_backend=MultiInstrumentModel.MUSCRIPTOR.value,
+            muscriptor_model=MuscriptorModel.SMALL.value,
+            custom_bpm=128.5,
+        ).to_dict()
+    )
+
+    assert restored.muscriptor_model == "small"
+    assert restored.custom_bpm == pytest.approx(128.5)
+
+
 def test_muscriptor_checkpoint_hash_is_reused_only_while_snapshot_is_unchanged(
     tmp_path: Path,
     monkeypatch,
@@ -119,7 +154,11 @@ def test_muscriptor_checkpoint_hash_is_reused_only_while_snapshot_is_unchanged(
         muscriptor_downloader.MUSCRIPTOR_CONFIG_FILENAME: config,
     }
     validations: list[Path] = []
-    monkeypatch.setattr(muscriptor_downloader, "_cached_file", paths.get)
+    monkeypatch.setattr(
+        muscriptor_downloader,
+        "_cached_file",
+        lambda _artifact, filename: paths.get(filename),
+    )
     monkeypatch.setattr(
         muscriptor_downloader,
         "validate_file_identity",
@@ -248,7 +287,7 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
     )
     monkeypatch.setattr(
         "src.core.muscriptor_transcriber.get_cached_muscriptor_paths",
-        lambda **_kwargs: (weights, config_path),
+        lambda *_args, **_kwargs: (weights, config_path),
     )
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
@@ -1175,7 +1214,9 @@ def test_default_midi_monitoring_uses_one_combined_bus_and_real_mutes_use_stems(
         widget._muted = {instruments[0]}
         widget._apply_mix()
         assert len(widget._all_playback_players()) == 8
-        assert len(widget._active_playback_players()) == 6
+        # The silent combined MIDI bus stays active as the authoritative
+        # transport clock: MIDI + original + five audible instrument stems.
+        assert len(widget._active_playback_players()) == 7
         assert widget._midi_normal[1].volume() == pytest.approx(0.0)
         assert widget._normal_players[instruments[0]][1].volume() == pytest.approx(0.0)
         assert widget._normal_players[instruments[1]][1].volume() == pytest.approx(0.75)
@@ -1208,21 +1249,26 @@ def test_playhead_tick_never_reseeks_audio_players(tmp_path: Path):
 
     master = FakePlayer(1_234)
     slave = FakePlayer(0)
+    midi_pair = widget._midi_normal
     original_pair = widget._original_normal
     original_players = widget._players
     try:
-        widget._original_normal = (master, object())
+        widget._midi_normal = (master, object())
+        widget._original_normal = (slave, object())
         widget._players = [master, slave]
         widget._playing = True
         widget._finalizing = True
         widget._preview_duration = 0.0
+        widget._set_playback_duration(10.0)
 
         widget._tick()
 
         assert widget._position_ms == 1_234
-        assert slave.set_positions == []
+        assert widget.playback_slider.value() == 1_234
+        assert slave.set_positions == [1_234]
     finally:
         widget._playing = False
+        widget._midi_normal = midi_pair
         widget._original_normal = original_pair
         widget._players = original_players
         widget.shutdown()
@@ -1262,10 +1308,10 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
 
     master = FakePlayer(990, 1_000, QMediaPlayer.MediaStatus.EndOfMedia)
     midi = FakePlayer(950, 1_000, QMediaPlayer.MediaStatus.LoadedMedia)
-    original_pair = widget._original_normal
+    midi_pair = widget._midi_normal
     original_players = widget._players
     try:
-        widget._original_normal = (master, object())
+        widget._midi_normal = (master, object())
         widget._players = [master, midi]
         widget._playing = True
         widget._finalizing = True
@@ -1290,7 +1336,7 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
         assert midi.set_positions == []
     finally:
         widget._playing = False
-        widget._original_normal = original_pair
+        widget._midi_normal = midi_pair
         widget._players = original_players
         widget.shutdown()
         widget.close()
@@ -1371,10 +1417,10 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
             return QMediaPlayer.MediaStatus.LoadedMedia
 
     master = FakePlayer([8_300, 8_270, 8_340])
-    original_pair = widget._original_normal
+    midi_pair = widget._midi_normal
     original_players = widget._players
     try:
-        widget._original_normal = (master, object())
+        widget._midi_normal = (master, object())
         widget._players = [master]
         widget._playing = True
         widget._finalizing = True
@@ -1397,8 +1443,86 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
         assert widget.roll_scroll.horizontalScrollBar().value() < previous_scroll
     finally:
         widget._playing = False
-        widget._original_normal = original_pair
+        widget._midi_normal = midi_pair
         widget._players = original_players
+        widget.shutdown()
+        widget.close()
+
+
+def test_transport_slider_supports_absolute_click_and_continuous_drag_seek(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "transport-source.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    widget.resize(1000, 720)
+    widget.show()
+    widget.play_button.setEnabled(True)
+    widget._set_playback_duration(20.0)
+    app.processEvents()
+
+    slider = widget.playback_slider
+    emitted: list[int] = []
+    slider.seek_requested.connect(emitted.append)
+    y = slider.rect().center().y()
+
+    try:
+        click_x = round(slider.width() * 0.25)
+        QTest.mouseClick(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(click_x, y),
+        )
+        assert widget._position_ms == pytest.approx(5_000, abs=600)
+
+        start_x = round(slider.width() * 0.2)
+        middle_x = round(slider.width() * 0.55)
+        end_x = round(slider.width() * 0.8)
+        QTest.mousePress(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(start_x, y),
+        )
+        QTest.mouseMove(slider, QPoint(middle_x, y), delay=1)
+        assert widget._position_ms == pytest.approx(11_000, abs=600)
+        QTest.mouseMove(slider, QPoint(end_x, y), delay=1)
+        QTest.mouseRelease(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(end_x, y),
+        )
+
+        assert widget._position_ms == pytest.approx(16_000, abs=600)
+        assert slider.isSliderDown() is False
+        assert len(emitted) >= 6
+
+        transitions: list[str] = []
+
+        def fake_pause() -> None:
+            transitions.append("pause")
+            widget._playing = False
+
+        def fake_resume() -> None:
+            transitions.append("resume")
+            widget._playing = True
+
+        widget.pause = fake_pause
+        widget._toggle_playback = fake_resume
+        widget._playing = True
+        QTest.mousePress(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(start_x, y),
+        )
+        QTest.mouseMove(slider, QPoint(end_x, y), delay=1)
+        QTest.mouseRelease(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(end_x, y),
+        )
+        assert transitions == ["pause", "resume"]
+        assert widget._playing is True
+    finally:
         widget.shutdown()
         widget.close()
 

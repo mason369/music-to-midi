@@ -65,7 +65,9 @@ jobs:
             musicfm_pretrained
             miros_finetuned
             muscriptor_source
-            muscriptor_checkpoint
+            muscriptor_small_checkpoint
+            muscriptor_medium_checkpoint
+            muscriptor_large_checkpoint
             musescore_general_soundfont
             fluidsynth_runtime
             pytorch_cuda_runtime
@@ -302,7 +304,7 @@ jobs:
           test -f "$WORKSPACE_DIR/external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt"
           python download_miros_model.py
 
-          echo "=== Download and verify the complete seven-mode asset set, including gated MuScriptor-large and its official playback SoundFont ==="
+          echo "=== Download and verify the complete seven-mode asset set, including gated MuScriptor Small/Medium/Large and the official playback SoundFont ==="
           python download_sota_models.py
           python download_fluidsynth_runtime.py
 
@@ -338,15 +340,19 @@ jobs:
           echo "MIROS (source + pretrained + fine-tuned):"
           ls -lh external/ai4m-miros/model/musicfm/data/pretrained_msd.pt
           ls -lh external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
-          echo "MuScriptor-large (checkpoint + config + SoundFont + FluidSynth):"
+          echo "MuScriptor Small/Medium/Large (three checkpoints + configs + SoundFont + FluidSynth):"
           python - <<'PY'
           from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
           from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
           from src.utils.fluidsynth_runtime import get_fluidsynth_executable
 
-          weights, config = get_cached_muscriptor_paths(validate_hashes=True)
-          print(weights)
-          print(config)
+          for model_size in ("small", "medium", "large"):
+              weights, config = get_cached_muscriptor_paths(
+                  model_size,
+                  validate_hashes=True,
+              )
+              print(f"{model_size}: {weights}")
+              print(f"{model_size}: {config}")
           print(download_muscriptor_soundfont(printer=lambda _message: None))
           print(get_fluidsynth_executable())
           PY
@@ -394,13 +400,17 @@ jobs:
           from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 
           root = Path(os.environ["BUILD_ASSET_ROOT"])
-          model_dir = root / "muscriptor_large"
           assets_dir = root / "muscriptor_assets"
-          model_dir.mkdir(parents=True, exist_ok=True)
           assets_dir.mkdir(parents=True, exist_ok=True)
-          weights, config = get_cached_muscriptor_paths(validate_hashes=True)
-          shutil.copy2(weights, model_dir / weights.name)
-          shutil.copy2(config, model_dir / config.name)
+          for model_size in ("small", "medium", "large"):
+              model_dir = root / f"muscriptor_{model_size}"
+              model_dir.mkdir(parents=True, exist_ok=True)
+              weights, config = get_cached_muscriptor_paths(
+                  model_size,
+                  validate_hashes=True,
+              )
+              shutil.copy2(weights, model_dir / weights.name)
+              shutil.copy2(config, model_dir / config.name)
           soundfont = download_muscriptor_soundfont(printer=lambda _message: None)
           shutil.copy2(soundfont, assets_dir / soundfont.name)
           PY
@@ -467,6 +477,9 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR=$BUILD_ASSET_ROOT/bytedance_piano" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR=$BUILD_ASSET_ROOT/transkun_v2_aug" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR=$BUILD_ASSET_ROOT/muscriptor_small" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR=$BUILD_ASSET_ROOT/muscriptor_medium" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR=$BUILD_ASSET_ROOT/muscriptor_large" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR=$BUILD_ASSET_ROOT/muscriptor_large" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR=$BUILD_ASSET_ROOT/muscriptor_assets" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR=$BUILD_ASSET_ROOT/fluidsynth" >> "$GITHUB_ENV"
@@ -484,6 +497,33 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           pyinstaller MusicToMidi.spec
+          python - <<'PY'
+          from pathlib import Path
+
+          from src.utils.artifact_identity import validate_file_identity
+          from src.utils.muscriptor_downloader import (
+              MUSCRIPTOR_ARTIFACTS,
+              MUSCRIPTOR_CONFIG_FILENAME,
+              MUSCRIPTOR_MODEL_FILENAME,
+          )
+
+          models_root = Path("dist/MusicToMidi/_internal/models")
+          for model_size, artifact in MUSCRIPTOR_ARTIFACTS.items():
+              model_dir = models_root / f"muscriptor_{model_size}"
+              validate_file_identity(
+                  model_dir / MUSCRIPTOR_MODEL_FILENAME,
+                  expected_size=artifact.model_bytes,
+                  expected_sha256=artifact.model_sha256,
+                  label=f"packaged MuScriptor-{model_size} model",
+              )
+              validate_file_identity(
+                  model_dir / MUSCRIPTOR_CONFIG_FILENAME,
+                  expected_size=artifact.config_bytes,
+                  expected_sha256=artifact.config_sha256,
+                  label=f"packaged MuScriptor-{model_size} config",
+              )
+          print("Packaged MuScriptor Small/Medium/Large assets verified")
+          PY
           cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt dist/MusicToMidi/
 
       - name: 烟测便携产物 (Windows)
@@ -699,10 +739,10 @@ jobs:
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor-large。
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor Small / Medium / Large。
             VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
 
-          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor-large 固定权重与配置、
+          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
             MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
             TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
 
@@ -750,10 +790,10 @@ jobs:
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor-large。
+            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor Small / Medium / Large。
             VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
 
-          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor-large 固定权重与配置、
+          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
             MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
             TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
 
@@ -900,6 +940,7 @@ jobs:
 
           #### MIDI 速度（BPM）识别与写入修复
           - 修复全部七种模式输出 MIDI 的速度元数据：此前 TransKun 等钢琴后端与 MuScriptor 的官方 writer 会在文件中留下固定 120 BPM 占位 tempo，导入 DAW 后节拍网格与原曲不符；现统一以检测 BPM 按绝对秒重写，音符、力度与 CC64 踏板消息保持不变。
+          - 桌面版新增可选的自定义 BPM：自动识别结果可直接采用，也可由用户明确覆盖；一旦设置，自定义 BPM 就是处理摘要与最终下载 MIDI 的权威速度，不会被后续自动检测结果改回。
           - 新增拍间隔中位数倍频校正：tempogram 投票结果与 beat_track 跟拍的逐拍间隔中位数呈严格 2x/0.5x 关系时以跟拍实测为准，修复半频误检（例如 78.3→161.5、46.1→92.3）。
           - 变速 tempo map（默认关闭，\`enable_tempo_map=True\` 时启用）：beat 引擎逐拍间隔捕捉约 ±3% 段落级速度流动，frame 引擎逐帧 tempo 兜底突变型变速，经高置信门控后写入多个 set_tempo；恒速或低置信时保持单一 tempo。
           - 处理中与完成摘要统一显示检测 BPM（变速时显示范围与"变速"标注）。
@@ -913,12 +954,12 @@ jobs:
           - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
           - 播放头连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时退出自动跟随。
 
-          #### 新增 MuScriptor Large 多乐器转写
+          #### 新增 MuScriptor Small / Medium / Large 多乐器转写
 
-          ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/master/docs/MuScriptor_vs_YourMT3.png)
+          ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/docs/MuScriptor_vs_YourMT3.png)
           *MuScriptor Large 与 YourMT3+ 多乐器转写效果对比*
 
-          - 在完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换中，新增 MuScriptor Large 多乐器后端。
+          - 在完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换中，新增 MuScriptor Small / Medium / Large 多乐器后端。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI，不会显示尚不可播放的未来片段。
           - 内置 MuseScore General SoundFont 与 FluidSynth，提供真实 MIDI 试听、原音/MIDI 混合、立体声、逐乐器静音/独奏，以及 MIDI、合成 WAV 和立体声结果下载。
@@ -946,15 +987,15 @@ jobs:
           - GPU 版内含 CUDA 12.8 运行时，无需单独安装 CUDA
           - 没有 NVIDIA 显卡，或当前显卡与内置 PyTorch/CUDA 不兼容时会显式报错；发布流程不再生成 CPU 版
           - 支持 128 种 GM 乐器精确识别
-          - 当前包含 7 种处理模式；三个多乐器模式均可选择 YourMT3+、MIROS 或 MuScriptor-large
-          - MuScriptor-large 固定权重、MuseScore General SoundFont 与 FluidSynth 已内置；MuScriptor 及其输出仅限符合 CC BY-NC 4.0 和模型页附加条件的用途
+          - 当前包含 7 种处理模式；三个多乐器模式均可选择 YourMT3+、MIROS 或 MuScriptor Small / Medium / Large
+          - MuScriptor Small / Medium / Large 三套固定权重、MuseScore General SoundFont 与 FluidSynth 已内置；MuScriptor 及其输出仅限符合 CC BY-NC 4.0 和模型页附加条件的用途
 
           ### 许可说明
           - 包内附带完整的 \`THIRD_PARTY_NOTICES.md\`（逐项来源、许可与署名）与 \`THIRD_PARTY_SBOM.txt\`（构建环境依赖清单）
           - 包内同时附带 \`FFMPEG_BUILD_AUDIT.txt\`，记录实际打包的 FFmpeg/ffprobe 版本、构建参数、许可文本与 SHA-256
           - 本包作为组合作品按 GPL-3.0 条款分发（含 PyQt6/Qt 组件），完整对应源代码与构建说明见本仓库
           - Aria-AMT checkpoint 按 CC BY-NC-SA 4.0 再分发（非商业用途、保留署名，见包内声明）
-          - MuScriptor-large checkpoint 按 CC BY-NC 4.0 再分发，并附带模型页的具体使用条件；使用者须确认拥有输入音乐所需权利
+          - MuScriptor Small / Medium / Large checkpoints 按 CC BY-NC 4.0 再分发，并附带各模型页的具体使用条件；使用者须确认拥有输入音乐所需权利
           - 个别未声明许可的上游权重（Leap XE、BS-RoFormer SW Fixed、MIROS）由维护者以署名方式分发，权利人可以随时通过 Issue 要求移除
 
           ### 系统要求

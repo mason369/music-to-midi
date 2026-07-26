@@ -82,7 +82,16 @@ miros_source_dir = _resolve_existing_dir(
     os.path.join(ROOT_DIR, "ai4m-miros"),
     os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
 )
-muscriptor_models_dir = _resolve_existing_dir(
+muscriptor_small_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_small"),
+)
+muscriptor_medium_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_medium"),
+)
+muscriptor_large_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR"),
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR"),
     os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_large"),
 )
@@ -144,7 +153,9 @@ datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
 datas += _collect_tree(transkun_v2_aug_models_dir, "models/transkun_v2_aug")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
-datas += _collect_tree(muscriptor_models_dir, "models/muscriptor_large")
+datas += _collect_tree(muscriptor_small_models_dir, "models/muscriptor_small")
+datas += _collect_tree(muscriptor_medium_models_dir, "models/muscriptor_medium")
+datas += _collect_tree(muscriptor_large_models_dir, "models/muscriptor_large")
 datas += _collect_tree(muscriptor_assets_dir, "models/muscriptor_assets")
 datas += _collect_tree(fluidsynth_dir, "resources/fluidsynth")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")

@@ -6,6 +6,7 @@ from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -22,6 +23,7 @@ from src.i18n.translator import get_translator, t
 from src.models.data_models import (
     MidiTrackMode,
     MultiInstrumentModel,
+    MuscriptorModel,
     ProcessingMode,
     TrackLayout,
     YourMT3Model,
@@ -263,6 +265,30 @@ class TrackPanel(QGroupBox):
         yourmt3_model_card_layout.addWidget(self.yourmt3_model_hint_label)
         main_layout.addWidget(self.yourmt3_model_card)
 
+        self._muscriptor_model_row = QWidget()
+        muscriptor_model_row = self._selector_layout(self._muscriptor_model_row)
+        self._muscriptor_model_label = QLabel(t("main.engine.muscriptor_model_label") + ":")
+        self._muscriptor_model_label.setWordWrap(True)
+        self._muscriptor_model_label.setStyleSheet(
+            "font-size: 11px; color: #b0b8c8; font-weight: normal;"
+        )
+        self.muscriptor_model_combo = NoWheelComboBox()
+        self._configure_combo(self.muscriptor_model_combo)
+        self.muscriptor_model_combo.addItem(
+            t("main.engine.muscriptor_models.large"),
+            MuscriptorModel.LARGE.value,
+        )
+        self.muscriptor_model_combo.addItem(
+            t("main.engine.muscriptor_models.medium"),
+            MuscriptorModel.MEDIUM.value,
+        )
+        self.muscriptor_model_combo.addItem(
+            t("main.engine.muscriptor_models.small"),
+            MuscriptorModel.SMALL.value,
+        )
+        muscriptor_model_row.addRow(self._muscriptor_model_label, self.muscriptor_model_combo)
+        main_layout.addWidget(self._muscriptor_model_row)
+
         self.muscriptor_instrument_selector = MuscriptorInstrumentSelector()
         main_layout.addWidget(self.muscriptor_instrument_selector)
 
@@ -270,6 +296,36 @@ class TrackPanel(QGroupBox):
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("background: #3a4a6a; margin: 4px 0;")
         main_layout.addWidget(sep)
+
+        self._tempo_row = QWidget()
+        tempo_row = self._selector_layout(self._tempo_row)
+        self._tempo_label = QLabel(t("main.tempo.label") + ":")
+        self._tempo_label.setWordWrap(True)
+        self._tempo_label.setStyleSheet(
+            "font-size: 11px; color: #b0b8c8; font-weight: normal;"
+        )
+        tempo_controls = QWidget()
+        tempo_controls_layout = QHBoxLayout(tempo_controls)
+        tempo_controls_layout.setContentsMargins(0, 0, 0, 0)
+        tempo_controls_layout.setSpacing(6)
+        self.tempo_mode_combo = NoWheelComboBox()
+        self._configure_combo(self.tempo_mode_combo)
+        self.tempo_mode_combo.addItem(t("main.tempo.auto"), "auto")
+        self.tempo_mode_combo.addItem(t("main.tempo.custom"), "custom")
+        self.tempo_mode_combo.currentIndexChanged.connect(self._on_tempo_mode_changed)
+        tempo_controls_layout.addWidget(self.tempo_mode_combo, 1)
+        self.custom_bpm_spin = QDoubleSpinBox()
+        self.custom_bpm_spin.setRange(20.0, 400.0)
+        self.custom_bpm_spin.setDecimals(1)
+        self.custom_bpm_spin.setSingleStep(0.5)
+        self.custom_bpm_spin.setValue(120.0)
+        self.custom_bpm_spin.setSuffix(" BPM")
+        self.custom_bpm_spin.setEnabled(False)
+        self.custom_bpm_spin.setToolTip(t("main.tempo.custom_tooltip"))
+        self.custom_bpm_spin.setStyleSheet(self._combo_style().replace("QComboBox", "QDoubleSpinBox"))
+        tempo_controls_layout.addWidget(self.custom_bpm_spin, 1)
+        tempo_row.addRow(self._tempo_label, tempo_controls)
+        main_layout.addWidget(self._tempo_row)
 
         self.model_info_card = QFrame()
         self.model_info_card.setObjectName("modelInfoCard")
@@ -345,6 +401,11 @@ class TrackPanel(QGroupBox):
 
     def _on_yourmt3_model_changed(self, _index: int):
         self._refresh_labels()
+
+    def _on_tempo_mode_changed(self, _index: int) -> None:
+        self.custom_bpm_spin.setEnabled(
+            self._controls_enabled and self.tempo_mode_combo.currentData() == "custom"
+        )
 
     def _mode_tooltip(self) -> str:
         mode = self.get_processing_mode()
@@ -564,6 +625,33 @@ class TrackPanel(QGroupBox):
     def set_muscriptor_instruments(self, instruments: list[str]) -> None:
         self.muscriptor_instrument_selector.set_selected_instruments(instruments)
 
+    def get_muscriptor_model(self) -> str:
+        model_name = self.muscriptor_model_combo.currentData()
+        if model_name is None:
+            raise RuntimeError("No MuScriptor model size is selected")
+        return str(model_name)
+
+    def set_muscriptor_model(self, model_name: str) -> None:
+        index = self.muscriptor_model_combo.findData(str(model_name).strip().lower())
+        if index < 0:
+            raise ValueError(f"Unsupported MuScriptor model size: {model_name!r}")
+        self.muscriptor_model_combo.setCurrentIndex(index)
+
+    def get_custom_bpm(self) -> float | None:
+        if self.tempo_mode_combo.currentData() != "custom":
+            return None
+        return float(self.custom_bpm_spin.value())
+
+    def set_custom_bpm(self, bpm: float | None) -> None:
+        is_custom = bpm is not None
+        index = self.tempo_mode_combo.findData("custom" if is_custom else "auto")
+        if index < 0:
+            raise RuntimeError("Tempo mode option was not populated")
+        self.tempo_mode_combo.setCurrentIndex(index)
+        if is_custom:
+            self.custom_bpm_spin.setValue(float(bpm))
+        self._on_tempo_mode_changed(index)
+
     def get_yourmt3_model(self) -> str:
         model_name = self.yourmt3_model_combo.currentData()
         if model_name is None:
@@ -604,6 +692,7 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_card.setVisible(shows_yourmt3_model)
         self.yourmt3_model_title_label.setVisible(shows_yourmt3_model)
         self.yourmt3_model_hint_label.setVisible(shows_yourmt3_model)
+        self._muscriptor_model_row.setVisible(shows_muscriptor_instruments)
         self.muscriptor_instrument_selector.setVisible(shows_muscriptor_instruments)
         self._vocal_split_options.setVisible(False)
 
@@ -617,9 +706,18 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_card.setEnabled(self._controls_enabled and shows_yourmt3_model)
         self.yourmt3_model_title_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
         self.yourmt3_model_hint_label.setEnabled(self._controls_enabled and shows_yourmt3_model)
+        self.muscriptor_model_combo.setEnabled(
+            self._controls_enabled and shows_muscriptor_instruments
+        )
+        self._muscriptor_model_label.setEnabled(
+            self._controls_enabled and shows_muscriptor_instruments
+        )
         self.muscriptor_instrument_selector.setEnabled(
             self._controls_enabled and shows_muscriptor_instruments
         )
+        self.tempo_mode_combo.setEnabled(self._controls_enabled)
+        self._tempo_label.setEnabled(self._controls_enabled)
+        self._on_tempo_mode_changed(self.tempo_mode_combo.currentIndex())
         self._refresh_labels()
 
     def set_processing_controls_enabled(self, enabled: bool):
@@ -640,6 +738,8 @@ class TrackPanel(QGroupBox):
         self._mode_label.setText(t("main.mode.label") + ":")
         self._model_label.setText(self._model_label_text() + ":")
         self._yourmt3_model_label.setText(t("main.engine.yourmt3_model_label") + ":")
+        self._muscriptor_model_label.setText(t("main.engine.muscriptor_model_label") + ":")
+        self._tempo_label.setText(t("main.tempo.label") + ":")
         mode_labels = {
             ProcessingMode.SMART.value: "main.mode.smart",
             ProcessingMode.VOCAL_SPLIT.value: "main.mode.vocal_split",
@@ -656,6 +756,25 @@ class TrackPanel(QGroupBox):
             self.mode_combo.setItemText(index, t(translation_key))
         self._sync_model_options(self.get_transcription_backend())
         self._sync_yourmt3_model_options(self.get_yourmt3_model())
+        model_labels = {
+            MuscriptorModel.LARGE.value: "main.engine.muscriptor_models.large",
+            MuscriptorModel.MEDIUM.value: "main.engine.muscriptor_models.medium",
+            MuscriptorModel.SMALL.value: "main.engine.muscriptor_models.small",
+        }
+        for model_name, key in model_labels.items():
+            index = self.muscriptor_model_combo.findData(model_name)
+            if index < 0:
+                raise RuntimeError(f"MuScriptor model option was not populated: {model_name!r}")
+            self.muscriptor_model_combo.setItemText(index, t(key))
+        self.tempo_mode_combo.setItemText(
+            self.tempo_mode_combo.findData("auto"),
+            t("main.tempo.auto"),
+        )
+        self.tempo_mode_combo.setItemText(
+            self.tempo_mode_combo.findData("custom"),
+            t("main.tempo.custom"),
+        )
+        self.custom_bpm_spin.setToolTip(t("main.tempo.custom_tooltip"))
         self.muscriptor_instrument_selector.update_translations()
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))
         self._refresh_labels()

@@ -235,7 +235,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         self.assertIn('"YourMT3+": "yourmt3"', source_text)
         self.assertIn('"MIROS": "miros"', source_text)
-        self.assertIn('"MuScriptor Large": "muscriptor"', source_text)
+        self.assertIn('"MuScriptor": "muscriptor"', source_text)
         self.assertIn("backend_dropdown = gr.Dropdown", source_text)
         self.assertIn("yourmt3_model_dropdown = gr.Dropdown", source_text)
         self.assertIn("def update_backend_controls", source_text)
@@ -308,7 +308,10 @@ class TestColabNotebookDependencies(unittest.TestCase):
             handler_source,
         )
         self.assertIn("_build_midi_result_state", handler_source)
-        self.assertNotIn('if backend_key == "muscriptor"', handler_source)
+        self.assertNotIn(
+            '\n        if backend_key == "muscriptor":',
+            handler_source,
+        )
         self.assertIn(
             "from src.core.separation_service import AudioSeparationService, SeparationResult",
             source_text,
@@ -341,8 +344,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         from src.core.manual_midi import MANUAL_MIDI_ROUTES
 
-        self.assertEqual(len(MANUAL_MIDI_ROUTES), 11)
-        self.assertEqual(len(set(MANUAL_MIDI_ROUTES)), 11)
+        self.assertEqual(len(MANUAL_MIDI_ROUTES), 13)
+        self.assertEqual(len(set(MANUAL_MIDI_ROUTES)), 13)
         self.assertIn(
             "MANUAL_MIDI_ROUTE_CHOICES = [(label, route) for label, route in "
             "MANUAL_MIDI_ROUTE_LABEL_TO_KEY.items()]",
@@ -646,7 +649,9 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn(
             "inputs=[\n            audio_input,\n            mode_radio,\n"
             "            backend_dropdown,\n            yourmt3_model_dropdown,\n"
-            "            muscriptor_instruments,\n        ]",
+            "            muscriptor_model,\n"
+            "            muscriptor_instruments,\n"
+            "            custom_bpm,\n        ]",
             source_text,
         )
 
@@ -655,7 +660,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         self.assertIn('"yourmt3": "YourMT3+"', source_text)
         self.assertIn('"miros": "MIROS"', source_text)
-        self.assertIn('"muscriptor": "MuScriptor Large"', source_text)
+        self.assertIn('"muscriptor": "MuScriptor"', source_text)
         self.assertIn(
             "def update_mode_info(mode, backend_label=DEFAULT_MULTI_BACKEND_LABEL):",
             source_text,

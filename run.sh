@@ -210,17 +210,21 @@ from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundf
 reason = MuscriptorTranscriber._runtime_unavailable_reason()
 if reason:
     raise RuntimeError(reason)
-# The actual model load performs the full SHA-256 gate. Avoid reading the 5.4 GB
-# checkpoint twice by keeping launcher preflight to exact path/size validation.
-weights, config = get_cached_muscriptor_paths(validate_hashes=False)
+# Each actual model load performs the full SHA-256 gate. Avoid reading the full
+# 7.1 GB checkpoint set twice by keeping launcher preflight to path/size checks.
+for model_size in ("small", "medium", "large"):
+    weights, config = get_cached_muscriptor_paths(
+        model_size,
+        validate_hashes=False,
+    )
+    print(f"MuScriptor {model_size} model:", weights)
+    print(f"MuScriptor {model_size} config:", config)
 soundfont = download_muscriptor_soundfont(printer=print)
 fluidsynth = get_fluidsynth_executable()
-print('MuScriptor model:', weights)
-print('MuScriptor config:', config)
 print('MuScriptor SoundFont:', soundfont)
 print('FluidSynth:', fluidsynth)
 "; then
-    warn "MuScriptor-large or its real SoundFont playback assets are missing/invalid"
+    warn "MuScriptor Small/Medium/Large or their real SoundFont playback assets are missing/invalid"
     warn "  Accept the Hugging Face model terms, then run: python download_sota_models.py"
     NEED_INSTALL=true
 fi

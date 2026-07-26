@@ -335,7 +335,7 @@ class AudioTrackMixerTests(unittest.TestCase):
 
         self.assertEqual(row.name_label.text(), "♪  reference")
         self.assertFalse(row.midi_enabled_checkbox.isChecked())
-        self.assertEqual(row.midi_model_selector.count(), 12)
+        self.assertEqual(row.midi_model_selector.count(), 14)
         self.assertFalse(row.convert_midi_button.isEnabled())
         self.assertIn("not converted", row.midi_status_label.text())
 

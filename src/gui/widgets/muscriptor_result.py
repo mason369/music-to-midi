@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStyle,
+    QStyleOptionSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -202,6 +203,81 @@ class _SmoothPlaybackClock:
         ceiling = max(self._display_ms, self._reported_ms + self.max_lead_ms)
         self._display_ms = max(self._display_ms, min(projected, ceiling))
         return self._display_ms
+
+
+class _SeekSlider(QSlider):
+    """Horizontal transport slider with absolute click and continuous drag seeking."""
+
+    seek_requested = pyqtSignal(int)
+    scrub_started = pyqtSignal()
+    scrub_finished = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self._scrubbing = False
+
+    def _value_for_x(self, x_position: float) -> int:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+        handle = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self,
+        )
+        slider_min = groove.left()
+        slider_max = groove.right() - handle.width() + 1
+        if slider_max <= slider_min:
+            slider_min = 0
+            slider_max = max(1, self.width() - handle.width())
+        slider_position = round(float(x_position) - handle.width() / 2.0)
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            max(0, min(slider_max - slider_min, slider_position - slider_min)),
+            max(1, slider_max - slider_min),
+            option.upsideDown,
+        )
+
+    def _seek_to_pointer(self, x_position: float) -> int:
+        value = self._value_for_x(x_position)
+        self.setValue(value)
+        self.seek_requested.emit(value)
+        return value
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._scrubbing = True
+            self.setSliderDown(True)
+            self.scrub_started.emit()
+            self._seek_to_pointer(event.position().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._scrubbing and event.buttons() & Qt.MouseButton.LeftButton:
+            self._seek_to_pointer(event.position().x())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._scrubbing and event.button() == Qt.MouseButton.LeftButton:
+            value = self._seek_to_pointer(event.position().x())
+            self._scrubbing = False
+            self.setSliderDown(False)
+            self.scrub_finished.emit(value)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _PianoRollCanvas(QWidget):
@@ -714,9 +790,11 @@ class MuscriptorResultWidget(QFrame):
         self._progress_total = 0
         self._source_duration_seconds = 0.0
         self._position_ms = 0
+        self._last_drift_check_position_ms = 0
         self._playback_clock = _SmoothPlaybackClock()
         self._playing = False
         self._playback_finished = False
+        self._resume_playback_after_scrub = False
         self._muted: set[str] = set()
         self._soloed: str | None = None
         self._instrument_rows: dict[str, _InstrumentRow] = {}
@@ -853,6 +931,24 @@ class MuscriptorResultWidget(QFrame):
         self.stereo_checkbox.toggled.connect(self._apply_mix)
         controls.addWidget(self.stereo_checkbox)
         root.addLayout(controls)
+
+        transport = QHBoxLayout()
+        self.playback_slider = _SeekSlider()
+        self.playback_slider.setRange(0, 0)
+        self.playback_slider.setSingleStep(100)
+        self.playback_slider.setPageStep(5_000)
+        self.playback_slider.setEnabled(False)
+        self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
+        self.playback_slider.scrub_started.connect(self._on_playback_scrub_started)
+        self.playback_slider.seek_requested.connect(
+            lambda position_ms: self.seek(position_ms / 1000.0)
+        )
+        self.playback_slider.scrub_finished.connect(self._on_playback_scrub_finished)
+        transport.addWidget(self.playback_slider, 1)
+        self.duration_label = QLabel("/ 0.0s")
+        self.duration_label.setStyleSheet("font-family: Consolas; color: #8da4c9;")
+        transport.addWidget(self.duration_label)
+        root.addLayout(transport)
 
         content = QHBoxLayout()
         self.roll_scroll = _PianoRollScrollArea()
@@ -1205,6 +1301,7 @@ class MuscriptorResultWidget(QFrame):
         self._detected = list(dict.fromkeys(note.instrument for note in payload.notes))
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
+        self._set_playback_duration(self._preview_duration)
         self.mix_slider.setEnabled(True)
         self.stereo_checkbox.setChecked(False)
         self.stereo_checkbox.setEnabled(False)
@@ -1219,6 +1316,7 @@ class MuscriptorResultWidget(QFrame):
         self._position_ms = min(position_ms, int(self._preview_duration * 1000))
         self._playback_finished = self._position_ms >= int(self._preview_duration * 1000) - 30
         self._playback_clock.reset(self._position_ms)
+        self.playback_slider.setValue(self._position_ms)
         for player in self._all_playback_players():
             player.setPosition(self._position_ms)
 
@@ -1387,6 +1485,7 @@ class MuscriptorResultWidget(QFrame):
         self._detected = list(dict.fromkeys(note.instrument for note in assets.notes))
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
+        self._set_playback_duration(assets.duration)
         self.mix_slider.setEnabled(True)
         self.stereo_checkbox.setEnabled(True)
         self.download_transcription_action.setEnabled(True)
@@ -1394,9 +1493,10 @@ class MuscriptorResultWidget(QFrame):
         self.status_label.setText(t("muscriptor_result.ready"))
         self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
         self._preview_duration = 0.0
-        self._position_ms = position_ms
+        self._position_ms = min(position_ms, int(round(assets.duration * 1000.0)))
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
+        self.playback_slider.setValue(self._position_ms)
         self._apply_mix()
         self._update_play_label()
 
@@ -1413,6 +1513,7 @@ class MuscriptorResultWidget(QFrame):
             )
         )
         self.play_button.setEnabled(preview_available)
+        self.playback_slider.setEnabled(preview_available and self.playback_slider.maximum() > 0)
         self.mix_slider.setEnabled(preview_available)
         self.stereo_checkbox.setEnabled(False)
 
@@ -1442,7 +1543,13 @@ class MuscriptorResultWidget(QFrame):
         if self._muted:
             self._ensure_instrument_players(stereo=stereo)
         instrument_players = self._right_players if stereo else self._normal_players
+        # The rendered MIDI mix is always the transport master, including when
+        # its gain is zero because per-instrument mute/solo playback is active.
+        # Keeping it scheduled makes the displayed progress and all seek/drift
+        # corrections follow playable MIDI time instead of the source audio.
         pairs: list[tuple[QMediaPlayer, QAudioOutput]] = []
+        if midi_mix is not None:
+            pairs.append(midi_mix)
         if original is not None:
             pairs.append(original)
         if self._muted:
@@ -1451,12 +1558,17 @@ class MuscriptorResultWidget(QFrame):
                 for instrument, pair in instrument_players.items()
                 if instrument not in self._muted
             )
-        elif midi_mix is not None:
-            pairs.append(midi_mix)
         return pairs
 
     def _active_playback_players(self) -> list[QMediaPlayer]:
         return [player for player, _output in self._active_playback_pairs()]
+
+    def _set_playback_duration(self, seconds: float) -> None:
+        duration_ms = max(0, int(round(float(seconds) * 1000.0)))
+        self.playback_slider.setRange(0, duration_ms)
+        self.playback_slider.setEnabled(duration_ms > 0 and self.play_button.isEnabled())
+        self.duration_label.setText(f"/ {_format_seconds(duration_ms / 1000.0)}")
+        self.playback_slider.setValue(min(self._position_ms, duration_ms))
 
     def _sync_active_players(self) -> None:
         active = self._active_playback_players()
@@ -1486,6 +1598,7 @@ class MuscriptorResultWidget(QFrame):
         else:
             if self._playback_finished:
                 self._position_ms = 0
+                self.playback_slider.setValue(0)
                 self._playback_finished = False
             elif (
                 not self._finalizing
@@ -1495,6 +1608,7 @@ class MuscriptorResultWidget(QFrame):
                 self._position_ms = 0
             self._playing = True
             self._startup_sync_pending = len(active_players) > 1
+            self._last_drift_check_position_ms = self._position_ms
             self._playback_clock.reset(self._position_ms)
             for player in active_players:
                 player.setPosition(self._position_ms)
@@ -1523,17 +1637,31 @@ class MuscriptorResultWidget(QFrame):
         if was_playing:
             self.playing_changed.emit(False)
 
+    def _on_playback_scrub_started(self) -> None:
+        self._resume_playback_after_scrub = self._playing
+        if self._playing:
+            self.pause()
+
+    def _on_playback_scrub_finished(self, _position_ms: int) -> None:
+        resume = self._resume_playback_after_scrub
+        self._resume_playback_after_scrub = False
+        if resume:
+            self._toggle_playback()
+
     def seek(self, seconds: float) -> None:
         position = max(0.0, float(seconds))
-        if not self._finalizing and self._preview_duration > 0:
-            position = min(position, self._preview_duration)
+        duration_ms = self.playback_slider.maximum()
+        if duration_ms > 0:
+            position = min(position, duration_ms / 1000.0)
         self._position_ms = int(position * 1000)
+        self._last_drift_check_position_ms = self._position_ms
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
         for player in self._all_playback_players():
             player.setPosition(self._position_ms)
         self.roll.set_position(position)
         self.clock_label.setText(_format_seconds(position))
+        self.playback_slider.setValue(self._position_ms)
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=True)
 
@@ -1627,6 +1755,7 @@ class MuscriptorResultWidget(QFrame):
         position = terminal_ms / 1000.0
         self.roll.set_position(position)
         self.clock_label.setText(_format_seconds(position))
+        self.playback_slider.setValue(min(terminal_ms, self.playback_slider.maximum()))
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=False)
         self._update_play_label()
@@ -1636,18 +1765,23 @@ class MuscriptorResultWidget(QFrame):
     def _tick(self) -> None:
         if not self._finalizing:
             self._update_stream_progress()
-        if not self._playing or self._original_normal is None:
+        if not self._playing or self._midi_normal is None:
             return
         master_pair = (
-            self._original_left
-            if self.stereo_checkbox.isChecked() and self._original_left is not None
-            else self._original_normal
+            self._midi_right
+            if self.stereo_checkbox.isChecked() and self._midi_right is not None
+            else self._midi_normal
         )
         master = master_pair[0]
         # Local playback cannot legitimately move backwards between timer ticks. Some
         # Windows multimedia backends briefly report an older clock sample; feeding
         # that value into follow-scroll makes the entire piano roll shake left/right.
         self._position_ms = max(self._position_ms, max(0, master.position()))
+        if self._position_ms - self._last_drift_check_position_ms >= 500:
+            for player in self._active_playback_players()[1:]:
+                if abs(player.position() - self._position_ms) > 80:
+                    player.setPosition(self._position_ms)
+            self._last_drift_check_position_ms = self._position_ms
         authoritative_position = self._position_ms / 1000.0
         if self._preview_duration > 0 and authoritative_position >= self._preview_duration:
             self._finish_playback_at(int(self._preview_duration * 1000))
@@ -1665,6 +1799,7 @@ class MuscriptorResultWidget(QFrame):
         position = display_ms / 1000.0
         self.roll.set_position(position)
         self.clock_label.setText(_format_seconds(position))
+        self.playback_slider.setValue(min(self._position_ms, self.playback_slider.maximum()))
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=False)
         if master.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia:
@@ -1830,6 +1965,7 @@ class MuscriptorResultWidget(QFrame):
         )
         self._update_play_label()
         self.follow_checkbox.setText(t("muscriptor_result.follow"))
+        self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
         self.original_label.setText(t("muscriptor_result.original"))
         self.stereo_checkbox.setText(t("muscriptor_result.stereo"))
         self.instruments_title.setText(t("muscriptor_result.instruments"))

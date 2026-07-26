@@ -303,12 +303,15 @@ from src.core.manual_midi import (
     MANUAL_MIDI_ROUTES,
     MIDI_ROUTE_MIROS,
     MIDI_ROUTE_MUSCRIPTOR,
+    MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
+    MIDI_ROUTE_MUSCRIPTOR_SMALL,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
     MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG,
     MIDI_ROUTE_YOURMT3_PREFIX,
     build_manual_midi_config,
+    is_muscriptor_midi_route,
     manual_midi_output_dir,
 )
 from src.core.multi_stem_separator import STEM_KEYS
@@ -326,6 +329,7 @@ from src.i18n.translator import Translator
 from src.models.data_models import (
     Config,
     MultiInstrumentModel,
+    MuscriptorModel,
     ProcessingMode,
     ProcessingStage,
     YourMT3Model,
@@ -400,6 +404,11 @@ BACKEND_CHOICES = [
 MUSCRIPTOR_INSTRUMENT_CHOICES = [
     (muscriptor_instrument_label(name, SPACE_LANGUAGE), name) for name in MUSCRIPTOR_INSTRUMENTS
 ]
+MUSCRIPTOR_MODEL_CHOICES = [
+    (st("main.engine.muscriptor_models.large"), MuscriptorModel.LARGE.value),
+    (st("main.engine.muscriptor_models.medium"), MuscriptorModel.MEDIUM.value),
+    (st("main.engine.muscriptor_models.small"), MuscriptorModel.SMALL.value),
+]
 YOURMT3_MODEL_CHOICES = [
     (YOURMT3_MODELS[model.value]["ui_label"], model.value)
     for model in (
@@ -448,7 +457,15 @@ def _manual_midi_route_label(route: str) -> str:
 
     route_labels = {
         MIDI_ROUTE_MIROS: st("dialogs.complete.audio_tracks.manual_midi.models.miros"),
-        MIDI_ROUTE_MUSCRIPTOR: st("dialogs.complete.audio_tracks.manual_midi.models.muscriptor"),
+        MIDI_ROUTE_MUSCRIPTOR: st(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_large"
+        ),
+        MIDI_ROUTE_MUSCRIPTOR_MEDIUM: st(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_medium"
+        ),
+        MIDI_ROUTE_MUSCRIPTOR_SMALL: st(
+            "dialogs.complete.audio_tracks.manual_midi.models.muscriptor_small"
+        ),
         MIDI_ROUTE_PIANO_TRANSKUN: st(
             "dialogs.complete.audio_tracks.manual_midi.models.piano_transkun"
         ),
@@ -468,7 +485,7 @@ def _manual_midi_route_label(route: str) -> str:
         raise ValueError(f"Unsupported manual MIDI route: {route!r}") from exc
     family_key = (
         "dialogs.complete.audio_tracks.manual_midi.multi_instrument"
-        if route in {MIDI_ROUTE_MIROS, MIDI_ROUTE_MUSCRIPTOR}
+        if route == MIDI_ROUTE_MIROS or is_muscriptor_midi_route(route)
         else "dialogs.complete.audio_tracks.manual_midi.piano"
     )
     return f"{st(family_key)} · {route_label}"
@@ -477,9 +494,9 @@ def _manual_midi_route_label(route: str) -> str:
 MANUAL_MIDI_ROUTE_CHOICES = [
     (_manual_midi_route_label(route), route) for route in MANUAL_MIDI_ROUTES
 ]
-if len(MANUAL_MIDI_ROUTE_CHOICES) != 11:
+if len(MANUAL_MIDI_ROUTE_CHOICES) != 13:
     raise RuntimeError(
-        "Space requires exactly eleven explicit per-track MIDI routes; "
+        "Space requires exactly thirteen explicit per-track MIDI routes; "
         f"received {len(MANUAL_MIDI_ROUTE_CHOICES)}"
     )
 
@@ -816,6 +833,8 @@ def _build_midi_result_state(
 
 def _result_backend_label(config: Config) -> str:
     if config.processing_mode == ProcessingMode.SMART.value:
+        if config.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value:
+            return f"MuScriptor-{config.muscriptor_model}"
         return {value: label for label, value in BACKEND_CHOICES}[config.transcription_backend]
     return MODE_LABELS[config.processing_mode]
 
@@ -944,14 +963,15 @@ def ensure_muscriptor_runtime():
         )
 
 
-def ensure_muscriptor_weights():
-    """Download the gated, pinned large checkpoint and verify its exact hashes."""
-    from src.utils.muscriptor_downloader import download_muscriptor_large_model
+def ensure_muscriptor_weights(model_size=MuscriptorModel.LARGE.value):
+    """Download one gated, pinned checkpoint and verify its exact hashes."""
+    from src.utils.muscriptor_downloader import download_muscriptor_model, get_muscriptor_artifact
 
     ensure_muscriptor_runtime()
-    weights, config = download_muscriptor_large_model(printer=logger.info)
-    logger.info("MuScriptor-large checkpoint ready: %s", weights)
-    logger.info("MuScriptor-large config ready: %s", config)
+    artifact = get_muscriptor_artifact(model_size)
+    weights, config = download_muscriptor_model(model_size, printer=logger.info)
+    logger.info("%s checkpoint ready: %s", artifact.display_name, weights)
+    logger.info("%s config ready: %s", artifact.display_name, config)
 
 
 def ensure_transkun_v2_aug_weights():
@@ -1096,7 +1116,9 @@ def _build_space_request_config(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model,
     muscriptor_instruments=None,
+    custom_bpm=None,
     *,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
@@ -1110,7 +1132,9 @@ def _build_space_request_config(
     config.transcription_backend = transcription_backend
     config.multi_instrument_model = transcription_backend
     config.yourmt3_model = yourmt3_model
+    config.muscriptor_model = muscriptor_model
     config.muscriptor_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
+    config.custom_bpm = custom_bpm
     config.vocal_split_merge_midi = bool(
         config.processing_mode == ProcessingMode.VOCAL_SPLIT.value and vocal_split_merge_midi
     )
@@ -1123,6 +1147,7 @@ def _prepare_request_models(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model=MuscriptorModel.LARGE.value,
     muscriptor_instruments=None,
 ) -> None:
     """Strictly prepare only the assets selected for the current job."""
@@ -1131,6 +1156,7 @@ def _prepare_request_models(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
     )
     if config.processing_mode == ProcessingMode.PIANO_ARIA_AMT.value:
@@ -1145,7 +1171,7 @@ def _prepare_request_models(
         elif config.transcription_backend == MultiInstrumentModel.MIROS.value:
             ensure_miros_weights()
         elif config.transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value:
-            ensure_muscriptor_weights()
+            ensure_muscriptor_weights(config.muscriptor_model)
         else:
             raise RuntimeError(
                 "Unsupported multi-instrument backend: " f"{config.transcription_backend!r}"
@@ -1194,7 +1220,9 @@ def _convert_impl(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model,
     muscriptor_instruments,
+    custom_bpm,
     progress=gr.Progress(),
 ):
     """Run one direct audio-to-MIDI mode without creating a track workbench."""
@@ -1216,7 +1244,9 @@ def _convert_impl(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
+        custom_bpm,
         vocal_split_merge_midi=False,
         save_separated_tracks=True,
     )
@@ -1283,7 +1313,9 @@ def _convert_impl(
     device_label = get_device_label()
     if result.beat_info:
         bpm_str = result.beat_info.bpm_display
-        if result.beat_info.is_variable_tempo:
+        if config.custom_bpm is not None:
+            bpm_str += f" ({st('dialogs.complete.bpm_custom')})"
+        elif result.beat_info.is_variable_tempo:
             bpm_str += f" ({st('dialogs.complete.bpm_variable')})"
     else:
         bpm_str = "N/A"
@@ -1417,6 +1449,11 @@ ZERO_GPU_MULTI_BACKEND_RUNTIME_FACTORS = {
     MultiInstrumentModel.MIROS.value: 2.5,
     MultiInstrumentModel.MUSCRIPTOR.value: 3.0,
 }
+ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS = {
+    MuscriptorModel.LARGE.value: 3.0,
+    MuscriptorModel.MEDIUM.value: 1.2,
+    MuscriptorModel.SMALL.value: 0.7,
+}
 ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS = {
     YourMT3Model.YMT3_PLUS.value: 1.0,
     YourMT3Model.YPTF_SINGLE_NOPS.value: 1.0,
@@ -1431,7 +1468,9 @@ def _estimate_zerogpu_duration(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model="large",
     muscriptor_instruments=None,
+    custom_bpm=None,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
     progress=None,
@@ -1442,7 +1481,7 @@ def _estimate_zerogpu_duration(
     daily quota or queue capacity is available.  Long songs must use Colab,
     the desktop build, or dedicated GPU hardware.
     """
-    del muscriptor_instruments, vocal_split_merge_midi, save_separated_tracks, progress
+    del custom_bpm, muscriptor_instruments, vocal_split_merge_midi, save_separated_tracks, progress
     if audio_path is None:
         return 60
     if mode not in MODE_IDS:
@@ -1462,6 +1501,10 @@ def _estimate_zerogpu_duration(
             if yourmt3_model not in ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS:
                 raise RuntimeError(f"Unsupported YourMT3 checkpoint: {yourmt3_model!r}")
             runtime_factor *= ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS[yourmt3_model]
+        elif transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value:
+            if muscriptor_model not in ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS:
+                raise RuntimeError(f"Unsupported MuScriptor model size: {muscriptor_model!r}")
+            runtime_factor = ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS[muscriptor_model]
 
     raw_estimated_seconds = max(
         ZERO_GPU_BASE_RUNTIME_SECONDS,
@@ -1493,7 +1536,9 @@ if ZERO_GPU:
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
+        custom_bpm,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1510,7 +1555,9 @@ if ZERO_GPU:
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_model,
             muscriptor_instruments,
+            custom_bpm,
             progress=progress,
         )
 
@@ -1521,7 +1568,9 @@ else:
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
+        custom_bpm,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1538,7 +1587,9 @@ else:
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_model,
             muscriptor_instruments,
+            custom_bpm,
             progress=progress,
         )
 
@@ -1548,7 +1599,9 @@ def convert_audio_to_midi(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model="large",
     muscriptor_instruments=None,
+    custom_bpm=None,
     progress=gr.Progress(),
 ):
     """Prepare exactly one selected primary job before requesting a GPU slot."""
@@ -1562,13 +1615,16 @@ def convert_audio_to_midi(
             mode,
             transcription_backend,
             yourmt3_model,
+            muscriptor_model,
             muscriptor_instruments,
+            custom_bpm,
             progress=progress,
         )
     _prepare_request_models(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
     )
     return _convert_audio_to_midi_on_gpu(
@@ -1576,7 +1632,9 @@ def convert_audio_to_midi(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
         muscriptor_instruments,
+        custom_bpm,
         progress=progress,
     )
 
@@ -1585,11 +1643,12 @@ if ZERO_GPU:
     setattr(convert_audio_to_midi, "zerogpu", None)
 
 
-def _manual_route_config(route: str, muscriptor_instruments=None) -> Config:
+def _manual_route_config(route: str, muscriptor_instruments=None, custom_bpm=None) -> Config:
     if route not in MANUAL_MIDI_ROUTES:
         raise RuntimeError(f"Unsupported manual MIDI route: {route!r}")
     base_config = Config()
     base_config.language = SPACE_LANGUAGE
+    base_config.custom_bpm = custom_bpm
     return build_manual_midi_config(
         base_config,
         route,
@@ -1603,6 +1662,7 @@ def _estimate_manual_zerogpu_duration(
     track_id,
     route,
     muscriptor_instruments=None,
+    custom_bpm=None,
     progress=None,
 ):
     del progress
@@ -1613,13 +1673,15 @@ def _estimate_manual_zerogpu_duration(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route), muscriptor_instruments)
+    config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
     return _estimate_zerogpu_duration(
         str(audio_file),
         config.processing_mode,
         config.transcription_backend,
         config.yourmt3_model,
+        config.muscriptor_model,
         config.muscriptor_instruments,
+        config.custom_bpm,
     )
 
 
@@ -1629,6 +1691,7 @@ def _convert_manual_midi_impl(
     track_id,
     route,
     muscriptor_instruments,
+    custom_bpm,
     progress=gr.Progress(),
 ):
     from src.core.pipeline import MusicToMidiPipeline
@@ -1640,7 +1703,7 @@ def _convert_manual_midi_impl(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route), muscriptor_instruments)
+    config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
     output_dir = _require_owned_request_output_dir(
         request_root,
         manual_midi_output_dir(audio_file, str(route)),
@@ -1694,9 +1757,10 @@ if ZERO_GPU:
         track_id,
         route,
         muscriptor_instruments,
+        custom_bpm,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route), muscriptor_instruments)
+        config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
@@ -1704,6 +1768,7 @@ if ZERO_GPU:
             track_id,
             route,
             muscriptor_instruments,
+            custom_bpm,
             progress=progress,
         )
 
@@ -1715,9 +1780,10 @@ else:
         track_id,
         route,
         muscriptor_instruments,
+        custom_bpm,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route), muscriptor_instruments)
+        config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
@@ -1725,6 +1791,7 @@ else:
             track_id,
             route,
             muscriptor_instruments,
+            custom_bpm,
             progress=progress,
         )
 
@@ -1735,6 +1802,7 @@ def _convert_one_track(
     midi_enabled,
     route,
     muscriptor_instruments,
+    custom_bpm,
     progress=gr.Progress(),
 ):
     state = _normalize_track_state(track_state)
@@ -1752,7 +1820,7 @@ def _convert_one_track(
         raise gr.Error(st("dialogs.complete.audio_tracks.manual_midi.model_required"))
 
     selected_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
-    config = _manual_route_config(str(route), selected_instruments)
+    config = _manual_route_config(str(route), selected_instruments, custom_bpm)
     try:
         if ZERO_GPU:
             _estimate_manual_zerogpu_duration(
@@ -1761,12 +1829,14 @@ def _convert_one_track(
                 selected_track["id"],
                 route,
                 selected_instruments,
+                custom_bpm,
                 progress=progress,
             )
         _prepare_request_models(
             config.processing_mode,
             config.transcription_backend,
             config.yourmt3_model,
+            config.muscriptor_model,
             config.muscriptor_instruments,
         )
         midi_path, midi_result = _convert_manual_midi_on_gpu(
@@ -1775,6 +1845,7 @@ def _convert_one_track(
             selected_track["id"],
             route,
             selected_instruments,
+            custom_bpm,
             progress=progress,
         )
     except InterruptedError:
@@ -1799,7 +1870,7 @@ def _convert_one_track(
                     "midi_enabled": True,
                     "route": str(route),
                     "muscriptor_instruments": (
-                        selected_instruments if str(route) == MIDI_ROUTE_MUSCRIPTOR else []
+                        selected_instruments if is_muscriptor_midi_route(str(route)) else []
                     ),
                     "midi_path": str(midi_path),
                     "status": st(
@@ -1843,8 +1914,8 @@ def _track_control_updates(enabled, route):
         gr.update(interactive=is_enabled and normalized_route in MANUAL_MIDI_ROUTES),
         status,
         gr.update(
-            visible=normalized_route == MIDI_ROUTE_MUSCRIPTOR,
-            interactive=is_enabled and normalized_route == MIDI_ROUTE_MUSCRIPTOR,
+            visible=is_muscriptor_midi_route(normalized_route),
+            interactive=is_enabled and is_muscriptor_midi_route(normalized_route),
         ),
     )
 
@@ -2000,6 +2071,7 @@ def update_mode_controls(mode, transcription_backend):
         gr.update(visible=uses_global_backend),
         gr.update(visible=shows_yourmt3_model),
         gr.update(visible=shows_muscriptor_instruments),
+        gr.update(visible=shows_muscriptor_instruments),
         gr.update(value=_main_action_label(mode)),
     )
 
@@ -2013,6 +2085,9 @@ def update_backend_controls(mode, transcription_backend):
     return (
         gr.update(
             visible=(uses_smart and transcription_backend == MultiInstrumentModel.YOURMT3.value)
+        ),
+        gr.update(
+            visible=(uses_smart and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value)
         ),
         gr.update(
             visible=(uses_smart and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value)
@@ -2229,6 +2304,12 @@ with gr.Blocks(
                 label=st("main.engine.yourmt3_model_label"),
                 visible=True,
             )
+            muscriptor_model = gr.Dropdown(
+                choices=MUSCRIPTOR_MODEL_CHOICES,
+                value=MuscriptorModel.LARGE.value,
+                label=st("main.engine.muscriptor_model_label"),
+                visible=False,
+            )
             muscriptor_instruments = gr.Dropdown(
                 choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
                 value=[],
@@ -2238,6 +2319,15 @@ with gr.Blocks(
                 info=st("main.engine.muscriptor_instruments_desc"),
                 visible=False,
                 elem_classes=["muscriptor-instrument-selector"],
+            )
+            custom_bpm = gr.Number(
+                value=None,
+                minimum=20.0,
+                maximum=400.0,
+                step=0.1,
+                precision=1,
+                label=st("main.tempo.label"),
+                info=st("main.tempo.custom_tooltip"),
             )
 
             with gr.Row():
@@ -2262,6 +2352,7 @@ with gr.Blocks(
                     mode_info,
                     transcription_backend,
                     yourmt3_model,
+                    muscriptor_model,
                     muscriptor_instruments,
                     convert_btn,
                 ],
@@ -2271,7 +2362,7 @@ with gr.Blocks(
             transcription_backend.change(
                 fn=update_backend_controls,
                 inputs=[mode_radio, transcription_backend],
-                outputs=[yourmt3_model, muscriptor_instruments],
+                outputs=[yourmt3_model, muscriptor_model, muscriptor_instruments],
                 api_name=False,
                 queue=False,
             )
@@ -2424,9 +2515,9 @@ with gr.Blocks(
                         filterable=True,
                         label=st("main.engine.muscriptor_instruments_title"),
                         info=st("main.engine.muscriptor_instruments_desc"),
-                        visible=track["route"] == MIDI_ROUTE_MUSCRIPTOR,
+                        visible=is_muscriptor_midi_route(track["route"]),
                         interactive=bool(
-                            track["midi_enabled"] and track["route"] == MIDI_ROUTE_MUSCRIPTOR
+                            track["midi_enabled"] and is_muscriptor_midi_route(track["route"])
                         ),
                         elem_classes=["muscriptor-instrument-selector"],
                         key=f"midi-instruments-{track['id']}",
@@ -2482,6 +2573,7 @@ with gr.Blocks(
                             midi_enabled,
                             midi_route,
                             midi_instruments,
+                            custom_bpm,
                         ],
                         outputs=[track_state],
                         api_name=False,
@@ -2520,7 +2612,9 @@ with gr.Blocks(
             mode_radio,
             transcription_backend,
             yourmt3_model,
+            muscriptor_model,
             muscriptor_instruments,
+            custom_bpm,
         ],
         outputs=[file_output, status_output, track_state],
         api_name="convert",

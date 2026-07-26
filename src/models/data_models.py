@@ -3,6 +3,7 @@
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import Enum
@@ -175,6 +176,14 @@ class MultiInstrumentModel(Enum):
     YOURMT3 = "yourmt3"
     MIROS = "miros"
     MUSCRIPTOR = "muscriptor"
+
+
+class MuscriptorModel(Enum):
+    """Official MuScriptor checkpoint sizes exposed as explicit choices."""
+
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
 
 
 class TranscriptionBackend(Enum):
@@ -516,9 +525,13 @@ class Config:
     preserve_all_notes: bool = True  # 保留所有音符
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
     yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
+    muscriptor_model: str = MuscriptorModel.LARGE.value
     # Empty means official MuScriptor auto-detection. Non-empty is a hard
     # decode-time allow-list and must never be treated as a display-only hint.
     muscriptor_instruments: List[str] = field(default_factory=list)
+    # None keeps automatic beat detection. A finite value is the authoritative
+    # constant tempo written into every exported MIDI.
+    custom_bpm: Optional[float] = None
 
     # MIDI设置
     ticks_per_beat: int = 480
@@ -608,6 +621,25 @@ class Config:
             raise ValueError(f"invalid yourmt3_model: {self.yourmt3_model!r}")
         self.yourmt3_model = normalized_yourmt3_model
 
+        valid_muscriptor_models = {model.value for model in MuscriptorModel}
+        normalized_muscriptor_model = (
+            str(getattr(self, "muscriptor_model", "") or "").strip().lower()
+        )
+        if normalized_muscriptor_model not in valid_muscriptor_models:
+            raise ValueError(f"invalid muscriptor_model: {self.muscriptor_model!r}")
+        self.muscriptor_model = normalized_muscriptor_model
+
+        custom_bpm = getattr(self, "custom_bpm", None)
+        if custom_bpm is None or custom_bpm == "":
+            self.custom_bpm = None
+        else:
+            normalized_bpm = float(custom_bpm)
+            if not math.isfinite(normalized_bpm) or not 20.0 <= normalized_bpm <= 400.0:
+                raise ValueError(
+                    f"custom_bpm must be between 20 and 400 BPM, got {custom_bpm!r}"
+                )
+            self.custom_bpm = normalized_bpm
+
         from src.models.muscriptor_instruments import validate_muscriptor_instruments
 
         self.muscriptor_instruments = validate_muscriptor_instruments(
@@ -645,7 +677,9 @@ class Config:
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,
             "yourmt3_model": self.yourmt3_model,
+            "muscriptor_model": self.muscriptor_model,
             "muscriptor_instruments": list(self.muscriptor_instruments),
+            "custom_bpm": self.custom_bpm,
             "ticks_per_beat": self.ticks_per_beat,
             "default_velocity": self.default_velocity,
             "quantize_notes": self.quantize_notes,
