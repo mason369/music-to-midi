@@ -158,6 +158,8 @@ class MusicToMidiPipeline:
         msg: str,
         *,
         bpm_display: Optional[str] = None,
+        source_bpm: Optional[float] = None,
+        target_bpm: Optional[float] = None,
     ) -> None:
         logger.info(
             "Progress | stage=%s %.0f%% | overall=%.0f%% | %s",
@@ -174,6 +176,8 @@ class MusicToMidiPipeline:
                     overall_progress=op,
                     message=msg,
                     bpm_display=bpm_display,
+                    source_bpm=source_bpm,
+                    target_bpm=target_bpm,
                 )
             )
 
@@ -190,6 +194,12 @@ class MusicToMidiPipeline:
             op,
             f"BPM: {bpm_text}",
             bpm_display=bpm_text,
+            source_bpm=(
+                float(beat_info.source_bpm)
+                if beat_info.source_bpm is not None
+                else float(beat_info.bpm)
+            ),
+            target_bpm=float(beat_info.bpm),
         )
 
     def _check_cancelled(self) -> None:
@@ -348,16 +358,6 @@ class MusicToMidiPipeline:
         audio_path: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> BeatInfo:
-        if self.config.custom_bpm is not None:
-            bpm = float(self.config.custom_bpm)
-            logger.info("使用用户指定的恒定速度：%.1f BPM；跳过自动速度检测", bpm)
-            if progress_callback is not None:
-                progress_callback(
-                    1.0,
-                    self._pt("progress.custom_bpm", bpm=f"{bpm:.1f}"),
-                )
-            return BeatInfo(bpm=bpm)
-
         try:
             detect_params = inspect.signature(self.beat_detector.detect).parameters
             if progress_callback is not None and "progress_callback" in detect_params:
@@ -373,7 +373,30 @@ class MusicToMidiPipeline:
         if beat_info is None:
             raise RuntimeError("节拍检测失败，检测器未返回 BPM，已停止。")
 
-        logger.info("节拍检测完成: %.1f BPM", beat_info.bpm)
+        detected_bpm = float(beat_info.bpm)
+        if self.config.custom_bpm is not None:
+            target_bpm = float(self.config.custom_bpm)
+            logger.info(
+                "原曲速度检测完成: %.1f BPM；用户目标速度: %.1f BPM；实际倍率: %.3fx",
+                detected_bpm,
+                target_bpm,
+                target_bpm / detected_bpm,
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    1.0,
+                    self._pt("progress.custom_bpm", bpm=f"{target_bpm:.1f}"),
+                )
+            return BeatInfo(
+                bpm=target_bpm,
+                beat_times=list(beat_info.beat_times),
+                downbeats=beat_info.downbeats,
+                time_signature=beat_info.time_signature,
+                tempo_map=[],
+                source_bpm=detected_bpm,
+            )
+
+        logger.info("节拍检测完成: %.1f BPM", detected_bpm)
         return beat_info
 
     @staticmethod
@@ -475,6 +498,7 @@ class MusicToMidiPipeline:
         *,
         force: bool = False,
         tempo_map: Optional[List[Tuple[float, float]]] = None,
+        source_bpm: Optional[float] = None,
     ) -> str:
         """Add detected tempo without applying any note-level post-processing.
 
@@ -483,9 +507,12 @@ class MusicToMidiPipeline:
         MuScriptor and the piano backends (e.g. TransKun ``writeMidi``) do emit
         a ``set_tempo``, but it is a fixed placeholder (120 BPM) rather than a
         detected value, so product paths pass ``force=True`` to replace it.
-        Match the authorized TelkNet dev contract by inserting the detected tempo
-        and recomputing delta ticks from absolute seconds.  Pitch, program,
-        velocity, controller, pitch-wheel, and note messages are copied unchanged.
+        With no ``source_bpm``, insert the detected tempo while recomputing delta
+        ticks to preserve absolute seconds. With ``source_bpm``, encode ticks on
+        the detected source-tempo grid but write ``tempo_bpm`` as the target
+        tempo, so the MIDI's real duration changes by
+        ``source_bpm / tempo_bpm``. Pitch, program, velocity, controller,
+        pitch-wheel, and note messages are copied unchanged.
 
         ``tempo_map`` 为 [(秒, BPM), ...] 变速点（首点 0 秒）时按分段写入多个
         ``set_tempo``；为空或单点时写入单一 tempo（原行为）。
@@ -508,6 +535,11 @@ class MusicToMidiPipeline:
         bpm = float(tempo_bpm)
         if not isfinite(bpm) or bpm <= 0.0:
             raise RuntimeError(f"检测到无效 MIDI 速度: {tempo_bpm!r}")
+        timing_bpm = bpm if source_bpm is None else float(source_bpm)
+        if not isfinite(timing_bpm) or timing_bpm <= 0.0:
+            raise RuntimeError(f"检测到无效原曲 MIDI 速度: {source_bpm!r}")
+        if source_bpm is not None and tempo_map:
+            raise RuntimeError("自定义目标 BPM 不能同时写入自动变速 tempo map")
 
         # 规整变速点：按时间升序、首点 0 秒、BPM 有效、相邻同值合并
         sections: List[Tuple[float, float]] = []
@@ -520,7 +552,7 @@ class MusicToMidiPipeline:
                     continue
                 sections.append((sec, sec_bpm))
         if not sections:
-            sections = [(0.0, bpm)]
+            sections = [(0.0, timing_bpm)]
         if sections[0][0] > 0.0:
             sections.insert(0, (0.0, sections[0][1]))
 
@@ -587,14 +619,15 @@ class MusicToMidiPipeline:
                 if message.is_meta and message.type == "set_tempo":
                     continue
                 absolute_seconds = source_tick_to_seconds(absolute_tick)
-                events.append(
-                    (seconds_to_target_tick(absolute_seconds), 1, message.copy(time=0))
-                )
+                events.append((seconds_to_target_tick(absolute_seconds), 1, message.copy(time=0)))
             if track_index == 0:
-                for _sec, start_tick, tempo_us in section_starts:
-                    events.append(
-                        (start_tick, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0))
-                    )
+                if source_bpm is not None:
+                    events.append((0, 0, MetaMessage("set_tempo", tempo=bpm2tempo(bpm), time=0)))
+                else:
+                    for _sec, start_tick, tempo_us in section_starts:
+                        events.append(
+                            (start_tick, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0))
+                        )
             events.sort(key=lambda event: (event[0], event[1]))
 
             target_track = MidiTrack()
@@ -837,6 +870,7 @@ class MusicToMidiPipeline:
                         tempo,
                         force=True,
                         tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                        source_bpm=beat_info.source_bpm,
                     )
                 except InterruptedError:
                     raise
@@ -972,7 +1006,13 @@ class MusicToMidiPipeline:
         # 钢琴后端 writer 只写入占位 tempo（如 TransKun 固定 120 BPM），自身不做
         # BPM 检测；必须用检测到的歌曲 BPM 强制替换。归一化按绝对秒重编码 ticks，
         # 音符时间与 CC64 踏板等消息保持不变。
-        midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
+        midi_path = self._normalize_midi_tempo_metadata(
+            midi_path,
+            tempo,
+            force=True,
+            tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+            source_bpm=beat_info.source_bpm,
+        )
 
         self._check_cancelled()
         self._report(
@@ -1113,7 +1153,13 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_yourmt3_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
+            midi_path = self._normalize_midi_tempo_metadata(
+                midi_path,
+                tempo,
+                force=True,
+                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                source_bpm=beat_info.source_bpm,
+            )
         except InterruptedError:
             raise
         except Exception as e:
@@ -1181,7 +1227,13 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_miros_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
+            midi_path = self._normalize_midi_tempo_metadata(
+                midi_path,
+                tempo,
+                force=True,
+                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                source_bpm=beat_info.source_bpm,
+            )
         except InterruptedError:
             raise
         except Exception as e:
@@ -1254,7 +1306,13 @@ class MusicToMidiPipeline:
                 output_path=midi_path,
                 progress_callback=_muscriptor_cb,
             )
-            midi_path = self._normalize_midi_tempo_metadata(midi_path, tempo, force=True, tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None))
+            midi_path = self._normalize_midi_tempo_metadata(
+                midi_path,
+                tempo,
+                force=True,
+                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                source_bpm=beat_info.source_bpm,
+            )
             # Tempo normalization cannot add notes, but the published result is
             # checked again so the user-visible artifact itself is the proof.
             validate_muscriptor_midi_constraint(midi_path, selected)
@@ -1436,6 +1494,7 @@ class MusicToMidiPipeline:
                 tempo,
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                source_bpm=beat_info.source_bpm,
             )
         except InterruptedError:
             self._cleanup_multi_instrument_backend()
@@ -1479,6 +1538,7 @@ class MusicToMidiPipeline:
                 tempo,
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                source_bpm=beat_info.source_bpm,
             )
         except InterruptedError:
             raise

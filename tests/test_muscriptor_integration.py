@@ -133,12 +133,12 @@ def test_config_round_trip_preserves_model_size_and_authoritative_bpm():
         Config(
             transcription_backend=MultiInstrumentModel.MUSCRIPTOR.value,
             muscriptor_model=MuscriptorModel.SMALL.value,
-            custom_bpm=128.5,
+            custom_bpm=10.0,
         ).to_dict()
     )
 
     assert restored.muscriptor_model == "small"
-    assert restored.custom_bpm == pytest.approx(128.5)
+    assert restored.custom_bpm == pytest.approx(10.0)
 
 
 def test_muscriptor_checkpoint_hash_is_reused_only_while_snapshot_is_unchanged(
@@ -1638,7 +1638,77 @@ app.exec()
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
+def test_source_and_target_bpm_are_bidirectionally_linked_and_not_overwritten(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "editable-bpm-playback.wav", 2.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    widget._midi_normal = widget._make_player(source)
+    widget.play_button.setEnabled(True)
+    widget._set_playback_duration(2.0)
+    widget.set_bpm_context(117.9, 23.0)
+
+    try:
+        assert widget.bpm_spin.value() == pytest.approx(23.0)
+        assert widget.speed_spin.value() == pytest.approx(
+            round(23.0 / 117.9, 3),
+            abs=0.0005,
+        )
+        assert widget.speed_spin.isVisible() is False
+
+        widget.show()
+        app.processEvents()
+        assert widget.speed_spin.isVisible() is True
+
+        widget._toggle_playback()
+        widget.bpm_spin.setValue(132.5)
+        app.processEvents()
+
+        expected_rate = 132.5 / 117.9
+        assert widget._playing is True
+        assert widget._bpm_user_overridden is True
+        assert widget.bpm_spin.value() == pytest.approx(132.5)
+        assert widget.speed_spin.value() == pytest.approx(
+            round(expected_rate, 3),
+            abs=0.0005,
+        )
+        assert all(
+            player.playbackRate() == pytest.approx(expected_rate)
+            for player in widget._all_playback_players()
+        )
+
+        widget.set_detected_bpm(90.0)
+
+        assert widget.bpm_spin.value() == pytest.approx(132.5)
+        assert widget._detected_bpm == pytest.approx(117.9)
+        assert widget.speed_spin.value() == pytest.approx(
+            round(expected_rate, 3),
+            abs=0.0005,
+        )
+
+        widget.speed_spin.setValue(0.75)
+        app.processEvents()
+
+        expected_bpm = round(117.9 * 0.75, 1)
+        expected_rate = expected_bpm / 117.9
+        assert widget.bpm_spin.value() == pytest.approx(expected_bpm)
+        assert widget.speed_spin.value() == pytest.approx(
+            round(expected_rate, 3),
+            abs=0.0005,
+        )
+        assert all(
+            player.playbackRate() == pytest.approx(expected_rate)
+            for player in widget._all_playback_players()
+        )
+        late_player = widget._make_player(source)[0]
+        assert late_player.playbackRate() == pytest.approx(expected_rate)
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -1647,7 +1717,7 @@ def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
     source_midi = tmp_path / "source.mid"
     midi = mido.MidiFile(type=1, ticks_per_beat=480)
     track = mido.MidiTrack()
-    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120.0), time=0))
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(117.9), time=0))
     track.append(mido.Message("note_on", note=60, velocity=90, time=0))
     track.append(mido.Message("note_off", note=60, velocity=0, time=480))
     midi.tracks.append(track)
@@ -1658,6 +1728,10 @@ def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
     widget._midi_path = str(source_midi)
     widget.set_detected_bpm(117.9)
     widget.bpm_spin.setValue(132.5)
+    assert widget.speed_spin.value() == pytest.approx(
+        round(132.5 / 117.9, 3),
+        abs=0.0005,
+    )
     monkeypatch.setattr(
         QFileDialog,
         "getSaveFileName",
@@ -1682,7 +1756,21 @@ def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
     downloaded_note = read_midi_roll_notes(destination)[0]
     source_note = read_midi_roll_notes(source_midi)[0]
     assert downloaded_note.start == pytest.approx(source_note.start, abs=1e-6)
-    assert downloaded_note.end == pytest.approx(source_note.end, abs=1e-6)
+    assert downloaded_note.end == pytest.approx(
+        source_note.end * 117.9 / 132.5,
+        abs=1e-6,
+    )
+    downloaded_note_off = next(
+        message
+        for message in downloaded.tracks[0]
+        if not message.is_meta and message.type == "note_off"
+    )
+    source_note_off = next(
+        message
+        for message in mido.MidiFile(source_midi).tracks[0]
+        if not message.is_meta and message.type == "note_off"
+    )
+    assert downloaded_note_off.time == source_note_off.time == 480
     assert mido.tempo2bpm(
         next(
             message.tempo
@@ -1690,7 +1778,7 @@ def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
             for message in midi_track
             if message.is_meta and message.type == "set_tempo"
         )
-    ) == pytest.approx(120.0)
+    ) == pytest.approx(117.9, abs=0.001)
     app.processEvents()
 
 

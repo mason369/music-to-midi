@@ -1214,6 +1214,15 @@ class MainWindow(QMainWindow):
         self.audio_timeline_container.show()
         self.result_panel.show()
         self.save_action.setEnabled(True)
+        if result.beat_info is not None:
+            workbench.set_bpm_context(
+                (
+                    result.beat_info.source_bpm
+                    if result.beat_info.source_bpm is not None
+                    else result.beat_info.bpm
+                ),
+                result.beat_info.bpm,
+            )
         workbench.update_translations()
         if workbench.midi_path != str(Path(result.midi_path).resolve()):
             workbench.finalize_result(result)
@@ -1912,7 +1921,18 @@ class MainWindow(QMainWindow):
         if progress.bpm_display:
             self._last_detected_bpm = progress.bpm_display
             if self.muscriptor_result_widget is not None:
-                self.muscriptor_result_widget.set_detected_bpm(progress.bpm_display)
+                if (
+                    progress.source_bpm is not None
+                    and progress.target_bpm is not None
+                ):
+                    self.muscriptor_result_widget.set_bpm_context(
+                        progress.source_bpm,
+                        progress.target_bpm,
+                    )
+                else:
+                    self.muscriptor_result_widget.set_detected_bpm(
+                        progress.bpm_display
+                    )
         # 节流内存标签更新（最多每 2 秒一次），避免阻塞 GUI 线程
         now = _time.monotonic()
         if now - self._last_memory_update >= 2.0:

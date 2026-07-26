@@ -21,6 +21,8 @@ from src.gui.widgets.muscriptor_instrument_selector import MuscriptorInstrumentS
 from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
 from src.i18n.translator import get_translator, t
 from src.models.data_models import (
+    MAX_MIDI_BPM,
+    MIN_MIDI_BPM,
     MidiTrackMode,
     MultiInstrumentModel,
     MuscriptorModel,
@@ -315,7 +317,7 @@ class TrackPanel(QGroupBox):
         self.tempo_mode_combo.currentIndexChanged.connect(self._on_tempo_mode_changed)
         tempo_controls_layout.addWidget(self.tempo_mode_combo, 1)
         self.custom_bpm_spin = QDoubleSpinBox()
-        self.custom_bpm_spin.setRange(20.0, 400.0)
+        self.custom_bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)
         self.custom_bpm_spin.setDecimals(1)
         self.custom_bpm_spin.setSingleStep(0.5)
         self.custom_bpm_spin.setValue(120.0)

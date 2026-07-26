@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Standard MIDI stores one quarter-note duration in an unsigned 24-bit
+# microsecond field.  Four BPM is the lowest practical one-decimal value that
+# stays within that format; 400 BPM remains the product's upper editing bound.
+MIN_MIDI_BPM = 4.0
+MAX_MIDI_BPM = 400.0
+
 
 class TrackType(Enum):
     """音源分离后的音轨类型 (已弃用，请使用 InstrumentType)"""
@@ -267,6 +273,8 @@ class BeatInfo:
     time_signature: Tuple[int, int] = (4, 4)  # 拍号（分子/分母）
     # 变速点列表 [(秒, BPM), ...]，按时间升序且首点为 0 秒；空或单点表示恒速
     tempo_map: List[Tuple[float, float]] = field(default_factory=list)
+    # 自定义目标 BPM 启用时保存自动识别的原曲 BPM，供实际变速与预览对齐。
+    source_bpm: Optional[float] = None
 
     @property
     def is_variable_tempo(self) -> bool:
@@ -466,6 +474,8 @@ class ProcessingProgress:
     overall_progress: float  # 总体进度 (0-1)
     message: str  # 状态消息
     bpm_display: Optional[str] = None  # 节拍检测完成后的 BPM 显示文本
+    source_bpm: Optional[float] = None  # 自动识别的原曲 BPM
+    target_bpm: Optional[float] = None  # 当前转换/导出的目标 BPM
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -474,6 +484,8 @@ class ProcessingProgress:
             "overall_progress": self.overall_progress,
             "message": self.message,
             "bpm_display": self.bpm_display,
+            "source_bpm": self.source_bpm,
+            "target_bpm": self.target_bpm,
         }
 
 
@@ -634,9 +646,13 @@ class Config:
             self.custom_bpm = None
         else:
             normalized_bpm = float(custom_bpm)
-            if not math.isfinite(normalized_bpm) or not 20.0 <= normalized_bpm <= 400.0:
+            if (
+                not math.isfinite(normalized_bpm)
+                or not MIN_MIDI_BPM <= normalized_bpm <= MAX_MIDI_BPM
+            ):
                 raise ValueError(
-                    f"custom_bpm must be between 20 and 400 BPM, got {custom_bpm!r}"
+                    f"custom_bpm must be between {MIN_MIDI_BPM:g} and "
+                    f"{MAX_MIDI_BPM:g} BPM, got {custom_bpm!r}"
                 )
             self.custom_bpm = normalized_bpm
 

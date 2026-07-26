@@ -148,7 +148,7 @@
       "label": "Final MIDI tempo",
       "auto": "Auto-detect",
       "custom": "Custom",
-      "custom_tooltip": "A custom value skips automatic detection and becomes the constant BPM in every downloaded MIDI."
+      "custom_tooltip": "Supports 4–400 BPM; the source tempo is still detected, and source audio, MIDI playback, and downloaded MIDI use target BPM ÷ source BPM."
     },
     "tracks": {
       "title": "Processing Settings"
@@ -419,7 +419,7 @@
   "progress": {
     "loading_audio_for_beat": "Loading audio for beat detection...",
     "analyzing_tempo": "Analyzing tempo with multiple algorithms...",
-    "custom_bpm": "Using custom constant tempo {bpm} BPM; automatic detection skipped",
+    "custom_bpm": "Source tempo detected; target tempo set to {bpm} BPM",
     "finding_beats": "Finding beat positions...",
     "detecting_downbeats": "Detecting downbeats...",
     "loading_aria_amt": "Loading Aria-AMT...",
@@ -503,7 +503,9 @@
   },
   "muscriptor_result": {
     "playback_progress_tooltip": "MIDI-master playback progress; dragging seeks MIDI and source audio together",
-    "export_bpm_tooltip": "Editable; MIDI downloads use the BPM shown here as the final tempo",
+    "export_bpm_tooltip": "Current playback and download BPM; editing also updates the speed multiplier",
+    "playback_speed_label": "Speed",
+    "playback_speed_tooltip": "Current BPM divided by detected BPM; editing updates BPM, playback speed, and MIDI downloads",
     "streaming": "MuScriptor is streaming notes into the piano roll…",
     "progress_waiting": "Waiting for the first transcription chunk…",
     "progress_timing": "{processed} / {total} · {elapsed} elapsed · done in about {remaining}",

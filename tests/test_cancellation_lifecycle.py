@@ -14,7 +14,12 @@ from src.core.pipeline import MusicToMidiPipeline
 from src.gui.main_window import MainWindow
 from src.gui.workers.processing_worker import ProcessingWorker
 from src.i18n.translator import t
-from src.models.data_models import Config, ProcessingResult
+from src.models.data_models import (
+    Config,
+    ProcessingProgress,
+    ProcessingResult,
+    ProcessingStage,
+)
 
 
 class _Signal:
@@ -192,6 +197,49 @@ class CancellationLifecycleTests(unittest.TestCase):
             worker = window.worker
             self.assertEqual(len(worker.finished.callbacks), 1)
             self.assertTrue(worker.running)
+        finally:
+            if window.worker is not None:
+                window.worker.running = False
+                window.worker.finished.callbacks[0]()
+            window.close()
+
+    def test_custom_bpm_waits_for_detected_source_before_setting_playback_rate(self):
+        window = self._window()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                window.current_file = str(Path(tmp) / "song.wav")
+                window.output_dir_edit.setText(tmp)
+                window.track_panel.set_transcription_backend("muscriptor")
+                window.track_panel.set_custom_bpm(10.0)
+                with mock.patch("src.gui.main_window.ProcessingWorker", _FakeWorker):
+                    window._start_processing()
+
+            self.assertEqual(window.config.custom_bpm, 10.0)
+            self.assertIsNotNone(window.muscriptor_result_widget)
+            self.assertIsNone(window._last_detected_bpm)
+
+            window._on_progress(
+                ProcessingProgress(
+                    stage=ProcessingStage.PREPROCESSING,
+                    stage_progress=1.0,
+                    overall_progress=0.1,
+                    message="BPM: 10.0",
+                    bpm_display="10.0",
+                    source_bpm=117.9,
+                    target_bpm=10.0,
+                )
+            )
+
+            self.assertEqual(window.muscriptor_result_widget.bpm_spin.value(), 10.0)
+            self.assertAlmostEqual(
+                window.muscriptor_result_widget._detected_bpm,
+                117.9,
+            )
+            self.assertAlmostEqual(
+                window.muscriptor_result_widget.speed_spin.value(),
+                round(10.0 / 117.9, 3),
+                places=3,
+            )
         finally:
             if window.worker is not None:
                 window.worker.running = False

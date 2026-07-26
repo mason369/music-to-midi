@@ -4,7 +4,7 @@ import mido
 import pytest
 
 from src.core.pipeline import MusicToMidiPipeline
-from src.models.data_models import Config
+from src.models.data_models import BeatInfo, Config
 
 
 def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
@@ -33,19 +33,32 @@ def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
     midi.save(path)
 
 
-def test_custom_bpm_is_authoritative_and_skips_automatic_detection():
-    pipeline = MusicToMidiPipeline(Config(custom_bpm=97.5))
-    pipeline.beat_detector.detect = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("automatic detector must not run when custom BPM is set")
+@pytest.mark.parametrize("custom_bpm", [10.0, 97.5])
+def test_custom_bpm_keeps_detected_source_tempo_and_sets_independent_target(custom_bpm):
+    pipeline = MusicToMidiPipeline(Config(custom_bpm=custom_bpm))
+    calls = []
+    pipeline.beat_detector.detect = lambda audio_path: (
+        calls.append(audio_path)
+        or BeatInfo(
+            bpm=117.9,
+            beat_times=[0.0, 60.0 / 117.9],
+            downbeats=[0.0],
+            time_signature=(4, 4),
+            tempo_map=[(0.0, 117.9)],
+        )
     )
 
-    beat_info = pipeline._detect_beat_or_raise("unused.wav")
+    beat_info = pipeline._detect_beat_or_raise("song.wav")
 
-    assert beat_info.bpm == pytest.approx(97.5)
+    assert calls == ["song.wav"]
+    assert beat_info.bpm == pytest.approx(custom_bpm)
+    assert beat_info.source_bpm == pytest.approx(117.9)
+    assert beat_info.beat_times == pytest.approx([0.0, 60.0 / 117.9])
+    assert beat_info.downbeats == [0.0]
     assert beat_info.tempo_map == []
 
 
-@pytest.mark.parametrize("custom_bpm", [19.9, 400.1, float("nan"), float("inf")])
+@pytest.mark.parametrize("custom_bpm", [3.9, 400.1, float("nan"), float("inf")])
 def test_custom_bpm_validation_rejects_unusable_values(custom_bpm):
     with pytest.raises(ValueError, match="BPM"):
         Config(custom_bpm=custom_bpm).validate()
@@ -141,6 +154,38 @@ def test_tempo_alignment_force_replaces_backend_placeholder_tempo(tmp_path):
     assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=666_667, time=0)]
 
 
+def test_custom_target_bpm_changes_real_midi_playback_duration(tmp_path):
+    midi_path = tmp_path / "custom-target.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120.0), time=0))
+    track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(midi_path)
+    source_duration = mido.MidiFile(midi_path).length
+
+    MusicToMidiPipeline._normalize_midi_tempo_metadata(
+        str(midi_path),
+        23.0,
+        force=True,
+        source_bpm=117.9,
+    )
+
+    normalized = mido.MidiFile(midi_path)
+    tempo_messages = [
+        message
+        for midi_track in normalized.tracks
+        for message in midi_track
+        if message.is_meta and message.type == "set_tempo"
+    ]
+    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(23.0), time=0)]
+    assert normalized.length == pytest.approx(
+        source_duration * 117.9 / 23.0,
+        rel=0.003,
+    )
+
+
 def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
     """钢琴模式必须将检测 BPM 写入输出 MIDI，而不是留下后端占位 120 BPM。
 
@@ -168,9 +213,7 @@ def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
             midi.tracks.append(conductor)
             track = mido.MidiTrack()
             track.append(mido.Message("program_change", program=0, channel=0, time=0))
-            track.append(
-                mido.Message("control_change", control=64, value=127, channel=0, time=0)
-            )
+            track.append(mido.Message("control_change", control=64, value=127, channel=0, time=0))
             track.append(mido.Message("note_on", note=60, velocity=100, channel=0, time=0))
             track.append(mido.Message("note_off", note=60, velocity=0, channel=0, time=960))
             track.append(mido.MetaMessage("end_of_track", time=0))
@@ -198,9 +241,7 @@ def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
         for message in track
         if message.is_meta and message.type == "set_tempo"
     ]
-    assert tempo_messages == [
-        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)
-    ]
+    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
     # CC64 踏板消息必须原样保留
     assert any(
         message.type == "control_change" and message.control == 64 and message.value == 127
@@ -260,9 +301,7 @@ def test_muscriptor_official_writes_detected_bpm_into_backend_midi(tmp_path):
         for message in track
         if message.is_meta and message.type == "set_tempo"
     ]
-    assert tempo_messages == [
-        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)
-    ]
+    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
     # 音符绝对时长不变：480 ticks @120BPM/480tpb = 0.5s，归一化后仍为 0.5s
     assert normalized.length == pytest.approx(0.5, abs=1e-3)
 
@@ -442,6 +481,26 @@ def test_report_detected_bpm_constant_tempo():
 
     assert len(reports) == 1
     assert reports[0].bpm_display == "120.0"
+    assert reports[0].source_bpm == pytest.approx(120.0)
+    assert reports[0].target_bpm == pytest.approx(120.0)
+
+
+def test_report_detected_bpm_exposes_source_and_custom_target():
+    from src.models.data_models import BeatInfo, Config
+
+    pipeline = MusicToMidiPipeline(Config(custom_bpm=23.0))
+    reports = []
+    pipeline._progress_callback = reports.append
+
+    pipeline._report_detected_bpm(
+        BeatInfo(bpm=23.0, source_bpm=117.9),
+        1.0,
+        0.1,
+    )
+
+    assert len(reports) == 1
+    assert reports[0].source_bpm == pytest.approx(117.9)
+    assert reports[0].target_bpm == pytest.approx(23.0)
 
 
 def test_specialized_piano_ignores_tempo_map_when_disabled_by_default(tmp_path):
@@ -496,7 +555,5 @@ def test_specialized_piano_ignores_tempo_map_when_disabled_by_default(tmp_path):
         if message.is_meta and message.type == "set_tempo"
     ]
     # 只有一个 set_tempo，且是全局 bpm（90.0）而非变速点
-    assert tempo_messages == [
-        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)
-    ]
+    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
     assert normalized.length == pytest.approx(0.5, abs=1e-3)

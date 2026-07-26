@@ -39,7 +39,7 @@
 - **六声部分离与逐轨转写**：`SIX_STEM_SPLIT` 模式用 `BS-Rofo-SW-Fixed.ckpt` 分离 `bass / drums / guitar / piano / vocals / other` 六条真实 WAV；随后逐轨选择 13 条 MIDI 路线，不会在用户未选择时自动生成或合并 MIDI。
 - **钢琴专用转写**：`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 面向纯钢琴音频，分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。
 - **默认后端语义**：多乐器默认后端为 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`；`SMART` 可显式切换 MIROS 或 MuScriptor，并为 MuScriptor 选择 Large、Medium 或 Small；分离后的每条 WAV 也可独立选择三档 MuScriptor 路线。
-- **速度与工程对齐**：自动 BPM 由独立检测器共识和稳定拍间隔倍频校验产生；也可设置 20–400 BPM 的自定义速度。只要设置了自定义值，所有最终下载 MIDI 的 `set_tempo` 都严格以该值为准，同时保持音符绝对秒位置不变。
+- **速度与工程对齐**：自动 BPM 由独立检测器共识和稳定拍间隔倍频校验产生；也可设置 4–400 BPM 的目标速度。设置目标值后仍会识别原曲 BPM，音频与 MIDI 的实际播放倍率统一为“目标 BPM ÷ 原曲 BPM”，最终下载 MIDI 的 `set_tempo` 与真实播放时长都以目标 BPM 为准。
 - **MIDI 主时钟播放进度**：MuScriptor 结果工作台的进度条以可播放 MIDI 合成轨为主时钟，统一控制 MIDI、原音和乐器分轨 seek，并在播放中校正超过 80 ms 的从轨漂移。
 - **MuScriptor 真约束**：MuScriptor 的乐器多选不是显示过滤器。空选表示模型自动检测；非空选择会传入官方 `instruments` + `prelude_forcing` 解码接口，未选乐器 token 在生成阶段被禁止，事件流和最终 MIDI 还会再次校验，发现越界就拒绝发布文件。
 - **MIROS 可选后端**：`SMART` 与分离结果的逐轨多乐器菜单都可显式选择本地 `ai4m-miros` 后端。

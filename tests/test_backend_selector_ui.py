@@ -379,6 +379,14 @@ class TestBackendSelectorUi(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported YourMT3 checkpoint"):
             panel.set_yourmt3_model("not_a_checkpoint")
 
+    def test_custom_tempo_accepts_ten_bpm_without_reverting_to_default(self):
+        panel = TrackPanel()
+
+        panel.set_custom_bpm(10.0)
+
+        self.assertEqual(panel.custom_bpm_spin.value(), 10.0)
+        self.assertEqual(panel.get_custom_bpm(), 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -148,7 +148,7 @@
       "label": "最终 MIDI 速度",
       "auto": "自动检测",
       "custom": "自定义",
-      "custom_tooltip": "自定义值会跳过自动检测，并作为所有最终下载 MIDI 的恒定 BPM。"
+      "custom_tooltip": "支持 4–400 BPM；仍会识别原曲 BPM，并按目标 BPM ÷ 原曲 BPM 联动实际播放速度和最终 MIDI。"
     },
     "tracks": {
       "title": "处理设置"
@@ -419,7 +419,7 @@
   "progress": {
     "loading_audio_for_beat": "正在加载音频进行节拍检测...",
     "analyzing_tempo": "正在使用多算法分析速度...",
-    "custom_bpm": "使用自定义恒定速度 {bpm} BPM，跳过自动检测",
+    "custom_bpm": "原曲速度识别完成，目标速度设为 {bpm} BPM",
     "finding_beats": "正在查找节拍位置...",
     "detecting_downbeats": "正在检测下拍...",
     "loading_aria_amt": "正在加载 Aria-AMT...",
@@ -503,7 +503,9 @@
   },
   "muscriptor_result": {
     "playback_progress_tooltip": "MIDI 主时钟播放进度；拖动会同时定位 MIDI 和原音频",
-    "export_bpm_tooltip": "可直接调整；点击下载 MIDI 时以这里显示的 BPM 为最终速度",
+    "export_bpm_tooltip": "当前播放与下载 BPM；调整后会联动更新速度倍数",
+    "playback_speed_label": "速度",
+    "playback_speed_tooltip": "当前 BPM ÷ 自动识别 BPM；调整后会反向更新当前 BPM、播放速度与下载 MIDI",
     "streaming": "MuScriptor 正在流式生成钢琴卷帘…",
     "progress_waiting": "等待首个转写分片…",
     "progress_timing": "{processed} / {total} · 已用 {elapsed} · 预计 {remaining} 后完成",

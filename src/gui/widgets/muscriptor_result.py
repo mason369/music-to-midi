@@ -13,7 +13,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from pathlib import Path
 
-from PyQt6.QtCore import QLineF, QRectF, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QLineF, QRectF, QSignalBlocker, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
@@ -45,7 +45,7 @@ from src.core.muscriptor_result_assets import (
     read_midi_roll_notes,
 )
 from src.i18n.translator import get_translator, t
-from src.models.data_models import ProcessingResult
+from src.models.data_models import MAX_MIDI_BPM, MIN_MIDI_BPM, ProcessingResult
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_REPRESENTATIVE_PROGRAMS,
@@ -85,9 +85,10 @@ def _export_midi_with_bpm(
     destination_path: str | Path,
     bpm: float,
 ) -> Path:
-    """Publish a MIDI copy whose tempo is the user-visible result BPM."""
+    """Publish a MIDI copy that plays at the user-visible result BPM."""
 
-    from src.core.pipeline import MusicToMidiPipeline
+    from mido import MetaMessage, MidiFile, MidiTrack, bpm2tempo
+
     from src.utils.midi_output import (
         publish_midi_output,
         remove_temporary_midi,
@@ -96,15 +97,40 @@ def _export_midi_with_bpm(
 
     source = Path(source_path).resolve()
     destination = Path(destination_path).resolve()
+    export_bpm = float(bpm)
+    if not math.isfinite(export_bpm) or not MIN_MIDI_BPM <= export_bpm <= MAX_MIDI_BPM:
+        raise ValueError(f"Invalid result BPM for MIDI export: {bpm!r}")
+
+    source_midi = MidiFile(str(source))
+    if not source_midi.tracks:
+        raise RuntimeError(f"MIDI export source has no tracks: {source}")
+    output_midi = MidiFile(
+        type=source_midi.type,
+        ticks_per_beat=source_midi.ticks_per_beat,
+    )
+    tempo_us = bpm2tempo(export_bpm)
+    for track_index, source_track in enumerate(source_midi.tracks):
+        absolute_tick = 0
+        events: list[tuple[int, int, object]] = []
+        for sequence, message in enumerate(source_track):
+            absolute_tick += message.time
+            if message.is_meta and message.type == "set_tempo":
+                continue
+            events.append((absolute_tick, sequence + 1, message.copy(time=0)))
+        if track_index == 0 or source_midi.type == 2:
+            events.append((0, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0)))
+        events.sort(key=lambda event: (event[0], event[1]))
+
+        target_track = MidiTrack()
+        previous_tick = 0
+        for target_tick, _sequence, message in events:
+            target_track.append(message.copy(time=target_tick - previous_tick))
+            previous_tick = target_tick
+        output_midi.tracks.append(target_track)
+
     temporary = unique_midi_temp_path(destination, "result-bpm")
     try:
-        shutil.copy2(source, temporary)
-        MusicToMidiPipeline._normalize_midi_tempo_metadata(
-            str(temporary),
-            float(bpm),
-            force=True,
-            tempo_map=None,
-        )
+        output_midi.save(str(temporary))
         return Path(
             publish_midi_output(
                 temporary,
@@ -834,6 +860,8 @@ class MuscriptorResultWidget(QFrame):
         self._playing = False
         self._playback_finished = False
         self._transport_scrubbing = False
+        self._detected_bpm: float | None = None
+        self._bpm_user_overridden = False
         self._muted: set[str] = set()
         self._soloed: str | None = None
         self._instrument_rows: dict[str, _InstrumentRow] = {}
@@ -946,7 +974,7 @@ class MuscriptorResultWidget(QFrame):
         )
         controls.addWidget(self.clock_label)
         self.bpm_spin = QDoubleSpinBox()
-        self.bpm_spin.setRange(20.0, 400.0)
+        self.bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)
         self.bpm_spin.setDecimals(1)
         self.bpm_spin.setSingleStep(0.1)
         self.bpm_spin.setPrefix("BPM ")
@@ -955,8 +983,27 @@ class MuscriptorResultWidget(QFrame):
             "font-family: Consolas; color: #c8d3e6; background: #16213e; "
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
+        self.bpm_spin.valueChanged.connect(self._on_result_bpm_changed)
         self.bpm_spin.hide()
         controls.addWidget(self.bpm_spin)
+        self.speed_label = QLabel()
+        self.speed_label.hide()
+        controls.addWidget(self.speed_label)
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.05, 20.0)
+        self.speed_spin.setDecimals(3)
+        self.speed_spin.setSingleStep(0.05)
+        self.speed_spin.setValue(1.0)
+        self.speed_spin.setSuffix("x")
+        self.speed_spin.setKeyboardTracking(False)
+        self.speed_spin.setMinimumWidth(88)
+        self.speed_spin.setStyleSheet(
+            "font-family: Consolas; color: #c8d3e6; background: #16213e; "
+            "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
+        )
+        self.speed_spin.valueChanged.connect(self._on_result_speed_changed)
+        self.speed_spin.hide()
+        controls.addWidget(self.speed_spin)
         controls.addStretch(1)
         self.original_label = QLabel()
         controls.addWidget(self.original_label)
@@ -1159,13 +1206,39 @@ class MuscriptorResultWidget(QFrame):
         if self._preview_worker is not None and self._preview_worker.isRunning():
             self._preview_worker.cancel()
         self._midi_path = str(Path(result.midi_path).resolve())
+        if result.beat_info is not None:
+            self.set_bpm_context(
+                (
+                    result.beat_info.source_bpm
+                    if result.beat_info.source_bpm is not None
+                    else result.beat_info.bpm
+                ),
+                result.beat_info.bpm,
+            )
+        output_dir = Path(self._midi_path).parent / "midi-playback"
+        playback_midi_path = Path(self._midi_path)
+        if (
+            result.beat_info is not None
+            and result.beat_info.source_bpm is not None
+            and not math.isclose(
+                result.beat_info.source_bpm,
+                result.beat_info.bpm,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            playback_midi_path = _export_midi_with_bpm(
+                self._midi_path,
+                output_dir / "source-tempo-playback.mid",
+                result.beat_info.source_bpm,
+            )
         read_midi_roll_notes(
-            self._midi_path,
+            playback_midi_path,
             muscriptor_groups=self.muscriptor_groups,
         )
         if self.muscriptor_groups:
             self.selected_instruments = list(result.selected_instruments)
-        output_dir = Path(self._midi_path).parent / "midi-playback"
         self.status_label.setText(t("muscriptor_result.preparing_audio"))
         self.progress_bar.setValue(1000)
         total_duration = self._effective_source_duration()
@@ -1180,7 +1253,7 @@ class MuscriptorResultWidget(QFrame):
             )
         self.playback_status_label.setText(t("muscriptor_result.final_audio_preparing"))
         worker = _AssetWorker(
-            self._midi_path,
+            str(playback_midi_path),
             self.audio_path,
             str(output_dir),
             self.muscriptor_groups,
@@ -1471,6 +1544,7 @@ class MuscriptorResultWidget(QFrame):
         output = QAudioOutput(self)
         player.setAudioOutput(output)
         player.setSource(QUrl.fromLocalFile(str(source)))
+        player.setPlaybackRate(self._result_playback_rate())
         player.errorOccurred.connect(
             lambda _error, message: self.playback_status_label.setText(
                 t("muscriptor_result.player_failed", error=message)
@@ -1658,7 +1732,7 @@ class MuscriptorResultWidget(QFrame):
         self._update_play_label()
 
     def set_detected_bpm(self, bpm_text: str | float) -> None:
-        """Seed the editable export BPM from the detected or configured tempo."""
+        """Seed the result BPM until the user explicitly overrides it."""
 
         if isinstance(bpm_text, (int, float)):
             bpm = float(bpm_text)
@@ -1667,10 +1741,80 @@ class MuscriptorResultWidget(QFrame):
             if match is None:
                 return
             bpm = float(match.group(0))
-        if not math.isfinite(bpm) or not 20.0 <= bpm <= 400.0:
+        if not math.isfinite(bpm) or not MIN_MIDI_BPM <= bpm <= MAX_MIDI_BPM:
             return
-        self.bpm_spin.setValue(bpm)
+        self.set_bpm_context(bpm, bpm)
+
+    def set_bpm_context(self, source_bpm: float, target_bpm: float) -> None:
+        """Set the detected source tempo and independently editable target tempo."""
+
+        if self._bpm_user_overridden:
+            return
+        source = float(source_bpm)
+        target = float(target_bpm)
+        if (
+            not math.isfinite(source)
+            or not MIN_MIDI_BPM <= source <= MAX_MIDI_BPM
+            or not math.isfinite(target)
+            or not MIN_MIDI_BPM <= target <= MAX_MIDI_BPM
+        ):
+            raise ValueError(
+                f"Invalid result BPM context: source={source_bpm!r}, target={target_bpm!r}"
+            )
+        self._detected_bpm = source
+        bpm_blocker = QSignalBlocker(self.bpm_spin)
+        self.bpm_spin.setValue(target)
+        del bpm_blocker
+        speed_blocker = QSignalBlocker(self.speed_spin)
+        self.speed_spin.setRange(MIN_MIDI_BPM / source, MAX_MIDI_BPM / source)
+        self.speed_spin.setValue(target / source)
+        del speed_blocker
         self.bpm_spin.show()
+        self.speed_label.show()
+        self.speed_spin.show()
+        self._apply_result_playback_rate()
+
+    def _result_playback_rate(self) -> float:
+        if self._detected_bpm is None:
+            return 1.0
+        return self.bpm_spin.value() / self._detected_bpm
+
+    def _on_result_bpm_changed(self, _bpm: float) -> None:
+        if self._detected_bpm is None:
+            return
+        self._bpm_user_overridden = True
+        self._sync_speed_from_bpm()
+        self._apply_result_playback_rate()
+
+    def _on_result_speed_changed(self, speed: float) -> None:
+        if self._detected_bpm is None:
+            return
+        self._bpm_user_overridden = True
+        bpm_blocker = QSignalBlocker(self.bpm_spin)
+        self.bpm_spin.setValue(self._detected_bpm * float(speed))
+        del bpm_blocker
+        self._sync_speed_from_bpm()
+        self._apply_result_playback_rate()
+
+    def _sync_speed_from_bpm(self) -> None:
+        speed_blocker = QSignalBlocker(self.speed_spin)
+        self.speed_spin.setValue(self._result_playback_rate())
+        del speed_blocker
+
+    def _apply_result_playback_rate(self) -> None:
+        rate = self._result_playback_rate()
+        active_players = self._active_playback_players()
+        master_position = (
+            active_players[0].position() if self._playing and active_players else self._position_ms
+        )
+        for player in self._all_playback_players():
+            player.setPlaybackRate(rate)
+        if self._playing:
+            for player in active_players[1:]:
+                if abs(player.position() - master_position) > 20:
+                    player.setPosition(master_position)
+            self._position_ms = master_position
+            self._playback_clock.reset(master_position)
 
     def pause(self) -> None:
         """Pause this workbench without changing its current play position."""
@@ -2003,6 +2147,7 @@ class MuscriptorResultWidget(QFrame):
         )
         if destination:
             if kind == "midi":
+                self.speed_spin.interpretText()
                 self.bpm_spin.interpretText()
                 _export_midi_with_bpm(
                     source,
@@ -2037,6 +2182,8 @@ class MuscriptorResultWidget(QFrame):
         self.follow_checkbox.setText(t("muscriptor_result.follow"))
         self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
         self.bpm_spin.setToolTip(t("muscriptor_result.export_bpm_tooltip"))
+        self.speed_label.setText(t("muscriptor_result.playback_speed_label"))
+        self.speed_spin.setToolTip(t("muscriptor_result.playback_speed_tooltip"))
         self.original_label.setText(t("muscriptor_result.original"))
         self.stereo_checkbox.setText(t("muscriptor_result.stereo"))
         self.instruments_title.setText(t("muscriptor_result.instruments"))
