@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import shutil
 import tempfile
 import time
@@ -17,6 +18,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -76,6 +78,42 @@ _ROLL_TILE_WIDTH = 512
 _ROLL_TILE_CACHE_LIMIT = 8
 
 logger = logging.getLogger(__name__)
+
+
+def _export_midi_with_bpm(
+    source_path: str | Path,
+    destination_path: str | Path,
+    bpm: float,
+) -> Path:
+    """Publish a MIDI copy whose tempo is the user-visible result BPM."""
+
+    from src.core.pipeline import MusicToMidiPipeline
+    from src.utils.midi_output import (
+        publish_midi_output,
+        remove_temporary_midi,
+        unique_midi_temp_path,
+    )
+
+    source = Path(source_path).resolve()
+    destination = Path(destination_path).resolve()
+    temporary = unique_midi_temp_path(destination, "result-bpm")
+    try:
+        shutil.copy2(source, temporary)
+        MusicToMidiPipeline._normalize_midi_tempo_metadata(
+            str(temporary),
+            float(bpm),
+            force=True,
+            tempo_map=None,
+        )
+        return Path(
+            publish_midi_output(
+                temporary,
+                destination,
+                "Result BPM MIDI export",
+            )
+        )
+    finally:
+        remove_temporary_midi(temporary)
 
 
 def _instrument_label(instrument: str) -> str:
@@ -794,7 +832,7 @@ class MuscriptorResultWidget(QFrame):
         self._playback_clock = _SmoothPlaybackClock()
         self._playing = False
         self._playback_finished = False
-        self._resume_playback_after_scrub = False
+        self._transport_scrubbing = False
         self._muted: set[str] = set()
         self._soloed: str | None = None
         self._instrument_rows: dict[str, _InstrumentRow] = {}
@@ -906,14 +944,18 @@ class MuscriptorResultWidget(QFrame):
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
         controls.addWidget(self.clock_label)
-        # 检测到的 BPM 显示（检出后由主窗口推入，未检出时隐藏）
-        self.bpm_label = QLabel()
-        self.bpm_label.setStyleSheet(
+        self.bpm_spin = QDoubleSpinBox()
+        self.bpm_spin.setRange(20.0, 400.0)
+        self.bpm_spin.setDecimals(1)
+        self.bpm_spin.setSingleStep(0.1)
+        self.bpm_spin.setPrefix("BPM ")
+        self.bpm_spin.setKeyboardTracking(False)
+        self.bpm_spin.setStyleSheet(
             "font-family: Consolas; color: #c8d3e6; background: #16213e; "
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
-        self.bpm_label.hide()
-        controls.addWidget(self.bpm_label)
+        self.bpm_spin.hide()
+        controls.addWidget(self.bpm_spin)
         controls.addStretch(1)
         self.original_label = QLabel()
         controls.addWidget(self.original_label)
@@ -940,9 +982,7 @@ class MuscriptorResultWidget(QFrame):
         self.playback_slider.setEnabled(False)
         self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
         self.playback_slider.scrub_started.connect(self._on_playback_scrub_started)
-        self.playback_slider.seek_requested.connect(
-            lambda position_ms: self.seek(position_ms / 1000.0)
-        )
+        self.playback_slider.seek_requested.connect(self._preview_playback_scrub)
         self.playback_slider.scrub_finished.connect(self._on_playback_scrub_finished)
         transport.addWidget(self.playback_slider, 1)
         self.duration_label = QLabel("/ 0.0s")
@@ -1616,13 +1656,20 @@ class MuscriptorResultWidget(QFrame):
             self.playing_changed.emit(True)
         self._update_play_label()
 
-    def set_detected_bpm(self, bpm_text: str) -> None:
-        """显示检测到的 BPM（恒速单值或变速范围），由主窗口在检出后推入。"""
-        text = (bpm_text or "").strip()
-        if not text:
+    def set_detected_bpm(self, bpm_text: str | float) -> None:
+        """Seed the editable export BPM from the detected or configured tempo."""
+
+        if isinstance(bpm_text, (int, float)):
+            bpm = float(bpm_text)
+        else:
+            match = re.search(r"\d+(?:\.\d+)?", str(bpm_text or ""))
+            if match is None:
+                return
+            bpm = float(match.group(0))
+        if not math.isfinite(bpm) or not 20.0 <= bpm <= 400.0:
             return
-        self.bpm_label.setText(f"BPM {text}")
-        self.bpm_label.show()
+        self.bpm_spin.setValue(bpm)
+        self.bpm_spin.show()
 
     def pause(self) -> None:
         """Pause this workbench without changing its current play position."""
@@ -1638,15 +1685,27 @@ class MuscriptorResultWidget(QFrame):
             self.playing_changed.emit(False)
 
     def _on_playback_scrub_started(self) -> None:
-        self._resume_playback_after_scrub = self._playing
-        if self._playing:
-            self.pause()
+        self._transport_scrubbing = True
 
-    def _on_playback_scrub_finished(self, _position_ms: int) -> None:
-        resume = self._resume_playback_after_scrub
-        self._resume_playback_after_scrub = False
-        if resume:
-            self._toggle_playback()
+    def _preview_playback_scrub(self, position_ms: int) -> None:
+        """Move only the UI during a pointer gesture; do not churn media backends."""
+
+        duration_ms = self.playback_slider.maximum()
+        self._position_ms = max(0, min(int(position_ms), duration_ms))
+        position = self._position_ms / 1000.0
+        self._playback_finished = False
+        self.roll.set_position(position)
+        self.clock_label.setText(_format_seconds(position))
+        if self.follow_checkbox.isChecked():
+            self._follow_roll_to_position(position, allow_backward=True)
+
+    def _on_playback_scrub_finished(self, position_ms: int) -> None:
+        try:
+            # Commit exactly once on release. Repeated setPosition/pause/play calls
+            # during mouse movement can deadlock Qt's Windows FFmpeg backend.
+            self.seek(position_ms / 1000.0)
+        finally:
+            self._transport_scrubbing = False
 
     def seek(self, seconds: float) -> None:
         position = max(0.0, float(seconds))
@@ -1765,6 +1824,8 @@ class MuscriptorResultWidget(QFrame):
     def _tick(self) -> None:
         if not self._finalizing:
             self._update_stream_progress()
+        if self._transport_scrubbing:
+            return
         if not self._playing or self._midi_normal is None:
             return
         master_pair = (
@@ -1940,7 +2001,15 @@ class MuscriptorResultWidget(QFrame):
             filter_text,
         )
         if destination:
-            shutil.copy2(source, destination)
+            if kind == "midi":
+                self.bpm_spin.interpretText()
+                _export_midi_with_bpm(
+                    source,
+                    destination,
+                    self.bpm_spin.value(),
+                )
+            else:
+                shutil.copy2(source, destination)
 
     def _update_play_label(self) -> None:
         standard_icon = (
@@ -1966,6 +2035,7 @@ class MuscriptorResultWidget(QFrame):
         self._update_play_label()
         self.follow_checkbox.setText(t("muscriptor_result.follow"))
         self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
+        self.bpm_spin.setToolTip(t("muscriptor_result.export_bpm_tooltip"))
         self.original_label.setText(t("muscriptor_result.original"))
         self.stereo_checkbox.setText(t("muscriptor_result.stereo"))
         self.instruments_title.setText(t("muscriptor_result.instruments"))

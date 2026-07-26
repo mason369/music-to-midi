@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QFileDialog
 
 from src.core import muscriptor_result_assets
 from src.core.manual_midi import (
@@ -1496,18 +1496,16 @@ def test_transport_slider_supports_absolute_click_and_continuous_drag_seek(
         assert slider.isSliderDown() is False
         assert len(emitted) >= 6
 
-        transitions: list[str] = []
+        committed_seeks: list[float] = []
+        original_seek = widget.seek
 
-        def fake_pause() -> None:
-            transitions.append("pause")
-            widget._playing = False
+        def recording_seek(seconds: float) -> None:
+            committed_seeks.append(seconds)
+            original_seek(seconds)
 
-        def fake_resume() -> None:
-            transitions.append("resume")
-            widget._playing = True
-
-        widget.pause = fake_pause
-        widget._toggle_playback = fake_resume
+        widget.seek = recording_seek
+        widget.pause = lambda: pytest.fail("scrubbing must not pause QMediaPlayer")
+        widget._toggle_playback = lambda: pytest.fail("scrubbing must not restart QMediaPlayer")
         widget._playing = True
         QTest.mousePress(
             slider,
@@ -1515,16 +1513,134 @@ def test_transport_slider_supports_absolute_click_and_continuous_drag_seek(
             pos=QPoint(start_x, y),
         )
         QTest.mouseMove(slider, QPoint(end_x, y), delay=1)
+        assert committed_seeks == []
+        assert widget._transport_scrubbing is True
         QTest.mouseRelease(
             slider,
             Qt.MouseButton.LeftButton,
             pos=QPoint(end_x, y),
         )
-        assert transitions == ["pause", "resume"]
+        assert committed_seeks == [pytest.approx(16.0, abs=0.6)]
+        assert widget._transport_scrubbing is False
         assert widget._playing is True
     finally:
         widget.shutdown()
         widget.close()
+
+
+def test_real_qmedia_players_can_seek_during_playback_without_deadlock(tmp_path: Path):
+    source = _silent_wav(tmp_path / "real-player-scrub.wav", 2.0)
+    script = f"""
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from pathlib import Path
+from PyQt6.QtCore import QPoint, QTimer, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
+from src.gui.widgets.muscriptor_result import MuscriptorResultWidget
+
+app = QApplication([])
+source = Path({str(source)!r})
+widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+widget._midi_normal = widget._make_player(source)
+widget.play_button.setEnabled(True)
+widget._set_playback_duration(2.0)
+widget.resize(1000, 720)
+widget.show()
+
+def exercise():
+    widget._toggle_playback()
+    slider = widget.playback_slider
+    target = QPoint(round(slider.width() * 0.6), slider.rect().center().y())
+    QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=target)
+    QTimer.singleShot(250, verify)
+
+def verify():
+    if not widget._playing:
+        raise RuntimeError("playback stopped after an in-flight slider click")
+    if not 900 <= widget._position_ms <= 1500:
+        raise RuntimeError(f"seek did not commit: {{widget._position_ms}}")
+    if not 900 <= widget._midi_normal[0].position() <= 1500:
+        raise RuntimeError(
+            f"MIDI player did not seek: {{widget._midi_normal[0].position()}}"
+        )
+    widget.shutdown()
+    widget.close()
+    app.quit()
+
+QTimer.singleShot(200, exercise)
+QTimer.singleShot(3000, lambda: (_ for _ in ()).throw(RuntimeError("scrub timed out")))
+app.exec()
+"""
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_midi_download_uses_editable_result_bpm_and_preserves_seconds(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    source_audio = _silent_wav(tmp_path / "download-bpm-source.wav", 1.0)
+    source_midi = tmp_path / "source.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120.0), time=0))
+    track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(source_midi)
+
+    destination = tmp_path / "downloaded.mid"
+    widget = MuscriptorResultWidget(str(source_audio), ["acoustic_piano"])
+    widget._midi_path = str(source_midi)
+    widget.set_detected_bpm(117.9)
+    widget.bpm_spin.setValue(132.5)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(destination), "MIDI (*.mid)"),
+    )
+
+    try:
+        widget._save_asset("midi")
+    finally:
+        widget.shutdown()
+        widget.close()
+
+    downloaded = mido.MidiFile(destination)
+    tempo_messages = [
+        message
+        for midi_track in downloaded.tracks
+        for message in midi_track
+        if message.is_meta and message.type == "set_tempo"
+    ]
+    assert len(tempo_messages) == 1
+    assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(132.5, abs=0.001)
+    downloaded_note = read_midi_roll_notes(destination)[0]
+    source_note = read_midi_roll_notes(source_midi)[0]
+    assert downloaded_note.start == pytest.approx(source_note.start, abs=1e-6)
+    assert downloaded_note.end == pytest.approx(source_note.end, abs=1e-6)
+    assert mido.tempo2bpm(
+        next(
+            message.tempo
+            for midi_track in mido.MidiFile(source_midi).tracks
+            for message in midi_track
+            if message.is_meta and message.type == "set_tempo"
+        )
+    ) == pytest.approx(120.0)
+    app.processEvents()
 
 
 def _send_roll_wheel(widget: MuscriptorResultWidget, modifiers, *, delta: int) -> None:

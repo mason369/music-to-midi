@@ -503,6 +503,7 @@
   },
   "muscriptor_result": {
     "playback_progress_tooltip": "MIDI-master playback progress; dragging seeks MIDI and source audio together",
+    "export_bpm_tooltip": "Editable; MIDI downloads use the BPM shown here as the final tempo",
     "streaming": "MuScriptor is streaming notes into the piano roll…",
     "progress_waiting": "Waiting for the first transcription chunk…",
     "progress_timing": "{processed} / {total} · {elapsed} elapsed · done in about {remaining}",

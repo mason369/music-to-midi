@@ -503,6 +503,7 @@
   },
   "muscriptor_result": {
     "playback_progress_tooltip": "MIDI 主时钟播放进度；拖动会同时定位 MIDI 和原音频",
+    "export_bpm_tooltip": "可直接调整；点击下载 MIDI 时以这里显示的 BPM 为最终速度",
     "streaming": "MuScriptor 正在流式生成钢琴卷帘…",
     "progress_waiting": "等待首个转写分片…",
     "progress_timing": "{processed} / {total} · 已用 {elapsed} · 预计 {remaining} 后完成",
