@@ -2393,11 +2393,20 @@ def test_roll_horizontal_scrollbar_handle_drag_is_not_cancelled(tmp_path: Path):
         app.processEvents()
 
         option = QStyleOptionSlider()
-        scrollbar.initStyleOption(option)
+        option.initFrom(scrollbar)
+        option.orientation = scrollbar.orientation()
+        option.minimum = scrollbar.minimum()
+        option.maximum = scrollbar.maximum()
+        option.singleStep = scrollbar.singleStep()
+        option.pageStep = scrollbar.pageStep()
+        option.sliderPosition = scrollbar.sliderPosition()
+        option.sliderValue = scrollbar.value()
+        option.upsideDown = scrollbar.invertedAppearance()
+        option.subControls = QStyle.SubControl.SC_All
         handle = scrollbar.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider,
+            QStyle.ComplexControl.CC_ScrollBar,
             option,
-            QStyle.SubControl.SC_SliderHandle,
+            QStyle.SubControl.SC_ScrollBarSlider,
             scrollbar,
         )
         start = handle.center()
