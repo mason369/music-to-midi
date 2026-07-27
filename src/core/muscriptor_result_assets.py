@@ -466,11 +466,25 @@ def prepare_muscriptor_preview_assets(
 
 
 def _load_mono_44k(path: Path):
-    import librosa
     import numpy as np
+    import soundfile as sf
 
-    audio, _sample_rate = librosa.load(str(path), sr=_SAMPLE_RATE, mono=True)
-    return np.asarray(audio, dtype="float32")
+    audio, sample_rate = sf.read(
+        str(path),
+        dtype="float32",
+        always_2d=True,
+    )
+    mono = np.mean(audio, axis=1, dtype="float32")
+    if sample_rate != _SAMPLE_RATE:
+        import soxr
+
+        mono = soxr.resample(
+            mono,
+            sample_rate,
+            _SAMPLE_RATE,
+            quality="HQ",
+        )
+    return np.ascontiguousarray(mono, dtype="float32")
 
 
 @lru_cache(maxsize=2)

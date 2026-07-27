@@ -691,6 +691,47 @@ def test_preview_assets_render_real_per_instrument_sources(tmp_path: Path, monke
     )
 
 
+def test_preview_audio_loader_preserves_44k_stereo_average(tmp_path: Path):
+    frames = 441
+    left = np.linspace(-0.8, 0.8, frames, dtype=np.float32)
+    right = np.linspace(0.4, -0.4, frames, dtype=np.float32)
+    source = tmp_path / "stereo.wav"
+    sf.write(source, np.stack([left, right], axis=1), 44_100, subtype="FLOAT")
+
+    loaded = muscriptor_result_assets._load_mono_44k(source)
+
+    assert loaded.dtype == np.float32
+    assert loaded.flags.c_contiguous
+    assert loaded == pytest.approx((left + right) / 2.0, abs=1e-7)
+
+
+def test_preview_audio_loader_uses_hq_resampling(tmp_path: Path, monkeypatch):
+    source = tmp_path / "source-48k.wav"
+    time_axis = np.arange(480, dtype=np.float32) / 48_000.0
+    sf.write(source, np.sin(2.0 * np.pi * 440.0 * time_axis), 48_000)
+    calls: list[tuple[int, int, str]] = []
+    import soxr
+
+    original_resample = soxr.resample
+
+    def recording_resample(audio, input_rate, output_rate, *, quality):
+        calls.append((input_rate, output_rate, quality))
+        return original_resample(
+            audio,
+            input_rate,
+            output_rate,
+            quality=quality,
+        )
+
+    monkeypatch.setattr(soxr, "resample", recording_resample)
+
+    loaded = muscriptor_result_assets._load_mono_44k(source)
+
+    assert calls == [(48_000, 44_100, "HQ")]
+    assert len(loaded) == 441
+    assert loaded.dtype == np.float32
+
+
 def test_preview_assets_round_up_non_frame_aligned_note_boundary(
     tmp_path: Path,
     monkeypatch,
