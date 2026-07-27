@@ -13,10 +13,22 @@ from collections import OrderedDict, deque
 from collections.abc import Iterable
 from pathlib import Path
 
-from PyQt6.QtCore import QLineF, QRectF, QSignalBlocker, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QLineF,
+    QRectF,
+    QSignalBlocker,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
+    QAbstractSlider,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -67,6 +79,9 @@ _STREAM_CHUNK_SECONDS = 5.0
 _PROGRESS_EMA_ALPHA = 0.4
 _PROGRESS_INTERPOLATION_CAP = 0.95
 _PROGRESS_INITIAL_CURVE_SECONDS = 4.0
+_SLOW_CONVERSION_THRESHOLD_SECONDS = 10.0 * 60.0
+_STREAM_PREVIEW_REFRESH_SECONDS = 15.0
+_STREAM_PREVIEW_PLAYBACK_MARGIN_SECONDS = 3.0
 _PLAYHEAD_TIMER_MS = 16
 _PLAYHEAD_MAX_LEAD_MS = 120.0
 _ROLL_FOLLOW_SCROLL_BLOCK_PX = 12
@@ -910,6 +925,7 @@ class MuscriptorResultWidget(QFrame):
         self._preview_generation = 0
         self._preview_ready_generation = 0
         self._preview_applied_generation = 0
+        self._preview_last_requested_frontier = 0.0
         self._preview_note_count = 0
         self._preview_duration = 0.0
         self._preview_error: str | None = None
@@ -918,6 +934,7 @@ class MuscriptorResultWidget(QFrame):
         self._progress_estimator = _ChunkProgressEstimator()
         self._progress_completed = 0
         self._progress_total = 0
+        self._runtime_details: dict[str, object] = {}
         self._source_duration_seconds = 0.0
         self._position_ms = 0
         self._last_drift_check_position_ms = 0
@@ -1020,6 +1037,15 @@ class MuscriptorResultWidget(QFrame):
         self.progress_label.setStyleSheet("color: #8da4c9;")
         root.addWidget(self.progress_label)
 
+        self.slow_hint_label = QLabel()
+        self.slow_hint_label.setWordWrap(True)
+        self.slow_hint_label.setStyleSheet(
+            "font-size: 10px; color: #d8b56a; background: #1b2942; "
+            "border-left: 3px solid #d8b56a; padding: 5px 8px;"
+        )
+        self.slow_hint_label.hide()
+        root.addWidget(self.slow_hint_label)
+
         self.playback_status_label = QLabel()
         self.playback_status_label.setWordWrap(True)
         self.playback_status_label.setStyleSheet("color: #73a7ff;")
@@ -1121,9 +1147,7 @@ class MuscriptorResultWidget(QFrame):
         self.roll_scroll.horizontalScrollBar().setSingleStep(48)
         self.roll_scroll.zoom_requested.connect(self._on_roll_zoom_requested)
         self.roll_scroll.manual_navigation_requested.connect(self._on_roll_manual_navigation)
-        self.roll_scroll.horizontalScrollBar().actionTriggered.connect(
-            lambda _action: self._on_roll_manual_navigation()
-        )
+        self.roll_scroll.horizontalScrollBar().actionTriggered.connect(self._on_roll_scroll_action)
         self.roll_scroll.horizontalScrollBar().sliderPressed.connect(
             self._on_roll_manual_navigation
         )
@@ -1192,7 +1216,20 @@ class MuscriptorResultWidget(QFrame):
         if not isinstance(payload, dict):
             raise TypeError("Transcription stream event must be a dictionary")
         event_type = payload.get("type")
-        if event_type in {"note_end", "note_batch"}:
+        if event_type == "runtime":
+            required = {
+                "model",
+                "device",
+                "gpu",
+                "compute_dtype",
+                "batch_size",
+                "prelude_forcing",
+            }
+            missing = sorted(required.difference(payload))
+            if missing:
+                raise ValueError(f"MuScriptor runtime event is missing fields: {missing!r}")
+            self._runtime_details = dict(payload)
+        elif event_type in {"note_end", "note_batch"}:
             raw_notes = [payload] if event_type == "note_end" else payload.get("notes")
             if not isinstance(raw_notes, list):
                 raise TypeError("MuScriptor note batch must contain a list")
@@ -1274,6 +1311,7 @@ class MuscriptorResultWidget(QFrame):
 
     def finalize_result(self, result: ProcessingResult) -> None:
         self._finalizing = True
+        self.slow_hint_label.hide()
         self._preview_pending = None
         if self._preview_worker is not None and self._preview_worker.isRunning():
             self._preview_worker.cancel()
@@ -1342,6 +1380,7 @@ class MuscriptorResultWidget(QFrame):
     def mark_failed(self, error: str) -> None:
         """Stop future snapshots while preserving an already rendered preview."""
         self._finalizing = True
+        self.slow_hint_label.hide()
         self._preview_pending = None
         if self._preview_worker is not None and self._preview_worker.isRunning():
             self._preview_worker.cancel()
@@ -1352,6 +1391,7 @@ class MuscriptorResultWidget(QFrame):
 
     def mark_cancelled(self) -> None:
         self._finalizing = True
+        self.slow_hint_label.hide()
         self._preview_pending = None
         if self._preview_worker is not None and self._preview_worker.isRunning():
             self._preview_worker.cancel()
@@ -1391,7 +1431,26 @@ class MuscriptorResultWidget(QFrame):
             if frontier is None
             else max(float(frontier), max(note.end for note in self._stream_notes))
         )
+        first_preview = self._preview_generation == 0
+        enough_new_audio = (
+            frontier - self._preview_last_requested_frontier >= _STREAM_PREVIEW_REFRESH_SECONDS
+        )
+        playback_position = self._position_ms / 1000.0
+        playback_needs_extension = (
+            self._preview_duration > 0
+            and playback_position
+            >= max(
+                0.0,
+                self._preview_duration - _STREAM_PREVIEW_PLAYBACK_MARGIN_SECONDS,
+            )
+            and frontier > self._preview_duration + 1e-6
+        )
+        if not (
+            first_preview or completed >= total or enough_new_audio or playback_needs_extension
+        ):
+            return
         self._preview_generation += 1
+        self._preview_last_requested_frontier = frontier
         self._preview_pending = (
             self._preview_generation,
             notes,
@@ -1586,19 +1645,16 @@ class MuscriptorResultWidget(QFrame):
                 output.setMuted(True)
 
         # Qt FFmpeg can deadlock when QMediaPlayer.stop() is called from the
-        # same timer callback that observed EndOfMedia and committed the next
-        # preview. Remove the old players from all live routing immediately,
-        # then release their backends on the next event-loop turn. Let QObject
-        # destruction detach the source/output in its normal order instead of
-        # manually changing both relationships while stop notifications remain
-        # queued.
+        # same event-loop transition that observed EndOfMedia and committed the
+        # next preview. Remove the old players from all live routing immediately,
+        # then let QObject destruction release their already-quiescent backends
+        # without issuing a second stop/source/output transition.
         def release_retired_players() -> None:
             for player in retired_players:
-                player.stop()
                 output = player.audioOutput()
+                player.deleteLater()
                 if output is not None:
                     output.deleteLater()
-                player.deleteLater()
 
         QTimer.singleShot(0, release_retired_players)
 
@@ -1627,6 +1683,8 @@ class MuscriptorResultWidget(QFrame):
         return player, output
 
     def _on_player_playback_state_changed(self, _state) -> None:
+        if self._deferred_apply_scheduled and not self._playing:
+            self._try_apply_deferred_assets()
         if not self._playing or not self._startup_sync_pending:
             return
         active = self._active_playback_players()
@@ -1960,15 +2018,21 @@ class MuscriptorResultWidget(QFrame):
         if self._deferred_apply_scheduled or self._shutting_down:
             return
         self._deferred_apply_scheduled = True
+        QTimer.singleShot(0, self._try_apply_deferred_assets)
 
-        def apply_after_players_settle() -> None:
+    def _try_apply_deferred_assets(self) -> None:
+        if not self._deferred_apply_scheduled:
+            return
+        if self._shutting_down:
             self._deferred_apply_scheduled = False
-            self._apply_deferred_assets()
-
-        # QMediaPlayer pause is asynchronous on Qt's Windows FFmpeg backend.
-        # Commit a buffered preview/final asset on the following event-loop turn so
-        # its backend is never cleared while that pause transition is still active.
-        QTimer.singleShot(0, apply_after_players_settle)
+            return
+        if self._playing or any(
+            player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            for player in self._all_playback_players()
+        ):
+            return
+        self._deferred_apply_scheduled = False
+        self._apply_deferred_assets()
 
     def _follow_roll_to_position(self, position: float, *, allow_backward: bool) -> None:
         scrollbar = self.roll_scroll.horizontalScrollBar()
@@ -1993,6 +2057,11 @@ class MuscriptorResultWidget(QFrame):
         self._commit_roll_render_offset()
         if self.follow_checkbox.isChecked():
             self.follow_checkbox.setChecked(False)
+
+    def _on_roll_scroll_action(self, action: int) -> None:
+        if action == QAbstractSlider.SliderAction.SliderMove.value:
+            return
+        self._on_roll_manual_navigation()
 
     def _on_follow_toggled(self, checked: bool) -> None:
         if checked:
@@ -2098,6 +2167,8 @@ class MuscriptorResultWidget(QFrame):
         if master.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia:
             terminal_ms = max(self._position_ms, max(0, master.duration()))
             self._finish_playback_at(terminal_ms)
+            if self._preview_duration > 0:
+                self._schedule_deferred_assets()
 
     def _update_stream_progress(self) -> None:
         if not self._progress_estimator.active or self._progress_total <= 0:
@@ -2125,6 +2196,43 @@ class MuscriptorResultWidget(QFrame):
                 "remaining": _format_clock(eta),
             }
         self.progress_label.setText(t(key, **values))
+        self._update_slow_conversion_hint(elapsed=elapsed, processed=processed)
+
+    def _update_slow_conversion_hint(self, *, elapsed: float, processed: float) -> None:
+        if self._finalizing or elapsed < _SLOW_CONVERSION_THRESHOLD_SECONDS:
+            self.slow_hint_label.hide()
+            return
+
+        model = str(self._runtime_details.get("model") or self.backend_label)
+        device = str(self._runtime_details.get("device") or "unknown")
+        gpu = str(self._runtime_details.get("gpu") or device)
+        precision = str(self._runtime_details.get("compute_dtype") or "unknown")
+        completed = max(0, int(self._progress_completed))
+        total = max(1, int(self._progress_total))
+        seconds_per_chunk = self._progress_estimator.ema_chunk_seconds
+        if seconds_per_chunk is None:
+            seconds_per_chunk = elapsed / max(1, completed)
+        realtime_factor = elapsed / max(_STREAM_CHUNK_SECONDS, processed)
+        values = {
+            "model": model,
+            "gpu": gpu,
+            "device": device,
+            "precision": precision,
+            "completed": completed,
+            "total": total,
+            "seconds_per_chunk": f"{seconds_per_chunk:.1f}",
+            "realtime_factor": f"{realtime_factor:.1f}",
+        }
+        if device.lower().startswith("cpu"):
+            key = "muscriptor_result.slow_hint_cpu"
+        elif "large" in model.lower():
+            key = "muscriptor_result.slow_hint_large"
+        else:
+            key = "muscriptor_result.slow_hint_check"
+        message = t(key, **values)
+        if self.slow_hint_label.text() != message:
+            self.slow_hint_label.setText(message)
+        self.slow_hint_label.show()
 
     def _apply_mix(self, *_args) -> None:
         if self._original_normal is None:
@@ -2308,13 +2416,13 @@ class MuscriptorResultWidget(QFrame):
         self._deferred_final_assets = None
         self.timer.stop()
         for player in self._all_playback_players():
-            player.stop()
-            player.setSource(QUrl())
             output = player.audioOutput()
-            player.setAudioOutput(None)
+            if output is not None:
+                output.setMuted(True)
+            player.deleteLater()
             if output is not None:
                 output.deleteLater()
-            player.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self._players.clear()
         self._active_player_ids = frozenset()
         self._startup_sync_pending = False

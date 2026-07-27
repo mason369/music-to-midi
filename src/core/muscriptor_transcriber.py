@@ -29,6 +29,7 @@ from src.utils.muscriptor_downloader import (
     get_muscriptor_artifact,
     normalize_muscriptor_model,
 )
+from src.utils.muscriptor_runtime import configure_muscriptor_kv_cache
 from src.utils.inference_precision import (
     MUSCRIPTOR,
     configure_torch_precision,
@@ -53,6 +54,7 @@ class MuscriptorTranscriber:
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
         self._model = None
+        self._runtime_details: dict[str, object] | None = None
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._event_callback: Optional[Callable[[dict[str, object]], None]] = None
@@ -190,11 +192,35 @@ class MuscriptorTranscriber:
                 "MuScriptor autocast dtype mismatch: "
                 f"expected {expected_dtype}, got {actual_dtype}"
             )
+        optimized_layers = 0
+        kv_cache_dtype = "float32"
+        if precision_plan.compute_dtype == "float16":
+            optimized_layers = configure_muscriptor_kv_cache(
+                runtime_model,
+                compute_dtype=precision_plan.compute_dtype,
+                torch_module=torch,
+            )
+            kv_cache_dtype = "float16"
         logger.info(
-            "MuScriptor runtime verified | parameters=float32 autocast=%s compute=%s",
+            "MuScriptor runtime verified | parameters=float32 autocast=%s "
+            "compute=%s kv_cache=%s reused_layers=%d",
             actual_enabled,
             precision_plan.compute_dtype,
+            kv_cache_dtype,
+            optimized_layers,
         )
+        capabilities = precision_plan.capabilities
+        self._runtime_details = {
+            "type": "runtime",
+            "model": artifact.display_name,
+            "device": str(precision_plan.device),
+            "gpu": str(capabilities.device_name),
+            "compute_dtype": str(precision_plan.compute_dtype),
+            "kv_cache_dtype": kv_cache_dtype,
+            "kv_cache_reused_layers": optimized_layers,
+            "batch_size": 1,
+            "prelude_forcing": True,
+        }
         self._check_cancelled()
         return self._model
 
@@ -226,6 +252,8 @@ class MuscriptorTranscriber:
         official_events: list[object] = []
         pending_note_ends: list[dict[str, object]] = []
         self._check_cancelled()
+        if self._runtime_details is not None:
+            self._emit_event(dict(self._runtime_details))
 
         def flush_note_ends() -> None:
             if not pending_note_ends:
@@ -233,59 +261,66 @@ class MuscriptorTranscriber:
             self._emit_event({"type": "note_batch", "notes": list(pending_note_ends)})
             pending_note_ends.clear()
 
-        events = model.transcribe(
-            source,
-            instruments=selected or None,
-            use_sampling=False,
-            batch_size=1,
-            beam_size=1,
-            prelude_forcing=True,
-        )
-        for event in events:
-            self._check_cancelled()
-            if isinstance(event, ProgressEvent):
-                # A dense polyphonic chunk can contain hundreds of events. One
-                # queued Qt signal per note can starve the GUI thread, so publish
-                # the completed notes as one chunk-owned batch.
-                flush_note_ends()
-                completed = int(event.completed)
-                total = max(1, int(event.total))
-                progress = max(0.0, min(1.0, completed / total))
-                if progress_callback is not None:
-                    progress_callback(
-                        progress,
-                        self._translator.t(
-                            "progress.muscriptor_chunks",
-                            completed=completed,
-                            total=total,
-                        ),
+        import torch
+
+        # MuScriptor already disables gradients in its generator, but the outer
+        # inference context also covers condition construction, event streaming,
+        # and the per-chunk state tensors. This removes autograd view/version
+        # bookkeeping without changing model precision or chunk ordering.
+        with torch.inference_mode():
+            events = model.transcribe(
+                source,
+                instruments=selected or None,
+                use_sampling=False,
+                batch_size=1,
+                beam_size=1,
+                prelude_forcing=True,
+            )
+            for event in events:
+                self._check_cancelled()
+                if isinstance(event, ProgressEvent):
+                    # A dense polyphonic chunk can contain hundreds of events. One
+                    # queued Qt signal per note can starve the GUI thread, so publish
+                    # the completed notes as one chunk-owned batch.
+                    flush_note_ends()
+                    completed = int(event.completed)
+                    total = max(1, int(event.total))
+                    progress = max(0.0, min(1.0, completed / total))
+                    if progress_callback is not None:
+                        progress_callback(
+                            progress,
+                            self._translator.t(
+                                "progress.muscriptor_chunks",
+                                completed=completed,
+                                total=total,
+                            ),
+                        )
+                    self._emit_event({"type": "progress", "completed": completed, "total": total})
+                elif isinstance(event, NoteStartEvent):
+                    instrument = str(event.instrument)
+                    require_allowed_muscriptor_event_instrument(instrument, selected)
+                    if instrument not in detected:
+                        detected.add(instrument)
+                        self.last_detected_instruments.append(instrument)
+                elif isinstance(event, NoteEndEvent):
+                    instrument = str(event.start_event.instrument)
+                    require_allowed_muscriptor_event_instrument(instrument, selected)
+                    pending_note_ends.append(
+                        {
+                            "index": int(event.start_event_index),
+                            "instrument": instrument,
+                            "pitch": int(event.start_event.pitch),
+                            "start_time": float(event.start_event.start_time),
+                            "end_time": float(event.end_time),
+                            "program": MUSCRIPTOR_REPRESENTATIVE_PROGRAMS.get(instrument),
+                            "is_drum": instrument == "drums",
+                        }
                     )
-                self._emit_event({"type": "progress", "completed": completed, "total": total})
-            elif isinstance(event, NoteStartEvent):
-                instrument = str(event.instrument)
-                require_allowed_muscriptor_event_instrument(instrument, selected)
-                if instrument not in detected:
-                    detected.add(instrument)
-                    self.last_detected_instruments.append(instrument)
-            elif isinstance(event, NoteEndEvent):
-                instrument = str(event.start_event.instrument)
-                require_allowed_muscriptor_event_instrument(instrument, selected)
-                pending_note_ends.append(
-                    {
-                        "index": int(event.start_event_index),
-                        "instrument": instrument,
-                        "pitch": int(event.start_event.pitch),
-                        "start_time": float(event.start_event.start_time),
-                        "end_time": float(event.end_time),
-                        "program": MUSCRIPTOR_REPRESENTATIVE_PROGRAMS.get(instrument),
-                        "is_drum": instrument == "drums",
-                    }
-                )
-            else:
-                raise RuntimeError(
-                    f"MuScriptor returned an unsupported event type: {type(event).__name__}"
-                )
-            official_events.append(event)
+                else:
+                    raise RuntimeError(
+                        f"MuScriptor returned an unsupported event type: {type(event).__name__}"
+                    )
+                official_events.append(event)
 
         flush_note_ends()
 
@@ -310,6 +345,7 @@ class MuscriptorTranscriber:
     def unload_model(self) -> None:
         model = self._model
         self._model = None
+        self._runtime_details = None
         if model is not None:
             del model
         gc.collect()

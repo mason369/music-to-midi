@@ -1277,6 +1277,7 @@ class MusicToMidiPipeline:
         stem = Path(audio_path).stem
         midi_path = str(Path(output_dir) / f"{stem}.mid")
         selected = list(self.config.muscriptor_instruments)
+        backend_label = self._get_multi_instrument_label()
         self._require_multi_instrument_available()
 
         self._report(
@@ -1293,7 +1294,7 @@ class MusicToMidiPipeline:
             ProcessingStage.TRANSCRIPTION,
             0.0,
             0.1,
-            self._pt("progress.loading_model", model="MuScriptor-large"),
+            self._pt("progress.loading_model", model=backend_label),
         )
 
         def _muscriptor_cb(progress: float, message: str) -> None:
@@ -1319,10 +1320,8 @@ class MusicToMidiPipeline:
         except InterruptedError:
             raise
         except Exception as exc:
-            logger.error("MuScriptor-large transcription failed: %s", exc, exc_info=True)
-            raise RuntimeError(
-                self._format_backend_error("MuScriptor-large", "转写失败", exc)
-            ) from exc
+            logger.error("%s transcription failed: %s", backend_label, exc, exc_info=True)
+            raise RuntimeError(self._format_backend_error(backend_label, "转写失败", exc)) from exc
         finally:
             self._cleanup_multi_instrument_backend()
 

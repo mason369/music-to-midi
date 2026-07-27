@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QFileDialog
+from PyQt6.QtWidgets import QApplication, QFileDialog, QStyle, QStyleOptionSlider
 
 from src.core import muscriptor_result_assets
 from src.core.manual_midi import (
@@ -58,6 +58,7 @@ from src.i18n.translator import t
 from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
 from src.models.muscriptor_instruments import muscriptor_instrument_label
 from src.utils import muscriptor_downloader
+from src.utils.muscriptor_runtime import configure_muscriptor_kv_cache
 
 
 def _midi_bytes(program: int = 0, *, drum: bool = False) -> bytes:
@@ -278,6 +279,8 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
     precision_plan = types.SimpleNamespace(
         autocast=True,
         compute_dtype="float16",
+        device="cuda:0",
+        capabilities=types.SimpleNamespace(device_name="Test CUDA GPU"),
         torch_dtype=lambda _torch_module: torch.float16,
     )
 
@@ -304,12 +307,72 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "src.core.muscriptor_transcriber.log_precision_plan",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.configure_muscriptor_kv_cache",
+        lambda *_args, **_kwargs: 14,
+    )
 
     transcriber = MuscriptorTranscriber(Config(use_gpu=True, gpu_device=0))
 
     assert transcriber.load_model() is loaded_model
     assert captured == {"weights_path": weights, "device": "cuda:0"}
     assert {parameter.dtype for parameter in inner_model.parameters()} == {torch.float32}
+    assert transcriber._runtime_details == {
+        "type": "runtime",
+        "model": "MuScriptor-large",
+        "device": "cuda:0",
+        "gpu": "Test CUDA GPU",
+        "compute_dtype": "float16",
+        "kv_cache_dtype": "float16",
+        "kv_cache_reused_layers": 14,
+        "batch_size": 1,
+        "prelude_forcing": True,
+    }
+
+
+def test_muscriptor_fp16_kv_cache_is_reused_without_changing_fp32_parameters():
+    import torch
+    from muscriptor.modules.streaming import init_states
+    from muscriptor.modules.transformer import StreamingMultiheadAttention
+
+    model = torch.nn.Sequential(
+        StreamingMultiheadAttention(
+            embed_dim=8,
+            num_heads=2,
+            device="cpu",
+            dtype=torch.float32,
+        )
+    )
+
+    assert (
+        configure_muscriptor_kv_cache(
+            model,
+            compute_dtype="float16",
+            torch_module=torch,
+        )
+        == 1
+    )
+    first = init_states(model, batch_size=1, sequence_length=32)
+    second = init_states(model, batch_size=1, sequence_length=32)
+    first_state = next(state for state in first.values() if "cache" in state)
+    second_state = next(state for state in second.values() if "cache" in state)
+
+    assert first_state["cache"].dtype == torch.float16
+    assert first_state["cache"].data_ptr() == second_state["cache"].data_ptr()
+    assert first_state["offset"].item() == 0
+    assert second_state["offset"].item() == 0
+    assert {parameter.dtype for parameter in model.parameters()} == {torch.float32}
+
+
+def test_muscriptor_kv_cache_requires_verified_fp16_compute():
+    import torch
+
+    with pytest.raises(ValueError, match="requires verified FP16 compute"):
+        configure_muscriptor_kv_cache(
+            torch.nn.Linear(2, 2),
+            compute_dtype="float32",
+            torch_module=torch,
+        )
 
 
 def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
@@ -353,6 +416,50 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
         "beam_size": 1,
         "prelude_forcing": True,
     }
+
+
+def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
+    tmp_path: Path,
+    monkeypatch,
+):
+    import torch
+
+    ProgressEvent, _NoteStartEvent, _NoteEndEvent = _install_fake_event_module(monkeypatch)
+    inference_states: list[bool] = []
+
+    class FakeModel:
+        def transcribe(self, _source, **_kwargs):
+            inference_states.append(torch.is_inference_mode_enabled())
+            return iter([ProgressEvent(1, 1)])
+
+        def events_to_midi_bytes(self, events):
+            assert len(list(events)) == 1
+            return _midi_bytes()
+
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"wav")
+    output = tmp_path / "output.mid"
+    transcriber = MuscriptorTranscriber(Config(use_gpu=False))
+    transcriber._model = FakeModel()
+    transcriber._runtime_details = {
+        "type": "runtime",
+        "model": "MuScriptor-small",
+        "device": "cuda:0",
+        "gpu": "Test GPU",
+        "compute_dtype": "float16",
+        "kv_cache_dtype": "float16",
+        "kv_cache_reused_layers": 14,
+        "batch_size": 1,
+        "prelude_forcing": True,
+    }
+    received: list[dict[str, object]] = []
+    transcriber.set_event_callback(received.append)
+
+    transcriber.transcribe_to_midi(str(audio), str(output))
+
+    assert inference_states == [True]
+    assert received[0] == transcriber._runtime_details
+    assert received[1] == {"type": "progress", "completed": 1, "total": 1}
 
 
 def test_transcriber_refuses_backend_event_outside_selected_instruments(
@@ -723,6 +830,118 @@ def test_stream_progress_does_not_crash_when_chunks_finish_in_same_clock_tick(
         assert widget._progress_total == 42
         assert widget._progress_estimator.ema_chunk_seconds is None
         assert "23/42" in widget.status_label.text()
+    finally:
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
+
+
+def test_ten_minute_large_model_hint_explains_verified_runtime(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "slow-large.wav", 1.0)
+    widget = MuscriptorResultWidget(
+        str(source),
+        ["acoustic_piano"],
+        backend_label="MuScriptor-large",
+    )
+    widget.add_stream_event(
+        {
+            "type": "runtime",
+            "model": "MuScriptor-large",
+            "device": "cuda:0",
+            "gpu": "Test GPU",
+            "compute_dtype": "float16",
+            "batch_size": 1,
+            "prelude_forcing": True,
+        }
+    )
+    widget._progress_completed = 10
+    widget._progress_total = 40
+    widget._progress_estimator.on_anchor(10, 40, now=600.0)
+
+    try:
+        widget._update_slow_conversion_hint(elapsed=599.9, processed=50.0)
+        assert widget.slow_hint_label.isHidden()
+
+        widget._update_slow_conversion_hint(elapsed=600.0, processed=50.0)
+
+        assert not widget.slow_hint_label.isHidden()
+        hint = widget.slow_hint_label.text()
+        assert "MuScriptor-large" in hint
+        assert "Test GPU" in hint
+        assert "10/40" in hint
+        assert "Medium" in hint
+        assert "Small" in hint
+
+        widget.mark_cancelled()
+        assert widget.slow_hint_label.isHidden()
+    finally:
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
+
+
+def test_ten_minute_cpu_hint_reports_that_cuda_is_not_active(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "slow-cpu.wav", 1.0)
+    widget = MuscriptorResultWidget(
+        str(source),
+        ["acoustic_piano"],
+        backend_label="MuScriptor-small",
+    )
+    widget.add_stream_event(
+        {
+            "type": "runtime",
+            "model": "MuScriptor-small",
+            "device": "cpu",
+            "gpu": "CPU",
+            "compute_dtype": "float32",
+            "batch_size": 1,
+            "prelude_forcing": True,
+        }
+    )
+    widget._progress_completed = 2
+    widget._progress_total = 40
+
+    try:
+        widget._update_slow_conversion_hint(elapsed=600.0, processed=10.0)
+
+        assert not widget.slow_hint_label.isHidden()
+        hint = widget.slow_hint_label.text()
+        assert "cpu" in hint.lower()
+        assert "CUDA" in hint
+    finally:
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
+
+
+def test_stream_preview_rendering_is_throttled_but_extends_near_playback_end(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "preview-throttle.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    widget._stream_notes = [MuscriptorRollNote("acoustic_piano", 60, 100, 0.0, 1.0)]
+    widget._start_pending_preview = lambda: None
+
+    try:
+        widget._queue_preview(1, 100, frontier=5.0)
+        assert widget._preview_generation == 1
+
+        widget._queue_preview(2, 100, frontier=10.0)
+        widget._queue_preview(3, 100, frontier=15.0)
+        assert widget._preview_generation == 1
+
+        widget._queue_preview(4, 100, frontier=20.0)
+        assert widget._preview_generation == 2
+
+        widget._preview_duration = 20.0
+        widget._position_ms = 18_000
+        widget._queue_preview(5, 100, frontier=25.0)
+        assert widget._preview_generation == 3
+        assert widget._preview_pending is not None
+        assert widget._preview_pending[2] == pytest.approx(25.0)
     finally:
         widget.shutdown()
         widget.close()
@@ -1390,6 +1609,93 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
     finally:
         widget._playing = False
         widget._midi_normal = midi_pair
+        widget._players = original_players
+        widget.shutdown()
+        widget.close()
+
+
+def test_stream_end_of_media_schedules_buffered_preview_application(tmp_path: Path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "stream-end-source.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    app.processEvents()
+
+    class FakePlayer:
+        def position(self):
+            return 990
+
+        def duration(self):
+            return 990
+
+        def mediaStatus(self):
+            return QMediaPlayer.MediaStatus.EndOfMedia
+
+        def pause(self):
+            pass
+
+    master = FakePlayer()
+    midi_pair = widget._midi_normal
+    original_players = widget._players
+    scheduled: list[bool] = []
+    try:
+        widget._midi_normal = (master, object())
+        widget._players = [master]
+        widget._playing = True
+        widget._finalizing = False
+        widget._preview_duration = 1.0
+        widget._position_ms = 990
+        widget._schedule_deferred_assets = lambda: scheduled.append(True)
+
+        widget._tick()
+
+        assert widget._playing is False
+        assert widget._playback_finished is True
+        assert scheduled == [True]
+    finally:
+        widget._playing = False
+        widget._midi_normal = midi_pair
+        widget._players = original_players
+        widget.shutdown()
+        widget.close()
+
+
+def test_deferred_preview_waits_for_media_backend_to_finish_pausing(tmp_path: Path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "pause-transition.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    app.processEvents()
+
+    class FakePlayer:
+        def __init__(self):
+            self.state = QMediaPlayer.PlaybackState.PlayingState
+
+        def playbackState(self):
+            return self.state
+
+    player = FakePlayer()
+    original_players = widget._players
+    applied: list[bool] = []
+    try:
+        widget._players = [player]
+        widget._playing = False
+        widget._apply_deferred_assets = lambda: applied.append(True)
+
+        widget._schedule_deferred_assets()
+        app.processEvents()
+
+        assert applied == []
+        assert widget._deferred_apply_scheduled is True
+
+        player.state = QMediaPlayer.PlaybackState.PausedState
+        widget._on_player_playback_state_changed(player.state)
+
+        assert applied == [True]
+        assert widget._deferred_apply_scheduled is False
+    finally:
         widget._players = original_players
         widget.shutdown()
         widget.close()
@@ -2063,6 +2369,49 @@ def test_roll_wheel_shortcuts_zoom_at_cursor_and_scroll_horizontally(tmp_path: P
         assert scrollbar.value() > horizontal_before
         assert not widget.follow_checkbox.isChecked()
         assert "QScrollBar::handle:horizontal" in widget.styleSheet()
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_roll_horizontal_scrollbar_handle_drag_is_not_cancelled(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "scrollbar-drag.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    widget.resize(1200, 720)
+    widget.show()
+    widget.roll.set_notes(
+        (MuscriptorRollNote("acoustic_piano", 60, 100, 0.0, 0.5),),
+        duration=120.0,
+    )
+    app.processEvents()
+
+    try:
+        scrollbar = widget.roll_scroll.horizontalScrollBar()
+        assert scrollbar.maximum() > 0
+        scrollbar.setValue(scrollbar.maximum() // 4)
+        app.processEvents()
+
+        option = QStyleOptionSlider()
+        scrollbar.initStyleOption(option)
+        handle = scrollbar.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            scrollbar,
+        )
+        start = handle.center()
+        target = QPoint(min(scrollbar.width() - 5, start.x() + 200), start.y())
+        before = scrollbar.value()
+
+        QTest.mousePress(scrollbar, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(scrollbar, target, delay=5)
+        QTest.mouseRelease(scrollbar, Qt.MouseButton.LeftButton, pos=target)
+        app.processEvents()
+
+        assert scrollbar.value() > before + scrollbar.maximum() // 10
+        assert scrollbar.isSliderDown() is False
+        assert not widget.follow_checkbox.isChecked()
     finally:
         widget.shutdown()
         widget.close()
