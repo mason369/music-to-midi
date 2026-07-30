@@ -946,9 +946,10 @@ jobs:
           - 修复全部七种模式中后端固定 120 BPM 占位 tempo 的问题，并保留音符、力度、控制器、弯音与 CC64 踏板消息。
           - 自动检测继续使用多引擎共识和拍间隔中位数倍频校正；变速 tempo map 仍为显式可选功能，低置信检测不会伪造速度变化。
 
-          #### 推理精度策略
-          - 新增按模型家族的推理精度策略：模型参数始终保持 FP32，YourMT3/PolarFormer 全程 FP32，MuScriptor/Leap XE 使用 FP16 autocast，Aria-AMT/MIROS 优先原生 BF16。
-          - 以真实矩阵乘法探测替代 GPU 名称白名单；TF32 与 reduced-precision reduction 显式禁用，精度计划在日志中逐项记录。
+          #### 模型原生精度调用修复
+          - 移除项目额外注入的统一 FP32/FP16/BF16 精度选择层；YourMT3、MuScriptor、Aria-AMT、Leap XE、PolarFormer 与 MIROS 均恢复各自固定上游版本原有的推理调用和缓存配置。
+          - 修复 Issue #4：Aria-AMT 的 KV 缓存现在与上游转写函数使用同一个 BF16 支持判断，不再出现 Float 目标缓存与 BFloat16 写入值不一致的 \`index_put\` 错误。
+          - YourMT3 恢复官方 \`precision=16\` 参数；MuScriptor 使用上游 autocast/cache；Leap XE 使用固定配置中的 AMP；PolarFormer 直接使用 ONNX Runtime provider；MIROS 恢复固定上游 BF16 autocast，不再接受项目环境变量切换精度。
 
           #### 音轨工作台、播放与稳定性
           - 转写工作台新增可拖动、可点击跳转的播放进度条：拖动实时预览位置，松手或点击即跳转播放；播放中跳转只在释放时提交一次，避免 Windows FFmpeg 媒体后端因高频 seek 卡死。

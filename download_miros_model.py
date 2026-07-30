@@ -57,7 +57,7 @@ MIROS_AUDIO_SEGMENTS_CPU_BLOCK = "\n".join(
     )
 )
 MIROS_INFERENCE_CONTEXT_OLD = "    with torch.cuda.amp.autocast(dtype=torch.bfloat16):"
-MIROS_INFERENCE_CONTEXT_PREVIOUS = "\n".join(
+MIROS_INFERENCE_CONTEXT_TARGET = "\n".join(
     (
         "    with torch.inference_mode(), torch.autocast(",
         "            device_type=device.type,",
@@ -65,7 +65,7 @@ MIROS_INFERENCE_CONTEXT_PREVIOUS = "\n".join(
         '            enabled=device.type == "cuda"):',
     )
 )
-MIROS_INFERENCE_CONTEXT_NEW = "\n".join(
+MIROS_INFERENCE_CONTEXT_ADAPTIVE = "\n".join(
     (
         "    inference_dtype, autocast_enabled = _resolve_runtime_precision(device)",
         "    with torch.inference_mode(), torch.autocast(",
@@ -80,10 +80,10 @@ MIROS_INFERENCE_BATCH_OLD = (
 MIROS_INFERENCE_BATCH_NEW = (
     "        pred_token_arr, _ = model.inference_file(bsz=1, " "audio_segments=audio_segments)"
 )
-MIROS_DEVICE_OLD = '    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")'
-MIROS_DEVICE_NEW = "    device = _resolve_runtime_device()"
-MIROS_MODEL_RETURN_OLD = "    return model.eval()"
-MIROS_MODEL_RETURN_NEW = "\n".join(
+MIROS_DEVICE_TARGET = '    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")'
+MIROS_DEVICE_ADAPTIVE = "    device = _resolve_runtime_device()"
+MIROS_MODEL_RETURN_TARGET = "    return model.eval()"
+MIROS_MODEL_RETURN_ADAPTIVE = "\n".join(
     (
         "    model.eval()",
         "    parameter_dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}",
@@ -188,7 +188,7 @@ def _resolve_runtime_precision(device):
     return dtype, dtype != torch.float32
 """.strip()
 MIROS_PRECISION_HELPERS_ANCHOR = "import torchaudio"
-MIROS_MUSICFM_PRECISION_OLD = "\n".join(
+MIROS_MUSICFM_PRECISION_TARGET = "\n".join(
     (
         "        if self.is_flash and (x.dtype != torch.bfloat16):",
         "            x = x.to(torch.bfloat16)",
@@ -207,7 +207,7 @@ MIROS_MUSICFM_PRECISION_OLD = "\n".join(
         "                out[key] = out[key].to(torch.bfloat16)",
     )
 )
-MIROS_MUSICFM_PRECISION_NEW = "\n".join(
+MIROS_MUSICFM_PRECISION_ADAPTIVE = "\n".join(
     (
         "        precision_dtype = x.dtype",
         '        if self.is_flash and x.is_cuda and torch.is_autocast_enabled("cuda"):',
@@ -677,22 +677,19 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
         raise RuntimeError(f"MIROS source is incomplete; missing {transcribe_path}")
     transcribe_text = transcribe_path.read_text(encoding="utf-8")
     precision_helpers_count = transcribe_text.count(MIROS_PRECISION_HELPERS)
-    precision_anchor_count = transcribe_text.count(MIROS_PRECISION_HELPERS_ANCHOR)
     if precision_helpers_count not in {0, 1}:
         raise RuntimeError(
             "Unexpected MIROS precision helper state: "
             f"count={precision_helpers_count} ({transcribe_path})"
         )
     source_patch_applied = False
-    if precision_helpers_count == 0:
-        if precision_anchor_count != 1:
-            raise RuntimeError(
-                "Unexpected MIROS precision helper anchor state: "
-                f"count={precision_anchor_count} ({transcribe_path})"
-            )
+    if precision_helpers_count == 1:
+        helper_block = MIROS_PRECISION_HELPERS_ANCHOR + "\n\n\n" + MIROS_PRECISION_HELPERS
+        if transcribe_text.count(helper_block) != 1:
+            raise RuntimeError("Unexpected MIROS precision helper placement: " f"{transcribe_path}")
         transcribe_text = transcribe_text.replace(
+            helper_block,
             MIROS_PRECISION_HELPERS_ANCHOR,
-            MIROS_PRECISION_HELPERS_ANCHOR + "\n\n\n" + MIROS_PRECISION_HELPERS,
             1,
         )
         source_patch_applied = True
@@ -707,11 +704,6 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
             MIROS_INFERENCE_BATCH_OLD,
             MIROS_INFERENCE_BATCH_NEW,
             "inference batch size",
-        ),
-        (
-            MIROS_MODEL_RETURN_OLD,
-            MIROS_MODEL_RETURN_NEW,
-            "FP32 parameter verification",
         ),
     )
     for old_fragment, new_fragment, label in inference_replacements:
@@ -730,41 +722,58 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
             )
             source_patch_applied = True
 
-    old_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_OLD)
-    previous_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_PREVIOUS)
-    new_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_NEW)
-    if old_context_count + previous_context_count + new_context_count != 1:
+    target_return_count = transcribe_text.count(MIROS_MODEL_RETURN_TARGET)
+    adaptive_return_count = transcribe_text.count(MIROS_MODEL_RETURN_ADAPTIVE)
+    if (target_return_count, adaptive_return_count) not in {(1, 0), (0, 1)}:
         raise RuntimeError(
-            "Unexpected MIROS inference precision patch state: "
-            f"old={old_context_count}, previous={previous_context_count}, "
-            f"new={new_context_count} ({transcribe_path})"
+            "Unexpected MIROS model return state: "
+            f"target={target_return_count}, adaptive={adaptive_return_count} "
+            f"({transcribe_path})"
         )
-    if old_context_count == 1:
+    if adaptive_return_count == 1:
         transcribe_text = transcribe_text.replace(
-            MIROS_INFERENCE_CONTEXT_OLD,
-            MIROS_INFERENCE_CONTEXT_NEW,
-            1,
-        )
-        source_patch_applied = True
-    elif previous_context_count == 1:
-        transcribe_text = transcribe_text.replace(
-            MIROS_INFERENCE_CONTEXT_PREVIOUS,
-            MIROS_INFERENCE_CONTEXT_NEW,
+            MIROS_MODEL_RETURN_ADAPTIVE,
+            MIROS_MODEL_RETURN_TARGET,
             1,
         )
         source_patch_applied = True
 
-    old_device_count = transcribe_text.count(MIROS_DEVICE_OLD)
-    new_device_count = transcribe_text.count(MIROS_DEVICE_NEW)
-    if (old_device_count, new_device_count) not in {(2, 0), (0, 2)}:
+    old_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_OLD)
+    target_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_TARGET)
+    adaptive_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_ADAPTIVE)
+    if old_context_count + target_context_count + adaptive_context_count != 1:
+        raise RuntimeError(
+            "Unexpected MIROS inference precision patch state: "
+            f"old={old_context_count}, target={target_context_count}, "
+            f"adaptive={adaptive_context_count} ({transcribe_path})"
+        )
+    if old_context_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_INFERENCE_CONTEXT_OLD,
+            MIROS_INFERENCE_CONTEXT_TARGET,
+            1,
+        )
+        source_patch_applied = True
+    elif adaptive_context_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_INFERENCE_CONTEXT_ADAPTIVE,
+            MIROS_INFERENCE_CONTEXT_TARGET,
+            1,
+        )
+        source_patch_applied = True
+
+    target_device_count = transcribe_text.count(MIROS_DEVICE_TARGET)
+    adaptive_device_count = transcribe_text.count(MIROS_DEVICE_ADAPTIVE)
+    if (target_device_count, adaptive_device_count) not in {(2, 0), (0, 2)}:
         raise RuntimeError(
             "Unexpected MIROS runtime device patch state: "
-            f"old={old_device_count}, new={new_device_count} ({transcribe_path})"
+            f"target={target_device_count}, adaptive={adaptive_device_count} "
+            f"({transcribe_path})"
         )
-    if old_device_count == 2:
+    if adaptive_device_count == 2:
         transcribe_text = transcribe_text.replace(
-            MIROS_DEVICE_OLD,
-            MIROS_DEVICE_NEW,
+            MIROS_DEVICE_ADAPTIVE,
+            MIROS_DEVICE_TARGET,
             2,
         )
         source_patch_applied = True
@@ -773,30 +782,31 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
         transcribe_path.write_text(transcribe_text, encoding="utf-8")
         _log(
             printer,
-            f"Patched MIROS bounded adaptive-precision inference: {transcribe_path}",
+            f"Patched MIROS bounded upstream-precision inference: {transcribe_path}",
         )
 
     musicfm_path = repo_dir / MIROS_MUSICFM_REL_PATH
     if not musicfm_path.is_file():
         raise RuntimeError(f"MIROS source is incomplete; missing {musicfm_path}")
     musicfm_text = musicfm_path.read_text(encoding="utf-8")
-    old_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_OLD)
-    new_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_NEW)
-    if (old_musicfm_count, new_musicfm_count) not in {(1, 0), (0, 1)}:
+    target_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_TARGET)
+    adaptive_musicfm_count = musicfm_text.count(MIROS_MUSICFM_PRECISION_ADAPTIVE)
+    if (target_musicfm_count, adaptive_musicfm_count) not in {(1, 0), (0, 1)}:
         raise RuntimeError(
             "Unexpected MIROS MusicFM precision patch state: "
-            f"old={old_musicfm_count}, new={new_musicfm_count} ({musicfm_path})"
+            f"target={target_musicfm_count}, adaptive={adaptive_musicfm_count} "
+            f"({musicfm_path})"
         )
-    if old_musicfm_count == 1:
+    if adaptive_musicfm_count == 1:
         musicfm_path.write_text(
             musicfm_text.replace(
-                MIROS_MUSICFM_PRECISION_OLD,
-                MIROS_MUSICFM_PRECISION_NEW,
+                MIROS_MUSICFM_PRECISION_ADAPTIVE,
+                MIROS_MUSICFM_PRECISION_TARGET,
                 1,
             ),
             encoding="utf-8",
         )
-        _log(printer, f"Patched MIROS MusicFM adaptive flash dtype: {musicfm_path}")
+        _log(printer, f"Restored MIROS MusicFM upstream flash dtype: {musicfm_path}")
 
 
 def prepare_miros_model(
