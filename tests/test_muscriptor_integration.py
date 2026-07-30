@@ -58,7 +58,6 @@ from src.i18n.translator import t
 from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
 from src.models.muscriptor_instruments import muscriptor_instrument_label
 from src.utils import muscriptor_downloader
-from src.utils.muscriptor_runtime import configure_muscriptor_kv_cache
 
 
 def _midi_bytes(program: int = 0, *, drum: bool = False) -> bytes:
@@ -276,14 +275,6 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
     weights.write_bytes(b"weights")
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
-    precision_plan = types.SimpleNamespace(
-        autocast=True,
-        compute_dtype="float16",
-        device="cuda:0",
-        capabilities=types.SimpleNamespace(device_name="Test CUDA GPU"),
-        torch_dtype=lambda _torch_module: torch.float16,
-    )
-
     monkeypatch.setitem(sys.modules, "muscriptor", fake_package)
     monkeypatch.setattr(
         MuscriptorTranscriber,
@@ -295,23 +286,6 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         lambda *_args, **_kwargs: (weights, config_path),
     )
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(
-        "src.core.muscriptor_transcriber.select_inference_precision",
-        lambda *_args, **_kwargs: precision_plan,
-    )
-    monkeypatch.setattr(
-        "src.core.muscriptor_transcriber.configure_torch_precision",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "src.core.muscriptor_transcriber.log_precision_plan",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "src.core.muscriptor_transcriber.configure_muscriptor_kv_cache",
-        lambda *_args, **_kwargs: 14,
-    )
-
     transcriber = MuscriptorTranscriber(Config(use_gpu=True, gpu_device=0))
 
     assert transcriber.load_model() is loaded_model
@@ -321,58 +295,13 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "type": "runtime",
         "model": "MuScriptor-large",
         "device": "cuda:0",
-        "gpu": "Test CUDA GPU",
-        "compute_dtype": "float16",
-        "kv_cache_dtype": "float16",
-        "kv_cache_reused_layers": 14,
+        "gpu": "cuda:0",
+        "compute_dtype": "upstream",
+        "kv_cache_dtype": "upstream",
+        "kv_cache_reused_layers": 0,
         "batch_size": 1,
         "prelude_forcing": True,
     }
-
-
-def test_muscriptor_fp16_kv_cache_is_reused_without_changing_fp32_parameters():
-    import torch
-    from muscriptor.modules.streaming import init_states
-    from muscriptor.modules.transformer import StreamingMultiheadAttention
-
-    model = torch.nn.Sequential(
-        StreamingMultiheadAttention(
-            embed_dim=8,
-            num_heads=2,
-            device="cpu",
-            dtype=torch.float32,
-        )
-    )
-
-    assert (
-        configure_muscriptor_kv_cache(
-            model,
-            compute_dtype="float16",
-            torch_module=torch,
-        )
-        == 1
-    )
-    first = init_states(model, batch_size=1, sequence_length=32)
-    second = init_states(model, batch_size=1, sequence_length=32)
-    first_state = next(state for state in first.values() if "cache" in state)
-    second_state = next(state for state in second.values() if "cache" in state)
-
-    assert first_state["cache"].dtype == torch.float16
-    assert first_state["cache"].data_ptr() == second_state["cache"].data_ptr()
-    assert first_state["offset"].item() == 0
-    assert second_state["offset"].item() == 0
-    assert {parameter.dtype for parameter in model.parameters()} == {torch.float32}
-
-
-def test_muscriptor_kv_cache_requires_verified_fp16_compute():
-    import torch
-
-    with pytest.raises(ValueError, match="requires verified FP16 compute"):
-        configure_muscriptor_kv_cache(
-            torch.nn.Linear(2, 2),
-            compute_dtype="float32",
-            torch_module=torch,
-        )
 
 
 def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(

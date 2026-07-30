@@ -62,13 +62,6 @@ from src.utils.gpu_utils import (
     ensure_cuda_runtime_compatibility,
     rewrite_cuda_runtime_error,
 )
-from src.utils.inference_precision import (
-    YOURMT3,
-    configure_torch_precision,
-    log_precision_plan,
-    select_inference_precision,
-    verify_float32_model_parameters,
-)
 from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
 from src.core.transcription_stream import model_notes_payload, snapshot_event
 
@@ -502,7 +495,7 @@ class YourMT3Transcriber:
             onset_tolerance=0.05,
             test_octave_shift=False,
             write_model_output=True,
-            precision="32",
+            precision="16",
             strategy="auto",
             num_nodes=1,
             num_gpus="auto",
@@ -877,13 +870,6 @@ class YourMT3Transcriber:
 
                 if self.device.startswith("cuda"):
                     ensure_cuda_runtime_compatibility(self.device)
-                precision_plan = select_inference_precision(
-                    YOURMT3,
-                    self.device,
-                    torch_module=torch,
-                )
-                configure_torch_precision(precision_plan, torch_module=torch)
-                log_precision_plan(logger, precision_plan)
                 from utils.task_manager import TaskManager
                 from model.ymt3 import YourMT3
                 from model.init_train import update_config
@@ -1009,11 +995,6 @@ class YourMT3Transcriber:
                     new_state_dict = {k: v for k, v in state_dict.items() if "pitchshift" not in k}
                     model.load_state_dict(new_state_dict, strict=False)
                     model.eval()
-                    verify_float32_model_parameters(
-                        model,
-                        model_name="YourMT3+",
-                        torch_module=torch,
-                    )
                     logger.info(
                         f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M"
                     )

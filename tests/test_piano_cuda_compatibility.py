@@ -133,7 +133,14 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
 
             class FakeModel:
                 def __init__(self):
-                    self.decoder = types.SimpleNamespace(setup_cache=lambda **_kwargs: None)
+                    self.decoder = types.SimpleNamespace(
+                        setup_cache=lambda **kwargs: self._verify_cache_dtype(kwargs)
+                    )
+
+                @staticmethod
+                def _verify_cache_dtype(kwargs):
+                    if kwargs["dtype"] is not fake_torch.bfloat16:
+                        raise AssertionError("Aria cache must follow upstream BF16 detection")
 
                 def cuda(self):
                     return self
@@ -151,7 +158,7 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_torch.float = object()
             fake_cuda = types.ModuleType("torch.cuda")
             fake_cuda.is_available = lambda: True
-            fake_cuda.is_bf16_supported = lambda: False
+            fake_cuda.is_bf16_supported = lambda: True
             fake_torch.cuda = fake_cuda
 
             fake_amt = types.ModuleType("amt")
@@ -171,10 +178,6 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
             fake_transcribe._truncate_seq = lambda sequence, *_args: sequence
             fake_transcribe._shift_onset = lambda sequence, _offset: sequence
             fake_inference.transcribe = fake_transcribe
-            precision_plan = types.SimpleNamespace(
-                torch_dtype=lambda _torch_module: fake_torch.float
-            )
-
             with (
                 patch.dict(
                     sys.modules,
@@ -191,19 +194,6 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
                 patch(
                     "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
                     return_value=None,
-                ),
-                patch(
-                    "src.core.aria_amt_transcriber.select_inference_precision",
-                    return_value=precision_plan,
-                ),
-                patch(
-                    "src.core.aria_amt_transcriber.configure_torch_precision",
-                ),
-                patch(
-                    "src.core.aria_amt_transcriber.log_precision_plan",
-                ),
-                patch(
-                    "src.core.aria_amt_transcriber.verify_float32_model_parameters",
                 ),
                 patch.object(
                     transcriber,

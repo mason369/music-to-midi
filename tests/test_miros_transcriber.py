@@ -131,8 +131,8 @@ class MirosTranscriberTests(unittest.TestCase):
                 str(Path(miros_runtime.__file__).resolve().parents[2]),
                 captured["env"]["PYTHONPATH"],
             )
-            self.assertEqual(captured["env"]["MUSIC_TO_MIDI_MIROS_DEVICE"], "cpu")
-            self.assertEqual(captured["env"]["MUSIC_TO_MIDI_MIROS_PRECISION"], "float32")
+            self.assertNotIn("MUSIC_TO_MIDI_MIROS_DEVICE", captured["env"])
+            self.assertNotIn("MUSIC_TO_MIDI_MIROS_PRECISION", captured["env"])
 
     def test_subprocess_enables_expandable_cuda_segments_without_overriding_user_value(self):
         with tempfile.TemporaryDirectory() as tmp:

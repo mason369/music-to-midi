@@ -20,12 +20,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 from src.i18n.translator import Translator
 from src.models.data_models import Config, NoteEvent
 from src.utils.gpu_utils import clear_gpu_memory
-from src.utils.inference_precision import (
-    MIROS,
-    configure_torch_precision,
-    log_precision_plan,
-    select_inference_precision,
-)
 from src.utils.midi_output import (
     publish_midi_output,
     remove_temporary_midi,
@@ -43,9 +37,9 @@ MIROS_OLDER_PATCHED_SOURCE_SHA256 = (
     "b9613befc9cc353a2bd75eb85ceb5fed76b4d3d1b066bad1aee3a6f8d82fd2a2"
 )
 MIROS_PREVIOUS_PATCHED_SOURCE_SHA256 = (
-    "69bd2872fe62c345323b3c296e53ecc0ee0133d96e00ddaa7dd25632a39f808c"
+    "a5f1f814964d4c11830197a222e227609e527ec8a3446ef167cce8d4af2b4020"
 )
-MIROS_PATCHED_SOURCE_SHA256 = "a5f1f814964d4c11830197a222e227609e527ec8a3446ef167cce8d4af2b4020"
+MIROS_PATCHED_SOURCE_SHA256 = "69bd2872fe62c345323b3c296e53ecc0ee0133d96e00ddaa7dd25632a39f808c"
 MIROS_PRETRAINED_COMMIT = "546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c"
 MIROS_PRETRAINED_EXACT_BYTES = 1_316_802_088
 MIROS_PRETRAINED_SHA256 = "218b483a0256ddef736267425fabb166fd97008983696bb9270def464b47bded"
@@ -557,17 +551,6 @@ class MirosTranscriber:
 
         self._check_cancelled()
 
-        import torch
-
-        requested_device = f"cuda:{int(self.config.gpu_device)}" if self.config.use_gpu else "cpu"
-        precision_plan = select_inference_precision(
-            MIROS,
-            requested_device,
-            torch_module=torch,
-        )
-        configure_torch_precision(precision_plan, torch_module=torch)
-        log_precision_plan(logger, precision_plan)
-
         input_path = Path(audio_path).resolve()
         out_path = Path(output_path).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -620,8 +603,6 @@ class MirosTranscriber:
         process_env = dict(os.environ)
         process_env["PYTHONIOENCODING"] = "utf-8"
         process_env["PYTHONUTF8"] = "1"
-        process_env["MUSIC_TO_MIDI_MIROS_DEVICE"] = precision_plan.device
-        process_env["MUSIC_TO_MIDI_MIROS_PRECISION"] = precision_plan.compute_dtype
         process_env.setdefault(
             "PYTORCH_CUDA_ALLOC_CONF",
             "expandable_segments:True",

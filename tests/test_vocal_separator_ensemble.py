@@ -15,47 +15,9 @@ from src.core.vocal_separator import (
     VocalSeparator,
 )
 from src.i18n.translator import Translator
-from src.utils.inference_precision import PrecisionCapabilities
-
-
-def _fake_cuda_precision_capabilities() -> PrecisionCapabilities:
-    """CI has no GPU; probe results are mocked, the real POLARFORMER->FP32
-    selection logic still runs against these capabilities."""
-    return PrecisionCapabilities(
-        device="cuda:0",
-        device_name="CI FakeGPU",
-        compute_capability="8.9",
-        fp32=True,
-        fp16=True,
-        bf16=True,
-        tf32=True,
-    )
 
 
 class VocalSeparatorTwoLegTests(unittest.TestCase):
-    def test_polarformer_cuda_provider_disables_tf32_for_strict_fp32(self):
-        fake_ort = SimpleNamespace(
-            get_available_providers=lambda: [
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ]
-        )
-
-        providers = vocal_separator._resolve_onnx_providers("cuda:1", fake_ort)
-
-        self.assertEqual(
-            providers,
-            [
-                (
-                    "CUDAExecutionProvider",
-                    {
-                        "device_id": 1,
-                        "use_tf32": 0,
-                    },
-                )
-            ],
-        )
-
     def test_model_available_requires_leap_and_polarformer_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
@@ -305,11 +267,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             patch("src.core.vocal_separator._load_stereo_audio", return_value=audio),
             patch(
                 "src.core.vocal_separator._resolve_onnx_providers",
-                return_value=[("CUDAExecutionProvider", {"device_id": 0, "use_tf32": 0})],
-            ),
-            patch(
-                "src.utils.inference_precision.probe_precision_capabilities",
-                return_value=_fake_cuda_precision_capabilities(),
+                return_value=[("CUDAExecutionProvider", {"device_id": 0})],
             ),
             patch.dict("sys.modules", {"onnxruntime": fake_ort}),
             patch(
