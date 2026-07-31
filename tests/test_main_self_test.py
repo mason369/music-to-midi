@@ -30,7 +30,7 @@ class MainSelfTestTests(unittest.TestCase):
             ), patch.object(
                 main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
             ) as retained_handles, patch(
-                "ctypes.WinDLL", side_effect=handles
+                "ctypes.WinDLL", side_effect=handles, create=True
             ) as win_dll:
                 main_module._preload_bundled_windows_vc_runtime()
 
@@ -48,9 +48,7 @@ class MainSelfTestTests(unittest.TestCase):
                 main_module, "get_bundle_roots", return_value=[root]
             ), patch.object(
                 main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
-            ), patch(
-                "ctypes.WinDLL"
-            ) as win_dll:
+            ), patch("ctypes.WinDLL", create=True) as win_dll:
                 with self.assertRaisesRegex(RuntimeError, "missing its required Visual"):
                     main_module._preload_bundled_windows_vc_runtime()
 
