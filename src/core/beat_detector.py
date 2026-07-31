@@ -6,6 +6,7 @@
 - 投票选择最可靠的结果
 - 倍频/半频修正
 """
+
 import logging
 from typing import Optional, Callable, List, Tuple
 import math
@@ -50,9 +51,7 @@ class BeatDetector:
         return self._translator.t(key, **kwargs)
 
     def detect(
-        self,
-        audio_path: str,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        self, audio_path: str, progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> BeatInfo:
         """
         从音频中检测节拍和速度
@@ -110,7 +109,7 @@ class BeatDetector:
             progress_callback(0.8, self._pt("progress.detecting_downbeats"))
 
         # 尝试检测下拍并推断拍号
-        downbeats, beats_per_bar = self._detect_downbeats(y, sr, beat_times)
+        downbeats, time_signature = self._detect_downbeats(y, sr, beat_times)
 
         if progress_callback:
             progress_callback(1.0, f"BPM: {tempo:.1f}")
@@ -118,9 +117,7 @@ class BeatDetector:
         # 变速 tempo map 默认关闭（config.enable_tempo_map）；开启时做高置信
         # 分段检测，恒速或检测失败返回空列表（退回全局单一 BPM）
         tempo_map = (
-            self._detect_tempo_map(y, sr)
-            if getattr(self.config, "enable_tempo_map", False)
-            else []
+            self._detect_tempo_map(y, sr) if getattr(self.config, "enable_tempo_map", False) else []
         )
         if tempo_map:
             logger.info(
@@ -132,7 +129,7 @@ class BeatDetector:
             bpm=tempo,
             beat_times=beat_times.tolist(),
             downbeats=downbeats,
-            time_signature=(beats_per_bar, 4),
+            time_signature=time_signature,
             tempo_map=tempo_map,
         )
 
@@ -200,11 +197,7 @@ class BeatDetector:
             return interval_median
         return tempo
 
-    def _detect_multi_method(
-        self,
-        y: np.ndarray,
-        sr: int
-    ) -> Tuple[float, List[float]]:
+    def _detect_multi_method(self, y: np.ndarray, sr: int) -> Tuple[float, List[float]]:
         """
         多算法融合 BPM 检测
 
@@ -227,7 +220,7 @@ class BeatDetector:
         # 方法1: beat_track（默认方法）
         try:
             tempo1, _ = librosa.beat.beat_track(y=y, sr=sr)
-            if hasattr(tempo1, '__len__'):
+            if hasattr(tempo1, "__len__"):
                 if len(tempo1) == 0:
                     raise RuntimeError("beat_track 未返回 BPM")
                 tempo1 = float(tempo1[0])
@@ -251,7 +244,7 @@ class BeatDetector:
                 sr=sr,
                 aggregate=None,
             )
-            if hasattr(tempo_candidates, '__len__') and len(tempo_candidates) > 0:
+            if hasattr(tempo_candidates, "__len__") and len(tempo_candidates) > 0:
                 tempo2 = float(np.median(tempo_candidates))
             else:
                 tempo2 = float(tempo_candidates)
@@ -266,7 +259,7 @@ class BeatDetector:
         try:
             # 使用 aggregate=None 获取所有候选值，然后手动计算平均值
             tempo_candidates = _librosa_tempo(librosa, y=y, sr=sr, aggregate=None)
-            if hasattr(tempo_candidates, '__len__') and len(tempo_candidates) > 0:
+            if hasattr(tempo_candidates, "__len__") and len(tempo_candidates) > 0:
                 tempo3 = float(np.mean(tempo_candidates))
             else:
                 tempo3 = float(tempo_candidates)
@@ -315,9 +308,7 @@ class BeatDetector:
         return best_tempo, [round(t, 1) for t in all_tempos]
 
     def _correct_octave_error(
-        self,
-        tempo: float,
-        valid_range: Tuple[float, float] = (40.0, 240.0)
+        self, tempo: float, valid_range: Tuple[float, float] = (40.0, 240.0)
     ) -> float:
         """
         倍频误差修正
@@ -343,11 +334,7 @@ class BeatDetector:
 
         return tempo
 
-    def _vote_best_tempo(
-        self,
-        candidates: List[float],
-        original_tempos: List[float]
-    ) -> float:
+    def _vote_best_tempo(self, candidates: List[float], original_tempos: List[float]) -> float:
         """
         通过聚类投票选择最佳 BPM
 
@@ -403,11 +390,8 @@ class BeatDetector:
         return best_tempo
 
     def _detect_downbeats(
-        self,
-        y: np.ndarray,
-        sr: int,
-        beat_times: np.ndarray
-    ) -> Tuple[Optional[list], int]:
+        self, y: np.ndarray, sr: int, beat_times: np.ndarray
+    ) -> Tuple[Optional[list], Tuple[int, int]]:
         """
         检测下拍（每小节的第一拍）
 
@@ -426,7 +410,7 @@ class BeatDetector:
             import librosa
 
             if len(beat_times) < 4:
-                return None, 4
+                return None, (4, 4)
 
             # 计算起始强度
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
@@ -439,8 +423,9 @@ class BeatDetector:
 
             # 自动推断每小节的拍数：对节拍强度序列做自相关分析
             # 候选拍号：2/4, 3/4, 4/4, 6/8
-            candidates_bpb = [2, 3, 4, 6]
+            candidate_signatures = ((2, 4), (3, 4), (4, 4), (6, 8))
             best_bpb = 4  # 默认 4/4
+            best_signature = (4, 4)
             best_score = -1.0
 
             if len(beat_strengths) >= 8:
@@ -450,13 +435,14 @@ class BeatDetector:
                 if bs_std > 1e-6:
                     bs_norm = bs_norm / bs_std
 
-                for bpb in candidates_bpb:
+                for signature in candidate_signatures:
+                    bpb = signature[0]
                     if len(beat_strengths) < bpb * 2:
                         continue
                     # 计算以 bpb 为周期的自相关值
                     n = len(bs_norm)
                     if bpb < n:
-                        corr = np.mean(bs_norm[:n - bpb] * bs_norm[bpb:])
+                        corr = np.mean(bs_norm[: n - bpb] * bs_norm[bpb:])
                     else:
                         corr = 0.0
 
@@ -473,6 +459,7 @@ class BeatDetector:
                     if score > best_score:
                         best_score = score
                         best_bpb = bpb
+                        best_signature = signature
 
             logger.debug(f"推断每小节拍数: {best_bpb}")
 
@@ -485,11 +472,11 @@ class BeatDetector:
             for i in range(first_downbeat_idx, len(beat_times), best_bpb):
                 downbeats.append(beat_times[i])
 
-            return downbeats, best_bpb
+            return downbeats, best_signature
 
         except Exception as e:
             logger.warning(f"无法检测下拍: {e}")
-            return None, 4
+            return None, (4, 4)
 
     def estimate_tempo(self, audio_path: str) -> float:
         """
@@ -519,23 +506,23 @@ class BeatDetector:
     # 2) frame 引擎：逐帧 tempo 分箱分段（无需跟拍，覆盖 beat_track
     #    跟丢的突变型变速，但容忍阈值更高）。
 
-    _TEMPO_MAP_MIN_SECONDS = 12.0   # 音频太短不做变速分析
+    _TEMPO_MAP_MIN_SECONDS = 12.0  # 音频太短不做变速分析
 
     # beat 引擎参数
-    _TEMPO_MAP_BEAT_MIN_BEATS = 32      # 拍数太少不做 beat 分析
+    _TEMPO_MAP_BEAT_MIN_BEATS = 32  # 拍数太少不做 beat 分析
     _TEMPO_MAP_BEAT_MIN_COVERAGE = 0.7  # 跟拍需覆盖至少 70% 时长
-    _TEMPO_MAP_BEAT_SMOOTH = 8          # 滑动中位数窗口（拍）
-    _TEMPO_MAP_BEAT_TOLERANCE = 0.02    # 段内允许的相对偏差
-    _TEMPO_MAP_BEAT_MIN_RUN = 16        # 连续偏离达到该拍数才确认变速
-    _TEMPO_MAP_BEAT_MAX_SECTIONS = 8    # 真变速通常只有几次变化
-    _TEMPO_MAP_BEAT_MIN_DWELL = 10.0    # 每段最短驻留（秒）
-    _TEMPO_MAP_BEAT_MIN_JUMP = 0.03     # 相邻段最小相对变化
+    _TEMPO_MAP_BEAT_SMOOTH = 8  # 滑动中位数窗口（拍）
+    _TEMPO_MAP_BEAT_TOLERANCE = 0.02  # 段内允许的相对偏差
+    _TEMPO_MAP_BEAT_MIN_RUN = 16  # 连续偏离达到该拍数才确认变速
+    _TEMPO_MAP_BEAT_MAX_SECTIONS = 8  # 真变速通常只有几次变化
+    _TEMPO_MAP_BEAT_MIN_DWELL = 10.0  # 每段最短驻留（秒）
+    _TEMPO_MAP_BEAT_MIN_JUMP = 0.03  # 相邻段最小相对变化
 
     # frame 引擎参数（兜底，容忍更大抖动）
-    _TEMPO_MAP_BIN_SECONDS = 0.5        # 逐帧 tempo 分箱宽度（秒）
-    _TEMPO_MAP_SMOOTH_BINS = 5          # 分箱滑动中位数窗口（约 2.5 秒）
-    _TEMPO_MAP_TOLERANCE = 0.05         # 段内允许的相对偏差
-    _TEMPO_MAP_MIN_RUN = 4              # 连续偏离达到该分箱数（约 2 秒）才确认变速
+    _TEMPO_MAP_BIN_SECONDS = 0.5  # 逐帧 tempo 分箱宽度（秒）
+    _TEMPO_MAP_SMOOTH_BINS = 5  # 分箱滑动中位数窗口（约 2.5 秒）
+    _TEMPO_MAP_TOLERANCE = 0.05  # 段内允许的相对偏差
+    _TEMPO_MAP_MIN_RUN = 4  # 连续偏离达到该分箱数（约 2 秒）才确认变速
     _TEMPO_MAP_MAX_SECTIONS = 6
     _TEMPO_MAP_MIN_SECTION_SECONDS = 8.0
     _TEMPO_MAP_MIN_SECTION_JUMP = 0.12
@@ -573,9 +560,7 @@ class BeatDetector:
         duration: float,
     ) -> List[Tuple[float, float]]:
         """beat 引擎：逐拍间隔平滑分段，捕捉段落级速度流动。"""
-        _, beat_frames = librosa.beat.beat_track(
-            onset_envelope=onset_env, sr=sr, trim=False
-        )
+        _, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, trim=False)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
         if len(beat_times) < self._TEMPO_MAP_BEAT_MIN_BEATS:
             return []
@@ -626,9 +611,7 @@ class BeatDetector:
         if len(frame_times) == 0:
             return []
 
-        frame_tempos = np.array(
-            [self._correct_octave_error(t) for t in frame_tempos], dtype=float
-        )
+        frame_tempos = np.array([self._correct_octave_error(t) for t in frame_tempos], dtype=float)
 
         bin_sec = self._TEMPO_MAP_BIN_SECONDS
         n_bins = int(np.ceil(frame_times[-1] / bin_sec))
@@ -643,9 +626,7 @@ class BeatDetector:
         if len(bin_bpms) < self._TEMPO_MAP_MIN_RUN * 2:
             return []
 
-        smoothed = self._sliding_median(
-            np.array(bin_bpms), self._TEMPO_MAP_SMOOTH_BINS
-        )
+        smoothed = self._sliding_median(np.array(bin_bpms), self._TEMPO_MAP_SMOOTH_BINS)
         sections = self._segment_tempo_curve(
             smoothed,
             np.array(bin_end_times),

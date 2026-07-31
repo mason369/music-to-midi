@@ -3,6 +3,7 @@ from pathlib import Path
 import mido
 import pytest
 
+from src.core.midi_tempo import rewrite_midi_tempo_preserving_seconds
 from src.core.pipeline import MusicToMidiPipeline
 from src.models.data_models import BeatInfo, Config
 
@@ -10,6 +11,14 @@ from src.models.data_models import BeatInfo, Config
 def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
     midi = mido.MidiFile(type=1, ticks_per_beat=480)
     conductor = mido.MidiTrack()
+    conductor.append(
+        mido.MetaMessage(
+            "time_signature",
+            numerator=4,
+            denominator=4,
+            time=0,
+        )
+    )
     if include_tempo:
         conductor.append(mido.MetaMessage("set_tempo", tempo=600_000, time=0))
     conductor.append(mido.MetaMessage("end_of_track", time=0))
@@ -72,6 +81,7 @@ def test_telknet_tempo_alignment_preserves_every_non_tempo_message_and_seconds(t
     result = MusicToMidiPipeline._normalize_midi_tempo_metadata(
         str(midi_path),
         90.0,
+        time_signature=(4, 4),
     )
 
     assert result == str(midi_path.resolve())
@@ -120,7 +130,11 @@ def test_telknet_tempo_alignment_leaves_existing_tempo_midi_byte_identical(tmp_p
     _write_semantic_midi(midi_path, include_tempo=True)
     original_bytes = midi_path.read_bytes()
 
-    MusicToMidiPipeline._normalize_midi_tempo_metadata(str(midi_path), 90.0)
+    MusicToMidiPipeline._normalize_midi_tempo_metadata(
+        str(midi_path),
+        90.0,
+        time_signature=(4, 4),
+    )
 
     assert midi_path.read_bytes() == original_bytes
 
@@ -132,7 +146,11 @@ def test_tempo_alignment_rejects_invalid_detected_bpm_without_overwriting(tmp_pa
     original_bytes = midi_path.read_bytes()
 
     with pytest.raises(RuntimeError, match="无效 MIDI 速度"):
-        MusicToMidiPipeline._normalize_midi_tempo_metadata(str(midi_path), tempo)
+        MusicToMidiPipeline._normalize_midi_tempo_metadata(
+            str(midi_path),
+            tempo,
+            time_signature=(4, 4),
+        )
 
     assert midi_path.read_bytes() == original_bytes
 
@@ -142,7 +160,12 @@ def test_tempo_alignment_force_replaces_backend_placeholder_tempo(tmp_path):
     midi_path = tmp_path / "placeholder-tempo.mid"
     _write_semantic_midi(midi_path, include_tempo=True)
 
-    MusicToMidiPipeline._normalize_midi_tempo_metadata(str(midi_path), 90.0, force=True)
+    MusicToMidiPipeline._normalize_midi_tempo_metadata(
+        str(midi_path),
+        90.0,
+        time_signature=(4, 4),
+        force=True,
+    )
 
     normalized = mido.MidiFile(midi_path)
     tempo_messages = [
@@ -154,8 +177,9 @@ def test_tempo_alignment_force_replaces_backend_placeholder_tempo(tmp_path):
     assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=666_667, time=0)]
 
 
-def test_custom_target_bpm_changes_real_midi_playback_duration(tmp_path):
+def test_custom_project_bpm_preserves_reference_ticks_and_changes_real_speed(tmp_path):
     midi_path = tmp_path / "custom-target.mid"
+    reference_path = tmp_path / "reference-tempo.mid"
     midi = mido.MidiFile(type=1, ticks_per_beat=480)
     track = mido.MidiTrack()
     track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120.0), time=0))
@@ -164,10 +188,18 @@ def test_custom_target_bpm_changes_real_midi_playback_duration(tmp_path):
     midi.tracks.append(track)
     midi.save(midi_path)
     source_duration = mido.MidiFile(midi_path).length
+    rewrite_midi_tempo_preserving_seconds(
+        midi_path,
+        reference_path,
+        117.9,
+        label="Test reference-tempo MIDI",
+    )
+    reference_midi = mido.MidiFile(reference_path)
 
     MusicToMidiPipeline._normalize_midi_tempo_metadata(
         str(midi_path),
         23.0,
+        time_signature=(4, 4),
         force=True,
         source_bpm=117.9,
     )
@@ -180,10 +212,18 @@ def test_custom_target_bpm_changes_real_midi_playback_duration(tmp_path):
         if message.is_meta and message.type == "set_tempo"
     ]
     assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(23.0), time=0)]
-    assert normalized.length == pytest.approx(
-        source_duration * 117.9 / 23.0,
-        rel=0.003,
-    )
+    assert normalized.length == pytest.approx(source_duration * 117.9 / 23.0, abs=0.01)
+    absolute_tick = 0
+    note_off_tick = None
+    for message in normalized.tracks[0]:
+        absolute_tick += int(message.time)
+        if not message.is_meta and message.type == "note_off":
+            note_off_tick = absolute_tick
+    reference_note_off_tick = 0
+    for message in reference_midi.tracks[0]:
+        reference_note_off_tick += int(message.time)
+    assert note_off_tick == reference_note_off_tick
+    assert note_off_tick != 480
 
 
 def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
@@ -222,7 +262,10 @@ def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
             return output_path
 
     pipeline = MusicToMidiPipeline(Config())
-    pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(bpm=90.0)
+    pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(
+        bpm=90.0,
+        time_signature=(6, 8),
+    )
 
     result = pipeline._process_specialized_piano(
         str(audio_path),
@@ -242,6 +285,22 @@ def test_specialized_piano_writes_detected_bpm_into_backend_midi(tmp_path):
         if message.is_meta and message.type == "set_tempo"
     ]
     assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
+    time_signatures = [
+        message
+        for track in normalized.tracks
+        for message in track
+        if message.is_meta and message.type == "time_signature"
+    ]
+    assert time_signatures == [
+        mido.MetaMessage(
+            "time_signature",
+            numerator=6,
+            denominator=8,
+            clocks_per_click=36,
+            notated_32nd_notes_per_beat=8,
+            time=0,
+        )
+    ]
     # CC64 踏板消息必须原样保留
     assert any(
         message.type == "control_change" and message.control == 64 and message.value == 127
@@ -332,6 +391,7 @@ def test_tempo_map_writes_multiple_set_tempo_events(tmp_path):
     MusicToMidiPipeline._normalize_midi_tempo_metadata(
         str(midi_path),
         60.0,
+        time_signature=(4, 4),
         force=True,
         tempo_map=[(0.0, 60.0), (1.5, 120.0)],
     )
@@ -376,6 +436,7 @@ def test_tempo_map_single_section_falls_back_to_single_tempo(tmp_path):
     MusicToMidiPipeline._normalize_midi_tempo_metadata(
         str(midi_path),
         90.0,
+        time_signature=(4, 4),
         tempo_map=[(0.0, 90.0)],
     )
 

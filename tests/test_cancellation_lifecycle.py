@@ -203,7 +203,7 @@ class CancellationLifecycleTests(unittest.TestCase):
                 window.worker.finished.callbacks[0]()
             window.close()
 
-    def test_custom_bpm_waits_for_detected_source_before_setting_playback_rate(self):
+    def test_custom_bpm_waits_for_detected_source_then_updates_real_playback_speed(self):
         window = self._window()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -237,7 +237,7 @@ class CancellationLifecycleTests(unittest.TestCase):
             )
             self.assertAlmostEqual(
                 window.muscriptor_result_widget.speed_spin.value(),
-                round(10.0 / 117.9, 3),
+                10.0 / 117.9,
                 places=3,
             )
         finally:
@@ -297,6 +297,23 @@ class CancellationLifecycleTests(unittest.TestCase):
             self.assertIsNone(window.worker)
             self.assertTrue(worker.deleted)
             self.assertFalse(window._close_pending)
+        finally:
+            window.worker = None
+            window.close()
+
+    def test_close_keeps_streaming_workbench_alive_until_worker_finishes(self):
+        window = self._window()
+        worker = _FakeWorker()
+        worker.running = True
+        window.worker = worker
+        event = _CloseEvent()
+        try:
+            with mock.patch.object(window, "_clear_audio_mixer") as clear_audio_mixer:
+                window.closeEvent(event)
+
+            self.assertTrue(event.ignored)
+            self.assertTrue(worker.cancelled)
+            clear_audio_mixer.assert_not_called()
         finally:
             window.worker = None
             window.close()

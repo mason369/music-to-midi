@@ -62,7 +62,11 @@ class _FlowLayout(QLayout):
         return self._items[index] if 0 <= index < len(self._items) else None
 
     def takeAt(self, index: int):  # noqa: N802
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
+        if not 0 <= index < len(self._items):
+            return None
+        item = self._items.pop(index)
+        self.invalidate()
+        return item
 
     def expandingDirections(self):  # noqa: N802
         return Qt.Orientation(0)

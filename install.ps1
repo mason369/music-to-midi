@@ -541,12 +541,14 @@ if ($LASTEXITCODE -ne 0) { Write-Err "ONNX Runtime CUDAExecutionProvider 严格�
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
 
-Write-Info "安装并校验固定 MuScriptor 公共源码（不改写固定 PyTorch 运行时）..."
-$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip"
+Write-Info "安装 MuScriptor 当前 main 并应用固定最佳质量补丁（不改写固定 PyTorch 运行时）..."
+$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/991ceaa04800484e617484ba065ebec802eebf53.zip"
 & "$PIP" install $muscriptorRequirement --no-deps --force-reinstall
 if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 固定公共源码安装失败" }
+& "$PYTHON" (Join-Path $REPO_DIR "patch_muscriptor_runtime.py")
+if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 重叠窗口与异常重启质量补丁失败" }
 & "$PYTHON" -c "from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason=MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or 'MuScriptor public runtime identity/API verified'); raise SystemExit(0 if reason == '' else 1)"
-if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 固定提交或硬乐器约束 API 校验失败" }
+if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 固定源码、质量补丁或 API 校验失败" }
 
 Write-Info "准备 MuScriptor 结果工作台所需的 FluidSynth 2.5.6..."
 & "$PYTHON" (Join-Path $REPO_DIR "download_fluidsynth_runtime.py")

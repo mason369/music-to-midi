@@ -1106,6 +1106,9 @@ class MainWindow(QMainWindow):
 
     def _transcribe_another(self) -> None:
         """Clear the MuScriptor result and return focus to the upload surface."""
+        if self.worker is not None and self.worker.isRunning():
+            logger.warning("Cannot clear the active MIDI workbench while processing is running")
+            return
         self._clear_completed_result()
         self.current_file = None
         self.dropzone.clear_selection()
@@ -2207,7 +2210,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭时清理后台线程"""
-        self._clear_audio_mixer()
         if self.worker and self.worker.isRunning():
             self._close_pending = True
             self._stopping = True
@@ -2219,6 +2221,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             logger.info("关闭请求已延后；等待工作线程真正退出")
             return
+        self._clear_audio_mixer()
         if hasattr(self, "_gpu_detector") and self._gpu_detector.isRunning():
             self._gpu_detector.wait(1000)
         super().closeEvent(event)

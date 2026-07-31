@@ -9,14 +9,16 @@ import shutil
 import tempfile
 import time
 from bisect import bisect_left, bisect_right
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 from PyQt6.QtCore import (
     QCoreApplication,
     QEvent,
     QLineF,
+    QPointF,
     QRectF,
     QSignalBlocker,
     Qt,
@@ -25,11 +27,12 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
     QAbstractSlider,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -41,6 +44,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSplitter,
+    QSpinBox,
     QStyle,
     QStyleOptionSlider,
     QToolButton,
@@ -48,6 +53,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.core.midi_editor import export_edited_midi
 from src.core.muscriptor_result_assets import (
     MuscriptorPlaybackAssets,
     MuscriptorPreviewAssets,
@@ -67,7 +73,7 @@ from src.models.muscriptor_instruments import (
 _INSTRUMENT_COLORS = (
     "#4a9eff",
     "#ff8d66",
-    "#73a7ff",
+    "#7bd88f",
     "#c89bff",
     "#ffd166",
     "#ff70a6",
@@ -85,8 +91,9 @@ _STREAM_PREVIEW_PLAYBACK_MARGIN_SECONDS = 3.0
 _PLAYHEAD_TIMER_MS = 16
 _PLAYHEAD_MAX_LEAD_MS = 120.0
 _ROLL_FOLLOW_SCROLL_BLOCK_PX = 12
-_ROLL_MIN_PIXELS_PER_SECOND = 46.0
-_ROLL_MAX_PIXELS_PER_SECOND = 368.0
+_ROLL_BASE_PIXELS_PER_SECOND = 92.0
+_ROLL_MIN_PIXELS_PER_SECOND = _ROLL_BASE_PIXELS_PER_SECOND * 0.5
+_ROLL_MAX_PIXELS_PER_SECOND = _ROLL_BASE_PIXELS_PER_SECOND * 4.0
 _ROLL_ZOOM_STEP = 1.15
 _ROLL_WHEEL_STEP_PX = 96
 _ROLL_TILE_WIDTH = 512
@@ -95,131 +102,52 @@ _ROLL_TILE_CACHE_LIMIT = 8
 logger = logging.getLogger(__name__)
 
 
+def _compact_editor_error(error: object, *, limit: int = 360) -> str:
+    """Keep status labels bounded while the complete diagnostic stays in logs."""
+
+    normalized = " ".join(str(error).split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
+
+
 def _export_midi_with_bpm(
     source_path: str | Path,
     destination_path: str | Path,
     bpm: float,
-    *,
-    notation_compatible: bool = False,
 ) -> Path:
-    """Publish a MIDI copy that plays at the user-visible result BPM."""
+    """Build the reference-speed preview while retaining musical ticks."""
 
-    from mido import MetaMessage, MidiFile, MidiTrack, bpm2tempo
+    from src.core.midi_tempo import rewrite_midi_tempo_preserving_ticks
 
-    from src.utils.midi_output import (
-        publish_midi_output,
-        remove_temporary_midi,
-        unique_midi_temp_path,
+    return rewrite_midi_tempo_preserving_ticks(
+        source_path,
+        destination_path,
+        bpm,
+        label="Result reference-speed MIDI preview",
     )
 
-    source = Path(source_path).resolve()
-    destination = Path(destination_path).resolve()
-    export_bpm = float(bpm)
-    if not math.isfinite(export_bpm) or not MIN_MIDI_BPM <= export_bpm <= MAX_MIDI_BPM:
-        raise ValueError(f"Invalid result BPM for MIDI export: {bpm!r}")
 
-    source_midi = MidiFile(str(source))
-    if not source_midi.tracks:
-        raise RuntimeError(f"MIDI export source has no tracks: {source}")
-    output_midi = MidiFile(
-        type=source_midi.type,
-        ticks_per_beat=source_midi.ticks_per_beat,
+def _export_midi_at_project_speed(
+    source_path: str | Path,
+    destination_path: str | Path,
+    reference_bpm: float,
+    target_bpm: float,
+) -> Path:
+    """Publish target tempo from an already normalized reference tick grid."""
+
+    from src.core.midi_tempo import (
+        rewrite_midi_tempo_preserving_ticks,
+        validated_midi_bpm,
     )
-    tempo_us = bpm2tempo(export_bpm)
-    notation_grid_ticks = max(1, round(source_midi.ticks_per_beat / 6))
-    for track_index, source_track in enumerate(source_midi.tracks):
-        absolute_tick = 0
-        events: list[tuple[int, int, object]] = []
-        note_shifts: dict[tuple[int, int], deque[int]] = {}
-        end_of_track_events: list[tuple[int, int, object]] = []
-        for sequence, message in enumerate(source_track):
-            absolute_tick += message.time
-            if message.is_meta and message.type == "set_tempo":
-                continue
-            if message.is_meta and message.type == "end_of_track":
-                end_of_track_events.append((absolute_tick, sequence + 1, message.copy(time=0)))
-                continue
 
-            target_tick = absolute_tick
-            if notation_compatible and not message.is_meta:
-                if message.type == "note_on" and message.velocity > 0:
-                    note_key = (message.channel, message.note)
-                    target_tick = (
-                        (absolute_tick + notation_grid_ticks // 2)
-                        // notation_grid_ticks
-                        * notation_grid_ticks
-                    )
-                    note_shifts.setdefault(note_key, deque()).append(target_tick - absolute_tick)
-                elif message.type == "note_off" or (
-                    message.type == "note_on" and message.velocity == 0
-                ):
-                    note_key = (message.channel, message.note)
-                    shifts = note_shifts.get(note_key)
-                    if shifts:
-                        target_tick = absolute_tick + shifts.popleft()
-            events.append((target_tick, sequence + 1, message.copy(time=0)))
-        if track_index == 0 or source_midi.type == 2:
-            events.append((0, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0)))
-        last_event_tick = max((event[0] for event in events), default=0)
-        for end_tick, sequence, message in end_of_track_events:
-            events.append((max(end_tick, last_event_tick), sequence, message))
-        events.sort(key=lambda event: (event[0], event[1]))
-
-        target_track = MidiTrack()
-        previous_tick = 0
-        for target_tick, _sequence, message in events:
-            target_track.append(message.copy(time=target_tick - previous_tick))
-            previous_tick = target_tick
-        output_midi.tracks.append(target_track)
-
-    temporary = unique_midi_temp_path(destination, "result-bpm")
-    try:
-        output_midi.save(str(temporary))
-        published_path = Path(
-            publish_midi_output(
-                temporary,
-                destination,
-                "Result BPM MIDI export",
-            )
-        )
-        published_midi = MidiFile(str(published_path))
-        published_tempos = [
-            message.tempo
-            for track in published_midi.tracks
-            for message in track
-            if message.is_meta and message.type == "set_tempo"
-        ]
-        expected_tempo_count = len(published_midi.tracks) if published_midi.type == 2 else 1
-        if len(published_tempos) != expected_tempo_count or any(
-            tempo != tempo_us for tempo in published_tempos
-        ):
-            raise RuntimeError(
-                "Exported MIDI tempo verification failed: "
-                f"path={published_path}, expected_bpm={export_bpm:.1f}, "
-                f"tempo_messages={published_tempos!r}"
-            )
-        if notation_compatible:
-            unaligned_note_onsets: list[tuple[int, int]] = []
-            for track_index, track in enumerate(published_midi.tracks):
-                absolute_tick = 0
-                for message in track:
-                    absolute_tick += message.time
-                    if (
-                        not message.is_meta
-                        and message.type == "note_on"
-                        and message.velocity > 0
-                        and absolute_tick % notation_grid_ticks
-                    ):
-                        unaligned_note_onsets.append((track_index, absolute_tick))
-            if unaligned_note_onsets:
-                raise RuntimeError(
-                    "Exported MIDI notation alignment verification failed: "
-                    f"path={published_path}, grid_ticks={notation_grid_ticks}, "
-                    f"unaligned_note_onsets={unaligned_note_onsets[:8]!r}"
-                )
-        return published_path
-    finally:
-        remove_temporary_midi(temporary)
+    validated_midi_bpm(reference_bpm, "reference")
+    return rewrite_midi_tempo_preserving_ticks(
+        source_path,
+        destination_path,
+        target_bpm,
+        label="Result project-speed MIDI export",
+    )
 
 
 def _instrument_label(instrument: str) -> str:
@@ -331,10 +259,19 @@ class _SmoothPlaybackClock:
         self._display_ms = position
         self._sampled_at = time.monotonic() if now is None else float(now)
 
-    def sample(self, reported_ms: float, *, now: float | None = None) -> float:
+    def sample(
+        self,
+        reported_ms: float,
+        *,
+        playback_rate: float = 1.0,
+        now: float | None = None,
+    ) -> float:
         current = time.monotonic() if now is None else float(now)
         reported = max(0.0, float(reported_ms))
-        elapsed_ms = max(0.0, (current - self._sampled_at) * 1000.0)
+        rate = float(playback_rate)
+        if not math.isfinite(rate) or rate <= 0.0:
+            raise ValueError(f"Invalid smooth playback-clock rate: {playback_rate!r}")
+        elapsed_ms = max(0.0, (current - self._sampled_at) * 1000.0 * rate)
         self._sampled_at = current
         if reported > self._reported_ms:
             self._reported_ms = reported
@@ -427,6 +364,13 @@ class _SeekSlider(QSlider):
 
 class _PianoRollCanvas(QWidget):
     seek_requested = pyqtSignal(float)
+    edit_committed = pyqtSignal(object, object)
+    selection_changed = pyqtSignal(object)
+    add_note_requested = pyqtSignal(float, int)
+    delete_requested = pyqtSignal()
+    undo_requested = pyqtSignal()
+    redo_requested = pyqtSignal()
+    command_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -439,11 +383,25 @@ class _PianoRollCanvas(QWidget):
         self._render_offset_px = 0.0
         self._muted: set[str] = set()
         self._colors: dict[str, QColor] = {}
+        self._instrument_order: tuple[str, ...] = ()
         self._tile_cache: OrderedDict[tuple[int, int], QPixmap] = OrderedDict()
-        self._pixels_per_second = 92.0
+        self._pixels_per_second = _ROLL_BASE_PIXELS_PER_SECOND
         self._keyboard_width = 72
         self._row_height = 7
+        self._editable = False
+        self._selected_index: int | None = None
+        self._selected_indices: set[int] = set()
+        self._grid_seconds = 0.125
+        self._drag_mode: str | None = None
+        self._drag_origin_position = None
+        self._drag_origin_note: MuscriptorRollNote | None = None
+        self._drag_origin_notes: dict[int, MuscriptorRollNote] = {}
+        self._drag_before: tuple[MuscriptorRollNote, ...] | None = None
+        self._marquee_origin: QPointF | None = None
+        self._marquee_current: QPointF | None = None
+        self._marquee_base: set[int] = set()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(88 * self._row_height)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._update_size()
@@ -453,6 +411,8 @@ class _PianoRollCanvas(QWidget):
         notes: Iterable[MuscriptorRollNote],
         *,
         duration: float | None = None,
+        selected_index: int | None = None,
+        selected_indices: Iterable[int] | None = None,
     ) -> None:
         normalized = tuple(notes)
         for note in normalized:
@@ -473,7 +433,10 @@ class _PianoRollCanvas(QWidget):
         for note in notes_by_start:
             max_end = max(max_end, note.end)
             prefix_max_ends.append(max_end)
-        instruments = list(dict.fromkeys(note.instrument for note in normalized))
+        instruments = list(self._instrument_order)
+        for note in normalized:
+            if note.instrument not in instruments:
+                instruments.append(note.instrument)
         colors = {
             name: QColor(_INSTRUMENT_COLORS[index % len(_INSTRUMENT_COLORS)])
             for index, name in enumerate(instruments)
@@ -500,9 +463,112 @@ class _PianoRollCanvas(QWidget):
         self._note_prefix_max_ends = tuple(prefix_max_ends)
         self._colors = colors
         self._duration = roll_duration
+        if selected_indices is None:
+            normalized_selection = (
+                {int(selected_index)}
+                if selected_index is not None and 0 <= int(selected_index) < len(normalized)
+                else set()
+            )
+        else:
+            normalized_selection = {
+                int(index) for index in selected_indices if 0 <= int(index) < len(normalized)
+            }
+        primary = (
+            int(selected_index)
+            if selected_index is not None and int(selected_index) in normalized_selection
+            else (min(normalized_selection) if normalized_selection else None)
+        )
+        self._selected_indices = normalized_selection
+        self._selected_index = primary
         self._tile_cache.clear()
         self._update_size()
         self.update()
+
+    @property
+    def notes(self) -> tuple[MuscriptorRollNote, ...]:
+        return self._notes
+
+    @property
+    def selected_index(self) -> int | None:
+        return self._selected_index
+
+    @property
+    def selected_indices(self) -> tuple[int, ...]:
+        return tuple(sorted(self._selected_indices))
+
+    @property
+    def selected_note(self) -> MuscriptorRollNote | None:
+        if self._selected_index is None:
+            return None
+        return self._notes[self._selected_index]
+
+    def set_editable(self, editable: bool) -> None:
+        self._editable = bool(editable)
+        if not self._editable:
+            self._drag_mode = None
+            self._drag_origin_note = None
+            self._drag_origin_notes.clear()
+            self._drag_before = None
+            self._set_selected_indices(())
+        self.setCursor(Qt.CursorShape.CrossCursor if self._editable else Qt.CursorShape.ArrowCursor)
+
+    def set_selected_index(self, index: int | None) -> None:
+        self._set_selected_index(index)
+
+    def _set_selected_index(self, index: int | None) -> None:
+        self._set_selected_indices(() if index is None else (int(index),), primary=index)
+
+    def set_selected_indices(
+        self,
+        indices: Iterable[int],
+        *,
+        primary: int | None = None,
+    ) -> None:
+        self._set_selected_indices(indices, primary=primary)
+
+    def _set_selected_indices(
+        self,
+        indices: Iterable[int],
+        *,
+        primary: int | None = None,
+    ) -> None:
+        normalized = {int(index) for index in indices if 0 <= int(index) < len(self._notes)}
+        normalized_primary = (
+            int(primary)
+            if primary is not None and int(primary) in normalized
+            else (min(normalized) if normalized else None)
+        )
+        if normalized == self._selected_indices and normalized_primary == self._selected_index:
+            return
+        self._selected_indices = normalized
+        self._selected_index = normalized_primary
+        self.update()
+        self.selection_changed.emit(self.selected_note)
+
+    def set_instrument_order(self, instruments: Iterable[str]) -> None:
+        order = tuple(dict.fromkeys(str(item) for item in instruments if str(item)))
+        if order == self._instrument_order:
+            return
+        self._instrument_order = order
+        combined = list(order)
+        for note in self._notes:
+            if note.instrument not in combined:
+                combined.append(note.instrument)
+        self._colors = {
+            name: QColor(_INSTRUMENT_COLORS[index % len(_INSTRUMENT_COLORS)])
+            for index, name in enumerate(combined)
+        }
+        self._tile_cache.clear()
+        self.update()
+
+    def set_grid_seconds(self, seconds: float) -> None:
+        grid = float(seconds)
+        if not math.isfinite(grid) or grid <= 0:
+            raise ValueError(f"Piano-roll grid must be finite and positive: {seconds}")
+        self._grid_seconds = grid
+
+    def snap_time(self, seconds: float) -> float:
+        return round(max(0.0, float(seconds)) / self._grid_seconds) * self._grid_seconds
 
     def set_position(self, seconds: float) -> None:
         position = max(0.0, float(seconds))
@@ -592,6 +658,36 @@ class _PianoRollCanvas(QWidget):
         next_tile = last_tile + 1
         if next_tile * _ROLL_TILE_WIDTH < self.width():
             self._static_tile(next_tile)
+
+        for index in self.selected_indices:
+            selected = self._notes[index]
+            if not 21 <= selected.pitch <= 108:
+                continue
+            selected_x = self.x_for_time_float(selected.start)
+            selected_width = max(
+                2.0,
+                self.x_for_time_float(selected.end) - selected_x,
+            )
+            selected_y = (108 - selected.pitch) * self._row_height + 1
+            selection_pen = QPen(QColor("#ffffff" if index == self._selected_index else "#b7d9ff"))
+            selection_pen.setWidthF(1.5)
+            selection_pen.setCosmetic(True)
+            painter.setPen(selection_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(
+                QRectF(
+                    selected_x,
+                    selected_y,
+                    selected_width,
+                    max(2, self._row_height - 2),
+                )
+            )
+
+        if self._marquee_origin is not None and self._marquee_current is not None:
+            marquee = QRectF(self._marquee_origin, self._marquee_current).normalized()
+            painter.setPen(QPen(QColor("#9fc9ff"), 1, Qt.PenStyle.DashLine))
+            painter.setBrush(QColor(74, 158, 255, 38))
+            painter.drawRect(marquee)
 
         playhead_x = self.x_for_time_float(self._position)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -701,14 +797,343 @@ class _PianoRollCanvas(QWidget):
                 color,
             )
 
+    def _note_index_at(self, logical_x: float, y_position: float) -> int | None:
+        pitch = 108 - int(float(y_position) // self._row_height)
+        for index in range(len(self._notes) - 1, -1, -1):
+            note = self._notes[index]
+            if note.pitch != pitch:
+                continue
+            note_left = self.x_for_time_float(note.start)
+            note_right = self.x_for_time_float(note.end)
+            if note_left - 2 <= logical_x <= max(note_left + 2, note_right) + 2:
+                return index
+        return None
+
+    def _pitch_for_y(self, y_position: float) -> int:
+        return max(21, min(108, 108 - int(float(y_position) // self._row_height)))
+
+    def _replace_selected_note(self, note: MuscriptorRollNote) -> None:
+        if self._selected_index is None:
+            return
+        updated = list(self._notes)
+        updated[self._selected_index] = note
+        self.set_notes(
+            updated,
+            duration=self._duration,
+            selected_index=self._selected_index,
+            selected_indices=self._selected_indices,
+        )
+        self.selection_changed.emit(note)
+
+    def _replace_selected_notes(
+        self,
+        replacements: dict[int, MuscriptorRollNote],
+    ) -> None:
+        if not replacements:
+            return
+        updated = list(self._notes)
+        for index, note in replacements.items():
+            updated[index] = note
+        self.set_notes(
+            updated,
+            duration=self._duration,
+            selected_index=self._selected_index,
+            selected_indices=self._selected_indices,
+        )
+        self.selection_changed.emit(self.selected_note)
+
+    def _note_rect(self, note: MuscriptorRollNote) -> QRectF:
+        x = self.x_for_time_float(note.start)
+        return QRectF(
+            x,
+            (108 - note.pitch) * self._row_height + 1,
+            max(2.0, self.x_for_time_float(note.end) - x),
+            max(2, self._row_height - 2),
+        )
+
+    def _update_marquee_selection(self) -> None:
+        if self._marquee_origin is None or self._marquee_current is None:
+            return
+        marquee = QRectF(self._marquee_origin, self._marquee_current).normalized()
+        selected = set(self._marquee_base)
+        selected.update(
+            index
+            for index, note in enumerate(self._notes)
+            if self._note_rect(note).intersects(marquee)
+        )
+        self._set_selected_indices(selected)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if (
             event.button() == Qt.MouseButton.LeftButton
             and event.position().x() + self._render_offset_px >= self._keyboard_width
         ):
-            seconds = self.time_for_x(event.position().x() + self._render_offset_px)
+            logical_x = event.position().x() + self._render_offset_px
+            if self._editable:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                note_index = self._note_index_at(logical_x, event.position().y())
+                if note_index is not None:
+                    additive = bool(
+                        event.modifiers()
+                        & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+                    )
+                    if additive:
+                        selected = set(self._selected_indices)
+                        if note_index in selected:
+                            selected.remove(note_index)
+                            self._set_selected_indices(selected)
+                            event.accept()
+                            return
+                        selected.add(note_index)
+                        self._set_selected_indices(selected, primary=note_index)
+                    elif note_index not in self._selected_indices:
+                        self._set_selected_index(note_index)
+                    else:
+                        self._set_selected_indices(
+                            self._selected_indices,
+                            primary=note_index,
+                        )
+                    note = self._notes[note_index]
+                    note_left = self.x_for_time_float(note.start)
+                    note_right = self.x_for_time_float(note.end)
+                    edge_width = min(6.0, max(3.0, (note_right - note_left) / 3.0))
+                    if abs(logical_x - note_left) <= edge_width:
+                        self._drag_mode = "resize_start"
+                    elif abs(logical_x - note_right) <= edge_width:
+                        self._drag_mode = "resize_end"
+                    else:
+                        self._drag_mode = "move"
+                    self._drag_origin_position = event.position()
+                    self._drag_origin_note = note
+                    self._drag_origin_notes = {
+                        index: self._notes[index] for index in self._selected_indices
+                    }
+                    self._drag_before = self._notes
+                    event.accept()
+                    return
+                additive = bool(
+                    event.modifiers()
+                    & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+                )
+                if not additive:
+                    self._set_selected_indices(())
+                self._drag_mode = "marquee"
+                self._drag_origin_position = event.position()
+                self._marquee_origin = QPointF(logical_x, event.position().y())
+                self._marquee_current = QPointF(self._marquee_origin)
+                self._marquee_base = set(self._selected_indices)
+                event.accept()
+                return
+            seconds = self.time_for_x(logical_x)
             self.seek_requested.emit(max(0.0, seconds))
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if (
+            self._editable
+            and self._drag_mode == "marquee"
+            and self._marquee_origin is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self._marquee_current = QPointF(
+                event.position().x() + self._render_offset_px,
+                event.position().y(),
+            )
+            self._update_marquee_selection()
+            self.update()
+            event.accept()
+            return
+        if (
+            self._editable
+            and self._drag_mode is not None
+            and self._drag_origin_position is not None
+            and self._drag_origin_note is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            origin = self._drag_origin_note
+            delta_seconds = (
+                float(event.position().x() - self._drag_origin_position.x())
+                / self._pixels_per_second
+            )
+            snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            if self._drag_mode == "move":
+                start = origin.start + delta_seconds
+                if snap:
+                    start = self.snap_time(start)
+                delta_seconds = start - origin.start
+                delta_seconds = max(
+                    -min(note.start for note in self._drag_origin_notes.values()),
+                    min(
+                        self._duration - max(note.end for note in self._drag_origin_notes.values()),
+                        delta_seconds,
+                    ),
+                )
+                pitch_delta = round(
+                    (self._drag_origin_position.y() - event.position().y()) / self._row_height
+                )
+                pitch_delta = max(
+                    21 - min(note.pitch for note in self._drag_origin_notes.values()),
+                    min(
+                        108 - max(note.pitch for note in self._drag_origin_notes.values()),
+                        pitch_delta,
+                    ),
+                )
+                replacements = {
+                    index: replace(
+                        note,
+                        start=note.start + delta_seconds,
+                        end=note.end + delta_seconds,
+                        pitch=note.pitch + pitch_delta,
+                    )
+                    for index, note in self._drag_origin_notes.items()
+                }
+            elif self._drag_mode == "resize_start":
+                start = origin.start + delta_seconds
+                if snap:
+                    start = self.snap_time(start)
+                delta_seconds = start - origin.start
+                delta_seconds = max(
+                    -min(note.start for note in self._drag_origin_notes.values()),
+                    min(
+                        min(
+                            note.end - note.start - 0.01
+                            for note in self._drag_origin_notes.values()
+                        ),
+                        delta_seconds,
+                    ),
+                )
+                replacements = {
+                    index: replace(note, start=note.start + delta_seconds)
+                    for index, note in self._drag_origin_notes.items()
+                }
+            else:
+                end = origin.end + delta_seconds
+                if snap:
+                    end = self.snap_time(end)
+                delta_seconds = end - origin.end
+                delta_seconds = max(
+                    -min(note.end - note.start - 0.01 for note in self._drag_origin_notes.values()),
+                    min(
+                        self._duration - max(note.end for note in self._drag_origin_notes.values()),
+                        delta_seconds,
+                    ),
+                )
+                replacements = {
+                    index: replace(note, end=note.end + delta_seconds)
+                    for index, note in self._drag_origin_notes.items()
+                }
+            self._replace_selected_notes(replacements)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._drag_mode is not None and event.button() == Qt.MouseButton.LeftButton:
+            before = self._drag_before
+            after = self._notes
+            self._drag_mode = None
+            self._drag_origin_position = None
+            self._drag_origin_note = None
+            self._drag_origin_notes.clear()
+            self._drag_before = None
+            self._marquee_origin = None
+            self._marquee_current = None
+            self._marquee_base.clear()
+            # A click on empty piano-roll space is a selection gesture while
+            # edit mode is enabled.  Treating the same release as a transport
+            # seek made simple note-selection/deselection enter QMediaPlayer's
+            # synchronous seek path while audio was running.
+            if before is not None and before != after:
+                self.edit_committed.emit(before, after)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if (
+            self._editable
+            and event.button() == Qt.MouseButton.LeftButton
+            and event.position().x() + self._render_offset_px >= self._keyboard_width
+        ):
+            logical_x = event.position().x() + self._render_offset_px
+            if self._note_index_at(logical_x, event.position().y()) is None:
+                self.add_note_requested.emit(
+                    min(self._duration, self.snap_time(self.time_for_x(logical_x))),
+                    self._pitch_for_y(event.position().y()),
+                )
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._editable and event.matches(QKeySequence.StandardKey.Undo):
+            self.undo_requested.emit()
+            event.accept()
+            return
+        if self._editable and event.matches(QKeySequence.StandardKey.Redo):
+            self.redo_requested.emit()
+            event.accept()
+            return
+        if self._editable:
+            command = bool(
+                event.modifiers()
+                & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+            )
+            key = event.key()
+            if command and key == Qt.Key.Key_A:
+                self.command_requested.emit("select_all")
+            elif command and key == Qt.Key.Key_X:
+                self.command_requested.emit("cut")
+            elif command and key == Qt.Key.Key_C:
+                self.command_requested.emit("copy")
+            elif command and key == Qt.Key.Key_V:
+                self.command_requested.emit("paste")
+            elif command and key in {Qt.Key.Key_B, Qt.Key.Key_D}:
+                self.command_requested.emit("duplicate")
+            elif (key == Qt.Key.Key_Q and event.modifiers() & Qt.KeyboardModifier.AltModifier) or (
+                command and key == Qt.Key.Key_U
+            ):
+                self.command_requested.emit("quantize")
+            elif key in {
+                Qt.Key.Key_Left,
+                Qt.Key.Key_Right,
+                Qt.Key.Key_Up,
+                Qt.Key.Key_Down,
+            }:
+                if key in {Qt.Key.Key_Left, Qt.Key.Key_Right}:
+                    direction = -1 if key == Qt.Key.Key_Left else 1
+                    action = (
+                        "resize_time"
+                        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                        else "move_time"
+                    )
+                    self.command_requested.emit(f"{action}:{direction}")
+                elif command:
+                    direction = 1 if key == Qt.Key.Key_Up else -1
+                    self.command_requested.emit(f"velocity:{direction}")
+                else:
+                    direction = 1 if key == Qt.Key.Key_Up else -1
+                    semitones = 12 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
+                    self.command_requested.emit(f"pitch:{direction * semitones}")
+            else:
+                super().keyPressEvent(event)
+                return
+            event.accept()
+            return
+        if self._editable and event.key() in {
+            Qt.Key.Key_Delete,
+            Qt.Key.Key_Backspace,
+        }:
+            self.delete_requested.emit()
+            event.accept()
+            return
+        if self._editable and event.key() == Qt.Key.Key_Escape:
+            self._set_selected_indices(())
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class _PianoRollScrollArea(QScrollArea):
@@ -826,6 +1251,68 @@ class _PreviewAssetWorker(QThread):
             self.failed.emit(self.generation, str(exc))
 
 
+class _EditedAssetWorker(QThread):
+    """Publish and render one immutable editor snapshot at source tempo."""
+
+    progress = pyqtSignal(int, float, str)
+    succeeded = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+    def __init__(
+        self,
+        generation: int,
+        source_midi_path: str,
+        notes: tuple[MuscriptorRollNote, ...],
+        reference_bpm: float,
+        audio_path: str,
+        output_dir: str,
+        muscriptor_groups: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.generation = int(generation)
+        self.source_midi_path = str(source_midi_path)
+        self.notes = tuple(notes)
+        self.reference_bpm = float(reference_bpm)
+        self.audio_path = str(audio_path)
+        self.output_dir = str(output_dir)
+        self.muscriptor_groups = bool(muscriptor_groups)
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            output_dir = Path(self.output_dir).resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            edited_midi = export_edited_midi(
+                self.source_midi_path,
+                output_dir / "edited-source-tempo.mid",
+                self.notes,
+                reference_bpm=self.reference_bpm,
+                target_bpm=self.reference_bpm,
+            )
+            if self._cancelled:
+                raise InterruptedError("Edited MIDI playback rendering cancelled")
+            assets = prepare_midi_playback_assets(
+                edited_midi,
+                self.audio_path,
+                output_dir,
+                progress_callback=lambda value, message: self.progress.emit(
+                    self.generation,
+                    value,
+                    message,
+                ),
+                cancel_check=lambda: self._cancelled,
+                muscriptor_groups=self.muscriptor_groups,
+                allow_empty_notes=True,
+            )
+            self.succeeded.emit(self.generation, assets)
+        except Exception as exc:
+            self.failed.emit(self.generation, str(exc))
+
+
 class _InstrumentRow(QFrame):
     mute_toggled = pyqtSignal(str)
     solo_toggled = pyqtSignal(str)
@@ -913,15 +1400,27 @@ class MuscriptorResultWidget(QFrame):
         self._detected: list[str] = []
         self._stream_notes: list[MuscriptorRollNote] = []
         self._assets: MuscriptorPlaybackAssets | None = None
+        self._original_assets: MuscriptorPlaybackAssets | None = None
         self._asset_worker: _AssetWorker | None = None
         self._preview_worker: _PreviewAssetWorker | None = None
+        self._edit_asset_worker: _EditedAssetWorker | None = None
         self._deferred_preview: tuple[int, MuscriptorPreviewAssets] | None = None
         self._deferred_final_assets: MuscriptorPlaybackAssets | None = None
+        self._deferred_editor_assets: tuple[int, MuscriptorPlaybackAssets] | None = None
         self._deferred_apply_scheduled = False
         self._preview_pending: (
             tuple[int, tuple[MuscriptorRollNote, ...], float, int, int] | None
         ) = None
         self._preview_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-preview-"))
+        self._edit_asset_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-editor-audio-"))
+        self._edit_asset_generation = 0
+        self._edit_asset_applied_generation = 0
+        self._edit_asset_pending: tuple[int, tuple[MuscriptorRollNote, ...]] | None = None
+        self._active_edit_asset_dir: Path | None = None
+        self._edit_asset_debounce = QTimer(self)
+        self._edit_asset_debounce.setSingleShot(True)
+        self._edit_asset_debounce.setInterval(180)
+        self._edit_asset_debounce.timeout.connect(self._start_pending_editor_audio)
         self._preview_generation = 0
         self._preview_ready_generation = 0
         self._preview_applied_generation = 0
@@ -942,6 +1441,24 @@ class MuscriptorResultWidget(QFrame):
         self._playing = False
         self._playback_finished = False
         self._transport_scrubbing = False
+        self._transport_seek_pending_ms: int | None = None
+        self._transport_seek_resume = False
+        self._transport_seek_pause_only = False
+        self._transport_seek_commit_scheduled = False
+        self._transport_seek_commit_players: tuple[QMediaPlayer, ...] = ()
+        self._transport_seek_commit_position_ms = 0
+        self._transport_seek_commit_pause_only = False
+        self._transport_seek_commit_index = 0
+        self._transport_seek_commit_phase = ""
+        self._transport_commit_timer = QTimer(self)
+        self._transport_commit_timer.setSingleShot(True)
+        self._transport_commit_timer.timeout.connect(self._commit_next_transport_player)
+        self._after_transport_timer = QTimer(self)
+        self._after_transport_timer.setSingleShot(True)
+        self._after_transport_timer.timeout.connect(self._apply_deferred_after_transport)
+        self._deferred_assets_timer = QTimer(self)
+        self._deferred_assets_timer.setSingleShot(True)
+        self._deferred_assets_timer.timeout.connect(self._try_apply_deferred_assets)
         self._detected_bpm: float | None = None
         self._bpm_user_overridden = False
         self._last_tempo_editor: str | None = None
@@ -959,7 +1476,20 @@ class MuscriptorResultWidget(QFrame):
         self._original_left: tuple[QMediaPlayer, QAudioOutput] | None = None
         self._active_player_ids: frozenset[int] = frozenset()
         self._startup_sync_pending = False
+        self._retired_media: list[tuple[QMediaPlayer, QAudioOutput | None]] = []
+        self._retired_media_timer = QTimer(self)
+        self._retired_media_timer.setSingleShot(True)
+        self._retired_media_timer.timeout.connect(self._release_retired_media)
         self._midi_path = ""
+        self._original_edit_notes: tuple[MuscriptorRollNote, ...] = ()
+        self._edited_notes: tuple[MuscriptorRollNote, ...] = ()
+        self._edit_duration = 0.0
+        self._edit_undo: list[tuple[MuscriptorRollNote, ...]] = []
+        self._edit_redo: list[tuple[MuscriptorRollNote, ...]] = []
+        self._edit_clipboard: tuple[MuscriptorRollNote, ...] = ()
+        self._active_edit_instrument = ""
+        self._syncing_editor_controls = False
+        self._syncing_roll_zoom_control = False
         self.setObjectName("muscriptorResultWorkbench")
         self.setStyleSheet(
             "QFrame#muscriptorResultWorkbench { background: #17243d; border: 1px solid #2c4f7c; "
@@ -1008,6 +1538,16 @@ class MuscriptorResultWidget(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
+        self.result_controls_panel = QWidget()
+        result_controls = QVBoxLayout(self.result_controls_panel)
+        result_controls.setContentsMargins(0, 0, 0, 0)
+        result_controls.setSpacing(8)
+        self.result_controls_panel.setMinimumHeight(0)
+        self.result_controls_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+
         self.source_label = QLabel()
         self.source_label.setWordWrap(True)
         self.source_label.setVisible(bool(self.source_track_name))
@@ -1015,12 +1555,12 @@ class MuscriptorResultWidget(QFrame):
             "color: #8fc6ff; font-weight: 600; background: #122039; "
             "border: 1px solid #2c4f7c; border-radius: 5px; padding: 7px 9px;"
         )
-        root.addWidget(self.source_label)
+        result_controls.addWidget(self.source_label)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: #9fb3d9;")
-        root.addWidget(self.status_label)
+        result_controls.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
@@ -1031,11 +1571,11 @@ class MuscriptorResultWidget(QFrame):
             "QProgressBar { background: #223451; border: 0; border-radius: 4px; } "
             "QProgressBar::chunk { background: #4a9eff; border-radius: 4px; }"
         )
-        root.addWidget(self.progress_bar)
+        result_controls.addWidget(self.progress_bar)
 
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet("color: #8da4c9;")
-        root.addWidget(self.progress_label)
+        result_controls.addWidget(self.progress_label)
 
         self.slow_hint_label = QLabel()
         self.slow_hint_label.setWordWrap(True)
@@ -1044,12 +1584,12 @@ class MuscriptorResultWidget(QFrame):
             "border-left: 3px solid #d8b56a; padding: 5px 8px;"
         )
         self.slow_hint_label.hide()
-        root.addWidget(self.slow_hint_label)
+        result_controls.addWidget(self.slow_hint_label)
 
         self.playback_status_label = QLabel()
         self.playback_status_label.setWordWrap(True)
         self.playback_status_label.setStyleSheet("color: #73a7ff;")
-        root.addWidget(self.playback_status_label)
+        result_controls.addWidget(self.playback_status_label)
 
         controls = QHBoxLayout()
         self.play_button = QPushButton()
@@ -1118,7 +1658,7 @@ class MuscriptorResultWidget(QFrame):
         self.stereo_checkbox.setEnabled(False)
         self.stereo_checkbox.toggled.connect(self._apply_mix)
         controls.addWidget(self.stereo_checkbox)
-        root.addLayout(controls)
+        result_controls.addLayout(controls)
 
         transport = QHBoxLayout()
         self.playback_slider = _SeekSlider()
@@ -1134,18 +1674,152 @@ class MuscriptorResultWidget(QFrame):
         self.duration_label = QLabel("/ 0.0s")
         self.duration_label.setStyleSheet("font-family: Consolas; color: #8da4c9;")
         transport.addWidget(self.duration_label)
-        root.addLayout(transport)
+        result_controls.addLayout(transport)
 
-        content = QHBoxLayout()
+        self.editor_panel = QWidget()
+        editor = QVBoxLayout(self.editor_panel)
+        editor.setContentsMargins(0, 0, 0, 0)
+        editor.setSpacing(5)
+        primary_commands = QHBoxLayout()
+        primary_commands.setSpacing(6)
+        secondary_commands = QHBoxLayout()
+        secondary_commands.setSpacing(6)
+        editor_fields = QHBoxLayout()
+        editor_fields.setSpacing(6)
+        self.edit_toggle = QToolButton()
+        self.edit_toggle.setCheckable(True)
+        self.edit_toggle.setEnabled(False)
+        self.edit_toggle.toggled.connect(self._on_edit_mode_toggled)
+        primary_commands.addWidget(self.edit_toggle)
+        self.edit_add_button = QPushButton()
+        self.edit_add_button.setEnabled(False)
+        self.edit_add_button.clicked.connect(self._add_editor_note_at_playhead)
+        primary_commands.addWidget(self.edit_add_button)
+        self.edit_delete_button = QPushButton()
+        self.edit_delete_button.setEnabled(False)
+        self.edit_delete_button.clicked.connect(self._delete_selected_editor_note)
+        primary_commands.addWidget(self.edit_delete_button)
+        self.edit_undo_button = QPushButton()
+        self.edit_undo_button.setEnabled(False)
+        self.edit_undo_button.clicked.connect(self._undo_editor_notes)
+        primary_commands.addWidget(self.edit_undo_button)
+        self.edit_redo_button = QPushButton()
+        self.edit_redo_button.setEnabled(False)
+        self.edit_redo_button.clicked.connect(self._redo_editor_notes)
+        primary_commands.addWidget(self.edit_redo_button)
+        self.edit_reset_button = QPushButton()
+        self.edit_reset_button.setEnabled(False)
+        self.edit_reset_button.clicked.connect(self._reset_editor_notes)
+        primary_commands.addWidget(self.edit_reset_button)
+        primary_commands.addStretch()
+        self.edit_select_all_button = QPushButton()
+        self.edit_select_all_button.setEnabled(False)
+        self.edit_select_all_button.clicked.connect(self._select_all_editor_notes)
+        secondary_commands.addWidget(self.edit_select_all_button)
+        self.edit_cut_button = QPushButton()
+        self.edit_cut_button.setEnabled(False)
+        self.edit_cut_button.clicked.connect(self._cut_selected_editor_notes)
+        secondary_commands.addWidget(self.edit_cut_button)
+        self.edit_copy_button = QPushButton()
+        self.edit_copy_button.setEnabled(False)
+        self.edit_copy_button.clicked.connect(self._copy_selected_editor_notes)
+        secondary_commands.addWidget(self.edit_copy_button)
+        self.edit_paste_button = QPushButton()
+        self.edit_paste_button.setEnabled(False)
+        self.edit_paste_button.clicked.connect(self._paste_editor_notes)
+        secondary_commands.addWidget(self.edit_paste_button)
+        self.edit_duplicate_button = QPushButton()
+        self.edit_duplicate_button.setEnabled(False)
+        self.edit_duplicate_button.clicked.connect(self._duplicate_selected_editor_notes)
+        secondary_commands.addWidget(self.edit_duplicate_button)
+        self.edit_quantize_button = QPushButton()
+        self.edit_quantize_button.setEnabled(False)
+        self.edit_quantize_button.clicked.connect(self._quantize_selected_editor_notes)
+        secondary_commands.addWidget(self.edit_quantize_button)
+        secondary_commands.addStretch()
+        for command_button in (
+            self.edit_toggle,
+            self.edit_add_button,
+            self.edit_delete_button,
+            self.edit_undo_button,
+            self.edit_redo_button,
+            self.edit_reset_button,
+            self.edit_select_all_button,
+            self.edit_cut_button,
+            self.edit_copy_button,
+            self.edit_paste_button,
+            self.edit_duplicate_button,
+            self.edit_quantize_button,
+        ):
+            command_button.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+        self.edit_instrument_label = QLabel()
+        editor_fields.addWidget(self.edit_instrument_label)
+        self.edit_instrument_combo = QComboBox()
+        self.edit_instrument_combo.setMinimumWidth(220)
+        self.edit_instrument_combo.setEnabled(False)
+        self.edit_instrument_combo.currentIndexChanged.connect(self._on_editor_instrument_changed)
+        editor_fields.addWidget(self.edit_instrument_combo)
+        editor_fields.addSpacing(8)
+        self.edit_velocity_label = QLabel()
+        editor_fields.addWidget(self.edit_velocity_label)
+        self.edit_velocity_spin = QSpinBox()
+        self.edit_velocity_spin.setRange(1, 127)
+        self.edit_velocity_spin.setValue(100)
+        self.edit_velocity_spin.setEnabled(False)
+        self.edit_velocity_spin.valueChanged.connect(self._on_editor_velocity_changed)
+        editor_fields.addWidget(self.edit_velocity_spin)
+        editor_fields.addSpacing(8)
+        self.roll_zoom_label = QLabel()
+        editor_fields.addWidget(self.roll_zoom_label)
+        self.roll_zoom_spin = QDoubleSpinBox()
+        self.roll_zoom_spin.setRange(
+            _ROLL_MIN_PIXELS_PER_SECOND / _ROLL_BASE_PIXELS_PER_SECOND,
+            _ROLL_MAX_PIXELS_PER_SECOND / _ROLL_BASE_PIXELS_PER_SECOND,
+        )
+        self.roll_zoom_spin.setDecimals(2)
+        self.roll_zoom_spin.setSingleStep(0.25)
+        self.roll_zoom_spin.setValue(1.0)
+        self.roll_zoom_spin.setSuffix("×")
+        self.roll_zoom_spin.setKeyboardTracking(False)
+        self.roll_zoom_spin.setMinimumWidth(82)
+        self.roll_zoom_spin.setStyleSheet(
+            "font-family: Consolas; color: #c8d3e6; background: #16213e; "
+            "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
+        )
+        editor_fields.addWidget(self.roll_zoom_spin)
+        self.edit_summary_label = QLabel()
+        self.edit_summary_label.setStyleSheet("color: #8da4c9;")
+        self.edit_summary_label.setWordWrap(True)
+        editor_fields.addWidget(self.edit_summary_label)
+        editor_fields.addStretch()
+        editor.addLayout(primary_commands)
+        editor.addLayout(secondary_commands)
+        editor.addLayout(editor_fields)
+        result_controls.addWidget(self.editor_panel)
+
+        self.roll_panel = QWidget()
+        content = QHBoxLayout(self.roll_panel)
+        content.setContentsMargins(0, 0, 0, 0)
         self.roll_scroll = _PianoRollScrollArea()
         self.roll_scroll.setWidgetResizable(False)
-        self.roll_scroll.setMinimumHeight(390)
+        self.roll_scroll.setMinimumHeight(240)
         self.roll_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.roll = _PianoRollCanvas()
         self.roll.seek_requested.connect(self.seek)
+        self.roll.edit_committed.connect(self._on_roll_edit_committed)
+        self.roll.selection_changed.connect(self._on_roll_selection_changed)
+        self.roll.add_note_requested.connect(self._add_editor_note)
+        self.roll.delete_requested.connect(self._delete_selected_editor_note)
+        self.roll.undo_requested.connect(self._undo_editor_notes)
+        self.roll.redo_requested.connect(self._redo_editor_notes)
+        self.roll.command_requested.connect(self._on_editor_command)
         self.roll_scroll.setWidget(self.roll)
         self.roll_scroll.horizontalScrollBar().setSingleStep(48)
         self.roll_scroll.zoom_requested.connect(self._on_roll_zoom_requested)
+        self.roll_zoom_spin.valueChanged.connect(self._on_roll_zoom_value_changed)
         self.roll_scroll.manual_navigation_requested.connect(self._on_roll_manual_navigation)
         self.roll_scroll.horizontalScrollBar().actionTriggered.connect(self._on_roll_scroll_action)
         self.roll_scroll.horizontalScrollBar().sliderPressed.connect(
@@ -1170,7 +1844,28 @@ class MuscriptorResultWidget(QFrame):
         instrument_layout.addLayout(self.instrument_rows_layout)
         instrument_layout.addStretch()
         content.addWidget(instrument_panel, 1)
-        root.addLayout(content)
+        self.result_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.result_splitter.setObjectName("muscriptorEditorSplitter")
+        self.result_splitter.setChildrenCollapsible(True)
+        self.result_splitter.setHandleWidth(10)
+        self.result_splitter.setStyleSheet(
+            "QSplitter#muscriptorEditorSplitter::handle:vertical {"
+            "background: #203657; border-top: 1px solid #4a78aa; "
+            "border-bottom: 1px solid #10233e; margin: 2px 0; }"
+            "QSplitter#muscriptorEditorSplitter::handle:vertical:hover {"
+            "background: #365f8d; }"
+        )
+        self.result_splitter.addWidget(self.result_controls_panel)
+        self.result_splitter.addWidget(self.roll_panel)
+        self.result_splitter.setCollapsible(0, True)
+        self.result_splitter.setCollapsible(1, False)
+        self.result_splitter.setStretchFactor(0, 0)
+        self.result_splitter.setStretchFactor(1, 1)
+        self.result_splitter.setSizes(
+            [max(240, self.result_controls_panel.sizeHint().height()), 465]
+        )
+        self.result_splitter.handle(1).setToolTip(t("muscriptor_result.editor_resize_hint"))
+        root.addWidget(self.result_splitter, 1)
 
         outputs = QHBoxLayout()
         self.download_button = QToolButton()
@@ -1326,22 +2021,13 @@ class MuscriptorResultWidget(QFrame):
                 result.beat_info.bpm,
             )
         output_dir = Path(self._midi_path).parent / "midi-playback"
+        output_dir.mkdir(parents=True, exist_ok=True)
         playback_midi_path = Path(self._midi_path)
-        if (
-            result.beat_info is not None
-            and result.beat_info.source_bpm is not None
-            and not math.isclose(
-                result.beat_info.source_bpm,
-                result.beat_info.bpm,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            )
-        ):
-            output_dir.mkdir(parents=True, exist_ok=True)
+        if self._detected_bpm is not None:
             playback_midi_path = _export_midi_with_bpm(
                 self._midi_path,
                 output_dir / "source-tempo-playback.mid",
-                result.beat_info.source_bpm,
+                self._detected_bpm,
             )
         read_midi_roll_notes(
             playback_midi_path,
@@ -1506,7 +2192,7 @@ class MuscriptorResultWidget(QFrame):
             )
             return
         self._preview_ready_generation = generation
-        if self._playing:
+        if self._playing or self._transport_seek_pending_ms is not None:
             self._deferred_preview = (generation, payload)
             self.playback_status_label.setText(
                 t(
@@ -1529,8 +2215,8 @@ class MuscriptorResultWidget(QFrame):
         generation: int,
         payload: MuscriptorPreviewAssets,
     ) -> None:
-        if self._playing:
-            raise RuntimeError("Cannot replace MIDI preview assets during playback")
+        if self._playing or self._transport_seek_pending_ms is not None:
+            raise RuntimeError("Cannot replace MIDI preview assets during transport activity")
         if generation <= self._preview_applied_generation:
             return
         self.roll.set_notes(payload.notes, duration=payload.duration)
@@ -1566,7 +2252,7 @@ class MuscriptorResultWidget(QFrame):
             player.setPosition(self._position_ms)
 
     def _apply_deferred_assets(self) -> None:
-        if self._playing or self._shutting_down:
+        if self._playing or self._transport_seek_pending_ms is not None or self._shutting_down:
             return
         if self._deferred_final_assets is not None:
             assets = self._deferred_final_assets
@@ -1634,29 +2320,41 @@ class MuscriptorResultWidget(QFrame):
         if not retired_players:
             return
 
-        # Silence retired outputs synchronously. Their FFmpeg backends are released
-        # on the next event-loop turn, but no stale MIDI tail may remain audible in
-        # that interval. Do not issue another pause here: preview rollover already
-        # paused the active set, and an overlapping pause/stop/source-clear sequence
-        # can crash Qt's Windows FFmpeg backend.
+        # Silence retired outputs synchronously.  Asset replacement is forbidden
+        # while transport is playing, so every retired backend must already be
+        # quiescent before its source is unloaded.
         for player in retired_players:
+            if player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                raise RuntimeError("Cannot retire a playing MIDI audio backend")
             output = player.audioOutput()
             if output is not None:
                 output.setMuted(True)
 
-        # Qt FFmpeg can deadlock when QMediaPlayer.stop() is called from the
-        # same event-loop transition that observed EndOfMedia and committed the
-        # next preview. Remove the old players from all live routing immediately,
-        # then let QObject destruction release their already-quiescent backends
-        # without issuing a second stop/source/output transition.
-        def release_retired_players() -> None:
-            for player in retired_players:
-                output = player.audioOutput()
-                player.deleteLater()
-                if output is not None:
-                    output.deleteLater()
+        # Keep both wrappers owned until a widget-bound timer reaches the next
+        # event-loop turn. A contextless singleShot closure can outlive this
+        # workbench and dereference an already deleted QMediaPlayer.
+        self._retired_media.extend((player, player.audioOutput()) for player in retired_players)
+        self._retired_media_timer.start(0)
 
-        QTimer.singleShot(0, release_retired_players)
+    def _release_retired_media(self) -> None:
+        """Unload retired Qt multimedia objects without leaving stale callbacks."""
+
+        retired_media = self._retired_media
+        self._retired_media = []
+        for player, output in retired_media:
+            if output is not None:
+                output.setMuted(True)
+            if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+                player.stop()
+            player.setSource(QUrl())
+            player.setAudioOutput(None)
+            player.deleteLater()
+            # Flush only this object's DeferredDelete event. The previous global
+            # flush could re-enter deletion of unrelated workers and widgets.
+            QCoreApplication.sendPostedEvents(player, QEvent.Type.DeferredDelete)
+            if output is not None:
+                output.deleteLater()
+                QCoreApplication.sendPostedEvents(output, QEvent.Type.DeferredDelete)
 
     def _on_source_duration_changed(self, duration_ms: int) -> None:
         if duration_ms > 0:
@@ -1683,6 +2381,8 @@ class MuscriptorResultWidget(QFrame):
         return player, output
 
     def _on_player_playback_state_changed(self, _state) -> None:
+        if self._transport_seek_pending_ms is not None:
+            return
         if self._deferred_apply_scheduled and not self._playing:
             self._try_apply_deferred_assets()
         if not self._playing or not self._startup_sync_pending:
@@ -1695,8 +2395,142 @@ class MuscriptorResultWidget(QFrame):
         master_position = active[0].position()
         for player in active[1:]:
             if abs(player.position() - master_position) > 20:
-                player.setPosition(master_position)
+                self._startup_sync_pending = False
+                self.seek(master_position / 1000.0)
+                return
         self._startup_sync_pending = False
+
+    def _schedule_transport_seek_commit(self) -> None:
+        """Start one serialized stop/position/play transaction for all backends."""
+
+        if (
+            self._shutting_down
+            or self._transport_seek_pending_ms is None
+            or self._transport_seek_commit_scheduled
+        ):
+            return
+        self._transport_seek_commit_scheduled = True
+        self._transport_seek_commit_players = tuple(self._all_playback_players())
+        self._transport_seek_commit_position_ms = self._transport_seek_pending_ms
+        self._transport_seek_commit_pause_only = self._transport_seek_pause_only
+        self._transport_seek_commit_index = 0
+        self._transport_seek_commit_phase = (
+            "pause" if self._transport_seek_commit_pause_only else "stop"
+        )
+        self._transport_commit_timer.start(0)
+
+    def _finish_transport_seek_commit(self) -> None:
+        resume = self._transport_seek_resume and self._playing
+        self._transport_seek_pending_ms = None
+        self._transport_seek_resume = False
+        self._transport_seek_pause_only = False
+        self._transport_seek_commit_scheduled = False
+        self._transport_seek_commit_players = ()
+        self._transport_seek_commit_pause_only = False
+        self._transport_seek_commit_index = 0
+        self._transport_seek_commit_phase = ""
+        self._startup_sync_pending = False
+        if not resume and not self._shutting_down:
+            self._after_transport_timer.start(0)
+
+    def _apply_deferred_after_transport(self) -> None:
+        if self._shutting_down or self._playing or self._transport_seek_pending_ms is not None:
+            return
+        if self._deferred_editor_assets is not None:
+            generation, assets = self._deferred_editor_assets
+            self._deferred_editor_assets = None
+            self._on_editor_audio_ready(generation, assets)
+            return
+        if self._deferred_apply_scheduled:
+            self._try_apply_deferred_assets()
+        else:
+            self._schedule_deferred_assets()
+
+    def _commit_next_transport_player(self) -> None:
+        """Apply one backend mutation per event-loop turn to avoid Qt re-entry."""
+
+        if self._shutting_down or self._transport_seek_pending_ms is None:
+            self._finish_transport_seek_commit()
+            return
+        if (
+            self._transport_seek_pending_ms != self._transport_seek_commit_position_ms
+            or self._transport_seek_pause_only != self._transport_seek_commit_pause_only
+        ):
+            self._transport_seek_commit_players = tuple(self._all_playback_players())
+            self._transport_seek_commit_position_ms = self._transport_seek_pending_ms
+            self._transport_seek_commit_pause_only = self._transport_seek_pause_only
+            self._transport_seek_commit_index = 0
+            self._transport_seek_commit_phase = (
+                "pause" if self._transport_seek_commit_pause_only else "stop"
+            )
+
+        players = self._transport_seek_commit_players
+        if self._transport_seek_commit_phase == "pause":
+            if self._transport_seek_commit_index < len(players):
+                player = players[self._transport_seek_commit_index]
+                player.pause()
+                self._transport_seek_commit_index += 1
+                self._transport_commit_timer.start(0)
+                return
+            if self._transport_seek_resume and self._playing:
+                self._transport_seek_pause_only = False
+                self._transport_seek_commit_pause_only = False
+                self._transport_seek_commit_players = tuple(self._all_playback_players())
+                self._transport_seek_commit_index = 0
+                self._transport_seek_commit_phase = "stop"
+                self._transport_commit_timer.start(0)
+                return
+            self._finish_transport_seek_commit()
+            return
+
+        if self._transport_seek_commit_phase == "stop":
+            if self._transport_seek_commit_index < len(players):
+                player = players[self._transport_seek_commit_index]
+                if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+                    player.stop()
+                self._transport_seek_commit_index += 1
+                self._transport_commit_timer.start(0)
+                return
+            self._transport_seek_commit_players = tuple(self._all_playback_players())
+            self._transport_seek_commit_index = 0
+            self._transport_seek_commit_phase = "position"
+            self._transport_commit_timer.start(0)
+            return
+
+        if self._transport_seek_commit_phase == "position":
+            if self._transport_seek_commit_index < len(players):
+                player = players[self._transport_seek_commit_index]
+                if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+                    raise RuntimeError("MIDI backend resumed before serialized seek positioning")
+                player.setPosition(self._transport_seek_commit_position_ms)
+                self._transport_seek_commit_index += 1
+                self._transport_commit_timer.start(0)
+                return
+            if not (self._transport_seek_resume and self._playing):
+                self._finish_transport_seek_commit()
+                return
+            active_players = self._active_playback_players()
+            self._active_player_ids = frozenset(id(player) for player in active_players)
+            self._transport_seek_commit_players = tuple(active_players)
+            self._transport_seek_commit_index = 0
+            self._transport_seek_commit_phase = "play"
+            self._transport_commit_timer.start(0)
+            return
+
+        if self._transport_seek_commit_phase != "play":
+            raise RuntimeError(
+                f"Invalid serialized MIDI seek phase: {self._transport_seek_commit_phase!r}"
+            )
+        if not (self._transport_seek_resume and self._playing):
+            self._finish_transport_seek_commit()
+            return
+        if self._transport_seek_commit_index < len(players):
+            player = players[self._transport_seek_commit_index]
+            player.play()
+            self._transport_seek_commit_index += 1
+            self._transport_commit_timer.start(0)
+            return
+        self._finish_transport_seek_commit()
 
     def _on_assets_ready(self, assets: object) -> None:
         if self._shutting_down:
@@ -1704,7 +2538,7 @@ class MuscriptorResultWidget(QFrame):
         if not isinstance(assets, MuscriptorPlaybackAssets):
             self._on_assets_failed("Invalid MuScriptor playback asset payload")
             return
-        if self._playing:
+        if self._playing or self._transport_seek_pending_ms is not None:
             self._deferred_final_assets = assets
             self.playback_status_label.setText(t("muscriptor_result.final_audio_buffered"))
             return
@@ -1715,9 +2549,26 @@ class MuscriptorResultWidget(QFrame):
             self._on_assets_failed(str(exc))
 
     def _apply_final_assets(self, assets: MuscriptorPlaybackAssets) -> None:
-        if self._playing:
-            raise RuntimeError("Cannot replace final MIDI assets during playback")
+        if self._playing or self._transport_seek_pending_ms is not None:
+            raise RuntimeError("Cannot replace final MIDI assets during transport activity")
         self.roll.set_notes(assets.notes, duration=assets.duration)
+        self._original_assets = assets
+        self._replace_playback_assets(assets, detected_notes=assets.notes)
+        self._begin_editor_session(assets.notes, assets.duration)
+        self.status_label.setText(t("muscriptor_result.ready"))
+        self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
+        self._preview_duration = 0.0
+
+    def _replace_playback_assets(
+        self,
+        assets: MuscriptorPlaybackAssets,
+        *,
+        detected_notes: Iterable[MuscriptorRollNote],
+    ) -> None:
+        """Atomically replace every audible MIDI bus while transport is paused."""
+
+        if self._playing or self._transport_seek_pending_ms is not None:
+            raise RuntimeError("Cannot replace MIDI playback assets during transport activity")
         position_ms = self._position_ms
         self._dispose_dynamic_players()
         self._assets = assets
@@ -1727,23 +2578,648 @@ class MuscriptorResultWidget(QFrame):
         self._midi_right = self._make_player(assets.transcription_right_wav)
         self._normal_sources = dict(assets.instrument_wavs)
         self._right_sources = dict(assets.instrument_right_wavs)
-        self._detected = list(dict.fromkeys(note.instrument for note in assets.notes))
+        self._detected = list(dict.fromkeys(note.instrument for note in detected_notes))
+        self._muted.intersection_update(self._detected)
+        if self._soloed not in self._detected:
+            self._soloed = None
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
         self._set_playback_duration(assets.duration)
-        self.mix_slider.setEnabled(True)
+        self.mix_slider.setEnabled(bool(self._normal_sources))
         self.stereo_checkbox.setEnabled(True)
         self.download_transcription_action.setEnabled(True)
         self.download_stereo_action.setEnabled(True)
-        self.status_label.setText(t("muscriptor_result.ready"))
-        self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
-        self._preview_duration = 0.0
         self._position_ms = min(position_ms, int(round(assets.duration * 1000.0)))
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
         self.playback_slider.setValue(self._position_ms)
+        for player in self._all_playback_players():
+            player.setPosition(self._position_ms)
         self._apply_mix()
         self._update_play_label()
+
+    def _begin_editor_session(
+        self,
+        notes: Iterable[MuscriptorRollNote],
+        duration: float,
+    ) -> None:
+        snapshot = tuple(notes)
+        self._original_edit_notes = snapshot
+        self._edited_notes = snapshot
+        self._edit_duration = float(duration)
+        self._edit_undo.clear()
+        self._edit_redo.clear()
+        self._edit_clipboard = ()
+        self._active_edit_instrument = snapshot[0].instrument if snapshot else ""
+        self.roll.set_grid_seconds(self._editor_grid_seconds())
+        self._syncing_editor_controls = True
+        try:
+            self.edit_instrument_combo.clear()
+            ordered = list(dict.fromkeys(note.instrument for note in snapshot))
+            for instrument in ordered:
+                self.edit_instrument_combo.addItem(_instrument_label(instrument), instrument)
+            if self._active_edit_instrument:
+                index = self.edit_instrument_combo.findData(self._active_edit_instrument)
+                if index >= 0:
+                    self.edit_instrument_combo.setCurrentIndex(index)
+        finally:
+            self._syncing_editor_controls = False
+        self.edit_toggle.setEnabled(True)
+        self.roll.set_editable(self.edit_toggle.isChecked())
+        self._sync_editor_controls()
+
+    def _on_edit_mode_toggled(self, enabled: bool) -> None:
+        self.roll.set_editable(enabled)
+        self._sync_editor_controls()
+        if enabled:
+            self.roll.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _sync_editor_controls(self) -> None:
+        editable = self.edit_toggle.isEnabled() and self.edit_toggle.isChecked()
+        selected = bool(self.roll.selected_indices)
+        dirty = bool(self._original_edit_notes) and self._edited_notes != self._original_edit_notes
+        self.edit_add_button.setEnabled(editable and bool(self._active_edit_instrument))
+        self.edit_delete_button.setEnabled(editable and selected)
+        self.edit_undo_button.setEnabled(editable and bool(self._edit_undo))
+        self.edit_redo_button.setEnabled(editable and bool(self._edit_redo))
+        self.edit_reset_button.setEnabled(editable and dirty)
+        self.edit_select_all_button.setEnabled(editable and bool(self._edited_notes))
+        self.edit_cut_button.setEnabled(editable and selected)
+        self.edit_copy_button.setEnabled(editable and selected)
+        self.edit_paste_button.setEnabled(editable and bool(self._edit_clipboard))
+        self.edit_duplicate_button.setEnabled(editable and selected)
+        self.edit_quantize_button.setEnabled(editable and selected)
+        self.edit_instrument_combo.setEnabled(editable and self.edit_instrument_combo.count() > 0)
+        self.edit_velocity_spin.setEnabled(editable and selected)
+        self.edit_summary_label.setText(
+            t(
+                "muscriptor_result.editor_summary",
+                count=len(self._edited_notes),
+                changes=len(self._edit_undo),
+            )
+        )
+
+    def _on_roll_selection_changed(self, note: object) -> None:
+        selected = note if isinstance(note, MuscriptorRollNote) else None
+        self._syncing_editor_controls = True
+        try:
+            if selected is not None:
+                self._active_edit_instrument = selected.instrument
+                index = self.edit_instrument_combo.findData(selected.instrument)
+                if index >= 0:
+                    self.edit_instrument_combo.setCurrentIndex(index)
+                self.edit_velocity_spin.setValue(int(selected.velocity))
+        finally:
+            self._syncing_editor_controls = False
+        self._sync_editor_controls()
+
+    def _record_editor_commit(
+        self,
+        before: tuple[MuscriptorRollNote, ...],
+        after: tuple[MuscriptorRollNote, ...],
+    ) -> None:
+        if before == after:
+            return
+        if self._playing:
+            self.pause()
+        self._edit_undo.append(tuple(before))
+        if len(self._edit_undo) > 100:
+            del self._edit_undo[0]
+        self._edit_redo.clear()
+        self._edited_notes = tuple(after)
+        self._queue_editor_audio_render(before, self._edited_notes)
+        self._sync_editor_controls()
+
+    def _on_roll_edit_committed(self, before: object, after: object) -> None:
+        if not isinstance(before, tuple) or not isinstance(after, tuple):
+            raise TypeError("Piano-roll edit snapshots must be tuples")
+        self._record_editor_commit(before, after)
+
+    def _apply_editor_snapshot(
+        self,
+        snapshot: Iterable[MuscriptorRollNote],
+        *,
+        selected_index: int | None = None,
+        selected_indices: Iterable[int] | None = None,
+        record: bool,
+    ) -> None:
+        before = self._edited_notes
+        after = tuple(snapshot)
+        self.roll.set_notes(
+            after,
+            duration=self._edit_duration,
+            selected_index=selected_index,
+            selected_indices=selected_indices,
+        )
+        self._edited_notes = after
+        self._on_roll_selection_changed(self.roll.selected_note)
+        if record:
+            self._record_editor_commit(before, after)
+        else:
+            if before != after:
+                self._queue_editor_audio_render(before, after)
+            self._sync_editor_controls()
+
+    def _queue_editor_audio_render(
+        self,
+        before: tuple[MuscriptorRollNote, ...],
+        after: tuple[MuscriptorRollNote, ...],
+    ) -> None:
+        """Invalidate stale audio and queue one render for the latest edit snapshot."""
+
+        if before == after:
+            return
+        if self._playing:
+            self.pause()
+        self._edit_asset_generation += 1
+        generation = self._edit_asset_generation
+        self._edit_asset_pending = (generation, tuple(after))
+        self.play_button.setEnabled(False)
+        self.playback_slider.setEnabled(False)
+        self.playback_status_label.setText(t("muscriptor_result.editor_audio_rendering"))
+        if self._edit_asset_worker is not None and self._edit_asset_worker.isRunning():
+            self._edit_asset_worker.cancel()
+
+        if tuple(after) == self._original_edit_notes and self._original_assets is not None:
+            self._edit_asset_debounce.stop()
+            self._edit_asset_pending = None
+            self._apply_editor_audio_assets(
+                generation,
+                self._original_assets,
+                output_dir=None,
+                restored_original=True,
+            )
+            return
+        self._edit_asset_debounce.start()
+
+    def _start_pending_editor_audio(self) -> None:
+        if self._shutting_down or self._edit_asset_pending is None:
+            return
+        if self._edit_asset_worker is not None and self._edit_asset_worker.isRunning():
+            return
+        generation, notes = self._edit_asset_pending
+        self._edit_asset_pending = None
+        if self._original_assets is None or not self._midi_path or self._detected_bpm is None:
+            self.playback_status_label.setText(
+                t(
+                    "muscriptor_result.editor_audio_failed",
+                    error="completed MIDI playback context is unavailable",
+                )
+            )
+            return
+        output_dir = self._edit_asset_root / f"generation-{generation:06d}"
+        worker = _EditedAssetWorker(
+            generation,
+            self._midi_path,
+            notes,
+            self._detected_bpm,
+            self.audio_path,
+            str(output_dir),
+            self.muscriptor_groups,
+            self,
+        )
+        worker.progress.connect(self._on_editor_audio_progress)
+        worker.succeeded.connect(self._on_editor_audio_ready)
+        worker.failed.connect(self._on_editor_audio_failed)
+        worker.finished.connect(lambda worker=worker: self._on_editor_audio_worker_finished(worker))
+        worker.finished.connect(worker.deleteLater)
+        self._edit_asset_worker = worker
+        worker.start(QThread.Priority.LowPriority)
+
+    def _on_editor_audio_progress(
+        self,
+        generation: int,
+        progress: float,
+        message: str,
+    ) -> None:
+        if self._shutting_down or generation != self._edit_asset_generation:
+            return
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.editor_audio_rendering_progress",
+                progress=int(round(float(progress) * 100)),
+                message=message,
+            )
+        )
+
+    def _on_editor_audio_ready(self, generation: int, payload: object) -> None:
+        if self._shutting_down or generation != self._edit_asset_generation:
+            return
+        if not isinstance(payload, MuscriptorPlaybackAssets):
+            self._on_editor_audio_failed(
+                generation,
+                "Invalid edited MIDI playback asset payload",
+            )
+            return
+        if self._playing or self._transport_seek_pending_ms is not None:
+            self._deferred_editor_assets = (generation, payload)
+            return
+        try:
+            self._apply_editor_audio_assets(
+                generation,
+                payload,
+                output_dir=self._edit_asset_root / f"generation-{generation:06d}",
+                restored_original=False,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to apply edited MIDI playback assets | generation=%s",
+                generation,
+            )
+            self._on_editor_audio_failed(generation, str(exc))
+
+    def _apply_editor_audio_assets(
+        self,
+        generation: int,
+        assets: MuscriptorPlaybackAssets,
+        *,
+        output_dir: Path | None,
+        restored_original: bool,
+    ) -> None:
+        if generation != self._edit_asset_generation:
+            raise RuntimeError(
+                "Cannot apply stale edited MIDI audio: "
+                f"generation={generation}, current={self._edit_asset_generation}"
+            )
+        previous_dir = self._active_edit_asset_dir
+        self._replace_playback_assets(assets, detected_notes=self._edited_notes)
+        self._edit_asset_applied_generation = generation
+        self._active_edit_asset_dir = output_dir
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.final_audio_ready"
+                if restored_original
+                else "muscriptor_result.editor_audio_ready"
+            )
+        )
+        if previous_dir is not None and previous_dir != output_dir:
+            QTimer.singleShot(
+                1000,
+                lambda path=previous_dir: self._remove_editor_audio_directory(path),
+            )
+
+    def _on_editor_audio_failed(self, generation: int, error: str) -> None:
+        if (
+            self._shutting_down
+            or generation != self._edit_asset_generation
+            or "cancelled" in str(error).lower()
+        ):
+            return
+        logger.error(
+            "Edited MIDI playback rendering failed | generation=%s | error=%s",
+            generation,
+            error,
+        )
+        self.play_button.setEnabled(False)
+        self.playback_slider.setEnabled(False)
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.editor_audio_failed",
+                error=_compact_editor_error(error),
+            )
+        )
+
+    def _on_editor_audio_worker_finished(self, worker: _EditedAssetWorker) -> None:
+        if self._edit_asset_worker is worker:
+            self._edit_asset_worker = None
+        worker_output = Path(worker.output_dir).resolve()
+        if worker_output != self._active_edit_asset_dir:
+            self._remove_editor_audio_directory(worker_output)
+        if (
+            not self._shutting_down
+            and self._edit_asset_pending is not None
+            and not self._edit_asset_debounce.isActive()
+        ):
+            self._start_pending_editor_audio()
+
+    def _remove_editor_audio_directory(self, path: Path) -> None:
+        root = self._edit_asset_root.resolve()
+        candidate = Path(path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Refusing to remove edited MIDI assets outside {root}: {candidate}"
+            ) from exc
+        if not candidate.exists():
+            return
+        try:
+            shutil.rmtree(candidate)
+        except OSError as exc:
+            logger.warning("Unable to remove edited MIDI assets %s: %s", candidate, exc)
+
+    def _instrument_note_template(self, instrument: str) -> MuscriptorRollNote:
+        for note in (*self._edited_notes, *self._original_edit_notes):
+            if note.instrument == instrument:
+                return note
+        if instrument == "drums":
+            return MuscriptorRollNote(
+                instrument="drums",
+                pitch=36,
+                velocity=100,
+                start=0.0,
+                end=0.5,
+                program=0,
+                is_drum=True,
+                track_index=0,
+                channel=9,
+            )
+        if instrument.startswith("gm:"):
+            program = int(instrument.split(":", 1)[1])
+        else:
+            program = MUSCRIPTOR_REPRESENTATIVE_PROGRAMS.get(instrument, 0)
+        return MuscriptorRollNote(
+            instrument=instrument,
+            pitch=60,
+            velocity=100,
+            start=0.0,
+            end=0.5,
+            program=program,
+            is_drum=False,
+            track_index=0,
+            channel=0,
+        )
+
+    def _add_editor_note_at_playhead(self) -> None:
+        self._add_editor_note(self._position_ms / 1000.0, 60)
+
+    def _add_editor_note(self, start: float, pitch: int) -> None:
+        if not self.edit_toggle.isChecked() or not self._active_edit_instrument:
+            return
+        template = self._instrument_note_template(self._active_edit_instrument)
+        note_duration = min(0.5, self._edit_duration)
+        note_start = max(0.0, min(float(start), self._edit_duration - 0.01))
+        note_end = min(self._edit_duration, note_start + note_duration)
+        if note_end - note_start < 0.01:
+            note_start = max(0.0, self._edit_duration - 0.01)
+            note_end = self._edit_duration
+        note = replace(
+            template,
+            pitch=max(21, min(108, int(pitch))),
+            velocity=int(self.edit_velocity_spin.value()),
+            start=note_start,
+            end=note_end,
+        )
+        updated = (*self._edited_notes, note)
+        self._apply_editor_snapshot(
+            updated,
+            selected_index=len(updated) - 1,
+            record=True,
+        )
+
+    def _delete_selected_editor_note(self) -> None:
+        indices = set(self.roll.selected_indices)
+        if not self.edit_toggle.isChecked() or not indices:
+            return
+        updated = [note for index, note in enumerate(self._edited_notes) if index not in indices]
+        first_deleted = min(indices)
+        next_index = min(first_deleted, len(updated) - 1) if updated else None
+        self._apply_editor_snapshot(updated, selected_index=next_index, record=True)
+
+    def _select_all_editor_notes(self) -> None:
+        if not self.edit_toggle.isChecked():
+            return
+        indices = tuple(range(len(self._edited_notes)))
+        self.roll.set_selected_indices(indices, primary=indices[0] if indices else None)
+        self._on_roll_selection_changed(self.roll.selected_note)
+
+    def _copy_selected_editor_notes(self) -> None:
+        indices = self.roll.selected_indices
+        if not self.edit_toggle.isChecked() or not indices:
+            return
+        self._edit_clipboard = tuple(self._edited_notes[index] for index in indices)
+        self._sync_editor_controls()
+
+    def _cut_selected_editor_notes(self) -> None:
+        if not self.roll.selected_indices:
+            return
+        self._copy_selected_editor_notes()
+        self._delete_selected_editor_note()
+
+    def _paste_editor_notes(self) -> None:
+        if not self.edit_toggle.isChecked() or not self._edit_clipboard:
+            return
+        source_start = min(note.start for note in self._edit_clipboard)
+        source_end = max(note.end for note in self._edit_clipboard)
+        span = source_end - source_start
+        target_start = max(
+            0.0,
+            min(self._position_ms / 1000.0, self._edit_duration - span),
+        )
+        offset = target_start - source_start
+        pasted = tuple(
+            replace(note, start=note.start + offset, end=note.end + offset)
+            for note in self._edit_clipboard
+        )
+        first_index = len(self._edited_notes)
+        selection = tuple(range(first_index, first_index + len(pasted)))
+        self._apply_editor_snapshot(
+            (*self._edited_notes, *pasted),
+            selected_index=selection[0],
+            selected_indices=selection,
+            record=True,
+        )
+
+    def _duplicate_selected_editor_notes(self) -> None:
+        indices = self.roll.selected_indices
+        if not self.edit_toggle.isChecked() or not indices:
+            return
+        selected = tuple(self._edited_notes[index] for index in indices)
+        selection_start = min(note.start for note in selected)
+        selection_end = max(note.end for note in selected)
+        offset = max(self._editor_grid_seconds(), selection_end - selection_start)
+        offset = min(offset, self._edit_duration - selection_end)
+        if offset <= 0:
+            return
+        duplicated = tuple(
+            replace(note, start=note.start + offset, end=note.end + offset) for note in selected
+        )
+        first_index = len(self._edited_notes)
+        selection = tuple(range(first_index, first_index + len(duplicated)))
+        self._apply_editor_snapshot(
+            (*self._edited_notes, *duplicated),
+            selected_index=selection[0],
+            selected_indices=selection,
+            record=True,
+        )
+
+    def _quantize_selected_editor_notes(self) -> None:
+        indices = self.roll.selected_indices
+        if not self.edit_toggle.isChecked() or not indices:
+            return
+        grid = self._editor_grid_seconds()
+        updated = list(self._edited_notes)
+        for index in indices:
+            note = updated[index]
+            duration = note.end - note.start
+            start = round(note.start / grid) * grid
+            start = max(0.0, min(self._edit_duration - duration, start))
+            updated[index] = replace(note, start=start, end=start + duration)
+        self._apply_editor_snapshot(
+            updated,
+            selected_index=self.roll.selected_index,
+            selected_indices=indices,
+            record=True,
+        )
+
+    def _transform_selected_editor_notes(self, command: str, amount: int) -> None:
+        indices = self.roll.selected_indices
+        if not self.edit_toggle.isChecked() or not indices:
+            return
+        updated = list(self._edited_notes)
+        selected = [updated[index] for index in indices]
+        if command == "move_time":
+            delta = self._editor_grid_seconds() * amount
+            delta = max(
+                -min(note.start for note in selected),
+                min(self._edit_duration - max(note.end for note in selected), delta),
+            )
+            for index in indices:
+                note = updated[index]
+                updated[index] = replace(
+                    note,
+                    start=note.start + delta,
+                    end=note.end + delta,
+                )
+        elif command == "resize_time":
+            delta = self._editor_grid_seconds() * amount
+            delta = max(
+                -min(note.end - note.start - 0.01 for note in selected),
+                min(self._edit_duration - max(note.end for note in selected), delta),
+            )
+            for index in indices:
+                note = updated[index]
+                updated[index] = replace(note, end=note.end + delta)
+        elif command == "pitch":
+            pitch_delta = max(
+                21 - min(note.pitch for note in selected),
+                min(108 - max(note.pitch for note in selected), amount),
+            )
+            for index in indices:
+                updated[index] = replace(
+                    updated[index],
+                    pitch=updated[index].pitch + pitch_delta,
+                )
+        elif command == "velocity":
+            velocity_delta = max(
+                1 - min(note.velocity for note in selected),
+                min(127 - max(note.velocity for note in selected), amount),
+            )
+            for index in indices:
+                updated[index] = replace(
+                    updated[index],
+                    velocity=updated[index].velocity + velocity_delta,
+                )
+        else:
+            raise ValueError(f"Unsupported piano-roll transform: {command}")
+        self._apply_editor_snapshot(
+            updated,
+            selected_index=self.roll.selected_index,
+            selected_indices=indices,
+            record=True,
+        )
+
+    def _on_editor_command(self, command: str) -> None:
+        handlers = {
+            "select_all": self._select_all_editor_notes,
+            "cut": self._cut_selected_editor_notes,
+            "copy": self._copy_selected_editor_notes,
+            "paste": self._paste_editor_notes,
+            "duplicate": self._duplicate_selected_editor_notes,
+            "quantize": self._quantize_selected_editor_notes,
+        }
+        handler = handlers.get(command)
+        if handler is not None:
+            handler()
+            return
+        name, separator, amount_text = command.partition(":")
+        if not separator:
+            raise ValueError(f"Unsupported piano-roll command: {command}")
+        self._transform_selected_editor_notes(name, int(amount_text))
+
+    def _editor_grid_seconds(self) -> float:
+        bpm = float(self.bpm_spin.value())
+        if not math.isfinite(bpm) or bpm <= 0:
+            raise RuntimeError(f"Cannot derive MIDI editor grid from BPM {bpm!r}")
+        return 60.0 / bpm / 4.0
+
+    def _undo_editor_notes(self) -> None:
+        if not self._edit_undo:
+            return
+        self._edit_redo.append(self._edited_notes)
+        snapshot = self._edit_undo.pop()
+        self._apply_editor_snapshot(snapshot, selected_index=None, record=False)
+        self.playback_status_label.setText(
+            t("muscriptor_result.editor_audio_notice")
+            if snapshot != self._original_edit_notes
+            else t("muscriptor_result.final_audio_ready")
+        )
+
+    def _redo_editor_notes(self) -> None:
+        if not self._edit_redo:
+            return
+        self._edit_undo.append(self._edited_notes)
+        snapshot = self._edit_redo.pop()
+        self._apply_editor_snapshot(snapshot, selected_index=None, record=False)
+        self.playback_status_label.setText(t("muscriptor_result.editor_audio_notice"))
+
+    def _reset_editor_notes(self) -> None:
+        if self._edited_notes == self._original_edit_notes:
+            return
+        self._apply_editor_snapshot(
+            self._original_edit_notes,
+            selected_index=None,
+            record=True,
+        )
+        self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
+
+    def _on_editor_instrument_changed(self, _index: int) -> None:
+        if self._syncing_editor_controls:
+            return
+        instrument = str(self.edit_instrument_combo.currentData() or "")
+        if not instrument:
+            return
+        self._active_edit_instrument = instrument
+        selected_indices = self.roll.selected_indices
+        if not selected_indices:
+            self._sync_editor_controls()
+            return
+        template = self._instrument_note_template(instrument)
+        updated = list(self._edited_notes)
+        for selected_index in selected_indices:
+            updated[selected_index] = replace(
+                updated[selected_index],
+                instrument=instrument,
+                program=template.program,
+                is_drum=template.is_drum,
+                track_index=template.track_index,
+                channel=template.channel,
+            )
+        self._apply_editor_snapshot(
+            updated,
+            selected_index=self.roll.selected_index,
+            selected_indices=selected_indices,
+            record=True,
+        )
+
+    def _on_editor_velocity_changed(self, velocity: int) -> None:
+        if self._syncing_editor_controls:
+            return
+        selected_indices = self.roll.selected_indices
+        if not selected_indices:
+            return
+        updated = list(self._edited_notes)
+        for selected_index in selected_indices:
+            updated[selected_index] = replace(
+                updated[selected_index],
+                velocity=int(velocity),
+            )
+        self._apply_editor_snapshot(
+            updated,
+            selected_index=self.roll.selected_index,
+            selected_indices=selected_indices,
+            record=True,
+        )
 
     def _on_assets_failed(self, error: str) -> None:
         if self._shutting_down:
@@ -1820,24 +3296,28 @@ class MuscriptorResultWidget(QFrame):
         next_ids = frozenset(id(player) for player in active)
         if next_ids == self._active_player_ids:
             return
-        for player in self._all_playback_players():
-            if id(player) not in next_ids:
-                player.pause()
-        if self._playing and len(active) > 1:
-            self._startup_sync_pending = True
-        for player in active:
-            if id(player) in self._active_player_ids:
-                continue
-            player.setPosition(self._position_ms)
-            if self._playing:
-                player.play()
+        if self._transport_seek_pending_ms is not None:
+            self._active_player_ids = next_ids
+            return
         self._active_player_ids = next_ids
+        if self._playing:
+            master_position = active[0].position() if active else self._position_ms
+            self.seek(master_position / 1000.0)
 
     def _toggle_playback(self) -> None:
         if self._original_normal is None or self._midi_normal is None:
             raise RuntimeError("MuScriptor playable audio is not ready")
         self._apply_mix()
-        active_players = self._active_playback_players()
+        if self._transport_seek_pending_ms is not None:
+            if self._playing:
+                self.pause()
+            else:
+                self._playing = True
+                self._transport_seek_resume = True
+                self._schedule_transport_seek_commit()
+                self.playing_changed.emit(True)
+                self._update_play_label()
+            return
         if self._playing:
             self.pause()
         else:
@@ -1852,12 +3332,13 @@ class MuscriptorResultWidget(QFrame):
             ):
                 self._position_ms = 0
             self._playing = True
-            self._startup_sync_pending = len(active_players) > 1
+            self._startup_sync_pending = False
             self._last_drift_check_position_ms = self._position_ms
             self._playback_clock.reset(self._position_ms)
-            for player in active_players:
-                player.setPosition(self._position_ms)
-                player.play()
+            self._transport_seek_pending_ms = self._position_ms
+            self._transport_seek_resume = True
+            self._transport_seek_pause_only = False
+            self._schedule_transport_seek_commit()
             self.playing_changed.emit(True)
         self._update_play_label()
 
@@ -1876,7 +3357,7 @@ class MuscriptorResultWidget(QFrame):
         self.set_bpm_context(bpm, bpm)
 
     def set_bpm_context(self, source_bpm: float, target_bpm: float) -> None:
-        """Set the detected source tempo and independently editable target tempo."""
+        """Set source/project BPM and expose their real playback-rate ratio."""
 
         if self._bpm_user_overridden:
             return
@@ -1903,44 +3384,71 @@ class MuscriptorResultWidget(QFrame):
         self.bpm_spin.show()
         self.speed_label.show()
         self.speed_spin.show()
+        self.roll.set_grid_seconds(self._editor_grid_seconds())
         self._apply_result_playback_rate()
 
     def _result_playback_rate(self) -> float:
-        if self._detected_bpm is None:
-            return 1.0
-        return self.bpm_spin.value() / self._detected_bpm
+        if self._detected_bpm is not None:
+            source_bpm = float(self._detected_bpm)
+            target_bpm = float(self.bpm_spin.value())
+            if (
+                not math.isfinite(source_bpm)
+                or source_bpm <= 0.0
+                or not math.isfinite(target_bpm)
+                or target_bpm <= 0.0
+            ):
+                raise RuntimeError(
+                    "Invalid result BPM context: "
+                    f"source_bpm={source_bpm!r}, target_bpm={target_bpm!r}"
+                )
+            project_rate = target_bpm / source_bpm
+            if not math.isfinite(project_rate) or project_rate <= 0.0:
+                raise RuntimeError(
+                    f"Invalid project playback rate: {project_rate!r}"
+                )
+            return project_rate
+        speed = float(self.speed_spin.value())
+        if not math.isfinite(speed) or speed <= 0.0:
+            raise RuntimeError(f"Invalid result playback rate: {speed!r}")
+        return speed
 
     def _on_result_bpm_changed(self, _bpm: float) -> None:
         if self._detected_bpm is None:
             return
         self._last_tempo_editor = "bpm"
         self._bpm_user_overridden = True
-        self._sync_speed_from_bpm()
+        speed_blocker = QSignalBlocker(self.speed_spin)
+        self.speed_spin.setValue(float(self.bpm_spin.value()) / float(self._detected_bpm))
+        del speed_blocker
+        self.roll.set_grid_seconds(self._editor_grid_seconds())
         self._apply_result_playback_rate()
 
     def _on_result_speed_changed(self, speed: float) -> None:
         if self._detected_bpm is None:
             return
         self._last_tempo_editor = "speed"
+        if not math.isfinite(float(speed)) or float(speed) <= 0.0:
+            raise ValueError(f"Invalid playback speed: {speed!r}")
+        target_bpm = float(self._detected_bpm) * float(speed)
+        if not MIN_MIDI_BPM <= target_bpm <= MAX_MIDI_BPM:
+            raise ValueError(
+                f"Playback speed maps outside the supported BPM range: "
+                f"speed={speed!r}, target_bpm={target_bpm!r}"
+            )
         self._bpm_user_overridden = True
         bpm_blocker = QSignalBlocker(self.bpm_spin)
-        self.bpm_spin.setValue(self._detected_bpm * float(speed))
+        self.bpm_spin.setValue(target_bpm)
         del bpm_blocker
-        self._sync_speed_from_bpm()
+        speed_blocker = QSignalBlocker(self.speed_spin)
+        self.speed_spin.setValue(float(self.bpm_spin.value()) / float(self._detected_bpm))
+        del speed_blocker
+        self.roll.set_grid_seconds(self._editor_grid_seconds())
         self._apply_result_playback_rate()
 
-    def _sync_speed_from_bpm(self) -> None:
-        speed_blocker = QSignalBlocker(self.speed_spin)
-        self.speed_spin.setValue(self._result_playback_rate())
-        del speed_blocker
-
     def _commit_result_tempo_edit(self) -> float:
-        """Commit only the tempo control edited most recently."""
+        """Commit the project BPM used by both export and linked audition."""
 
-        if self._last_tempo_editor == "speed":
-            self.speed_spin.interpretText()
-        else:
-            self.bpm_spin.interpretText()
+        self.bpm_spin.interpretText()
         target_bpm = float(self.bpm_spin.value())
         if not math.isfinite(target_bpm) or not MIN_MIDI_BPM <= target_bpm <= MAX_MIDI_BPM:
             raise RuntimeError(f"Invalid result BPM at download time: {target_bpm!r}")
@@ -1957,19 +3465,29 @@ class MuscriptorResultWidget(QFrame):
         if self._playing:
             for player in active_players[1:]:
                 if abs(player.position() - master_position) > 20:
-                    player.setPosition(master_position)
+                    self.seek(master_position / 1000.0)
+                    break
             self._position_ms = master_position
             self._playback_clock.reset(master_position)
 
     def pause(self) -> None:
         """Pause this workbench without changing its current play position."""
         was_playing = self._playing
-        for player in self._all_playback_players():
-            player.pause()
+        self._transport_seek_resume = False
+        if was_playing and self._transport_seek_pending_ms is None:
+            active_players = self._active_playback_players()
+            if active_players:
+                self._position_ms = max(0, active_players[0].position())
+            self._transport_seek_pending_ms = self._position_ms
+        if self._transport_seek_pending_ms is not None:
+            self._transport_seek_pause_only = True
         self._playing = False
         self._startup_sync_pending = False
         self._playback_clock.reset(self._position_ms)
-        self._schedule_deferred_assets()
+        if self._transport_seek_pending_ms is not None:
+            self._schedule_transport_seek_commit()
+        else:
+            self._schedule_deferred_assets()
         self._update_play_label()
         if was_playing:
             self.playing_changed.emit(False)
@@ -2006,25 +3524,34 @@ class MuscriptorResultWidget(QFrame):
         self._last_drift_check_position_ms = self._position_ms
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
-        for player in self._all_playback_players():
-            player.setPosition(self._position_ms)
         self.roll.set_position(position)
         self.clock_label.setText(_format_seconds(position))
         self.playback_slider.setValue(self._position_ms)
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=True)
+        if not self._all_playback_players():
+            return
+
+        self._transport_seek_pending_ms = self._position_ms
+        self._transport_seek_pause_only = False
+        if self._playing:
+            self._transport_seek_resume = True
+            self._startup_sync_pending = False
+        self._schedule_transport_seek_commit()
 
     def _schedule_deferred_assets(self) -> None:
         if self._deferred_apply_scheduled or self._shutting_down:
             return
         self._deferred_apply_scheduled = True
-        QTimer.singleShot(0, self._try_apply_deferred_assets)
+        self._deferred_assets_timer.start(0)
 
     def _try_apply_deferred_assets(self) -> None:
         if not self._deferred_apply_scheduled:
             return
         if self._shutting_down:
             self._deferred_apply_scheduled = False
+            return
+        if self._transport_seek_pending_ms is not None:
             return
         if self._playing or any(
             player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
@@ -2066,7 +3593,11 @@ class MuscriptorResultWidget(QFrame):
     def _on_follow_toggled(self, checked: bool) -> None:
         if checked:
             self._follow_roll_to_position(
-                self._playback_clock.sample(self._position_ms) / 1000.0,
+                self._playback_clock.sample(
+                    self._position_ms,
+                    playback_rate=self._result_playback_rate(),
+                )
+                / 1000.0,
                 allow_backward=True,
             )
         else:
@@ -2095,6 +3626,7 @@ class MuscriptorResultWidget(QFrame):
             ),
         )
         self.roll.set_pixels_per_second(pixels_per_second)
+        self._sync_roll_zoom_control()
         if following:
             self._follow_roll_to_position(anchor_time, allow_backward=True)
         else:
@@ -2102,15 +3634,36 @@ class MuscriptorResultWidget(QFrame):
             target = min(scrollbar.maximum(), max(scrollbar.minimum(), target))
             scrollbar.setValue(round(target))
 
+    def _on_roll_zoom_value_changed(self, ratio: float) -> None:
+        if self._syncing_roll_zoom_control:
+            return
+        desired_pixels_per_second = _ROLL_BASE_PIXELS_PER_SECOND * float(ratio)
+        factor = desired_pixels_per_second / self.roll.pixels_per_second
+        self._on_roll_zoom_requested(
+            factor,
+            self.roll_scroll.viewport().width() / 2.0,
+        )
+
+    def _sync_roll_zoom_control(self) -> None:
+        self._syncing_roll_zoom_control = True
+        try:
+            blocker = QSignalBlocker(self.roll_zoom_spin)
+            self.roll_zoom_spin.setValue(self.roll.pixels_per_second / _ROLL_BASE_PIXELS_PER_SECOND)
+            del blocker
+        finally:
+            self._syncing_roll_zoom_control = False
+
     def _finish_playback_at(self, position_ms: int) -> None:
         terminal_ms = max(0, int(position_ms))
         was_playing = self._playing
-        for player in self._all_playback_players():
-            player.pause()
         self._playing = False
         self._playback_finished = True
         self._startup_sync_pending = False
         self._position_ms = terminal_ms
+        self._transport_seek_pending_ms = terminal_ms
+        self._transport_seek_resume = False
+        self._transport_seek_pause_only = True
+        self._schedule_transport_seek_commit()
         self._playback_clock.reset(terminal_ms)
         position = terminal_ms / 1000.0
         self.roll.set_position(position)
@@ -2125,7 +3678,7 @@ class MuscriptorResultWidget(QFrame):
     def _tick(self) -> None:
         if not self._finalizing:
             self._update_stream_progress()
-        if self._transport_scrubbing:
+        if self._transport_scrubbing or self._transport_seek_pending_ms is not None:
             return
         if not self._playing or self._midi_normal is None:
             return
@@ -2139,11 +3692,6 @@ class MuscriptorResultWidget(QFrame):
         # Windows multimedia backends briefly report an older clock sample; feeding
         # that value into follow-scroll makes the entire piano roll shake left/right.
         self._position_ms = max(self._position_ms, max(0, master.position()))
-        if self._position_ms - self._last_drift_check_position_ms >= 500:
-            for player in self._active_playback_players()[1:]:
-                if abs(player.position() - self._position_ms) > 80:
-                    player.setPosition(self._position_ms)
-            self._last_drift_check_position_ms = self._position_ms
         authoritative_position = self._position_ms / 1000.0
         if self._preview_duration > 0 and authoritative_position >= self._preview_duration:
             self._finish_playback_at(int(self._preview_duration * 1000))
@@ -2155,7 +3703,22 @@ class MuscriptorResultWidget(QFrame):
             )
             self._schedule_deferred_assets()
             return
-        display_ms = self._playback_clock.sample(self._position_ms)
+        if master.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia:
+            terminal_ms = max(self._position_ms, max(0, master.duration()))
+            self._finish_playback_at(terminal_ms)
+            if self._preview_duration > 0:
+                self._schedule_deferred_assets()
+            return
+        if self._position_ms - self._last_drift_check_position_ms >= 500:
+            for player in self._active_playback_players()[1:]:
+                if abs(player.position() - self._position_ms) > 80:
+                    self.seek(self._position_ms / 1000.0)
+                    return
+            self._last_drift_check_position_ms = self._position_ms
+        display_ms = self._playback_clock.sample(
+            self._position_ms,
+            playback_rate=self._result_playback_rate(),
+        )
         if self._preview_duration > 0:
             display_ms = min(display_ms, self._preview_duration * 1000.0)
         position = display_ms / 1000.0
@@ -2164,11 +3727,6 @@ class MuscriptorResultWidget(QFrame):
         self.playback_slider.setValue(min(self._position_ms, self.playback_slider.maximum()))
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=False)
-        if master.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia:
-            terminal_ms = max(self._position_ms, max(0, master.duration()))
-            self._finish_playback_at(terminal_ms)
-            if self._preview_duration > 0:
-                self._schedule_deferred_assets()
 
     def _update_stream_progress(self) -> None:
         if not self._progress_estimator.active or self._progress_total <= 0:
@@ -2308,6 +3866,7 @@ class MuscriptorResultWidget(QFrame):
         for instrument in self._detected:
             if instrument not in ordered:
                 ordered.append(instrument)
+        self.roll.set_instrument_order(ordered)
         for index, instrument in enumerate(ordered):
             detected = instrument in self._detected
             row = _InstrumentRow(
@@ -2326,9 +3885,13 @@ class MuscriptorResultWidget(QFrame):
         target_bpm: float | None = None
         if kind == "midi":
             source = Path(self._midi_path)
-            filter_text = "MIDI (*.mid)"
             target_bpm = self._commit_result_tempo_edit()
-            suggested_name = f"{source.stem}_{target_bpm:.1f}BPM{source.suffix}"
+            edited = bool(self._original_edit_notes) and (
+                self._edited_notes != self._original_edit_notes
+            )
+            edit_suffix = "_edited" if edited else ""
+            filter_text = "MIDI (*.mid)"
+            suggested_name = f"{source.stem}{edit_suffix}_{target_bpm:.1f}BPM{source.suffix}"
         elif kind == "transcription" and self._assets is not None:
             source = self._assets.transcription_wav
             filter_text = "WAV (*.wav)"
@@ -2349,15 +3912,45 @@ class MuscriptorResultWidget(QFrame):
             if kind == "midi":
                 if target_bpm is None:
                     raise RuntimeError("Result BPM was not committed before MIDI download")
-                published_path = _export_midi_with_bpm(
-                    source,
-                    destination,
-                    target_bpm,
-                    notation_compatible=True,
-                )
+                try:
+                    if edited:
+                        if self._detected_bpm is None:
+                            raise RuntimeError(
+                                "Detected/reference BPM is unavailable for edited MIDI export"
+                            )
+                        published_path = export_edited_midi(
+                            source,
+                            destination,
+                            self._edited_notes,
+                            reference_bpm=self._detected_bpm,
+                            target_bpm=target_bpm,
+                        )
+                    else:
+                        if self._detected_bpm is None:
+                            raise RuntimeError(
+                                "Detected/reference BPM is unavailable for MIDI export"
+                            )
+                        published_path = _export_midi_at_project_speed(
+                            source,
+                            destination,
+                            self._detected_bpm,
+                            target_bpm,
+                        )
+                except Exception as exc:
+                    self.playback_status_label.setText(
+                        t(
+                            "muscriptor_result.editor_export_failed",
+                            error=_compact_editor_error(exc),
+                        )
+                    )
+                    raise
                 self.playback_status_label.setText(
                     t(
-                        "muscriptor_result.midi_saved",
+                        (
+                            "muscriptor_result.edited_midi_saved"
+                            if edited
+                            else "muscriptor_result.midi_saved"
+                        ),
                         bpm=f"{target_bpm:.1f}",
                         path=str(published_path),
                     )
@@ -2392,11 +3985,29 @@ class MuscriptorResultWidget(QFrame):
         self.bpm_spin.setToolTip(t("muscriptor_result.export_bpm_tooltip"))
         self.speed_label.setText(t("muscriptor_result.playback_speed_label"))
         self.speed_spin.setToolTip(t("muscriptor_result.playback_speed_tooltip"))
+        self.edit_toggle.setText(t("muscriptor_result.editor_toggle"))
+        self.edit_toggle.setToolTip(t("muscriptor_result.editor_help"))
+        self.edit_add_button.setText(t("muscriptor_result.editor_add"))
+        self.edit_delete_button.setText(t("muscriptor_result.editor_delete"))
+        self.edit_undo_button.setText(t("muscriptor_result.editor_undo"))
+        self.edit_redo_button.setText(t("muscriptor_result.editor_redo"))
+        self.edit_reset_button.setText(t("muscriptor_result.editor_reset"))
+        self.edit_select_all_button.setText(t("muscriptor_result.editor_select_all"))
+        self.edit_cut_button.setText(t("muscriptor_result.editor_cut"))
+        self.edit_copy_button.setText(t("muscriptor_result.editor_copy"))
+        self.edit_paste_button.setText(t("muscriptor_result.editor_paste"))
+        self.edit_duplicate_button.setText(t("muscriptor_result.editor_duplicate"))
+        self.edit_quantize_button.setText(t("muscriptor_result.editor_quantize"))
+        self.edit_instrument_label.setText(t("muscriptor_result.editor_instrument"))
+        self.edit_velocity_label.setText(t("muscriptor_result.editor_velocity"))
+        self.roll_zoom_label.setText(t("muscriptor_result.editor_view_zoom"))
+        self.roll_zoom_spin.setToolTip(t("muscriptor_result.editor_view_zoom_tooltip"))
+        self.result_splitter.handle(1).setToolTip(t("muscriptor_result.editor_resize_hint"))
         self.original_label.setText(t("muscriptor_result.original"))
         self.stereo_checkbox.setText(t("muscriptor_result.stereo"))
         self.instruments_title.setText(t("muscriptor_result.instruments"))
         self.download_button.setText(t("muscriptor_result.download"))
-        self.download_midi_action.setText(t("muscriptor_result.download_midi"))
+        self.download_midi_action.setText(t("muscriptor_result.export_edited_midi"))
         self.download_transcription_action.setText(t("muscriptor_result.download_transcription"))
         self.download_stereo_action.setText(t("muscriptor_result.download_stereo"))
         self.another_button.setText(
@@ -2406,34 +4017,37 @@ class MuscriptorResultWidget(QFrame):
         )
         for row in self._instrument_rows.values():
             row.update_translations()
+        self._sync_editor_controls()
 
     def shutdown(self) -> None:
         if self._shutting_down:
             return
         self._shutting_down = True
         self._preview_pending = None
+        self._edit_asset_pending = None
         self._deferred_preview = None
         self._deferred_final_assets = None
+        self._deferred_editor_assets = None
+        self._deferred_apply_scheduled = False
         self.timer.stop()
-        for player in self._all_playback_players():
-            output = player.audioOutput()
-            if output is not None:
-                output.setMuted(True)
-            player.deleteLater()
-            if output is not None:
-                output.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        self._players.clear()
-        self._active_player_ids = frozenset()
-        self._startup_sync_pending = False
-        self._normal_sources.clear()
-        self._right_sources.clear()
-        self._normal_players.clear()
-        self._right_players.clear()
-        self._midi_normal = None
-        self._midi_right = None
-        self._original_normal = None
-        self._original_left = None
+        self._edit_asset_debounce.stop()
+        self._transport_commit_timer.stop()
+        self._after_transport_timer.stop()
+        self._deferred_assets_timer.stop()
+        self._retired_media_timer.stop()
+        self._playing = False
+        self._transport_scrubbing = False
+        self._transport_seek_pending_ms = None
+        self._transport_seek_resume = False
+        self._transport_seek_pause_only = False
+        self._transport_seek_commit_scheduled = False
+        self._transport_seek_commit_players = ()
+        self._transport_seek_commit_index = 0
+        self._transport_seek_commit_phase = ""
+
+        # QThread objects must finish before their parent and the media objects
+        # they publish into are destroyed. Waiting after media teardown leaves
+        # queued worker signals targeting a half-destroyed workbench.
         preview_worker = self._preview_worker
         self._preview_worker = None
         if preview_worker is not None and preview_worker.isRunning():
@@ -2447,6 +4061,26 @@ class MuscriptorResultWidget(QFrame):
             # not interruptible inside huggingface_hub, so a timed wait could
             # destroy a still-running worker and crash Qt during result reset.
             asset_worker.wait()
+        edit_asset_worker = self._edit_asset_worker
+        self._edit_asset_worker = None
+        if edit_asset_worker is not None and edit_asset_worker.isRunning():
+            edit_asset_worker.cancel()
+            edit_asset_worker.wait()
+
+        active_media = [(player, player.audioOutput()) for player in self._all_playback_players()]
+        self._players.clear()
+        self._retired_media.extend(active_media)
+        self._release_retired_media()
+        self._active_player_ids = frozenset()
+        self._startup_sync_pending = False
+        self._normal_sources.clear()
+        self._right_sources.clear()
+        self._normal_players.clear()
+        self._right_players.clear()
+        self._midi_normal = None
+        self._midi_right = None
+        self._original_normal = None
+        self._original_left = None
         if self._preview_root.exists():
             try:
                 shutil.rmtree(self._preview_root)
@@ -2454,5 +4088,14 @@ class MuscriptorResultWidget(QFrame):
                 logger.warning(
                     "Unable to remove MuScriptor preview directory %s: %s",
                     self._preview_root,
+                    exc,
+                )
+        if self._edit_asset_root.exists():
+            try:
+                shutil.rmtree(self._edit_asset_root)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove edited MIDI audio directory %s: %s",
+                    self._edit_asset_root,
                     exc,
                 )

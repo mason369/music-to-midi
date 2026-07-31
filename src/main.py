@@ -17,7 +17,12 @@ from pathlib import Path
 
 from src import __version__
 from src.utils.midi_output import validate_midi_output
-from src.utils.runtime_paths import bootstrap_runtime_environment, get_logs_dir
+from src.utils.runtime_paths import (
+    activate_audio_separator_runtime,
+    bootstrap_runtime_environment,
+    get_bundle_roots,
+    get_logs_dir,
+)
 from src.utils.warnings_filter import ensure_standard_streams
 
 # 在导入其他模块之前抑制第三方库的警告
@@ -49,8 +54,59 @@ from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment
 
 
+_BUNDLED_VC_RUNTIME_HANDLES: list[object] = []
+
+
+def _preload_bundled_windows_vc_runtime() -> None:
+    """Load the bundle's coherent VC runtime before Qt can load its older copies."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    if _BUNDLED_VC_RUNTIME_HANDLES:
+        return
+
+    import ctypes
+
+    bundle_roots = [root for root in get_bundle_roots() if root.is_dir()]
+    runtime_root = next(
+        (
+            root
+            for root in bundle_roots
+            if all(
+                (root / dll_name).is_file()
+                for dll_name in (
+                    "msvcp140.dll",
+                    "vcruntime140.dll",
+                    "vcruntime140_1.dll",
+                )
+            )
+        ),
+        None,
+    )
+    if runtime_root is None:
+        searched = ", ".join(str(root) for root in bundle_roots) or "<none>"
+        raise RuntimeError(
+            "Portable bundle is missing its required Visual C++ runtime DLL set "
+            f"(msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll); searched: {searched}"
+        )
+
+    for dll_name in (
+        "msvcp140.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+    ):
+        dll_path = runtime_root / dll_name
+        try:
+            handle = ctypes.WinDLL(str(dll_path))
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to load required bundled Visual C++ runtime: {dll_path}"
+            ) from exc
+        _BUNDLED_VC_RUNTIME_HANDLES.append(handle)
+
+
 def _prepare_torch_runtime_before_pyqt() -> None:
     """Prepare torch DLLs before importing PyQt on GUI startup."""
+    _preload_bundled_windows_vc_runtime()
     # 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
     # 必须在任何 import torch 之前执行
     import platform as _plat
@@ -111,6 +167,10 @@ def _prepare_torch_runtime_before_pyqt() -> None:
             )
             torchaudio.set_audio_backend("soundfile")
     except Exception as e:
+        if getattr(sys, "frozen", False):
+            raise RuntimeError(
+                "Portable torch/torchaudio runtime failed before PyQt startup"
+            ) from e
         logging.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
 
 
@@ -159,6 +219,36 @@ def _run_self_test(
     except Exception as e:
         logger.error(t("startup.portable_self_test_exception", error=e), exc_info=True)
         print(f"SELF-TEST FAILED: {e}")
+        return 1
+
+
+def _run_gui_runtime_self_test() -> int:
+    """Validate the frozen GUI/Qt/ONNX Runtime load order used by separation modes."""
+    setup_chinese_environment()
+    logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
+    try:
+        _prepare_torch_runtime_before_pyqt()
+        from PyQt6.QtWidgets import QApplication  # noqa: F401
+
+        activate_audio_separator_runtime()
+        import onnxruntime as ort
+        from audio_separator.separator import Separator  # noqa: F401
+
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" not in providers:
+            raise RuntimeError(
+                "Packaged ONNX Runtime did not expose CUDAExecutionProvider: "
+                + ", ".join(providers)
+            )
+        logger.info(
+            "GUI runtime self-test passed: Qt loaded before ONNX Runtime; providers=%s",
+            providers,
+        )
+        print("SELF-TEST OK: GUI + Qt + ONNX Runtime CUDA load order")
+        return 0
+    except Exception as exc:
+        logger.error("GUI runtime self-test failed: %s", exc, exc_info=True)
+        print(f"SELF-TEST FAILED: GUI runtime load order: {exc}")
         return 1
 
 
@@ -292,13 +382,15 @@ def main():
         from src.i18n.translator import t
 
         print(
-            f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] [--self-test-miros]\n"
+            f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] "
+            "[--self-test-miros] [--self-test-gui-runtime]\n"
             "\n"
             f"{t('cli.options')}:\n"
             f"  -h, --help          {t('cli.help')}\n"
             f"  --self-test         {t('cli.self_test')}\n"
             f"  --self-test-no-load {t('cli.self_test_no_load')}\n"
             f"  --self-test-miros   {t('cli.self_test_miros')}\n"
+            "  --self-test-gui-runtime  Validate Qt + ONNX Runtime CUDA load order\n"
             f"  --miros-worker      {t('cli.miros_worker')}"
         )
         sys.exit(0)
@@ -322,10 +414,20 @@ def main():
             )
         )
 
-    _prepare_torch_runtime_before_pyqt()
+    if "--self-test-gui-runtime" in sys.argv:
+        sys.exit(_run_gui_runtime_self_test())
 
     # 设置日志
     logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
+
+    try:
+        _prepare_torch_runtime_before_pyqt()
+    except Exception:
+        logger.critical(
+            "Required portable runtime failed before PyQt startup",
+            exc_info=True,
+        )
+        raise
 
     # 设置所有 src.* 模块的日志级别为 DEBUG，这样子模块也会输出详细日志
     src_logger = logging.getLogger("src")

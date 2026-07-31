@@ -5,6 +5,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PortableReleaseContractTests(unittest.TestCase):
+    def test_pyinstaller_spec_removes_only_conflicting_pyqt_vc_runtime_copies(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("_remove_conflicting_pyqt_vc_runtime_binaries", spec)
+        self.assertIn("_require_root_vc_runtime_binaries", spec)
+        self.assertIn('"pyqt6/qt6/bin/msvcp140.dll"', spec)
+        self.assertIn('"pyqt6/qt6/bin/vcruntime140.dll"', spec)
+        self.assertIn('"pyqt6/qt6/bin/vcruntime140_1.dll"', spec)
+        self.assertNotIn('"pyqt6/qt6/bin/msvcp140_1.dll"', spec)
+        self.assertNotIn('"pyqt6/qt6/bin/msvcp140_2.dll"', spec)
+
+    def test_portable_build_preloads_coherent_vc_runtime_in_pyinstaller_children(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+        bootstrap = REPO_ROOT / "tools" / "pyinstaller_bootstrap" / "sitecustomize.py"
+
+        self.assertTrue(bootstrap.is_file())
+        bootstrap_source = bootstrap.read_text(encoding="utf-8")
+        self.assertIn("MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR", bootstrap_source)
+        self.assertIn("ctypes.WinDLL", bootstrap_source)
+        self.assertIn("os._exit(86)", bootstrap_source)
+        self.assertIn("tools\\pyinstaller_bootstrap", script)
+        self.assertIn("MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR", script)
+        self.assertIn("$env:PYTHONPATH", script)
+
     def test_torch_openmp_repair_helper_exists(self):
         helper = REPO_ROOT / "tools" / "repair_torch_openmp.py"
 

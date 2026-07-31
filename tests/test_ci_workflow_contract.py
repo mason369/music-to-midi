@@ -48,9 +48,10 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         self.assertIn(
             '"muscriptor @ https://github.com/muscriptor/muscriptor/archive/'
-            '302343e8992bdfc619f77f1988168374ed5d675d.zip" --no-deps',
+            '991ceaa04800484e617484ba065ebec802eebf53.zip" --no-deps',
             workflow,
         )
+        self.assertIn("python patch_muscriptor_runtime.py", workflow)
 
     def test_build_workflow_installs_audio_separator_runtime_pins(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
