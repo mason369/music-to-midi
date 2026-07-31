@@ -26,6 +26,8 @@ class MainSelfTestTests(unittest.TestCase):
 
             handles = [object(), object(), object()]
             with patch.object(sys, "frozen", True, create=True), patch.object(
+                main_module, "os", types.SimpleNamespace(name="nt")
+            ), patch.object(
                 main_module, "get_bundle_roots", return_value=[root]
             ), patch.object(
                 main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
@@ -45,6 +47,8 @@ class MainSelfTestTests(unittest.TestCase):
             root = Path(tmp)
             (root / "msvcp140.dll").write_bytes(b"dll")
             with patch.object(sys, "frozen", True, create=True), patch.object(
+                main_module, "os", types.SimpleNamespace(name="nt")
+            ), patch.object(
                 main_module, "get_bundle_roots", return_value=[root]
             ), patch.object(
                 main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
