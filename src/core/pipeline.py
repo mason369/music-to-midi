@@ -375,20 +375,21 @@ class MusicToMidiPipeline:
 
         detected_bpm = float(beat_info.bpm)
         if self.config.custom_bpm is not None:
-            target_bpm = float(self.config.custom_bpm)
+            project_bpm = float(self.config.custom_bpm)
             logger.info(
-                "原曲速度检测完成: %.1f BPM；用户目标速度: %.1f BPM；实际倍率: %.3fx",
+                "原曲速度检测完成: %.1f BPM；用户工程 BPM 覆盖值: %.1f BPM；"
+                "导出 MIDI 将保留参考音乐 tick 并按工程 BPM 真实变速，"
+                "结果页原音/MIDI 联动试听使用相同比率",
                 detected_bpm,
-                target_bpm,
-                target_bpm / detected_bpm,
+                project_bpm,
             )
             if progress_callback is not None:
                 progress_callback(
                     1.0,
-                    self._pt("progress.custom_bpm", bpm=f"{target_bpm:.1f}"),
+                    self._pt("progress.custom_bpm", bpm=f"{project_bpm:.1f}"),
                 )
             return BeatInfo(
-                bpm=target_bpm,
+                bpm=project_bpm,
                 beat_times=list(beat_info.beat_times),
                 downbeats=beat_info.downbeats,
                 time_signature=beat_info.time_signature,
@@ -496,29 +497,37 @@ class MusicToMidiPipeline:
         midi_path: str,
         tempo_bpm: float,
         *,
+        time_signature: Tuple[int, int],
         force: bool = False,
         tempo_map: Optional[List[Tuple[float, float]]] = None,
         source_bpm: Optional[float] = None,
     ) -> str:
-        """Add detected tempo without applying any note-level post-processing.
+        """Write detected tempo metadata or apply a true project-speed override.
 
         YourMT3 and MIROS encode absolute seconds against the implicit Standard
         MIDI default tempo (120 BPM) but do not emit a ``set_tempo`` message.
         MuScriptor and the piano backends (e.g. TransKun ``writeMidi``) do emit
         a ``set_tempo``, but it is a fixed placeholder (120 BPM) rather than a
         detected value, so product paths pass ``force=True`` to replace it.
-        With no ``source_bpm``, insert the detected tempo while recomputing delta
-        ticks to preserve absolute seconds. With ``source_bpm``, encode ticks on
-        the detected source-tempo grid but write ``tempo_bpm`` as the target
-        tempo, so the MIDI's real duration changes by
-        ``source_bpm / tempo_bpm``. Pitch, program, velocity, controller,
-        pitch-wheel, and note messages are copied unchanged.
+        Every backend event is first resolved to its absolute playback second
+        using the source MIDI tempo map and expressed on the detected/reference
+        BPM tick grid. With an explicit manual BPM override, those musical ticks
+        are retained and the requested tempo is written, so playback duration
+        scales by ``source_bpm / tempo_bpm``. Without an override, the detected
+        tempo is written while event seconds stay synchronized to the source.
+        Pitch, program, velocity, controller, pitch-wheel, and note payloads are
+        copied unchanged; no note quantization or filtering is performed.
+
+        The detected meter is written as an explicit ``time_signature`` event
+        in the SMF conductor track (or every independent type-2 sequence).
+        This completes the portable tempo-map metadata without snapping any
+        performance event to a rhythmic grid.
 
         ``tempo_map`` 为 [(秒, BPM), ...] 变速点（首点 0 秒）时按分段写入多个
         ``set_tempo``；为空或单点时写入单一 tempo（原行为）。
         """
         from bisect import bisect_right
-        from math import isfinite
+        from math import isclose, isfinite
 
         from mido import MetaMessage, MidiFile, MidiTrack, bpm2tempo, second2tick, tick2second
 
@@ -529,17 +538,61 @@ class MusicToMidiPipeline:
             for track in source.tracks
             for message in track
         )
+        from src.core.midi_tempo import write_midi_time_signature_preserving_ticks
+
         if has_tempo and not force:
-            return str(path)
+            return str(
+                write_midi_time_signature_preserving_ticks(
+                    path,
+                    path,
+                    time_signature,
+                    label="MIDI conductor metadata",
+                )
+            )
 
         bpm = float(tempo_bpm)
         if not isfinite(bpm) or bpm <= 0.0:
             raise RuntimeError(f"检测到无效 MIDI 速度: {tempo_bpm!r}")
-        timing_bpm = bpm if source_bpm is None else float(source_bpm)
-        if not isfinite(timing_bpm) or timing_bpm <= 0.0:
+        detected_bpm = bpm if source_bpm is None else float(source_bpm)
+        if not isfinite(detected_bpm) or detected_bpm <= 0.0:
             raise RuntimeError(f"检测到无效原曲 MIDI 速度: {source_bpm!r}")
         if source_bpm is not None and tempo_map:
             raise RuntimeError("自定义目标 BPM 不能同时写入自动变速 tempo map")
+
+        if not tempo_map:
+            from src.core.midi_tempo import (
+                rewrite_midi_tempo_for_project_speed,
+                rewrite_midi_tempo_preserving_seconds,
+            )
+
+            if source_bpm is not None and not isclose(
+                detected_bpm,
+                bpm,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                rewrite_midi_tempo_for_project_speed(
+                    path,
+                    path,
+                    detected_bpm,
+                    bpm,
+                    label="Project-speed backend MIDI",
+                )
+            else:
+                rewrite_midi_tempo_preserving_seconds(
+                    path,
+                    path,
+                    bpm,
+                    label="Tempo-normalized backend MIDI",
+                )
+            return str(
+                write_midi_time_signature_preserving_ticks(
+                    path,
+                    path,
+                    time_signature,
+                    label="Tempo-normalized MIDI conductor metadata",
+                )
+            )
 
         # 规整变速点：按时间升序、首点 0 秒、BPM 有效、相邻同值合并
         sections: List[Tuple[float, float]] = []
@@ -551,8 +604,6 @@ class MusicToMidiPipeline:
                 if sections and abs(sec_bpm - sections[-1][1]) < 1e-9:
                     continue
                 sections.append((sec, sec_bpm))
-        if not sections:
-            sections = [(0.0, timing_bpm)]
         if sections[0][0] > 0.0:
             sections.insert(0, (0.0, sections[0][1]))
 
@@ -621,13 +672,8 @@ class MusicToMidiPipeline:
                 absolute_seconds = source_tick_to_seconds(absolute_tick)
                 events.append((seconds_to_target_tick(absolute_seconds), 1, message.copy(time=0)))
             if track_index == 0:
-                if source_bpm is not None:
-                    events.append((0, 0, MetaMessage("set_tempo", tempo=bpm2tempo(bpm), time=0)))
-                else:
-                    for _sec, start_tick, tempo_us in section_starts:
-                        events.append(
-                            (start_tick, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0))
-                        )
+                for _sec, start_tick, tempo_us in section_starts:
+                    events.append((start_tick, 0, MetaMessage("set_tempo", tempo=tempo_us, time=0)))
             events.sort(key=lambda event: (event[0], event[1]))
 
             target_track = MidiTrack()
@@ -647,7 +693,14 @@ class MusicToMidiPipeline:
             )
         finally:
             remove_temporary_midi(temporary_path)
-        return str(path)
+        return str(
+            write_midi_time_signature_preserving_ticks(
+                path,
+                path,
+                time_signature,
+                label="Tempo-map MIDI conductor metadata",
+            )
+        )
 
     def _merge_stem_midis(
         self,
@@ -871,6 +924,7 @@ class MusicToMidiPipeline:
                         force=True,
                         tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                         source_bpm=beat_info.source_bpm,
+                        time_signature=beat_info.time_signature,
                     )
                 except InterruptedError:
                     raise
@@ -1004,14 +1058,15 @@ class MusicToMidiPipeline:
             progress_callback=_piano_cb,
         )
         # 钢琴后端 writer 只写入占位 tempo（如 TransKun 固定 120 BPM），自身不做
-        # BPM 检测；必须用检测到的歌曲 BPM 强制替换。归一化按绝对秒重编码 ticks，
-        # 音符时间与 CC64 踏板等消息保持不变。
+        # BPM 检测。自动 BPM 先按绝对秒建立检测 BPM 的参考 tick；手动 BPM 再保持
+        # 该参考 tick 并改写 tempo，因此音符、CC64 等消息会按目标/参考比例真实变速。
         midi_path = self._normalize_midi_tempo_metadata(
             midi_path,
             tempo,
             force=True,
             tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
             source_bpm=beat_info.source_bpm,
+            time_signature=beat_info.time_signature,
         )
 
         self._check_cancelled()
@@ -1159,6 +1214,7 @@ class MusicToMidiPipeline:
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                 source_bpm=beat_info.source_bpm,
+                time_signature=beat_info.time_signature,
             )
         except InterruptedError:
             raise
@@ -1233,6 +1289,7 @@ class MusicToMidiPipeline:
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                 source_bpm=beat_info.source_bpm,
+                time_signature=beat_info.time_signature,
             )
         except InterruptedError:
             raise
@@ -1313,6 +1370,7 @@ class MusicToMidiPipeline:
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                 source_bpm=beat_info.source_bpm,
+                time_signature=beat_info.time_signature,
             )
             # Tempo normalization cannot add notes, but the published result is
             # checked again so the user-visible artifact itself is the proof.
@@ -1494,6 +1552,7 @@ class MusicToMidiPipeline:
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                 source_bpm=beat_info.source_bpm,
+                time_signature=beat_info.time_signature,
             )
         except InterruptedError:
             self._cleanup_multi_instrument_backend()
@@ -1538,6 +1597,7 @@ class MusicToMidiPipeline:
                 force=True,
                 tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
                 source_bpm=beat_info.source_bpm,
+                time_signature=beat_info.time_signature,
             )
         except InterruptedError:
             raise

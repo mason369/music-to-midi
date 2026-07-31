@@ -23,7 +23,7 @@
 | 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；公开 release `v0.2.1`：2026-07-10 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | commit `302343e8992bdfc619f77f1988168374ed5d675d`，包版本 `0.2.2a1` |
+| 本项目固定代码 | current-main commit `991ceaa04800484e617484ba065ebec802eebf53`，包版本 `0.2.2`；叠加 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的两个经 SHA-256 校验的质量补丁文件 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
 
 这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布，GitHub release 与当前权重 revision 在 7 月 10 日更新。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。

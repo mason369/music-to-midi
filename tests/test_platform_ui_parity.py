@@ -25,6 +25,26 @@ def _desktop_source() -> str:
     return Path("src/gui/main_window.py").read_text(encoding="utf-8")
 
 
+def test_project_bpm_contract_is_shared_by_desktop_space_and_colab():
+    space = _space_source()
+    colab = _colab_source()
+    track_panel = Path("src/gui/widgets/track_panel.py").read_text(encoding="utf-8")
+    zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
+    en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
+
+    assert "self.custom_bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)" in track_panel
+    assert "minimum=4.0" in space
+    assert "maximum=400.0" in space
+    assert "minimum=4.0" in colab
+    assert "maximum=400.0" in colab
+    assert zh["main"]["tempo"]["label"] == "工程 BPM"
+    assert en["main"]["tempo"]["label"] == "Project BPM"
+    assert "保留 tick" in zh["main"]["tempo"]["custom_tooltip"]
+    assert "真实变速" in zh["main"]["tempo"]["custom_tooltip"]
+    assert "those ticks are retained" in en["main"]["tempo"]["custom_tooltip"]
+    assert "change speed" in en["main"]["tempo"]["custom_tooltip"]
+
+
 def test_shared_action_label_keys_exist_in_every_language():
     zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
     en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
@@ -248,6 +268,9 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
         assert "source_track_name" in source
         assert "build_muscriptor_result_html(" in source
         assert "prepare_midi_playback_assets" in source
+        assert "rewrite_midi_tempo_preserving_ticks" in source
+        assert "source-tempo-playback.mid" in source
+        assert "result.beat_info.source_bpm" in source
 
     assert "preserve_mixer=True" in desktop
     assert "source_track_name=track_name" in desktop
@@ -255,3 +278,17 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
     assert "_on_midi_workbench_playing_changed" in desktop
     assert "fn=_close_active_midi_detail" in space
     assert "fn=close_midi_detail" in colab
+
+
+def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context():
+    for source in (_space_source(), _colab_source()):
+        for field in (
+            '"program"',
+            '"is_drum"',
+            '"track_index"',
+            '"channel"',
+            '"reference_bpm"',
+            '"target_bpm"',
+        ):
+            assert field in source
+        assert "The browser MIDI editor requires result beat information" in source

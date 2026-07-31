@@ -43,7 +43,7 @@ PORTABLE_COMPONENT: bytedance_checkpoint | bundle=models/bytedance_piano | artif
 PORTABLE_COMPONENT: miros_source | bundle=external/ai4m-miros | artifact=patched-source-tree | revision=668a0aa6357bb3f09e767c9ece378956c2ffd182 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: musicfm_pretrained | bundle=external/ai4m-miros/model/musicfm/data/pretrained_msd.pt | artifact=checkpoint | revision=546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: miros_finetuned | bundle=external/ai4m-miros/logs/.../last.ckpt | artifact=checkpoint | revision=sha256:b1b8c167b3d2e3eaeb19202cd3fd366bb43492cd7720ff1516e1553c72e356e5 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
-PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=source+metadata | revision=302343e8992bdfc619f77f1988168374ed5d675d | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=current-main-source+verified-overlap-restart-overlay+metadata | revision=991ceaa04800484e617484ba065ebec802eebf53+edaebd3126336bd7eb4467dcf675d77f4e7772f0 | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_small_checkpoint | bundle=models/muscriptor_small | artifact=model.safetensors+config.json | revision=8c127f603b807520fa465c838e9bfee8a91ada4e | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_medium_checkpoint | bundle=models/muscriptor_medium | artifact=model.safetensors+config.json | revision=f32236969308476e01fd3aae67357de5feb05a2d | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_large_checkpoint | bundle=models/muscriptor_large | artifact=model.safetensors+config.json | revision=8809fdfbed2affa7ade94a7059e746e3880720e7 | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
@@ -65,9 +65,10 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
 
 ### MuScriptor public runtime, three gated checkpoints, and demo playback assets
 
-- Runtime source: [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor/tree/302343e8992bdfc619f77f1988168374ed5d675d),
-  pinned commit `302343e8992bdfc619f77f1988168374ed5d675d`, package version
-  `0.2.2a1`; declared source license: MIT.
+- Runtime source: [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor/tree/991ceaa04800484e617484ba065ebec802eebf53),
+  pinned current-main commit `991ceaa04800484e617484ba065ebec802eebf53`,
+  package version `0.2.2`, plus the two SHA-256-verified runtime files from
+  PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`; declared source license: MIT.
 - Models:
   [MuScriptor/muscriptor-small](https://huggingface.co/MuScriptor/muscriptor-small)
   at pinned revision `8c127f603b807520fa465c838e9bfee8a91ada4e`,

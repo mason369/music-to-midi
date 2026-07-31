@@ -56,6 +56,40 @@ def _collect_aria_amt_config_datas():
     return _collect_tree(config_dir, "config")
 
 
+def _remove_conflicting_pyqt_vc_runtime_binaries(binaries):
+    """Keep one process-wide VC runtime instead of Qt's older private copies."""
+    conflicting_destinations = {
+        "pyqt6/qt6/bin/msvcp140.dll",
+        "pyqt6/qt6/bin/vcruntime140.dll",
+        "pyqt6/qt6/bin/vcruntime140_1.dll",
+    }
+    filtered = []
+    for entry in binaries:
+        destination = str(entry[0]).replace("\\", "/").lower()
+        if destination in conflicting_destinations:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _require_root_vc_runtime_binaries(binaries):
+    required = {
+        "msvcp140.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+    }
+    destinations = {
+        str(entry[0]).replace("\\", "/").lower()
+        for entry in binaries
+    }
+    missing = sorted(required - destinations)
+    if missing:
+        raise RuntimeError(
+            "PyInstaller did not collect the required root Visual C++ runtime DLLs: "
+            + ", ".join(missing)
+        )
+
+
 audio_separator_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR"),
     os.path.join(USER_HOME, ".music-to-midi", "models", "audio-separator"),
@@ -348,6 +382,10 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+if os.name == "nt":
+    a.binaries = _remove_conflicting_pyqt_vc_runtime_binaries(a.binaries)
+    _require_root_vc_runtime_binaries(a.binaries)
 
 pyz = PYZ(a.pure)
 

@@ -39,7 +39,8 @@
 - **六声部分离与逐轨转写**：`SIX_STEM_SPLIT` 模式用 `BS-Rofo-SW-Fixed.ckpt` 分离 `bass / drums / guitar / piano / vocals / other` 六条真实 WAV；随后逐轨选择 13 条 MIDI 路线，不会在用户未选择时自动生成或合并 MIDI。
 - **钢琴专用转写**：`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 与 `PIANO_BYTEDANCE_PEDAL` 面向纯钢琴音频，分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。
 - **默认后端语义**：多乐器默认后端为 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`；`SMART` 可显式切换 MIROS 或 MuScriptor，并为 MuScriptor 选择 Large、Medium 或 Small；分离后的每条 WAV 也可独立选择三档 MuScriptor 路线。
-- **速度与工程对齐**：自动 BPM 由独立检测器共识和稳定拍间隔倍频校验产生；也可设置 4–400 BPM 的目标速度。设置目标值后仍会识别原曲 BPM，音频与 MIDI 的实际播放倍率统一为“目标 BPM ÷ 原曲 BPM”，最终下载 MIDI 的 `set_tempo` 与真实播放时长都以目标 BPM 为准。
+- **工程 BPM 会真实写入并联动变速**：自动 BPM 由独立检测器共识和稳定拍间隔倍频校验产生，也可手动覆盖为 4–400 BPM。模型事件先按检测 BPM 映射到音乐 tick，下载时保留这些 tick 并在第 0 轨写入目标 tempo；因此导出 MIDI 与结果页原音/MIDI 联动试听都会按“工程 BPM ÷ 检测 BPM”真实变速。“播放速度”直接显示该真实倍率；修改 BPM 会同步更新倍率，修改倍率也会反算并写回工程 BPM。该流程不把音符吸附到网格，也不改音高、力度、音色、控制器或模型事件；模型本身预测错误的 onset 不会被伪装成已修复。若将变速后的 MIDI 与源音频一同导入 DAW，需让 DAW 以相同比率适配音频。
+- **专业软件导入边界**：标准 MIDI 的 tempo、拍号和非 tempo 事件经过写后回读验证；DAW 需启用 tempo map/速度图导入。MuseScore 3/4 会把未量化的人类演奏型 MIDI 重新跟拍，并可能用它自己的估计覆盖乐谱页显示 BPM；这是 MuseScore MIDI 导入器行为，不代表文件中的目标 tempo 没有写入。项目不会为了迎合该显示值而偷偷量化或移动模型音符。
 - **MIDI 主时钟播放进度**：MuScriptor 结果工作台的进度条以可播放 MIDI 合成轨为主时钟，统一控制 MIDI、原音和乐器分轨 seek，并在播放中校正超过 80 ms 的从轨漂移。
 - **MuScriptor 真约束**：MuScriptor 的乐器多选不是显示过滤器。空选表示模型自动检测；非空选择会传入官方 `instruments` + `prelude_forcing` 解码接口，未选乐器 token 在生成阶段被禁止，事件流和最终 MIDI 还会再次校验，发现越界就拒绝发布文件。
 - **MIROS 可选后端**：`SMART` 与分离结果的逐轨多乐器菜单都可显式选择本地 `ai4m-miros` 后端。
@@ -157,8 +158,9 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
-项目固定使用公开提交 `302343e8992bdfc619f77f1988168374ed5d675d`
-（包版本 `0.2.2a1`）及 gated 权重仓库
+项目固定使用当前公开 `main` 提交 `991ceaa04800484e617484ba065ebec802eebf53`
+（包版本 `0.2.2`），并以 SHA-256 校验后叠加 PR #58 固定 head
+`edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的重叠窗口与 gzip 异常重启实现；及 gated 权重仓库
 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) 的
 revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重约 5.47 GB，许可为
 CC BY-NC 4.0；必须先在 Hugging Face 接受仓库条款并登录：
@@ -170,7 +172,7 @@ python download_muscriptor_model.py --size medium
 python download_muscriptor_model.py --size small
 ```
 
-三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
+三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；三档均固定启用 `2.5s` 重叠窗口、prelude forcing、双次生成与 gzip 异常重启，不提供低质量静默降级。桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
 
 Windows 结果工作台还需要固定 FluidSynth 2.5.6；安装脚本会准备，也可单独运行：
 
@@ -648,7 +650,8 @@ AMD/ROCm 当前不能完成七模式：即使 PyTorch 提供 ROCm wheel，PolarF
 pip install -r requirements.txt
 python -m pip install --no-deps "audio-separator==0.44.1"
 python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip"
-python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip"
+python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/991ceaa04800484e617484ba065ebec802eebf53.zip"
+python patch_muscriptor_runtime.py
 ```
 
 `requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 或 MuScriptor 的服务端依赖覆盖当前 Torch/FastAPI 运行时。上述三项因此必须按固定版本以 `--no-deps` 单独安装；需要完整伴随依赖时优先运行 `install.ps1` / `install.sh`。

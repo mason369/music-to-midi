@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -17,10 +18,10 @@ import soundfile as sf
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QFileDialog, QStyle, QStyleOptionSlider
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QStyle, QStyleOptionSlider
 
 from src.core import muscriptor_result_assets
 from src.core.manual_midi import (
@@ -29,6 +30,11 @@ from src.core.manual_midi import (
     MIDI_ROUTE_MUSCRIPTOR_MEDIUM,
     MIDI_ROUTE_MUSCRIPTOR_SMALL,
     build_manual_midi_config,
+)
+from src.core.midi_editor import export_edited_midi
+from src.core.midi_tempo import (
+    non_tempo_event_tick_fingerprint,
+    non_tempo_event_time_fingerprint,
 )
 from src.core.muscriptor_midi import validate_muscriptor_midi_constraint
 from src.core.muscriptor_result_assets import (
@@ -42,6 +48,7 @@ from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.gui.web.muscriptor_result_runtime import (
     MUSCRIPTOR_RESULT_CSS,
     MUSCRIPTOR_RESULT_JS,
+    _COLORS,
     build_muscriptor_result_html,
 )
 from src.gui.widgets.muscriptor_instrument_selector import (
@@ -50,9 +57,11 @@ from src.gui.widgets.muscriptor_instrument_selector import (
 from src.gui.widgets.muscriptor_result import (
     MuscriptorResultWidget,
     _ChunkProgressEstimator,
+    _INSTRUMENT_COLORS,
+    _export_midi_at_project_speed,
+    _export_midi_with_bpm,
     _PianoRollCanvas,
     _SmoothPlaybackClock,
-    _export_midi_with_bpm,
 )
 from src.i18n.translator import t
 from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
@@ -301,6 +310,13 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "kv_cache_reused_layers": 0,
         "batch_size": 1,
         "prelude_forcing": True,
+        "quality_mode": "overlap_restart",
+        "overlap_seconds": 2.5,
+        "allow_reset": True,
+        "strict_eos": True,
+        "package_version": "0.2.2",
+        "source_commit": "991ceaa04800484e617484ba065ebec802eebf53",
+        "quality_patch_commit": "edaebd3126336bd7eb4467dcf675d77f4e7772f0",
     }
 
 
@@ -344,6 +360,9 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
         "batch_size": 1,
         "beam_size": 1,
         "prelude_forcing": True,
+        "no_eos_is_ok": False,
+        "overlap": 2.5,
+        "allow_reset": True,
     }
 
 
@@ -546,6 +565,15 @@ def test_playhead_clock_interpolates_media_samples_and_stops_at_bounded_lead():
     assert clock.sample(8_300, now=1.000) == pytest.approx(8_420)
     assert clock.sample(8_500, now=1.010) == pytest.approx(8_435)
     assert clock.sample(8_500, now=1.026) == pytest.approx(8_459)
+
+
+def test_playhead_clock_interpolation_tracks_non_unit_playback_rate():
+    clock = _SmoothPlaybackClock(max_lead_ms=120.0)
+    clock.reset(1_000, now=0.0)
+
+    assert clock.sample(1_000, playback_rate=1.5, now=0.100) == pytest.approx(1_120)
+    clock.reset(1_000, now=0.0)
+    assert clock.sample(1_000, playback_rate=0.5, now=0.100) == pytest.approx(1_050)
 
 
 def test_playhead_repaints_fractional_frame_motion(monkeypatch):
@@ -1095,7 +1123,11 @@ def test_new_preview_is_committed_only_after_current_playback_stops(tmp_path: Pa
         assert widget._deferred_preview is not None
 
         widget._toggle_playback()
-        app.processEvents()
+        for _ in range(100):
+            app.processEvents()
+            if widget._deferred_preview is None:
+                break
+            QTest.qWait(1)
 
         assert not widget._playing
         assert widget._deferred_preview is None
@@ -1416,6 +1448,48 @@ def test_final_playback_transport_covers_notes_beyond_source_audio(
         assert (info.frames, info.samplerate) == (master.frames, master.samplerate)
 
 
+def test_empty_edited_midi_builds_exact_silence_without_invoking_fluidsynth(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = _tone_wav(tmp_path / "empty-edit-source.wav", 1.25, amplitude=0.1)
+    midi_path = tmp_path / "empty-edited.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    midi.tracks.append(conductor)
+    midi.save(midi_path)
+
+    monkeypatch.setattr(
+        muscriptor_result_assets,
+        "get_fluidsynth_executable",
+        lambda: pytest.fail("FluidSynth must not be invoked for an intentionally empty edit"),
+    )
+    monkeypatch.setattr(
+        muscriptor_result_assets,
+        "download_muscriptor_soundfont",
+        lambda **_kwargs: pytest.fail(
+            "The SoundFont must not be loaded for an intentionally empty edit"
+        ),
+    )
+
+    assets = muscriptor_result_assets.prepare_midi_playback_assets(
+        midi_path,
+        source,
+        tmp_path / "empty-assets",
+        allow_empty_notes=True,
+    )
+
+    rendered, sample_rate = sf.read(assets.live_transcription_wav, dtype="float32")
+    assert assets.notes == ()
+    assert assets.instrument_wavs == {}
+    assert assets.instrument_right_wavs == {}
+    assert assets.duration == pytest.approx(1.25)
+    assert sample_rate == 44_100
+    assert len(rendered) == round(1.25 * sample_rate)
+    assert float(np.max(np.abs(rendered))) == 0.0
+
+
 def test_default_midi_monitoring_uses_one_combined_bus_and_real_mutes_use_stems(
     tmp_path: Path,
 ):
@@ -1468,6 +1542,8 @@ def test_default_midi_monitoring_uses_one_combined_bus_and_real_mutes_use_stems(
 
 
 def test_playhead_tick_never_reseeks_audio_players(tmp_path: Path):
+    from PyQt6.QtMultimedia import QMediaPlayer
+
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "source.wav", 1.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
@@ -1476,17 +1552,31 @@ def test_playhead_tick_never_reseeks_audio_players(tmp_path: Path):
     class FakePlayer:
         def __init__(self, position: int):
             self._position = position
+            self._state = QMediaPlayer.PlaybackState.PlayingState
             self.set_positions: list[int] = []
+            self.events: list[str] = []
 
         def position(self):
             return self._position
 
+        def playbackState(self):
+            return self._state
+
+        def stop(self):
+            self.events.append("stop")
+            self._state = QMediaPlayer.PlaybackState.StoppedState
+
         def setPosition(self, position):
+            assert self._state != QMediaPlayer.PlaybackState.PlayingState
+            self.events.append("seek")
+            self._position = position
             self.set_positions.append(position)
 
-        def mediaStatus(self):
-            from PyQt6.QtMultimedia import QMediaPlayer
+        def play(self):
+            self.events.append("play")
+            self._state = QMediaPlayer.PlaybackState.PlayingState
 
+        def mediaStatus(self):
             return QMediaPlayer.MediaStatus.LoadedMedia
 
     master = FakePlayer(1_234)
@@ -1504,10 +1594,18 @@ def test_playhead_tick_never_reseeks_audio_players(tmp_path: Path):
         widget._set_playback_duration(10.0)
 
         widget._tick()
+        for _ in range(100):
+            app.processEvents()
+            if widget._transport_seek_pending_ms is None:
+                break
+            QTest.qWait(1)
 
         assert widget._position_ms == 1_234
         assert widget.playback_slider.value() == 1_234
+        assert master.set_positions == [1_234]
         assert slave.set_positions == [1_234]
+        assert master.events == ["stop", "seek", "play"]
+        assert slave.events == ["stop", "seek", "play"]
     finally:
         widget._playing = False
         widget._midi_normal = midi_pair
@@ -1530,6 +1628,7 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
             self._position = position
             self._duration = duration
             self._status = status
+            self._state = QMediaPlayer.PlaybackState.PlayingState
             self.pause_calls = 0
             self.set_positions: list[int] = []
 
@@ -1545,8 +1644,12 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
         def mediaStatus(self):
             return self._status
 
+        def playbackState(self):
+            return self._state
+
         def pause(self):
             self.pause_calls += 1
+            self._state = QMediaPlayer.PlaybackState.PausedState
 
     master = FakePlayer(990, 1_000, QMediaPlayer.MediaStatus.EndOfMedia)
     midi = FakePlayer(950, 1_000, QMediaPlayer.MediaStatus.LoadedMedia)
@@ -1561,6 +1664,11 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
         widget._position_ms = 990
 
         widget._tick()
+        for _ in range(100):
+            app.processEvents()
+            if widget._transport_seek_pending_ms is None:
+                break
+            QTest.qWait(1)
 
         assert widget._playing is False
         assert widget._playback_finished is True
@@ -1572,6 +1680,11 @@ def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Pat
         assert widget.clock_label.text() == "1.0s"
 
         widget._tick()
+        for _ in range(100):
+            app.processEvents()
+            if widget._transport_seek_pending_ms is None:
+                break
+            QTest.qWait(1)
         assert master.pause_calls == 1
         assert midi.pause_calls == 1
         assert master.set_positions == []
@@ -1706,6 +1819,11 @@ def test_preview_replacement_silences_retired_midi_output_immediately(tmp_path: 
         )
 
         assert retired_output.isMuted() is True
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+        first_midi.unlink()
+        assert not first_midi.exists()
     finally:
         app.processEvents()
         widget.shutdown()
@@ -1747,9 +1865,11 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
 
     master = FakePlayer([8_300, 8_270, 8_340])
     midi_pair = widget._midi_normal
+    original_pair = widget._original_normal
     original_players = widget._players
     try:
         widget._midi_normal = (master, object())
+        widget._original_normal = None
         widget._players = [master]
         widget._playing = True
         widget._finalizing = True
@@ -1767,12 +1887,14 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
         assert scroll_values == sorted(scroll_values)
 
         previous_scroll = scroll_values[-1]
+        widget._playing = False
         widget.seek(2.0)
         assert widget._position_ms == 2_000
         assert widget.roll_scroll.horizontalScrollBar().value() < previous_scroll
     finally:
         widget._playing = False
         widget._midi_normal = midi_pair
+        widget._original_normal = original_pair
         widget._players = original_players
         widget.shutdown()
         widget.close()
@@ -1866,33 +1988,50 @@ from pathlib import Path
 from PyQt6.QtCore import QPoint, QTimer, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
+from src.core.muscriptor_result_assets import MuscriptorRollNote
 from src.gui.widgets.muscriptor_result import MuscriptorResultWidget
 
 app = QApplication([])
 source = Path({str(source)!r})
 widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
-widget._midi_normal = widget._make_player(source)
+pairs = [widget._make_player(source) for _ in range(8)]
+widget._midi_normal = pairs[0]
+widget._original_normal = pairs[1]
+widget._active_playback_players = lambda: [player for player, _output in pairs]
 widget.play_button.setEnabled(True)
 widget._set_playback_duration(2.0)
+note = MuscriptorRollNote("acoustic_piano", 60, 100, 0.25, 0.75)
+widget.roll.set_notes((note,), duration=2.0)
+widget.roll.set_editable(True)
 widget.resize(1000, 720)
 widget.show()
 
 def exercise():
     widget._toggle_playback()
+    note_point = QPoint(
+        round(widget.roll.x_for_time_float(0.5)),
+        (108 - 60) * 7 + 3,
+    )
+    QTest.mouseClick(widget.roll, Qt.MouseButton.LeftButton, pos=note_point)
+    widget.speed_spin.setValue(1.1)
+    QTimer.singleShot(100, scrub)
+
+def scrub():
     slider = widget.playback_slider
     target = QPoint(round(slider.width() * 0.6), slider.rect().center().y())
     QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=target)
-    QTimer.singleShot(250, verify)
+    QTimer.singleShot(500, verify)
 
 def verify():
     if not widget._playing:
         raise RuntimeError("playback stopped after an in-flight slider click")
-    if not 900 <= widget._position_ms <= 1500:
+    if widget.roll.selected_indices != (0,):
+        raise RuntimeError(f"note selection was lost: {{widget.roll.selected_indices}}")
+    if not 900 <= widget._position_ms <= 1800:
         raise RuntimeError(f"seek did not commit: {{widget._position_ms}}")
-    if not 900 <= widget._midi_normal[0].position() <= 1500:
-        raise RuntimeError(
-            f"MIDI player did not seek: {{widget._midi_normal[0].position()}}"
-        )
+    positions = [player.position() for player, _output in pairs]
+    if any(position < 850 or position > 1900 for position in positions):
+        raise RuntimeError(f"players did not seek together: {{positions}}")
     widget.shutdown()
     widget.close()
     app.quit()
@@ -1916,7 +2055,7 @@ app.exec()
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_source_and_target_bpm_are_bidirectionally_linked_and_not_overwritten(
+def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
     tmp_path: Path,
 ):
     app = QApplication.instance() or QApplication([])
@@ -1929,64 +2068,58 @@ def test_source_and_target_bpm_are_bidirectionally_linked_and_not_overwritten(
 
     try:
         assert widget.bpm_spin.value() == pytest.approx(23.0)
-        assert widget.speed_spin.value() == pytest.approx(
-            round(23.0 / 117.9, 3),
-            abs=0.0005,
-        )
+        assert widget.speed_spin.value() == pytest.approx(23.0 / 117.9, abs=0.001)
         assert widget.speed_spin.isVisible() is False
 
         widget.show()
         app.processEvents()
         assert widget.speed_spin.isVisible() is True
 
+        widget.speed_spin.setValue(1.25)
+        widget.set_bpm_context(117.9, 23.0)
+        assert widget.speed_spin.value() == pytest.approx(1.25)
+        assert widget.bpm_spin.value() == pytest.approx(147.4)
+        assert all(
+            player.playbackRate() == pytest.approx(147.4 / 117.9)
+            for player in widget._all_playback_players()
+        )
         widget._toggle_playback()
         widget.bpm_spin.setValue(132.5)
         app.processEvents()
 
-        expected_rate = 132.5 / 117.9
         assert widget._playing is True
         assert widget._bpm_user_overridden is True
         assert widget.bpm_spin.value() == pytest.approx(132.5)
-        assert widget.speed_spin.value() == pytest.approx(
-            round(expected_rate, 3),
-            abs=0.0005,
-        )
+        assert widget.speed_spin.value() == pytest.approx(132.5 / 117.9, abs=0.001)
         assert all(
-            player.playbackRate() == pytest.approx(expected_rate)
+            player.playbackRate() == pytest.approx(132.5 / 117.9)
             for player in widget._all_playback_players()
         )
+        assert widget._editor_grid_seconds() == pytest.approx(60.0 / 132.5 / 4.0)
 
         widget.set_detected_bpm(90.0)
 
         assert widget.bpm_spin.value() == pytest.approx(132.5)
         assert widget._detected_bpm == pytest.approx(117.9)
-        assert widget.speed_spin.value() == pytest.approx(
-            round(expected_rate, 3),
-            abs=0.0005,
-        )
+        assert widget.speed_spin.value() == pytest.approx(132.5 / 117.9, abs=0.001)
 
         widget.speed_spin.setValue(0.75)
         app.processEvents()
 
-        expected_bpm = round(117.9 * 0.75, 1)
-        expected_rate = expected_bpm / 117.9
-        assert widget.bpm_spin.value() == pytest.approx(expected_bpm)
-        assert widget.speed_spin.value() == pytest.approx(
-            round(expected_rate, 3),
-            abs=0.0005,
-        )
+        assert widget.bpm_spin.value() == pytest.approx(88.4)
+        assert widget.speed_spin.value() == pytest.approx(0.75)
         assert all(
-            player.playbackRate() == pytest.approx(expected_rate)
+            player.playbackRate() == pytest.approx(88.4 / 117.9)
             for player in widget._all_playback_players()
         )
         late_player = widget._make_player(source)[0]
-        assert late_player.playbackRate() == pytest.approx(expected_rate)
+        assert late_player.playbackRate() == pytest.approx(88.4 / 117.9)
     finally:
         widget.shutdown()
         widget.close()
 
 
-def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
+def test_midi_download_uses_project_bpm_and_truly_changes_playback_speed(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -2006,10 +2139,7 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
     widget._midi_path = str(source_midi)
     widget.set_detected_bpm(117.9)
     widget.bpm_spin.setValue(132.5)
-    assert widget.speed_spin.value() == pytest.approx(
-        round(132.5 / 117.9, 3),
-        abs=0.0005,
-    )
+    assert widget.speed_spin.value() == pytest.approx(132.5 / 117.9, abs=0.001)
     monkeypatch.setattr(
         QFileDialog,
         "getSaveFileName",
@@ -2033,10 +2163,14 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
     assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(132.5, abs=0.001)
     downloaded_note = read_midi_roll_notes(destination)[0]
     source_note = read_midi_roll_notes(source_midi)[0]
-    assert downloaded_note.start == pytest.approx(source_note.start, abs=1e-6)
+    duration_scale = 117.9 / 132.5
+    assert downloaded_note.start == pytest.approx(
+        source_note.start * duration_scale,
+        abs=60.0 / 132.5 / downloaded.ticks_per_beat,
+    )
     assert downloaded_note.end == pytest.approx(
-        source_note.end * 117.9 / 132.5,
-        abs=1e-6,
+        source_note.end * duration_scale,
+        abs=60.0 / 132.5 / downloaded.ticks_per_beat,
     )
     downloaded_note_off = next(
         message
@@ -2048,7 +2182,8 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
         for message in mido.MidiFile(source_midi).tracks[0]
         if not message.is_meta and message.type == "note_off"
     )
-    assert downloaded_note_off.time == source_note_off.time == 480
+    assert downloaded_note_off.bytes() == source_note_off.bytes()
+    assert downloaded_note_off.time == source_note_off.time
     assert mido.tempo2bpm(
         next(
             message.tempo
@@ -2060,6 +2195,783 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
     app.processEvents()
 
 
+def test_custom_bpm_result_is_not_applied_twice_to_preview_or_download(tmp_path: Path):
+    """A pipeline result already carries target tempo on the reference tick grid."""
+
+    pipeline_result = tmp_path / "pipeline-77.9.mid"
+    preview = tmp_path / "preview-117.9.mid"
+    download = tmp_path / "download-60.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(77.9), time=0))
+    track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(pipeline_result)
+    source_ticks = non_tempo_event_tick_fingerprint(mido.MidiFile(pipeline_result))
+
+    _export_midi_with_bpm(pipeline_result, preview, 117.9)
+    _export_midi_at_project_speed(pipeline_result, download, 117.9, 60.0)
+
+    preview_midi = mido.MidiFile(preview)
+    downloaded_midi = mido.MidiFile(download)
+    assert non_tempo_event_tick_fingerprint(preview_midi) == source_ticks
+    assert non_tempo_event_tick_fingerprint(downloaded_midi) == source_ticks
+    assert preview_midi.length == pytest.approx(60.0 / 117.9, abs=0.001)
+    assert downloaded_midi.length == pytest.approx(1.0, abs=0.001)
+
+
+def test_edited_midi_export_replaces_notes_and_preserves_pedal_and_markers(
+    tmp_path: Path,
+):
+    source = tmp_path / "editor-source.mid"
+    destination = tmp_path / "editor-published.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    conductor.append(mido.MetaMessage("marker", text="keep-me", time=120))
+    conductor.append(mido.Message("sysex", data=(0x7D, 0x01), time=0))
+    midi.tracks.append(conductor)
+    notes = mido.MidiTrack()
+    notes.append(mido.MetaMessage("track_name", name="Piano", time=0))
+    notes.append(mido.Message("program_change", channel=0, program=0, time=0))
+    notes.append(mido.Message("control_change", channel=0, control=64, value=127, time=0))
+    notes.append(mido.Message("note_on", channel=0, note=60, velocity=90, time=0))
+    notes.append(mido.Message("control_change", channel=0, control=64, value=0, time=240))
+    notes.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=240))
+    midi.tracks.append(notes)
+    midi.save(source)
+
+    published = export_edited_midi(
+        source,
+        destination,
+        (
+            MuscriptorRollNote(
+                instrument="gm:000",
+                pitch=64,
+                velocity=77,
+                start=0.25,
+                end=0.75,
+                program=0,
+                is_drum=False,
+                track_index=1,
+                channel=0,
+            ),
+        ),
+        reference_bpm=120,
+        target_bpm=90,
+    )
+
+    assert published == destination.resolve()
+    edited = mido.MidiFile(published)
+    assert [
+        message.text for track in edited.tracks for message in track if message.type == "marker"
+    ] == ["keep-me"]
+    assert [
+        (message.control, message.value)
+        for track in edited.tracks
+        for message in track
+        if message.type == "control_change"
+    ] == [(64, 127), (64, 0)]
+    assert [
+        tuple(message.data)
+        for track in edited.tracks
+        for message in track
+        if message.type == "sysex"
+    ] == [(0x7D, 0x01)]
+    assert [
+        mido.tempo2bpm(message.tempo)
+        for track in edited.tracks
+        for message in track
+        if message.type == "set_tempo"
+    ] == pytest.approx([90.0], abs=0.001)
+
+    absolute_tick = 0
+    note_events = []
+    for message in edited.tracks[1]:
+        absolute_tick += message.time
+        if message.type in {"note_on", "note_off"}:
+            note_events.append((message.type, message.note, message.velocity, absolute_tick))
+    assert note_events == [
+        ("note_on", 64, 77, 240),
+        ("note_off", 64, 0, 720),
+    ]
+    source_times, _source_resolutions = non_tempo_event_time_fingerprint(mido.MidiFile(source))
+    edited_times, edited_resolutions = non_tempo_event_time_fingerprint(edited)
+    source_retained = [
+        (payload, seconds)
+        for payload, seconds in source_times[0] + source_times[1]
+        if payload[0] not in {0x80, 0x90, 0xC0}
+    ]
+    edited_retained = [
+        (payload, seconds)
+        for payload, seconds in edited_times[0] + edited_times[1]
+        if payload[0] not in {0x80, 0x90, 0xC0}
+    ]
+    assert [payload for payload, _seconds in edited_retained] == [
+        payload for payload, _seconds in source_retained
+    ]
+    for (_payload, source_seconds), (_payload, edited_seconds) in zip(
+        source_retained,
+        edited_retained,
+    ):
+        assert edited_seconds == pytest.approx(
+            source_seconds * 120.0 / 90.0,
+            abs=max(edited_resolutions),
+        )
+    parsed = read_midi_roll_notes(published)
+    assert len(parsed) == 1
+    assert parsed[0].track_index == 1
+    assert parsed[0].channel == 0
+
+
+def test_edited_midi_export_preserves_nested_same_pitch_notes_on_spare_channel(
+    tmp_path: Path,
+):
+    source = tmp_path / "nested-overlap-source.mid"
+    destination = tmp_path / "nested-overlap-edited.mid"
+    bpm = 117.9
+    ticks_per_beat = 480
+    ticks_per_second = ticks_per_beat * bpm / 60.0
+    midi = mido.MidiFile(type=1, ticks_per_beat=ticks_per_beat)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(bpm), time=0))
+    midi.tracks.append(conductor)
+    notes_track = mido.MidiTrack()
+    notes_track.append(mido.Message("program_change", channel=0, program=0, time=0))
+    notes_track.append(mido.Message("control_change", channel=0, control=64, value=127, time=0))
+    midi.tracks.append(notes_track)
+    midi.save(source)
+
+    expected_ticks = [(100, 500), (200, 400)]
+    edited_notes = tuple(
+        MuscriptorRollNote(
+            instrument="gm:000",
+            pitch=62,
+            velocity=100,
+            start=start_tick / ticks_per_second,
+            end=end_tick / ticks_per_second,
+            program=0,
+            track_index=1,
+            channel=0,
+        )
+        for start_tick, end_tick in expected_ticks
+    )
+
+    export_edited_midi(
+        source,
+        destination,
+        edited_notes,
+        reference_bpm=bpm,
+        target_bpm=bpm,
+    )
+
+    published = mido.MidiFile(destination)
+    active: dict[tuple[int, int], tuple[int, int]] = {}
+    actual_ticks: list[tuple[int, int, int]] = []
+    for track in published.tracks:
+        absolute_tick = 0
+        for message in track:
+            absolute_tick += int(message.time)
+            if message.type == "note_on" and message.velocity > 0:
+                active[(message.channel, message.note)] = (
+                    absolute_tick,
+                    message.velocity,
+                )
+            elif message.type in {"note_on", "note_off"}:
+                start_tick, velocity = active.pop((message.channel, message.note))
+                assert velocity == 100
+                actual_ticks.append((start_tick, absolute_tick, message.channel))
+
+    assert [(start, end) for start, end, _channel in sorted(actual_ticks)] == expected_ticks
+    assert {channel for _start, _end, channel in actual_ticks} == {0, 1}
+    assert [
+        (message.channel, message.control, message.value)
+        for track in published.tracks
+        for message in track
+        if message.type == "control_change"
+    ] == [(0, 64, 127), (1, 64, 127)]
+
+    professional_reader = pretty_midi.PrettyMIDI(str(destination))
+    professional_notes = sorted(
+        (note for instrument in professional_reader.instruments for note in instrument.notes),
+        key=lambda note: (note.start, note.end),
+    )
+    assert len(professional_notes) == 2
+    assert [
+        (round(note.start * ticks_per_second), round(note.end * ticks_per_second))
+        for note in professional_notes
+    ] == expected_ticks
+
+
+def test_edited_midi_export_does_not_invent_unsupported_performance_events(
+    tmp_path: Path,
+):
+    source = tmp_path / "notes-only-source.mid"
+    destination = tmp_path / "notes-only-edited.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    track.append(
+        mido.MetaMessage(
+            "time_signature",
+            numerator=6,
+            denominator=8,
+            clocks_per_click=36,
+            time=0,
+        )
+    )
+    track.append(mido.Message("note_on", channel=0, note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(source)
+
+    export_edited_midi(
+        source,
+        destination,
+        (
+            MuscriptorRollNote(
+                instrument="gm:000",
+                pitch=64,
+                velocity=77,
+                start=0.25,
+                end=0.75,
+                program=0,
+                is_drum=False,
+                track_index=0,
+                channel=0,
+            ),
+        ),
+        reference_bpm=120,
+        target_bpm=120,
+    )
+
+    unsupported_types = {
+        "aftertouch",
+        "control_change",
+        "marker",
+        "pitchwheel",
+        "polytouch",
+        "sysex",
+    }
+    actual_types = {
+        message.type for midi_track in mido.MidiFile(destination).tracks for message in midi_track
+    }
+    assert actual_types.isdisjoint(unsupported_types)
+
+
+def test_edited_midi_export_rejects_invalid_drum_channel_without_publishing(
+    tmp_path: Path,
+):
+    source = tmp_path / "invalid-editor-source.mid"
+    destination = tmp_path / "must-not-exist.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    midi.tracks.append(mido.MidiTrack())
+    midi.save(source)
+    sentinel = b"existing user destination"
+    destination.write_bytes(sentinel)
+
+    with pytest.raises(ValueError, match="Invalid edited MIDI note"):
+        export_edited_midi(
+            source,
+            destination,
+            (
+                MuscriptorRollNote(
+                    instrument="drums",
+                    pitch=36,
+                    velocity=100,
+                    start=0.0,
+                    end=0.5,
+                    is_drum=True,
+                    track_index=0,
+                    channel=0,
+                ),
+            ),
+            reference_bpm=120,
+            target_bpm=120,
+        )
+
+    assert destination.read_bytes() == sentinel
+
+
+def test_edit_mode_note_selection_and_empty_click_never_request_transport_seek():
+    app = QApplication.instance() or QApplication([])
+    roll = _PianoRollCanvas()
+    note = MuscriptorRollNote("acoustic_piano", 60, 90, 0.5, 1.0)
+    roll.set_notes((note,), duration=2.0)
+    roll.set_editable(True)
+    roll.show()
+    app.processEvents()
+    seeks: list[float] = []
+    roll.seek_requested.connect(seeks.append)
+
+    note_x = round(roll.x_for_time_float(0.75))
+    note_y = (108 - note.pitch) * 7 + 3
+    QTest.mouseClick(
+        roll,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(note_x, note_y),
+    )
+    assert roll.selected_indices == (0,)
+    assert seeks == []
+
+    empty_y = (108 - (note.pitch + 1)) * 7 + 3
+    QTest.mouseClick(
+        roll,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(note_x, empty_y),
+    )
+    assert roll.selected_indices == ()
+    assert seeks == []
+    roll.close()
+
+
+def test_desktop_midi_editor_add_delete_undo_redo_and_reset(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    audio = _silent_wav(tmp_path / "editor-controls.wav", 1.0)
+    original = MuscriptorRollNote(
+        "acoustic_piano",
+        60,
+        90,
+        0.0,
+        0.5,
+        program=0,
+        is_drum=False,
+        track_index=0,
+        channel=0,
+    )
+    widget = MuscriptorResultWidget(str(audio), ["acoustic_piano"])
+    try:
+        widget._begin_editor_session((original,), 1.0)
+        widget.edit_toggle.setChecked(True)
+        widget._add_editor_note(0.5, 64)
+        assert [note.pitch for note in widget._edited_notes] == [60, 64]
+        assert widget.roll.selected_index == 1
+
+        widget.edit_velocity_spin.setValue(73)
+        assert widget._edited_notes[1].velocity == 73
+        widget._delete_selected_editor_note()
+        assert widget._edited_notes == (original,)
+
+        widget._undo_editor_notes()
+        assert [note.pitch for note in widget._edited_notes] == [60, 64]
+        assert widget._edited_notes[1].velocity == 73
+        widget._redo_editor_notes()
+        assert widget._edited_notes == (original,)
+
+        widget._undo_editor_notes()
+        widget._reset_editor_notes()
+        assert widget._edited_notes == (original,)
+        assert widget.edit_reset_button.isEnabled() is False
+        assert widget.edit_summary_label.text()
+        app.processEvents()
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render_applies(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source_audio = _silent_wav(tmp_path / "edit-audio-source.wav", 1.0)
+    original_render = _tone_wav(tmp_path / "original-render.wav", 1.0, amplitude=0.1)
+    edited_render = _silent_wav(tmp_path / "edited-render.wav", 1.0)
+    source_midi = tmp_path / "edit-audio-source.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    track.append(mido.Message("note_on", channel=0, note=60, velocity=90, time=0))
+    track.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(source_midi)
+    note = read_midi_roll_notes(source_midi)[0]
+    original_assets = muscriptor_result_assets.MuscriptorPlaybackAssets(
+        notes=(note,),
+        duration=1.0,
+        transcription_wav=original_render,
+        live_transcription_wav=original_render,
+        stereo_mix_wav=original_render,
+        original_left_wav=source_audio,
+        transcription_right_wav=original_render,
+        instrument_wavs={note.instrument: original_render},
+        instrument_right_wavs={note.instrument: original_render},
+        midi_gain_db=0.0,
+    )
+    edited_assets = muscriptor_result_assets.MuscriptorPlaybackAssets(
+        notes=(),
+        duration=1.0,
+        transcription_wav=edited_render,
+        live_transcription_wav=edited_render,
+        stereo_mix_wav=edited_render,
+        original_left_wav=source_audio,
+        transcription_right_wav=edited_render,
+        instrument_wavs={},
+        instrument_right_wavs={},
+        midi_gain_db=0.0,
+    )
+    widget = MuscriptorResultWidget(str(source_audio), ["acoustic_piano"])
+    try:
+        widget._midi_path = str(source_midi)
+        widget.set_detected_bpm(120.0)
+        widget._apply_final_assets(original_assets)
+        assert widget.play_button.isEnabled()
+        assert Path(widget._midi_normal[0].source().toLocalFile()) == original_render.resolve()
+
+        widget._record_editor_commit((note,), ())
+
+        generation = widget._edit_asset_generation
+        assert generation == 1
+        assert not widget.play_button.isEnabled()
+        assert not widget.playback_slider.isEnabled()
+        assert widget._assets is original_assets
+
+        widget._apply_editor_audio_assets(
+            generation,
+            edited_assets,
+            output_dir=tmp_path / "generation-000001",
+            restored_original=False,
+        )
+        app.processEvents()
+
+        assert widget._assets is edited_assets
+        assert widget._edited_notes == ()
+        assert widget._detected == []
+        assert widget.play_button.isEnabled()
+        assert widget.playback_slider.isEnabled()
+        assert Path(widget._midi_normal[0].source().toLocalFile()) == edited_render.resolve()
+        with pytest.raises(RuntimeError, match="stale edited MIDI audio"):
+            widget._apply_editor_audio_assets(
+                generation - 1,
+                original_assets,
+                output_dir=None,
+                restored_original=True,
+            )
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_desktop_editor_failure_keeps_full_diagnostic_in_log_but_bounds_status_label(
+    tmp_path: Path,
+    caplog,
+):
+    app = QApplication.instance() or QApplication([])
+    source_audio = _silent_wav(tmp_path / "bounded-editor-error.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source_audio), ["acoustic_piano"])
+    full_error = "Edited MIDI note verification failed: expected=Counter(" + "x" * 20_000 + ")"
+    widget._edit_asset_generation = 7
+    try:
+        with caplog.at_level("ERROR"):
+            widget._on_editor_audio_failed(7, full_error)
+        visible = widget.playback_status_label.text()
+        assert len(visible) < 500
+        assert visible.endswith("…")
+        assert "x" * 1_000 not in visible
+        assert any(full_error in record.getMessage() for record in caplog.records)
+    finally:
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
+
+
+def test_edited_midi_download_publishes_current_notes_and_exact_77_9_bpm(
+    tmp_path: Path,
+    monkeypatch,
+):
+    app = QApplication.instance() or QApplication([])
+    source_audio = _silent_wav(tmp_path / "edited-download-source.wav", 2.0)
+    source_midi = tmp_path / "edited-download-source.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(117.9), time=0))
+    conductor.append(mido.MetaMessage("marker", text="retain-marker", time=0))
+    midi.tracks.append(conductor)
+    notes_track = mido.MidiTrack()
+    notes_track.append(mido.Message("program_change", channel=0, program=0, time=0))
+    notes_track.append(mido.Message("control_change", channel=0, control=64, value=127, time=0))
+    notes_track.append(mido.Message("note_on", channel=0, note=60, velocity=91, time=37))
+    notes_track.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=443))
+    notes_track.append(mido.Message("note_on", channel=0, note=67, velocity=82, time=480))
+    notes_track.append(mido.Message("note_off", channel=0, note=67, velocity=0, time=480))
+    notes_track.append(mido.Message("control_change", channel=0, control=64, value=0, time=0))
+    midi.tracks.append(notes_track)
+    midi.save(source_midi)
+
+    original_notes = read_midi_roll_notes(source_midi)
+    destination = tmp_path / "current-edit-77.9BPM.mid"
+    widget = MuscriptorResultWidget(str(source_audio), ["acoustic_piano"])
+    widget._midi_path = str(source_midi)
+    widget.set_detected_bpm(117.9)
+    widget._original_edit_notes = original_notes
+    widget._edited_notes = original_notes[:1]
+    widget.bpm_spin.setValue(77.9)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(destination), "MIDI (*.mid)"),
+    )
+
+    try:
+        widget._save_asset("midi")
+    finally:
+        widget.shutdown()
+        widget.close()
+
+    downloaded = mido.MidiFile(destination)
+    tempo_messages = [
+        message for track in downloaded.tracks for message in track if message.type == "set_tempo"
+    ]
+    assert len(tempo_messages) == 1
+    assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(77.9, abs=0.001)
+    assert [
+        (note.pitch, note.velocity, note.track_index, note.channel)
+        for note in read_midi_roll_notes(destination)
+    ] == [
+        (
+            original_notes[0].pitch,
+            original_notes[0].velocity,
+            original_notes[0].track_index,
+            original_notes[0].channel,
+        )
+    ]
+    assert [
+        message.text for track in downloaded.tracks for message in track if message.type == "marker"
+    ] == ["retain-marker"]
+    assert [
+        (message.control, message.value)
+        for track in downloaded.tracks
+        for message in track
+        if message.type == "control_change"
+    ] == [(64, 127), (64, 0)]
+    pretty_result = pretty_midi.PrettyMIDI(str(destination))
+    tempo_times, tempo_values = pretty_result.get_tempo_changes()
+    assert tempo_times.tolist() == [0.0]
+    assert tempo_values.tolist() == pytest.approx([77.9], abs=0.001)
+
+
+def test_desktop_midi_editor_uses_daw_multi_select_clipboard_and_nudge_shortcuts(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    audio = _silent_wav(tmp_path / "editor-shortcuts.wav", 4.0)
+    notes = (
+        MuscriptorRollNote(
+            "acoustic_piano",
+            60,
+            90,
+            0.13,
+            0.63,
+            program=0,
+            is_drum=False,
+            track_index=0,
+            channel=0,
+        ),
+        MuscriptorRollNote(
+            "acoustic_piano",
+            64,
+            80,
+            1.13,
+            1.63,
+            program=0,
+            is_drum=False,
+            track_index=0,
+            channel=0,
+        ),
+    )
+    widget = MuscriptorResultWidget(str(audio), ["acoustic_piano"])
+    widget.resize(1100, 900)
+    widget.show()
+    try:
+        widget.set_bpm_context(120.0, 120.0)
+        widget.roll.set_notes(notes, duration=4.0)
+        widget._begin_editor_session(notes, 4.0)
+        widget.edit_toggle.setChecked(True)
+        widget.roll.setFocus()
+        app.processEvents()
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_A,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert widget.roll.selected_indices == (0, 1)
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_C,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert len(widget._edit_clipboard) == 2
+
+        QTest.keyClick(widget.roll, Qt.Key.Key_Right)
+        assert [note.start for note in widget._edited_notes] == pytest.approx([0.255, 1.255])
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_Up,
+            Qt.KeyboardModifier.ShiftModifier,
+        )
+        assert [note.pitch for note in widget._edited_notes] == [72, 76]
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_Q,
+            Qt.KeyboardModifier.AltModifier,
+        )
+        assert [note.start for note in widget._edited_notes] == pytest.approx([0.25, 1.25])
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_B,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert len(widget._edited_notes) == 4
+        assert widget.roll.selected_indices == (2, 3)
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_X,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert len(widget._edited_notes) == 2
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_V,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert len(widget._edited_notes) == 4
+
+        QTest.keyClick(
+            widget.roll,
+            Qt.Key.Key_Z,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert len(widget._edited_notes) == 2
+        app.processEvents()
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_desktop_roll_and_legend_share_one_high_contrast_instrument_palette(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    widget = MuscriptorResultWidget(
+        str(tmp_path / "colors.wav"),
+        ["string_ensemble", "acoustic_piano"],
+    )
+    notes = (
+        MuscriptorRollNote("acoustic_piano", 60, 90, 0.0, 0.5),
+        MuscriptorRollNote("string_ensemble", 67, 90, 0.5, 1.0),
+    )
+    try:
+        widget.roll.set_notes(notes, duration=1.0)
+        widget._detected = ["acoustic_piano", "string_ensemble"]
+        widget._rebuild_instrument_rows()
+
+        assert _COLORS == _INSTRUMENT_COLORS
+        assert _INSTRUMENT_COLORS[2] == "#7bd88f"
+        assert widget.roll._colors["string_ensemble"].name() == "#4a9eff"
+        assert widget.roll._colors["acoustic_piano"].name() == "#ff8d66"
+        for index, instrument in enumerate(widget.selected_instruments):
+            swatch = widget._instrument_rows[instrument].findChildren(QLabel)[0]
+            assert _INSTRUMENT_COLORS[index] in swatch.styleSheet()
+        app.processEvents()
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_desktop_piano_roll_splitter_expands_the_note_view_upward(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    widget = MuscriptorResultWidget(str(tmp_path / "splitter.wav"), ["acoustic_piano"])
+    widget.resize(1100, 1000)
+    widget.show()
+    app.processEvents()
+    try:
+        assert widget.result_splitter.widget(0) is widget.result_controls_panel
+        assert widget.result_splitter.widget(1) is widget.roll_panel
+        assert widget.result_splitter.isCollapsible(0)
+        assert not widget.result_splitter.isCollapsible(1)
+        assert widget.source_label.parentWidget() is widget.result_controls_panel
+        assert widget.editor_panel.parentWidget() is widget.result_controls_panel
+
+        before = widget.result_splitter.sizes()
+        handle = widget.result_splitter.handle(1)
+        start = handle.rect().center()
+        finish = QPoint(start.x(), start.y() - widget.height())
+        QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(handle, finish, delay=20)
+        QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=finish)
+        app.processEvents()
+        maximized = widget.result_splitter.sizes()
+
+        assert len(before) == len(maximized) == 2
+        assert maximized[0] == 0
+        assert maximized[1] > before[1]
+        assert widget.result_controls_panel.height() == 0
+        assert handle.geometry().top() == 0
+
+        restore_start = handle.rect().center()
+        restore_finish = QPoint(restore_start.x(), restore_start.y() + 260)
+        QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=restore_start)
+        QTest.mouseMove(handle, restore_finish, delay=20)
+        QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=restore_finish)
+        app.processEvents()
+        restored = widget.result_splitter.sizes()
+
+        assert restored[0] >= 240
+        assert restored[1] < maximized[1]
+        assert widget.result_controls_panel.height() >= 240
+        assert widget.result_splitter.handle(1).toolTip() == t(
+            "muscriptor_result.editor_resize_hint"
+        )
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
+def test_desktop_view_zoom_grows_notes_beyond_one_x_and_is_not_playback_speed(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "view-zoom.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
+    widget.resize(1200, 800)
+    widget.show()
+    widget.roll.set_notes(
+        (MuscriptorRollNote("acoustic_piano", 60, 100, 1.0, 2.0),),
+        duration=12.0,
+    )
+    widget.set_bpm_context(120.0, 120.0)
+    app.processEvents()
+
+    try:
+        default_width = widget.roll.x_for_time_float(2.0) - widget.roll.x_for_time_float(1.0)
+        default_pixels_per_second = widget.roll.pixels_per_second
+
+        widget.speed_spin.setValue(1.25)
+        app.processEvents()
+        assert widget.roll.pixels_per_second == pytest.approx(default_pixels_per_second)
+        assert (
+            widget.roll.x_for_time_float(2.0) - widget.roll.x_for_time_float(1.0)
+        ) == pytest.approx(default_width)
+
+        assert widget.roll_zoom_spin.maximum() > 1.0
+        widget.roll_zoom_spin.setValue(2.0)
+        app.processEvents()
+        doubled_width = widget.roll.x_for_time_float(2.0) - widget.roll.x_for_time_float(1.0)
+        assert widget.roll_zoom_spin.value() == pytest.approx(2.0)
+        assert widget.roll.pixels_per_second == pytest.approx(default_pixels_per_second * 2.0)
+        assert doubled_width == pytest.approx(default_width * 2.0)
+        assert widget.speed_label.text() == t("muscriptor_result.playback_speed_label")
+        assert widget.roll_zoom_label.text() == t("muscriptor_result.editor_view_zoom")
+    finally:
+        widget.shutdown()
+        widget.close()
+
+
 @pytest.mark.parametrize(
     ("editor", "typed_text", "expected_bpm"),
     [
@@ -2067,7 +2979,7 @@ def test_midi_download_uses_editable_result_bpm_and_changes_playback_seconds(
         ("speed", "0.500x", 59.0),
     ],
 )
-def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
+def test_midi_download_uses_bidirectionally_linked_bpm_or_speed(
     tmp_path: Path,
     monkeypatch,
     editor: str,
@@ -2093,6 +3005,7 @@ def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
     control = widget.bpm_spin if editor == "bpm" else widget.speed_spin
     control.lineEdit().setText(typed_text)
     control.lineEdit().textEdited.emit(typed_text)
+    control.interpretText()
     dialog_defaults: list[str] = []
 
     def choose_destination(_parent, _title, default_path, _filter):
@@ -2107,6 +3020,8 @@ def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
 
     try:
         widget.download_midi_action.trigger()
+        expected_rate = expected_bpm / 117.9
+        assert widget._result_playback_rate() == pytest.approx(expected_rate)
         assert dialog_defaults == [f"{source_midi.stem}_{expected_bpm:.1f}BPM.mid"]
         assert f"{expected_bpm:.1f}" in widget.playback_status_label.text()
         assert str(destination.resolve()) in widget.playback_status_label.text()
@@ -2128,12 +3043,12 @@ def test_midi_download_commits_only_the_last_tempo_control_and_verifies_file(
     )
     assert downloaded.length == pytest.approx(
         source_duration * 117.9 / expected_bpm,
-        abs=1e-6,
+        abs=60.0 / expected_bpm / downloaded.ticks_per_beat,
     )
     app.processEvents()
 
 
-def test_midi_download_aligns_note_onsets_without_changing_note_durations(
+def test_midi_download_preserves_reference_ticks_and_changes_real_duration(
     tmp_path: Path,
 ):
     source_midi = tmp_path / "unaligned-source.mid"
@@ -2152,12 +3067,12 @@ def test_midi_download_aligns_note_onsets_without_changing_note_durations(
     midi.tracks.append(notes)
     midi.save(source_midi)
 
-    destination = tmp_path / "notation-compatible.mid"
-    _export_midi_with_bpm(
+    destination = tmp_path / "tempo-only.mid"
+    _export_midi_at_project_speed(
         source_midi,
         destination,
+        117.9,
         77.9,
-        notation_compatible=True,
     )
 
     downloaded = mido.MidiFile(destination)
@@ -2176,41 +3091,34 @@ def test_midi_download_aligns_note_onsets_without_changing_note_durations(
     assert tempo_values.tolist() == pytest.approx([77.9], abs=0.001)
     assert sum(len(instrument.notes) for instrument in pretty_midi_result.instruments) == 3
 
-    grid_ticks = downloaded.ticks_per_beat // 6
-
-    def note_timings(path: Path) -> list[tuple[int, int, int, int]]:
-        timings: list[tuple[int, int, int, int]] = []
-        for track in mido.MidiFile(path).tracks:
-            absolute_tick = 0
-            active: dict[tuple[int, int], list[int]] = {}
-            for message in track:
-                absolute_tick += message.time
-                if message.is_meta:
-                    continue
-                if message.type == "note_on" and message.velocity > 0:
-                    key = (message.channel, message.note)
-                    active.setdefault(key, []).append(absolute_tick)
-                elif message.type == "note_off" or (
-                    message.type == "note_on" and message.velocity == 0
-                ):
-                    key = (message.channel, message.note)
-                    starts = active.get(key)
-                    if starts:
-                        start = starts.pop(0)
-                        timings.append(
-                            (message.channel, message.note, start, absolute_tick - start)
-                        )
-        return timings
-
-    source_timings = note_timings(source_midi)
-    downloaded_timings = note_timings(destination)
-    assert [(item[0], item[1], item[3]) for item in downloaded_timings] == [
-        (item[0], item[1], item[3]) for item in source_timings
-    ]
-    assert all(item[2] % grid_ticks == 0 for item in downloaded_timings)
-    assert all(
-        abs(downloaded_item[2] - source_item[2]) <= grid_ticks // 2
-        for source_item, downloaded_item in zip(source_timings, downloaded_timings)
+    source_notes = read_midi_roll_notes(source_midi)
+    downloaded_notes = read_midi_roll_notes(destination)
+    assert [
+        (note.track_index, note.channel, note.pitch, note.velocity) for note in downloaded_notes
+    ] == [(note.track_index, note.channel, note.pitch, note.velocity) for note in source_notes]
+    source_ticks = non_tempo_event_tick_fingerprint(mido.MidiFile(source_midi))
+    downloaded_ticks = non_tempo_event_tick_fingerprint(downloaded)
+    assert downloaded_ticks == source_ticks
+    source_times, source_resolutions = non_tempo_event_time_fingerprint(mido.MidiFile(source_midi))
+    downloaded_times, downloaded_resolutions = non_tempo_event_time_fingerprint(downloaded)
+    assert len(downloaded_times) == len(source_times)
+    for track_index, (source_events, downloaded_events) in enumerate(
+        zip(source_times, downloaded_times)
+    ):
+        assert len(downloaded_events) == len(source_events)
+        tolerance = source_resolutions[track_index] + downloaded_resolutions[track_index] + 1e-9
+        for (source_payload, source_seconds), (
+            downloaded_payload,
+            downloaded_seconds,
+        ) in zip(source_events, downloaded_events):
+            assert downloaded_payload == source_payload
+            assert downloaded_seconds == pytest.approx(
+                source_seconds * 117.9 / 77.9,
+                abs=tolerance,
+            )
+    assert downloaded.length == pytest.approx(
+        mido.MidiFile(source_midi).length * 117.9 / 77.9,
+        abs=2 * 60.0 / 77.9 / downloaded.ticks_per_beat,
     )
 
 
@@ -2434,6 +3342,29 @@ def test_project_native_selector_controls_real_constraint_state():
     selector.close()
 
 
+def test_selector_returns_search_input_to_left_edge_after_last_tag_is_removed():
+    app = QApplication.instance() or QApplication([])
+    selector = MuscriptorInstrumentSelector()
+    selector.resize(760, 220)
+    selector.show()
+    app.processEvents()
+
+    empty_left = selector.search_edit.geometry().left()
+    selector.set_selected_instruments(["acoustic_piano"])
+    app.processEvents()
+    assert selector.search_edit.geometry().left() > empty_left
+
+    QTest.mouseClick(
+        selector._tags["acoustic_piano"].remove_button,
+        Qt.MouseButton.LeftButton,
+    )
+    app.processEvents()
+
+    assert selector.selected_instruments() == []
+    assert selector.search_edit.geometry().left() == empty_left
+    selector.close()
+
+
 def test_selector_uses_filtered_completion_identity_for_multiple_choices():
     app = QApplication.instance() or QApplication([])
     selector = MuscriptorInstrumentSelector()
@@ -2543,6 +3474,25 @@ def test_browser_midi_workbench_uses_virtualized_smooth_transport_and_shortcuts(
     assert 'querySelectorAll(".msr-root:not([data-msr-init])")' in MUSCRIPTOR_RESULT_JS
 
 
+def test_browser_midi_editor_exposes_daw_commands_and_upward_resize_handle():
+    assert "msr-resize-handle" in MUSCRIPTOR_RESULT_CSS
+    assert "cursor:ns-resize" in MUSCRIPTOR_RESULT_CSS
+    assert "startHeight + self.resizeDrag.startY - event.clientY" in MUSCRIPTOR_RESULT_JS
+    assert 'key === "b" || key === "d"' in MUSCRIPTOR_RESULT_JS
+    assert 'event.altKey && key === "q"' in MUSCRIPTOR_RESULT_JS
+    assert 'command && key === "u"' in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.selectAll" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.copySelected" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.pasteNotes" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.quantizeSelected" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.transformSelected" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.setZoomRatio" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.setZoomPps" in MUSCRIPTOR_RESULT_JS
+    assert "BASE_PPS * ratio" in MUSCRIPTOR_RESULT_JS
+    assert "this.zoomInput.value = (this.pps / BASE_PPS).toFixed(2)" in MUSCRIPTOR_RESULT_JS
+    assert "msr-zoom-input" in MUSCRIPTOR_RESULT_CSS
+
+
 def test_browser_midi_workbench_labels_generic_gm_programs():
     state = {
         "audio_path": "C:/tmp/source.wav",
@@ -2563,6 +3513,243 @@ def test_browser_midi_workbench_labels_generic_gm_programs():
     assert "Acoustic Grand Piano" in markup
     assert "YourMT3+" in markup
     assert "vocals" in markup
+
+
+def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
+    state = {
+        "audio_path": "C:/tmp/source.wav",
+        "midi_path": "C:/tmp/result.mid",
+        "transcription_wav": "C:/tmp/result.wav",
+        "stereo_mix_wav": "C:/tmp/stereo.wav",
+        "instrument_wavs": {"gm:024": "C:/tmp/guitar.wav"},
+        "selected_instruments": ["gm:024"],
+        "detected_instruments": ["gm:024"],
+        "notes": [
+            {
+                "instrument": "gm:024",
+                "pitch": 64,
+                "velocity": 91,
+                "start": 0.25,
+                "end": 0.75,
+                "program": 24,
+                "is_drum": False,
+                "track_index": 2,
+                "channel": 3,
+            }
+        ],
+        "duration": 1.0,
+        "reference_bpm": 117.9,
+        "target_bpm": 132.5,
+        "backend_label": "MIROS",
+        "source_track_name": "guitar",
+    }
+
+    markup = build_muscriptor_result_html(state, lambda key: key, "en_US")
+
+    assert '"referenceBpm": 117.9' in markup
+    assert '"targetBpm": 132.5' in markup
+    assert '"program": 24' in markup
+    assert '"track_index": 2' in markup
+    assert '"channel": 3' in markup
+    assert "buildEditedSmf" in MUSCRIPTOR_RESULT_JS
+    assert "pass-through event verification failed" in MUSCRIPTOR_RESULT_JS
+    assert "this.undoStack" in MUSCRIPTOR_RESULT_JS
+    assert "onPointerMove" in MUSCRIPTOR_RESULT_JS
+    assert "downloadEditedMidi" in MUSCRIPTOR_RESULT_JS
+
+
+def test_browser_midi_editor_builds_verified_smf_and_preserves_controller_events(
+    tmp_path: Path,
+):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is unavailable for browser MIDI editor validation")
+    source = tmp_path / "browser-editor-source.mid"
+    destination = tmp_path / "browser-editor-output.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    # Browser receives the pipeline's target-tempo file; its non-tempo ticks
+    # are already expressed on the 120 BPM reference grid.
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90), time=0))
+    track.append(
+        mido.MetaMessage(
+            "time_signature",
+            numerator=6,
+            denominator=8,
+            clocks_per_click=36,
+            time=0,
+        )
+    )
+    track.append(mido.MetaMessage("marker", text="browser-keeps-this", time=10))
+    track.append(mido.Message("sysex", data=(0x7D, 0x02), time=0))
+    track.append(mido.Message("program_change", channel=2, program=24, time=0))
+    track.append(mido.Message("control_change", channel=2, control=64, value=127, time=40))
+    track.append(mido.Message("note_on", channel=2, note=60, velocity=90, time=0))
+    track.append(mido.Message("control_change", channel=2, control=64, value=0, time=200))
+    track.append(mido.Message("note_off", channel=2, note=60, velocity=0, time=230))
+    midi.tracks.append(track)
+    midi.save(source)
+    notes_path = tmp_path / "browser-editor-notes.json"
+    notes_path.write_text(
+        json.dumps(
+            [
+                {
+                    "instrument": "gm:024",
+                    "pitch": 67,
+                    "velocity": 76,
+                    "start": 0.0375,
+                    "end": 0.8375,
+                    "program": 24,
+                    "is_drum": False,
+                    "track_index": 0,
+                    "channel": 2,
+                },
+                {
+                    "instrument": "gm:024",
+                    "pitch": 67,
+                    "velocity": 76,
+                    "start": 0.2875,
+                    "end": 0.5375,
+                    "program": 24,
+                    "is_drum": False,
+                    "track_index": 0,
+                    "channel": 2,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    harness = tmp_path / "browser-editor-harness.js"
+    harness.write_text(
+        "\n".join(
+            [
+                "global.window = {};",
+                "global.document = {",
+                "  documentElement: {},",
+                '  readyState: "loading",',
+                "  addEventListener: function () {},",
+                "  querySelectorAll: function () { return []; }",
+                "};",
+                "global.MutationObserver = function () { this.observe = function () {}; };",
+                MUSCRIPTOR_RESULT_JS,
+                'const fs = require("fs");',
+                "const source = fs.readFileSync(process.argv[2]);",
+                "const sourceBuffer = source.buffer.slice(",
+                "  source.byteOffset, source.byteOffset + source.byteLength",
+                ");",
+                'const notes = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));',
+                "const output = window.musicToMidiMidiEditorRuntime.buildEditedSmf(",
+                "  sourceBuffer, notes, 90, 120",
+                ");",
+                "fs.writeFileSync(process.argv[4], Buffer.from(output));",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [node, str(harness), str(source), str(notes_path), str(destination)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert completed.returncode == 0, completed.stdout
+    edited = mido.MidiFile(destination)
+    assert [
+        message.text
+        for midi_track in edited.tracks
+        for message in midi_track
+        if message.type == "marker"
+    ] == ["browser-keeps-this"]
+    assert [
+        (message.channel, message.control, message.value)
+        for midi_track in edited.tracks
+        for message in midi_track
+        if message.type == "control_change"
+    ] == [
+        (2, 64, 127),
+        (0, 64, 127),
+        (2, 64, 0),
+        (0, 64, 0),
+    ]
+    assert [
+        tuple(message.data)
+        for midi_track in edited.tracks
+        for message in midi_track
+        if message.type == "sysex"
+    ] == [(0x7D, 0x02)]
+    assert [
+        (message.numerator, message.denominator, message.clocks_per_click)
+        for midi_track in edited.tracks
+        for message in midi_track
+        if message.type == "time_signature"
+    ] == [(6, 8, 36)]
+    absolute_tick = 0
+    active_notes = {}
+    note_intervals = []
+    for message in edited.tracks[0]:
+        absolute_tick += message.time
+        if message.type == "note_on" and message.velocity > 0:
+            active_notes[(message.channel, message.note)] = absolute_tick
+        elif message.type in {"note_on", "note_off"}:
+            note_intervals.append(
+                (
+                    active_notes.pop((message.channel, message.note)),
+                    absolute_tick,
+                    message.channel,
+                )
+            )
+    assert sorted(note_intervals) == [(36, 804, 2), (276, 516, 0)]
+    assert [
+        mido.tempo2bpm(message.tempo)
+        for midi_track in edited.tracks
+        for message in midi_track
+        if message.type == "set_tempo"
+    ] == pytest.approx([90.0], abs=0.001)
+
+    plain_source = tmp_path / "browser-notes-only-source.mid"
+    plain_destination = tmp_path / "browser-notes-only-output.mid"
+    plain_midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    plain_track = mido.MidiTrack()
+    plain_track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    plain_track.append(mido.Message("note_on", channel=2, note=60, velocity=90, time=0))
+    plain_track.append(mido.Message("note_off", channel=2, note=60, velocity=0, time=480))
+    plain_midi.tracks.append(plain_track)
+    plain_midi.save(plain_source)
+    plain_completed = subprocess.run(
+        [
+            node,
+            str(harness),
+            str(plain_source),
+            str(notes_path),
+            str(plain_destination),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert plain_completed.returncode == 0, plain_completed.stdout
+    unsupported_types = {
+        "aftertouch",
+        "control_change",
+        "marker",
+        "pitchwheel",
+        "polytouch",
+        "sysex",
+    }
+    actual_types = {
+        message.type
+        for midi_track in mido.MidiFile(plain_destination).tracks
+        for message in midi_track
+    }
+    assert actual_types.isdisjoint(unsupported_types)
 
 
 def test_linked_desktop_midi_detail_identifies_source_and_closes_independently(
@@ -2591,6 +3778,55 @@ def test_linked_desktop_midi_detail_identifies_source_and_closes_independently(
     finally:
         widget.shutdown()
         widget.close()
+
+
+def test_muscriptor_result_shutdown_unloads_edited_wav_before_temp_cleanup(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "shutdown-source.wav", 0.2)
+    widget = MuscriptorResultWidget(str(source), [], backend_label="MuScriptor-large")
+    edit_root = widget._edit_asset_root
+    generation_dir = edit_root / "generation-000001"
+    generation_dir.mkdir()
+    edited_wav = _silent_wav(generation_dir / "midi-live.wav", 0.2)
+    player, _output = widget._make_player(edited_wav)
+    player.play()
+    QTest.qWait(100)
+    app.processEvents()
+
+    widget.shutdown()
+    app.processEvents()
+
+    assert not edit_root.exists()
+    widget.close()
+
+
+def test_muscriptor_shutdown_drains_pending_retired_media_before_deletion(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "retired-source.wav", 0.2)
+    widget = MuscriptorResultWidget(str(source), [], backend_label="MuScriptor-large")
+    preview_root = widget._preview_root
+    generation_dir = preview_root / "generation-000001"
+    generation_dir.mkdir()
+    preview_wav = _silent_wav(generation_dir / "midi-live.wav", 0.2)
+    player, _output = widget._make_player(preview_wav)
+    player.play()
+    QTest.qWait(80)
+    player.stop()
+    app.processEvents()
+
+    widget._dispose_dynamic_players()
+    assert widget._retired_media_timer.isActive()
+    assert widget._retired_media
+
+    widget.shutdown()
+    widget.close()
+    app.processEvents()
+
+    assert not widget._retired_media_timer.isActive()
+    assert widget._retired_media == []
+    assert not preview_root.exists()
 
 
 def test_muscriptor_desktop_result_uses_project_palette(tmp_path: Path):
@@ -2631,3 +3867,41 @@ def test_muscriptor_browser_workbench_javascript_is_syntactically_valid(tmp_path
     )
 
     assert completed.returncode == 0, completed.stdout
+
+
+def test_browser_project_bpm_changes_linked_audition_rate(tmp_path: Path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is unavailable for MuScriptor JS validation")
+    harness = tmp_path / "browser-bpm-rate.js"
+    harness.write_text(
+        "\n".join(
+            [
+                "global.window = {};",
+                "global.document = {",
+                "  documentElement: {},",
+                '  readyState: "loading",',
+                "  addEventListener: function () {},",
+                "  querySelectorAll: function () { return []; }",
+                "};",
+                "global.MutationObserver = function () { this.observe = function () {}; };",
+                MUSCRIPTOR_RESULT_JS,
+                "const runtime = window.musicToMidiMidiEditorRuntime;",
+                "console.log(runtime.projectPlaybackRate(76.3, 120));",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [node, str(harness)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    assert completed.returncode == 0, completed.stdout
+    assert float(completed.stdout.strip()) == pytest.approx(120.0 / 76.3)

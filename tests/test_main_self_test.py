@@ -13,6 +13,87 @@ import src.main as main_module
 
 
 class MainSelfTestTests(unittest.TestCase):
+    def test_preload_bundled_windows_vc_runtime_loads_complete_absolute_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expected_paths = [
+                root / "msvcp140.dll",
+                root / "vcruntime140.dll",
+                root / "vcruntime140_1.dll",
+            ]
+            for path in expected_paths:
+                path.write_bytes(b"dll")
+
+            handles = [object(), object(), object()]
+            with patch.object(sys, "frozen", True, create=True), patch.object(
+                main_module, "os", types.SimpleNamespace(name="nt")
+            ), patch.object(
+                main_module, "get_bundle_roots", return_value=[root]
+            ), patch.object(
+                main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
+            ) as retained_handles, patch(
+                "ctypes.WinDLL", side_effect=handles, create=True
+            ) as win_dll:
+                main_module._preload_bundled_windows_vc_runtime()
+
+        self.assertEqual(
+            [Path(call.args[0]) for call in win_dll.call_args_list],
+            expected_paths,
+        )
+        self.assertEqual(retained_handles, handles)
+
+    def test_preload_bundled_windows_vc_runtime_fails_for_incomplete_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "msvcp140.dll").write_bytes(b"dll")
+            with patch.object(sys, "frozen", True, create=True), patch.object(
+                main_module, "os", types.SimpleNamespace(name="nt")
+            ), patch.object(
+                main_module, "get_bundle_roots", return_value=[root]
+            ), patch.object(
+                main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
+            ), patch("ctypes.WinDLL", create=True) as win_dll:
+                with self.assertRaisesRegex(RuntimeError, "missing its required Visual"):
+                    main_module._preload_bundled_windows_vc_runtime()
+
+        win_dll.assert_not_called()
+
+    def test_gui_runtime_self_test_loads_qt_before_onnx_and_requires_cuda(self):
+        fake_logger = Mock()
+        fake_qt_widgets = types.ModuleType("PyQt6.QtWidgets")
+        fake_qt_widgets.QApplication = object
+        fake_ort = types.ModuleType("onnxruntime")
+        fake_ort.get_available_providers = lambda: [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        fake_separator = types.ModuleType("audio_separator.separator")
+        fake_separator.Separator = object
+        stdout = io.StringIO()
+
+        with patch.object(main_module, "setup_chinese_environment"), patch.object(
+            main_module, "get_logs_dir", return_value="logs"
+        ), patch.object(
+            main_module, "setup_logger", return_value=fake_logger
+        ), patch.object(
+            main_module, "_prepare_torch_runtime_before_pyqt"
+        ) as prepare_runtime, patch.object(
+            main_module, "activate_audio_separator_runtime"
+        ) as activate_ort, patch.dict(
+            sys.modules,
+            {
+                "PyQt6.QtWidgets": fake_qt_widgets,
+                "onnxruntime": fake_ort,
+                "audio_separator.separator": fake_separator,
+            },
+        ), redirect_stdout(stdout):
+            exit_code = main_module._run_gui_runtime_self_test()
+
+        self.assertEqual(exit_code, 0)
+        prepare_runtime.assert_called_once_with()
+        activate_ort.assert_called_once_with()
+        self.assertIn("GUI + Qt + ONNX Runtime CUDA", stdout.getvalue())
+
     def test_self_test_returns_zero_when_yourmt3_available(self):
         fake_logger = Mock()
 
@@ -224,6 +305,24 @@ class MainSelfTestTests(unittest.TestCase):
             load_model=False,
         )
         prepare_torch.assert_not_called()
+        qapplication.assert_not_called()
+
+    def test_main_dispatches_gui_runtime_self_test_before_normal_gui_startup(self):
+        with patch.object(
+            sys, "argv", ["MusicToMidi.exe", "--self-test-gui-runtime"]
+        ), patch.object(
+            main_module, "_run_gui_runtime_self_test", return_value=0
+        ) as self_test, patch.object(
+            main_module, "_prepare_torch_runtime_before_pyqt"
+        ) as normal_prepare, patch(
+            "PyQt6.QtWidgets.QApplication", create=True
+        ) as qapplication:
+            with self.assertRaises(SystemExit) as cm:
+                main_module.main()
+
+        self.assertEqual(cm.exception.code, 0)
+        self_test.assert_called_once_with()
+        normal_prepare.assert_not_called()
         qapplication.assert_not_called()
 
     def test_miros_worker_writes_failure_status_json(self):

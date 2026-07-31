@@ -519,6 +519,25 @@ $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR = $MuscriptorLargeBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR = $MuscriptorAssetsBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR = $FluidSynthBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
+$PyInstallerBootstrapDir = Join-Path $Root "tools\pyinstaller_bootstrap"
+$PyInstallerBootstrap = Join-Path $PyInstallerBootstrapDir "sitecustomize.py"
+if (-not (Test-Path -LiteralPath $PyInstallerBootstrap -PathType Leaf)) {
+    throw "PyInstaller VC runtime bootstrap is missing: $PyInstallerBootstrap"
+}
+$BuildVcRuntimeDir = Join-Path $env:WINDIR "System32"
+foreach ($name in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+    $runtimePath = Join-Path $BuildVcRuntimeDir $name
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        throw "Required PyInstaller build runtime is missing: $runtimePath"
+    }
+}
+$OriginalPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = if ([string]::IsNullOrWhiteSpace($OriginalPythonPath)) {
+    $PyInstallerBootstrapDir
+} else {
+    $PyInstallerBootstrapDir + [IO.Path]::PathSeparator + $OriginalPythonPath
+}
+$env:MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR = $BuildVcRuntimeDir
 
 $PyInstallerExitCode = 0
 try {
@@ -538,6 +557,12 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($OriginalPythonPath)) {
+        Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
+    } else {
+        $env:PYTHONPATH = $OriginalPythonPath
+    }
 }
 
 if ($PyInstallerExitCode -ne 0) {
@@ -548,6 +573,25 @@ $DistDir = Join-Path $Root "dist\MusicToMidi"
 if (-not (Test-Path -LiteralPath $DistDir -PathType Container)) {
     throw "PyInstaller reported success but the portable directory is missing: $DistDir"
 }
+
+$PortableExe = Join-Path $DistDir "MusicToMidi.exe"
+if (-not (Test-Path -LiteralPath $PortableExe -PathType Leaf)) {
+    throw "Portable executable is missing: $PortableExe"
+}
+$GuiRuntimeSelfTest = Start-Process `
+    -FilePath $PortableExe `
+    -ArgumentList "--self-test-gui-runtime" `
+    -PassThru `
+    -WindowStyle Hidden
+if (-not $GuiRuntimeSelfTest.WaitForExit(120000)) {
+    Stop-Process -Id $GuiRuntimeSelfTest.Id -Force -ErrorAction SilentlyContinue
+    throw "Portable GUI/Qt/ONNX Runtime self-test timed out after 120 seconds."
+}
+$GuiRuntimeSelfTest.Refresh()
+if ($GuiRuntimeSelfTest.ExitCode -ne 0) {
+    throw "Portable GUI/Qt/ONNX Runtime self-test failed with exit code $($GuiRuntimeSelfTest.ExitCode)."
+}
+Write-Host "[ok] Portable GUI + Qt + ONNX Runtime CUDA load order verified"
 
 $muscriptorDistCheck = @"
 from pathlib import Path

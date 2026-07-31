@@ -252,7 +252,8 @@ jobs:
           pip install -r .tmp/requirements-build.txt
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
-          pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip" --no-deps
+          pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/991ceaa04800484e617484ba065ebec802eebf53.zip" --no-deps
+          python patch_muscriptor_runtime.py
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime-gpu==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
@@ -941,28 +942,37 @@ jobs:
           #### 原曲 BPM、目标 BPM 与真实播放速度
           - 原曲 BPM 与目标 BPM 现在是两个独立状态：即使设置了自定义目标 BPM，应用仍会先自动识别原曲速度，并以“目标 BPM ÷ 原曲 BPM”同步控制原音与 MIDI 的实际播放倍率。
           - BPM 与速度控件双向联动。调整 BPM 会立即换算速度，调整速度也会反算 BPM；播放过程中修改同样即时生效，不再恢复为后端占位值或错误地保持 1.000x。
-          - 下载 MIDI 始终采用结果工作台当前显示的 BPM，并同时更新 tempo 元数据和真实播放时长；采纳 Standard MIDI tempo 的 DAW 会与应用内试听保持一致。
-          - 下载副本按 Standard MIDI Type 1 规范在第 0 轨、第 0 tick 写入唯一 tempo，并对齐乐谱导入网格且等量平移对应 Note Off，保持音符数量、音符时值与总播放时长；已用 Mido、PrettyMIDI、MuseScore 3/4 和实际歌曲交叉验证。
+          - 下载 MIDI 始终采用结果工作台当前显示的 BPM，并同时更新 tempo 元数据和真实播放时长；采纳 Standard MIDI tempo/tempo map 的 DAW 会与应用内试听保持一致。
+          - 下载副本先通过源 tempo map 恢复事件绝对秒，再映射到检测 BPM 的音乐 tick；目标 BPM 阶段保持该 tick 网格和全部消息值/顺序，只替换第 0 轨、第 0 tick 的唯一 tempo 与检测拍号。不吸附节奏网格，也不改变力度、音色、弯音、SysEx 或 CC64 踏板。
           - 修复全部七种模式中后端固定 120 BPM 占位 tempo 的问题，并保留音符、力度、控制器、弯音与 CC64 踏板消息。
           - 自动检测继续使用多引擎共识和拍间隔中位数倍频校正；变速 tempo map 仍为显式可选功能，低置信检测不会伪造速度变化。
+          - Mido、PrettyMIDI、FluidSynth、真实 3 分 27 秒 MuScriptor 结果和 Qt 播放链路均已回归。MuseScore 3/4 会对未量化的人类演奏型 MIDI 重新跟拍并可能覆盖乐谱页显示 BPM；这是其 MIDI 导入器行为，v1.4 不会用破坏音符时间的方式伪装适配。
 
-          #### 模型原生精度调用修复
-          - 移除项目额外注入的统一 FP32/FP16/BF16 精度选择层；YourMT3、MuScriptor、Aria-AMT、Leap XE、PolarFormer 与 MIROS 均恢复各自固定上游版本原有的推理调用和缓存配置。
-          - 修复 Issue #4：Aria-AMT 的 KV 缓存现在与上游转写函数使用同一个 BF16 支持判断，不再出现 Float 目标缓存与 BFloat16 写入值不一致的 \`index_put\` 错误。
-          - YourMT3 恢复官方 \`precision=16\` 参数；MuScriptor 使用上游 autocast/cache；Leap XE 使用固定配置中的 AMP；PolarFormer 直接使用 ONNX Runtime provider；MIROS 恢复固定上游 BF16 autocast，不再接受项目环境变量切换精度。
+          #### MIDI 编辑、试听与导出一致性
+          - 结果页新增完整钢琴卷帘编辑器：框选和 Ctrl/Shift 多选、添加/删除、拖动、改时值/力度/乐器、剪切复制粘贴、撤销重做、还原，以及用户主动触发的量化操作。
+          - 删除、移动或修改音符后会在后台重新生成与当前编辑完全一致的 SoundFont 试听；旧试听在新资产完成前被明确禁用，不再播放编辑前的缓存音频。
+          - 导出的编辑 MIDI 会重新构建已编辑音符，同时严格透传源文件中未被编辑器接管的 tempo 之外事件；写后会重新解析并校验 BPM、事件和音符，不把保存成功当成验证成功。
+          - 视图缩放与工程速度彻底分离；缩放只改变钢琴卷帘显示宽度。“播放速度”显示工程 BPM ÷ 检测 BPM 的真实倍率，修改 BPM 会同步更新倍率，修改倍率也会反算并写回工程 BPM、试听和导出 MIDI。
+
+          ![v1.4 BPM 与 MIDI 编辑工作台](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/resources/screenshots/05-v1.4-bpm-editor.png)
+          *v1.4 工程 BPM、真实联动速度、钢琴卷帘编辑与下载工作台*
 
           #### 音轨工作台、播放与稳定性
           - 转写工作台新增可拖动、可点击跳转的播放进度条：拖动实时预览位置，松手或点击即跳转播放；播放中跳转只在释放时提交一次，避免 Windows FFmpeg 媒体后端因高频 seek 卡死。
           - MIDI 作为进度主时钟，原音与乐器分轨统一 seek，并持续校正可感知漂移；调整 BPM/速度后仍保持音频和 MIDI 对齐。
           - 修复 MuScriptor 分片快于计时器分辨率时产生 0 秒耗时样本、进而触发 \`ValueError\` 导致界面闪退的问题。
+          - 播放时选择、拖动或批量编辑音符不再在 GUI 线程同步生成音频；编辑预览通过低优先级工作线程生成，并用 generation token 丢弃过期结果，避免旧任务覆盖新编辑。
+          - 关闭结果页或再次转换时会停止计时器、取消待处理预览、等待 QThread 完整退出，再释放 Qt Multimedia 对象，修复退出/重置期间的卡死与闪退窗口。
           - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
           - 播放头连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时退出自动跟随。
 
-          #### 新增 MuScriptor Small / Medium / Large 多乐器转写
+          #### 新增 MuScriptor Small / Medium / Large 多乐器转写：0.2.2 与长音频高质量推理更新
 
           ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/docs/MuScriptor_vs_YourMT3.png)
-          *MuScriptor Large 与 YourMT3+ 多乐器转写效果对比*
+          *保留上一版更新日志中的 MuScriptor Large 与 YourMT3+ 公开评测对比图*
 
+          - 固定源码升级到上游 main commit \`991ceaa04800484e617484ba065ebec802eebf53\`（package \`0.2.2\`），并以 SHA-256 身份校验叠加 PR #58 head \`edaebd3126336bd7eb4467dcf675d77f4e7772f0\` 的重叠窗口与异常重启实现。
+          - 三档模型均固定使用 \`2.5s\` 重叠窗口、prelude forcing、双次生成与 gzip 异常重启；这是 v1.4 明确选择的最高质量路径，不提供低质量静默降级，也不会更换或量化 Small/Medium/Large 权重。与旧的不重叠路径相比，它会增加推理时间，发布说明不隐瞒这项质量成本。
           - 完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换，均支持 MuScriptor Small / Medium / Large；便携包同时内置并严格校验三套官方权重与配置。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI。Small/Medium 为显存或速度受限设备提供更实用的选择，Large 保留最高容量。

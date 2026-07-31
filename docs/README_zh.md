@@ -129,7 +129,7 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large
 
-项目固定使用 `muscriptor` 代码提交 `302343e8992bdfc619f77f1988168374ed5d675d`（包版本 `0.2.2a1`）和 gated 权重 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重文件为 5,465,642,136 bytes，采用 CC BY-NC 4.0 并附额外合法使用条件；下载前必须接受 Hugging Face 条款并登录：
+项目固定使用 `muscriptor` 当前 main 提交 `991ceaa04800484e617484ba065ebec802eebf53`（包版本 `0.2.2`），并叠加经 SHA-256 校验的 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 重叠窗口/异常重启实现；同时固定 gated 权重 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重文件为 5,465,642,136 bytes，采用 CC BY-NC 4.0 并附额外合法使用条件；下载前必须接受 Hugging Face 条款并登录：
 
 ```bash
 hf auth login
@@ -413,6 +413,10 @@ TelkNet 边界：本轮经授权核验了私有 `mason369/telknet` 的 `dev` 提
 ## 默认处理策略
 
 桌面版、Space 和 Colab 不再提供可调质量入口。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；项目不再追加重叠分段去重、稀疏音色过滤或本地 MIDI 重新生成。MIROS 同样直接保留官方 CLI writer 输出，再只补齐 tempo 元数据。
+
+自动 BPM 来自拍点检测器；手动 4–400 BPM 是明确的工程 tempo 覆盖。模型事件先按检测 BPM 映射到音乐 tick，再保持 tick 不变并写入精确工程 tempo，因此下载 MIDI 与结果页联动的原音/MIDI 试听都会按“工程 BPM ÷ 检测 BPM”真实变速。“播放速度”直接显示这个真实倍率：修改 BPM 会同步更新倍率，修改倍率也会反算并写回工程 BPM。这不是量化或音符清理：事件内容与音乐 tick 均保持不变。源音频文件本身不会被改写；若在 DAW 中与手动变速后的 MIDI 一起导入，需让 DAW 以相同倍率适配原音。
+
+发布后的 Standard MIDI 会回读校验 tempo、拍号和全部非 tempo 事件；DAW 需启用 tempo map/速度图导入。MuseScore 3/4 可能把未量化的演奏型 MIDI 判定为 human performance，重新跟拍并覆盖乐谱页显示 BPM。该数值来自 MuseScore 的 MIDI 导入器；项目不会为了强制制谱软件显示文件 tempo 而量化或移动模型音符。
 
 `SIX_STEM_SPLIT` 中，`BS-Rofo-SW-Fixed.ckpt` 先生成六个真实 WAV stem，随后对每个 stem 各调用一次用户选择的 YourMT3+ 或 MIROS；各 stem 输出直接来自各自的独立转写。
 

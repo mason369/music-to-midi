@@ -63,6 +63,8 @@ class MuscriptorRollNote:
     end: float
     program: int = 0
     is_drum: bool = False
+    track_index: int = 0
+    channel: int = 0
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,8 @@ def read_midi_roll_notes(
                     end=max(start + 0.01, event_time),
                     program=program,
                     is_drum=is_drum,
+                    track_index=track_index,
+                    channel=channel,
                 )
             )
     notes.sort(key=lambda note: (note.start, note.pitch, note.instrument, note.end))
@@ -797,6 +801,7 @@ def prepare_midi_playback_assets(
     progress_callback=None,
     cancel_check=None,
     muscriptor_groups: bool = False,
+    allow_empty_notes: bool = False,
 ) -> MuscriptorPlaybackAssets:
     """Create every real audio artifact behind the shared result controls."""
 
@@ -815,18 +820,50 @@ def prepare_midi_playback_assets(
         if check_cancelled():
             raise InterruptedError("MuScriptor playback rendering cancelled")
 
+    notes = read_midi_roll_notes(midi_path, muscriptor_groups=muscriptor_groups)
+    if not notes and not allow_empty_notes:
+        raise RuntimeError("MIDI result contains no completed notes to play")
+    source_frames = len(_load_reference_mono_44k(original_audio))
+    if source_frames <= 0:
+        raise RuntimeError(f"Playback reference audio is empty: {original_audio}")
+    if not notes:
+        import numpy as np
+        import soundfile as sf
+
+        checkpoint()
+        report(0.25, "Rendering exact silence for an empty edited MIDI")
+        duration = source_frames / _SAMPLE_RATE
+        silence = np.zeros(source_frames, dtype="float32")
+        transcription_wav = output_dir / "transcription.wav"
+        sf.write(transcription_wav, silence, _SAMPLE_RATE)
+        original_left, transcription_right, instrument_rights = _write_channelized_playback(
+            original_audio,
+            transcription_wav,
+            {},
+            output_dir,
+        )
+        stereo_mix = output_dir / "original-and-midi-stereo.wav"
+        _write_official_stereo_mix(original_audio, transcription_wav, stereo_mix)
+        report(1.0, "Empty edited MIDI playback assets ready")
+        return MuscriptorPlaybackAssets(
+            notes=(),
+            duration=duration,
+            transcription_wav=transcription_wav,
+            live_transcription_wav=transcription_wav,
+            stereo_mix_wav=stereo_mix,
+            original_left_wav=original_left,
+            transcription_right_wav=transcription_right,
+            instrument_wavs={},
+            instrument_right_wavs=instrument_rights,
+            midi_gain_db=0.0,
+        )
+
     checkpoint()
     report(0.02, "Validating FluidSynth")
     executable = get_fluidsynth_executable()
     report(0.05, "Preparing the official MuseScore General SoundFont")
     soundfont = download_muscriptor_soundfont(printer=lambda message: report(0.07, message))
-    notes = read_midi_roll_notes(midi_path, muscriptor_groups=muscriptor_groups)
-    if not notes:
-        raise RuntimeError("MIDI result contains no completed notes to play")
     last_note_end = max(note.end for note in notes)
-    source_frames = len(_load_reference_mono_44k(original_audio))
-    if source_frames <= 0:
-        raise RuntimeError(f"Playback reference audio is empty: {original_audio}")
     transport_boundary = max(source_frames / _SAMPLE_RATE, last_note_end)
 
     grouped: dict[str, list[MuscriptorRollNote]] = defaultdict(list)

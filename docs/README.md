@@ -8,6 +8,10 @@ Music to MIDI is a local-first AI audio-to-MIDI converter for music producers, t
 
 The current product surface syncs seven processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and four dedicated piano routes through TransKun default V2, TransKun V2 Aug, Aria-AMT, or ByteDance Pedal. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, BPM/tempo metadata, and MIDI merging into one workflow.
 
+Automatic BPM comes from the beat detector, while a manual 4–400 BPM value is an explicit project-tempo override. Model event seconds are first mapped onto the detected-tempo beat ticks; those ticks are then retained while the exact project tempo is written. The downloaded MIDI and the linked source/MIDI result preview therefore run at `project BPM / detected BPM`. The playback-speed control displays that real ratio: changing BPM updates the rate, and changing the rate recalculates project BPM. This is not quantization or note cleanup: event payloads and musical tick positions are preserved. The source audio file itself is not rewritten, so a DAW must tempo-conform that audio by the same ratio when it is imported alongside a manually retimed MIDI.
+
+The Standard MIDI tempo, meter, and every non-tempo event are verified after publication. DAWs must enable tempo-map import. MuseScore 3/4 may classify an unquantized performance MIDI as human performance, run its own beat tracker, and replace the tempo shown on the notation page. That displayed value is produced by MuseScore's MIDI importer; the project does not quantize or move model notes merely to force a notation application to display the file tempo.
+
 ## Unified Interface Gallery
 
 The desktop app, Gradio Web interface, and Google Colab use the same seven-mode workflow and interaction semantics. The gallery follows the core flow from the main interface to completed separation, per-track processing, and MuScriptor's progressive MIDI preview.
@@ -155,7 +159,7 @@ models/yourmt3_all
 
 ### MuScriptor Large
 
-The project pins public `muscriptor` commit `302343e8992bdfc619f77f1988168374ed5d675d` (package `0.2.2a1`) and gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
+The project pins public `muscriptor` main commit `991ceaa04800484e617484ba065ebec802eebf53` (package `0.2.2`) and overlays the SHA-256-verified overlap/restart implementation from PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`. It also pins gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
 
 ```bash
 hf auth login

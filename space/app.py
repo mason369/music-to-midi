@@ -327,6 +327,8 @@ from src.gui.web.track_mixer_runtime import (
 )
 from src.i18n.translator import Translator
 from src.models.data_models import (
+    MAX_MIDI_BPM,
+    MIN_MIDI_BPM,
     Config,
     MultiInstrumentModel,
     MuscriptorModel,
@@ -595,13 +597,24 @@ def _normalize_midi_result_state(
             "velocity": int(raw_note.get("velocity", -1)),
             "start": float(raw_note.get("start", -1.0)),
             "end": float(raw_note.get("end", -1.0)),
+            "program": int(raw_note.get("program", -1)),
+            "is_drum": bool(raw_note.get("is_drum", False)),
+            "track_index": int(raw_note.get("track_index", -1)),
+            "channel": int(raw_note.get("channel", -1)),
         }
         if (
             not note["instrument"]
             or not 0 <= note["pitch"] <= 127
-            or not 0 <= note["velocity"] <= 127
+            or not 1 <= note["velocity"] <= 127
+            or not math.isfinite(note["start"])
+            or not math.isfinite(note["end"])
             or note["start"] < 0
             or note["end"] <= note["start"]
+            or not 0 <= note["program"] <= 127
+            or note["track_index"] < 0
+            or not 0 <= note["channel"] <= 15
+            or (note["is_drum"] and note["channel"] != 9)
+            or (not note["is_drum"] and note["channel"] == 9)
         ):
             raise RuntimeError(f"Linked MIDI result contains an invalid note: {note!r}")
         notes.append(note)
@@ -623,8 +636,20 @@ def _normalize_midi_result_state(
         )
 
     duration = float(raw_state.get("duration", 0.0))
-    if duration <= 0:
+    if not math.isfinite(duration) or duration <= 0:
         raise RuntimeError("Linked MIDI result has no playable duration")
+    reference_bpm = float(raw_state.get("reference_bpm", 0.0))
+    target_bpm = float(raw_state.get("target_bpm", 0.0))
+    if (
+        not math.isfinite(reference_bpm)
+        or not MIN_MIDI_BPM <= reference_bpm <= MAX_MIDI_BPM
+        or not math.isfinite(target_bpm)
+        or not MIN_MIDI_BPM <= target_bpm <= MAX_MIDI_BPM
+    ):
+        raise RuntimeError(
+            "Linked MIDI result contains an invalid BPM context: "
+            f"reference={reference_bpm!r}, target={target_bpm!r}"
+        )
     return {
         "kind": "midi_result",
         "audio_path": str(audio_path),
@@ -633,6 +658,8 @@ def _normalize_midi_result_state(
         "detected_instruments": [str(item) for item in raw_state.get("detected_instruments", [])],
         "notes": notes,
         "duration": duration,
+        "reference_bpm": reference_bpm,
+        "target_bpm": target_bpm,
         "transcription_wav": owned_file("transcription_wav", "Linked MIDI transcription audio"),
         "stereo_mix_wav": owned_file("stereo_mix_wav", "Linked MIDI stereo audio"),
         "instrument_wavs": instrument_wavs,
@@ -795,12 +822,29 @@ def _build_midi_result_state(
     progress_callback=None,
 ) -> dict:
     """Build the shared playable MIDI workbench for any transcription backend."""
+    from src.core.midi_tempo import rewrite_midi_tempo_preserving_ticks
     from src.core.muscriptor_result_assets import prepare_midi_playback_assets
 
-    assets = prepare_midi_playback_assets(
+    if result.beat_info is None:
+        raise RuntimeError("The browser MIDI editor requires result beat information")
+    reference_bpm = float(
+        result.beat_info.source_bpm
+        if result.beat_info.source_bpm is not None
+        else result.beat_info.bpm
+    )
+    target_bpm = float(result.beat_info.bpm)
+    playback_dir = Path(output_dir).resolve()
+    playback_dir.mkdir(parents=True, exist_ok=True)
+    playback_midi_path = rewrite_midi_tempo_preserving_ticks(
         result.midi_path,
+        playback_dir / "source-tempo-playback.mid",
+        reference_bpm,
+        label="Browser source-tempo playback MIDI",
+    )
+    assets = prepare_midi_playback_assets(
+        playback_midi_path,
         audio_path,
-        output_dir,
+        playback_dir,
         progress_callback=progress_callback,
         muscriptor_groups=muscriptor_groups,
     )
@@ -819,10 +863,16 @@ def _build_midi_result_state(
                 "velocity": note.velocity,
                 "start": note.start,
                 "end": note.end,
+                "program": note.program,
+                "is_drum": note.is_drum,
+                "track_index": note.track_index,
+                "channel": note.channel,
             }
             for note in assets.notes
         ],
         "duration": assets.duration,
+        "reference_bpm": reference_bpm,
+        "target_bpm": target_bpm,
         "transcription_wav": str(assets.transcription_wav),
         "stereo_mix_wav": str(assets.stereo_mix_wav),
         "instrument_wavs": {name: str(path) for name, path in assets.instrument_wavs.items()},
@@ -917,12 +967,13 @@ def ensure_miros_weights():
 
 
 def ensure_muscriptor_runtime():
-    """Install and verify the exact public commit that implements hard masking."""
+    """Install current main plus the fixed, verified best-quality overlay."""
     from src.core.muscriptor_transcriber import (
         MUSCRIPTOR_SOURCE_COMMIT,
         MUSCRIPTOR_SOURCE_REQUIREMENT,
         MuscriptorTranscriber,
     )
+    from src.utils.muscriptor_source_patch import apply_muscriptor_quality_patch
 
     unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
     if not unavailable:
@@ -954,6 +1005,8 @@ def ensure_muscriptor_runtime():
             "Pinned MuScriptor runtime installation failed "
             f"for commit {MUSCRIPTOR_SOURCE_COMMIT} (exit={completed.returncode})"
         )
+    importlib.invalidate_caches()
+    apply_muscriptor_quality_patch(printer=logger.info)
     importlib.invalidate_caches()
     unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
     if unavailable:
@@ -1450,9 +1503,11 @@ ZERO_GPU_MULTI_BACKEND_RUNTIME_FACTORS = {
     MultiInstrumentModel.MUSCRIPTOR.value: 3.0,
 }
 ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS = {
-    MuscriptorModel.LARGE.value: 3.0,
-    MuscriptorModel.MEDIUM.value: 1.2,
-    MuscriptorModel.SMALL.value: 0.7,
+    # Fixed best-quality overlap plus restart performs roughly four times the
+    # default-window generation work in the worst case.
+    MuscriptorModel.LARGE.value: 12.0,
+    MuscriptorModel.MEDIUM.value: 4.8,
+    MuscriptorModel.SMALL.value: 2.8,
 }
 ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS = {
     YourMT3Model.YMT3_PLUS.value: 1.0,
@@ -2322,7 +2377,7 @@ with gr.Blocks(
             )
             custom_bpm = gr.Number(
                 value=None,
-                minimum=20.0,
+                minimum=4.0,
                 maximum=400.0,
                 step=0.1,
                 precision=1,

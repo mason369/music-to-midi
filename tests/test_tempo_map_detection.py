@@ -1,5 +1,8 @@
 """变速 tempo map 的分段算法与 BeatInfo 显示契约。"""
 
+import sys
+import types
+
 import numpy as np
 import pytest
 
@@ -44,6 +47,28 @@ class TestSlidingMedian:
         assert smoothed[-1] == 120.0
 
 
+def test_downbeat_detector_reports_six_beat_meter_as_six_eight(monkeypatch):
+    strengths = np.array([10.0, 0.0, 0.0, 0.0, 0.0, 0.0] * 3)
+    fake_librosa = types.SimpleNamespace(
+        onset=types.SimpleNamespace(
+            onset_strength=lambda *, y, sr: strengths,
+        ),
+        time_to_frames=lambda beat_times, *, sr: np.arange(len(beat_times)),
+    )
+    monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
+    detector = BeatDetector(Config())
+    beat_times = np.arange(len(strengths), dtype=float) * 0.5
+
+    downbeats, time_signature = detector._detect_downbeats(
+        np.zeros(128, dtype=np.float32),
+        44_100,
+        beat_times,
+    )
+
+    assert time_signature == (6, 8)
+    assert downbeats == pytest.approx([0.0, 3.0, 6.0])
+
+
 class TestSegmentTempoCurve:
     @staticmethod
     def _times(n: int, step: float = 0.5) -> np.ndarray:
@@ -52,9 +77,7 @@ class TestSegmentTempoCurve:
     def test_constant_curve_returns_empty(self):
         bpms = np.full(32, 100.0)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, self._times(32), tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, self._times(32), tolerance=0.05, min_run=4)
 
         assert result == []
 
@@ -62,9 +85,7 @@ class TestSegmentTempoCurve:
         bpms = np.array([100.0] * 16 + [130.0] * 16)
         times = self._times(32)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, times, tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, times, tolerance=0.05, min_run=4)
 
         assert len(result) == 2
         assert result[0] == (0.0, pytest.approx(100.0))
@@ -75,9 +96,7 @@ class TestSegmentTempoCurve:
     def test_short_deviation_is_ignored(self):
         bpms = np.array([100.0] * 16 + [140.0] * 2 + [100.0] * 14)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, self._times(32), tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, self._times(32), tolerance=0.05, min_run=4)
 
         assert result == []
 
@@ -85,9 +104,7 @@ class TestSegmentTempoCurve:
         # 3% 差异低于 5% 容差，视为恒速抖动
         bpms = np.array([100.0] * 16 + [103.0] * 16)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, self._times(32), tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, self._times(32), tolerance=0.05, min_run=4)
 
         assert result == []
 
@@ -95,9 +112,7 @@ class TestSegmentTempoCurve:
         bpms = np.array([100.0] * 12 + [130.0] * 12 + [70.0] * 12)
         times = self._times(36)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, times, tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, times, tolerance=0.05, min_run=4)
 
         assert len(result) == 3
         assert [bpm for _, bpm in result] == [
@@ -111,9 +126,7 @@ class TestSegmentTempoCurve:
     def test_too_few_intervals_returns_empty(self):
         bpms = np.array([100.0] * 4 + [130.0] * 3)
 
-        result = BeatDetector._segment_tempo_curve(
-            bpms, self._times(7), tolerance=0.05, min_run=4
-        )
+        result = BeatDetector._segment_tempo_curve(bpms, self._times(7), tolerance=0.05, min_run=4)
 
         assert result == []
 

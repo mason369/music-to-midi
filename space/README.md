@@ -60,7 +60,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Spac
 
 | 功能 | 实际来源与固定版本 | 在本 Space 中的用途 | 许可/使用边界 |
 |---|---|---|---|
-| MuScriptor Large / Medium / Small | [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large)、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium)、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) 的固定 revision；推理源码 [`muscriptor/muscriptor`](https://github.com/muscriptor/muscriptor/tree/302343e8992bdfc619f77f1988168374ed5d675d) | `SMART` 和逐轨多乐器转写；三档显式选择，空选自动识别，非空多选成为真实生成约束 | 三个权重仓库均 gated、CC BY-NC 4.0；部署者必须逐项接受条款并配置有权限的 `HF_TOKEN`。未授权时所选路线明确失败，不改用其他模型 |
+| MuScriptor Large / Medium / Small | [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large)、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium)、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) 的固定 revision；推理源码 current-main [`991ceaa`](https://github.com/muscriptor/muscriptor/tree/991ceaa04800484e617484ba065ebec802eebf53) 加经 SHA-256 校验的 PR #58 head `edaebd3` 质量补丁 | `SMART` 和逐轨多乐器转写；三档显式选择，固定启用 2.5 秒重叠窗口与 gzip 异常重启；空选自动识别，非空多选成为真实生成约束 | 三个权重仓库均 gated、CC BY-NC 4.0；部署者必须逐项接受条款并配置有权限的 `HF_TOKEN`。未授权或质量运行时身份不符时明确失败，不改用其他模型 |
 | MuScriptor 播放资源 | [`MuScriptor/assets`](https://huggingface.co/MuScriptor/assets/tree/7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f)；FluidSynth `2.5.6` | 把 MIDI 及其乐器分轨合成为可试听预览 | 资源仓库声明 MIT；FluidSynth 为 LGPL-2.1-or-later。只用于真实合成，不用静音或假音频冒充 MIDI 预览 |
 | YourMT3+ 五个 checkpoint | [`mimbres/YourMT3`](https://huggingface.co/mimbres/YourMT3/tree/5e66c1ea173a8186e0d20432b841d3180cc015b5) @ `5e66c1ea173a8186e0d20432b841d3180cc015b5` | 默认多乐器路线及五个逐轨选择项 | 固定 Space revision 声明 Apache-2.0；本项目携带受控兼容补丁，不运行时切换可变上游源码 |
 | MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目仅保留完整归属与维护者责任记录，不声称额外许可 |
@@ -81,7 +81,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Spac
 - **六声部 WAV 分离**：`BS-Rofo-SW-Fixed.ckpt` 输出 bass、drums、guitar、piano、vocals、other 六条 WAV，不自动生成 MIDI。
 - **真实波形音轨面板**：分离完成后，每条音轨用 `gr.Audio` 显示对应波形，可试听、下载，也可添加本地音频。新增音频会复制到当前请求专属目录。
 - **逐轨显式 MIDI**：每条音轨都有“转 MIDI”复选框、十三个明确路线的下拉框和独立“开始转换”按钮。十三路线为五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small，以及 TransKun V2、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 四个钢琴模型。一次点击只转换该音轨。
-- **速度与播放对齐**：可使用自动 BPM，也可输入 20–400 BPM 自定义速度；设置值是最终下载 MIDI 的权威 tempo。结果播放进度以可播放 MIDI 为主时钟，并同步 seek 原音和分轨。
+- **工程 BPM 与播放对齐**：可使用自动 BPM，也可输入 4–400 BPM 手动工程 BPM；设置值是最终下载 MIDI 的权威 tempo。模型事件先按检测 BPM 映射到音乐 tick，再保持 tick 并写入工程 tempo；下载 MIDI 与结果页原音/MIDI 联动试听按“工程 BPM ÷ 检测 BPM”真实变速，不做量化、过滤或音符重建。源音频文件本身不会被改写。
 - **钢琴专用直接转写**：四个钢琴模式直接生成一个 MIDI，不显示分离音轨面板；ByteDance Pedal 保留延音踏板 CC64。
 - **严格任务隔离**：分离音频、添加音频和逐轨 MIDI 的所有可见路径都必须位于当前请求目录；过期、越界或空文件会明确失败。
 - **串行 GPU 调度**：主转换、WAV 分离和逐轨 MIDI 共用同一个 GPU 并发队列，防止多个模型任务争抢显存。
