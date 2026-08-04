@@ -95,6 +95,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("collect_all('piano_transcription_inference')", spec)
         self.assertIn("collect_all('torchlibrosa')", spec)
 
+    def test_pyinstaller_spec_bundles_the_only_beat_this_runtime_and_checkpoint(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR", spec)
+        self.assertIn("models/beat_this", spec)
+        self.assertIn("copy_metadata('beat-this')", spec)
+        self.assertIn("collect_all('beat_this')", spec)
+
     def test_pyinstaller_spec_bundles_bytedance_pedal_matplotlib_dependency(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
         excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]
@@ -238,6 +246,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("download_bytedance_piano_model.py", workflow)
         self.assertIn("download_miros_model.py", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", workflow)
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR", workflow)
@@ -246,6 +255,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR", workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR", workflow)
         self.assertIn("gated MuScriptor Small/Medium/Large", workflow)
+        self.assertIn(".music-to-midi/models/beat_this/final0.ckpt", workflow)
 
     def test_release_workflow_downloads_and_packages_gated_muscriptor_assets(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -559,6 +569,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR", script)
         self.assertIn("bytedance_piano", script)
         self.assertIn("ByteDance Piano models", script)
+
+    def test_build_portable_collects_and_validates_beat_this_final0(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR", script)
+        self.assertIn("download_beat_this_model.py", script)
+        self.assertIn("Beat This final0 model", script)
+        self.assertIn("Packaged Beat This final0 asset verified", script)
 
     def test_build_portable_collects_real_ffmpeg_binaries_into_bin_layout(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")

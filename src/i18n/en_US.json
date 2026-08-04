@@ -418,7 +418,11 @@
   },
   "progress": {
     "loading_audio_for_beat": "Loading audio for beat detection...",
-    "analyzing_tempo": "Analyzing tempo with multiple algorithms...",
+    "analyzing_tempo": "Analyzing tempo with Beat This final0...",
+    "loading_beat_this": "Loading Beat This final0...",
+    "running_beat_this": "Detecting beats and downbeats with Beat This...",
+    "validating_beat_grid": "Cleaning and validating the beat grid...",
+    "beat_this_complete": "Beat This detection complete: {bpm} BPM",
     "custom_bpm": "Source tempo detected; project BPM overridden to {bpm}; exported MIDI and linked source/MIDI audition will change speed by project BPM / detected BPM",
     "finding_beats": "Finding beat positions...",
     "detecting_downbeats": "Detecting downbeats...",

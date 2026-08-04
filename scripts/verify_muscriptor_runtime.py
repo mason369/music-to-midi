@@ -17,6 +17,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from src.core.beat_detector import BeatDetector
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.models.data_models import Config
 from src.utils.muscriptor_source_patch import (
@@ -71,6 +72,7 @@ def main() -> int:
         muscriptor_instruments=[],
     )
     transcriber = MuscriptorTranscriber(config)
+    transcriber.set_beat_info(BeatDetector(config).detect(str(source)))
     model = transcriber.load_model()
     inner_model = getattr(model, "_model", None)
     if inner_model is None:
@@ -79,7 +81,8 @@ def main() -> int:
     parameter_dtypes = Counter(str(parameter.dtype) for parameter in inner_model.parameters())
     if set(parameter_dtypes) != {"torch.float32"}:
         raise RuntimeError(
-            f"MuScriptor parameters are not strictly FP32: {dict(parameter_dtypes)!r}"
+            "MuScriptor parameters do not match the official CUDA default "
+            f"(FP32 parameters with FP16 autocast compute): {dict(parameter_dtypes)!r}"
         )
     autocast = getattr(inner_model, "autocast", None)
     if not getattr(autocast, "enabled", False) or getattr(autocast, "dtype", None) != torch.float16:
@@ -120,6 +123,7 @@ def main() -> int:
                 "model": args.model,
                 "gpu": torch.cuda.get_device_name(0),
                 "parameter_dtypes": dict(parameter_dtypes),
+                "precision_policy": "official_cuda_default",
                 "autocast_enabled": True,
                 "autocast_dtype": str(torch.float16),
                 "quality_mode": "overlap_restart",

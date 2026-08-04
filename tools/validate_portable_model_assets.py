@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import download_vocal_harmony_model as polarformer  # noqa: E402
 import download_vocal_model as leap  # noqa: E402
 import src.core.aria_amt_transcriber as aria_amt  # noqa: E402
+import src.core.beat_this_tracker as beat_this  # noqa: E402
 import src.core.bytedance_piano_transcriber as bytedance_piano  # noqa: E402
 import src.core.miros_transcriber as miros  # noqa: E402
 import src.core.transkun_transcriber as transkun  # noqa: E402
@@ -150,6 +151,12 @@ def _validate_bytedance_piano_assets(model_dir: Path) -> tuple[Path]:
     return (checkpoint,)
 
 
+def _validate_beat_this_assets(model_dir: Path) -> tuple[Path]:
+    checkpoint = model_dir / beat_this.BEAT_THIS_CHECKPOINT_NAME
+    beat_this.validate_beat_this_checkpoint(checkpoint)
+    return (checkpoint,)
+
+
 def _validate_miros_assets(repo_dir: Path) -> tuple[Path, ...]:
     source_error = miros.get_miros_source_identity_error(repo_dir)
     if source_error:
@@ -196,8 +203,9 @@ def validate_portable_runtime_identities() -> dict[str, str]:
     onnxruntime_version = _require_distribution_version(
         "onnxruntime-gpu", ONNXRUNTIME_GPU_PACKAGE_VERSION
     )
+    beat_this_version = _require_distribution_version("beat-this", "1.1.0")
 
-    for module_name in ("audio_separator.separator", "onnxruntime"):
+    for module_name in ("audio_separator.separator", "onnxruntime", "beat_this.inference"):
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -217,6 +225,7 @@ def validate_portable_runtime_identities() -> dict[str, str]:
     return {
         "audio-separator": audio_separator_version,
         "onnxruntime-gpu": onnxruntime_version,
+        "beat-this": beat_this_version,
         "aria-amt-source": aria_amt.ARIA_AMT_SOURCE_REVISION,
         "piano-transcription-inference": (bytedance_piano.BYTEDANCE_PIANO_PACKAGE_VERSION),
         "transkun": transkun.TRANSKUN_PACKAGE_VERSION,
@@ -230,6 +239,7 @@ def validate_portable_model_assets(
     yourmt3_source_dir: Path | str,
     aria_amt_dir: Path | str,
     bytedance_piano_dir: Path | str,
+    beat_this_dir: Path | str,
     miros_dir: Path | str,
 ) -> dict[str, tuple[Path, ...]]:
     """Require every pinned portable model identity represented by these roots."""
@@ -239,6 +249,7 @@ def validate_portable_model_assets(
     yourmt3_source_root = _require_directory(yourmt3_source_dir, label="patched YourMT3 source")
     aria_amt_root = _require_directory(aria_amt_dir, label="Aria-AMT")
     bytedance_root = _require_directory(bytedance_piano_dir, label="ByteDance Piano")
+    beat_this_root = _require_directory(beat_this_dir, label="Beat This final0")
     miros_root = _require_directory(miros_dir, label="MIROS")
 
     return {
@@ -248,6 +259,7 @@ def validate_portable_model_assets(
         "yourmt3_source": _validate_yourmt3_source(yourmt3_source_root),
         "aria_amt": _validate_aria_amt_assets(aria_amt_root),
         "bytedance_piano": _validate_bytedance_piano_assets(bytedance_root),
+        "beat_this": _validate_beat_this_assets(beat_this_root),
         "miros": _validate_miros_assets(miros_root),
     }
 
@@ -261,6 +273,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yourmt3-source-dir", type=Path, required=True)
     parser.add_argument("--aria-amt-dir", type=Path, required=True)
     parser.add_argument("--bytedance-piano-dir", type=Path, required=True)
+    parser.add_argument("--beat-this-dir", type=Path, required=True)
     parser.add_argument("--miros-dir", type=Path, required=True)
     parser.add_argument("--label", default="portable model assets")
     return parser
@@ -275,6 +288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             yourmt3_source_dir=args.yourmt3_source_dir,
             aria_amt_dir=args.aria_amt_dir,
             bytedance_piano_dir=args.bytedance_piano_dir,
+            beat_this_dir=args.beat_this_dir,
             miros_dir=args.miros_dir,
         )
         runtime_identities = validate_portable_runtime_identities()

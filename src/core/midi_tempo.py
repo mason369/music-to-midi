@@ -17,6 +17,90 @@ from src.utils.midi_output import (
 )
 
 _DEFAULT_TEMPO_US = 500_000
+_MUSCRIPTOR_BAR_OFFSET_PREFIX = "muscriptor:bar_offset="
+
+
+def _bar_offset_value(message: mido.MetaMessage) -> float | None:
+    if not (message.is_meta and message.type == "marker"):
+        return None
+    text = str(message.text)
+    if not text.startswith(_MUSCRIPTOR_BAR_OFFSET_PREFIX):
+        return None
+    raw = text.removeprefix(_MUSCRIPTOR_BAR_OFFSET_PREFIX)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid MuScriptor bar-offset marker: {text!r}") from exc
+    if not isfinite(value) or value < 0.0:
+        raise RuntimeError(f"Invalid MuScriptor bar-offset marker: {text!r}")
+    return value
+
+
+def read_muscriptor_bar_offset_seconds(source: str | Path | mido.MidiFile) -> float:
+    """Read one strict e2bd0fc bar-alignment offset, or zero when absent."""
+
+    midi = source if isinstance(source, mido.MidiFile) else mido.MidiFile(str(source))
+    values = [
+        value
+        for track in midi.tracks
+        for message in track
+        if (value := _bar_offset_value(message)) is not None
+    ]
+    if not values:
+        return 0.0
+    if any(abs(value - values[0]) > 0.0001 for value in values[1:]):
+        raise RuntimeError(f"Conflicting MuScriptor bar-offset markers: {values!r}")
+    return float(values[0])
+
+
+def _constant_source_bpm_for_bar_offset(midi: mido.MidiFile) -> float:
+    tempos = {
+        int(message.tempo)
+        for track in midi.tracks
+        for message in track
+        if message.is_meta and message.type == "set_tempo"
+    }
+    if not tempos:
+        tempos = {_DEFAULT_TEMPO_US}
+    if len(tempos) != 1:
+        raise RuntimeError(
+            "MuScriptor bar alignment requires one constant source tempo before "
+            f"project-speed rewriting, got {sorted(tempos)!r}"
+        )
+    return float(mido.tempo2bpm(next(iter(tempos))))
+
+
+def _rescale_bar_offset_message(
+    message: mido.Message | mido.MetaMessage,
+    scale: float,
+) -> mido.Message | mido.MetaMessage:
+    value = _bar_offset_value(message) if message.is_meta else None
+    if value is None:
+        return message
+    scaled = value * float(scale)
+    if not isfinite(scaled) or scaled < 0.0:
+        raise RuntimeError(
+            f"Invalid scaled MuScriptor bar offset: source={value}, scale={scale}"
+        )
+    return message.copy(text=f"{_MUSCRIPTOR_BAR_OFFSET_PREFIX}{scaled:.4f}")
+
+
+def _project_speed_tick_fingerprint(
+    midi: mido.MidiFile,
+    bar_offset_scale: float,
+) -> list[list[tuple[bytes, int]]]:
+    fingerprint: list[list[tuple[bytes, int]]] = []
+    for track in midi.tracks:
+        absolute_tick = 0
+        events: list[tuple[bytes, int]] = []
+        for message in track:
+            absolute_tick += int(message.time)
+            if message.is_meta and message.type in {"set_tempo", "end_of_track"}:
+                continue
+            expected = _rescale_bar_offset_message(message, bar_offset_scale)
+            events.append((message_payload(expected), absolute_tick))
+        fingerprint.append(events)
+    return fingerprint
 
 
 def validated_midi_bpm(value: float, label: str = "MIDI") -> float:
@@ -191,15 +275,17 @@ def _non_time_signature_event_tick_fingerprint(
 def write_midi_time_signature_preserving_ticks(
     source_path: str | Path,
     destination_path: str | Path,
-    time_signature: tuple[int, int],
+    time_signature: tuple[int, int] | None,
     *,
     label: str = "MIDI conductor metadata export",
 ) -> Path:
-    """Write one explicit SMF meter without moving any other event tick."""
+    """Write one detected meter, or remove placeholder meters when unknown."""
 
     source = Path(source_path).resolve()
     destination = Path(destination_path).resolve()
-    numerator, denominator = validated_midi_time_signature(time_signature)
+    validated_signature = (
+        validated_midi_time_signature(time_signature) if time_signature is not None else None
+    )
     source_midi = mido.MidiFile(str(source))
     if not source_midi.tracks:
         raise RuntimeError(f"MIDI source has no tracks: {source}")
@@ -214,7 +300,12 @@ def write_midi_time_signature_preserving_ticks(
         ticks_per_beat=source_midi.ticks_per_beat,
     )
     conductor_tracks = set(range(len(source_midi.tracks))) if source_midi.type == 2 else {0}
-    clocks_per_click = 36 if denominator == 8 and numerator > 3 and numerator % 3 == 0 else 24
+    clocks_per_click = 24
+    if validated_signature is not None:
+        numerator, denominator = validated_signature
+        clocks_per_click = (
+            36 if denominator == 8 and numerator > 3 and numerator % 3 == 0 else 24
+        )
 
     for track_index, source_track in enumerate(source_midi.tracks):
         absolute_tick = 0
@@ -229,7 +320,8 @@ def write_midi_time_signature_preserving_ticks(
                 continue
             events.append((absolute_tick, 1, sequence, message.copy(time=0)))
 
-        if track_index in conductor_tracks:
+        if track_index in conductor_tracks and validated_signature is not None:
+            numerator, denominator = validated_signature
             events.append(
                 (
                     0,
@@ -284,9 +376,13 @@ def write_midi_time_signature_preserving_ticks(
                             int(message.denominator),
                         )
                     )
-        expected_signatures = [
-            (track_index, 0, numerator, denominator) for track_index in sorted(conductor_tracks)
-        ]
+        expected_signatures = []
+        if validated_signature is not None:
+            numerator, denominator = validated_signature
+            expected_signatures = [
+                (track_index, 0, numerator, denominator)
+                for track_index in sorted(conductor_tracks)
+            ]
         if published_signatures != expected_signatures:
             raise RuntimeError(
                 "MIDI conductor metadata verification found incorrect time "
@@ -499,6 +595,10 @@ def rewrite_midi_tempo_preserving_ticks(
         )
 
     tempo_us = mido.bpm2tempo(export_bpm)
+    bar_offset_seconds = read_muscriptor_bar_offset_seconds(source_midi)
+    bar_offset_scale = 1.0
+    if bar_offset_seconds > 0.0:
+        bar_offset_scale = _constant_source_bpm_for_bar_offset(source_midi) / export_bpm
     output = mido.MidiFile(
         type=source_midi.type,
         ticks_per_beat=source_midi.ticks_per_beat,
@@ -516,7 +616,8 @@ def rewrite_midi_tempo_preserving_ticks(
             if message.is_meta and message.type == "end_of_track":
                 end_ticks.append(absolute_tick)
                 continue
-            events.append((absolute_tick, 1, sequence, message.copy(time=0)))
+            rewritten = _rescale_bar_offset_message(message, bar_offset_scale)
+            events.append((absolute_tick, 1, sequence, rewritten.copy(time=0)))
 
         if track_index in tempo_tracks:
             events.append(
@@ -547,7 +648,7 @@ def rewrite_midi_tempo_preserving_ticks(
             previous_tick = target_tick
         output.tracks.append(target_track)
 
-    source_fingerprint = non_tempo_event_tick_fingerprint(source_midi)
+    source_fingerprint = _project_speed_tick_fingerprint(source_midi, bar_offset_scale)
     temporary = unique_midi_temp_path(destination, "tempo-tick-preserving")
     try:
         output.save(str(temporary))
@@ -628,6 +729,7 @@ __all__ = [
     "message_payload",
     "non_tempo_event_tick_fingerprint",
     "non_tempo_event_time_fingerprint",
+    "read_muscriptor_bar_offset_seconds",
     "rewrite_midi_tempo_for_project_speed",
     "rewrite_midi_tempo_preserving_seconds",
     "rewrite_midi_tempo_preserving_ticks",

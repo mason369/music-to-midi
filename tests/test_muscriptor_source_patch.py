@@ -31,11 +31,17 @@ def _fake_identity(monkeypatch, package_root: Path) -> dict[str, bytes]:
         {
             relative: {
                 "base_sha256": _sha256(base[relative]),
+                "overlay_sha256": _sha256(patched[relative]),
                 "patched_sha256": _sha256(patched[relative]),
                 "url": f"https://example.invalid/{relative}",
             }
             for relative in base
         },
+    )
+    monkeypatch.setattr(
+        muscriptor_source_patch,
+        "_compose_beat_grid_overlay",
+        lambda _relative, payload: payload,
     )
     monkeypatch.setattr(
         muscriptor_source_patch,

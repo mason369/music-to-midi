@@ -64,7 +64,13 @@ from src.gui.widgets.muscriptor_result import (
     _SmoothPlaybackClock,
 )
 from src.i18n.translator import t
-from src.models.data_models import Config, MultiInstrumentModel, MuscriptorModel, ProcessingResult
+from src.models.data_models import (
+    BeatInfo,
+    Config,
+    MultiInstrumentModel,
+    MuscriptorModel,
+    ProcessingResult,
+)
 from src.models.muscriptor_instruments import muscriptor_instrument_label
 from src.utils import muscriptor_downloader
 
@@ -250,11 +256,40 @@ def _install_fake_event_module(monkeypatch):
     events.ProgressEvent = ProgressEvent
     events.NoteStartEvent = NoteStartEvent
     events.NoteEndEvent = NoteEndEvent
+    beats = types.ModuleType("muscriptor.utils.beats")
+
+    class BeatGrid:
+        def __init__(self, *, bpm: float, beats_per_bar: int, first_downbeat: float):
+            self.bpm = bpm
+            self.beats_per_bar = beats_per_bar
+            self.first_downbeat = first_downbeat
+
+        def bar_offset(self) -> float:
+            bar = self.beats_per_bar * 60.0 / self.bpm
+            return (bar - self.first_downbeat % bar) % bar
+
+    beats.BeatGrid = BeatGrid
+    utils = types.ModuleType("muscriptor.utils")
+    utils.beats = beats
     package = types.ModuleType("muscriptor")
     package.events = events
+    package.utils = utils
     monkeypatch.setitem(sys.modules, "muscriptor", package)
     monkeypatch.setitem(sys.modules, "muscriptor.events", events)
+    monkeypatch.setitem(sys.modules, "muscriptor.utils", utils)
+    monkeypatch.setitem(sys.modules, "muscriptor.utils.beats", beats)
     return ProgressEvent, NoteStartEvent, NoteEndEvent
+
+
+def _configure_test_beat_grid(transcriber: MuscriptorTranscriber) -> None:
+    transcriber.set_beat_info(
+        BeatInfo(
+            bpm=120.0,
+            beat_times=[0.0, 0.5, 1.0, 1.5],
+            downbeats=[0.0],
+            time_signature=(4, 4),
+        )
+    )
 
 
 def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
@@ -271,20 +306,20 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
     loaded_model = types.SimpleNamespace(_model=inner_model)
     captured = {}
 
-    class FakeTranscriptionModel:
-        @classmethod
-        def load_model(cls, *, weights_path, device):
-            captured["weights_path"] = Path(weights_path)
-            captured["device"] = device
-            return loaded_model
-
-    fake_package = types.ModuleType("muscriptor")
-    fake_package.TranscriptionModel = FakeTranscriptionModel
     weights = tmp_path / "model.safetensors"
     weights.write_bytes(b"weights")
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setitem(sys.modules, "muscriptor", fake_package)
+
+    def fake_memory_bounded_loader(weights_path, device):
+        captured["weights_path"] = Path(weights_path)
+        captured["device"] = device
+        return loaded_model
+
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.load_muscriptor_model_memory_bounded",
+        fake_memory_bounded_loader,
+    )
     monkeypatch.setattr(
         MuscriptorTranscriber,
         "_runtime_unavailable_reason",
@@ -307,6 +342,7 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "gpu": "cuda:0",
         "compute_dtype": "upstream",
         "kv_cache_dtype": "upstream",
+        "weight_load_strategy": "safetensors_cpu_tensor_stream",
         "kv_cache_reused_layers": 0,
         "batch_size": 1,
         "prelude_forcing": True,
@@ -315,7 +351,7 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "allow_reset": True,
         "strict_eos": True,
         "package_version": "0.2.2",
-        "source_commit": "991ceaa04800484e617484ba065ebec802eebf53",
+        "source_commit": "e2bd0fc5994f9acba7c1387ca5df67eb8d95df44",
         "quality_patch_commit": "edaebd3126336bd7eb4467dcf675d77f4e7772f0",
     }
 
@@ -335,8 +371,11 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
             self.kwargs = kwargs
             return iter([ProgressEvent(1, 1), start, NoteEndEvent(0, start, 0.8)])
 
-        def events_to_midi_bytes(self, events):
+        def events_to_midi_bytes(self, events, *, beat_grid=None):
             assert len(list(events)) == 3
+            assert beat_grid.bpm == pytest.approx(120.0)
+            assert beat_grid.beats_per_bar == 4
+            assert beat_grid.first_downbeat == pytest.approx(0.0)
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -351,6 +390,7 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
     )
     transcriber = MuscriptorTranscriber(config)
     transcriber._model = model
+    _configure_test_beat_grid(transcriber)
 
     assert transcriber.transcribe_to_midi(str(audio), str(output)) == str(output.resolve())
     assert output.is_file()
@@ -380,8 +420,9 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
             inference_states.append(torch.is_inference_mode_enabled())
             return iter([ProgressEvent(1, 1)])
 
-        def events_to_midi_bytes(self, events):
+        def events_to_midi_bytes(self, events, *, beat_grid=None):
             assert len(list(events)) == 1
+            assert beat_grid is not None
             return _midi_bytes()
 
     audio = tmp_path / "input.wav"
@@ -389,6 +430,7 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
     output = tmp_path / "output.mid"
     transcriber = MuscriptorTranscriber(Config(use_gpu=False))
     transcriber._model = FakeModel()
+    _configure_test_beat_grid(transcriber)
     transcriber._runtime_details = {
         "type": "runtime",
         "model": "MuScriptor-small",
@@ -430,6 +472,7 @@ def test_transcriber_refuses_backend_event_outside_selected_instruments(
     )
     transcriber = MuscriptorTranscriber(config)
     transcriber._model = ViolatingModel()
+    _configure_test_beat_grid(transcriber)
 
     with pytest.raises(RuntimeError, match="constraint violation"):
         transcriber.transcribe_to_midi(str(audio), str(output))
@@ -457,8 +500,9 @@ def test_transcriber_batches_dense_note_events_before_each_progress_anchor(
                 ]
             )
 
-        def events_to_midi_bytes(self, events):
+        def events_to_midi_bytes(self, events, *, beat_grid=None):
             assert len(list(events)) == 7
+            assert beat_grid is not None
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -466,6 +510,7 @@ def test_transcriber_batches_dense_note_events_before_each_progress_anchor(
     output = tmp_path / "output.mid"
     transcriber = MuscriptorTranscriber(Config(use_gpu=False))
     transcriber._model = FakeModel()
+    _configure_test_beat_grid(transcriber)
     received: list[dict[str, object]] = []
     transcriber.set_event_callback(received.append)
 
@@ -1390,6 +1435,27 @@ def test_live_bus_uses_original_transport_length_and_fades_synth_tail(tmp_path: 
     )
     assert abs(float(combined_audio[-1])) <= 1 / 32_768
     assert abs(float(stem_audio[-1])) <= 1 / 32_768
+
+
+def test_bar_aligned_reference_audio_prepends_exact_verified_silence(tmp_path: Path):
+    source = _tone_wav(tmp_path / "source.wav", 0.2, amplitude=0.1)
+    output_dir = tmp_path / "bar-aligned"
+    output_dir.mkdir()
+    offset_seconds = 0.125
+
+    aligned = muscriptor_result_assets._write_bar_aligned_reference_audio(
+        source,
+        output_dir,
+        offset_seconds,
+    )
+
+    source_audio, source_rate = sf.read(source, dtype="float32")
+    aligned_audio, aligned_rate = sf.read(aligned, dtype="float32")
+    padding_frames = round(offset_seconds * 44_100)
+    assert source_rate == aligned_rate == 44_100
+    assert len(aligned_audio) == len(source_audio) + padding_frames
+    assert float(np.max(np.abs(aligned_audio[:padding_frames]))) == 0.0
+    assert aligned_audio[padding_frames:] == pytest.approx(source_audio, abs=1 / 32_768)
 
 
 def test_final_playback_transport_covers_notes_beyond_source_audio(

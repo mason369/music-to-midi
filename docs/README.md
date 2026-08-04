@@ -8,7 +8,7 @@ Music to MIDI is a local-first AI audio-to-MIDI converter for music producers, t
 
 The current product surface syncs seven processing modes: full-mix multi-instrument transcription, vocal/accompaniment split transcription, six-stem split transcription, and four dedicated piano routes through TransKun default V2, TransKun V2 Aug, Aria-AMT, or ByteDance Pedal. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, BPM/tempo metadata, and MIDI merging into one workflow.
 
-Automatic BPM comes from the beat detector, while a manual 4–400 BPM value is an explicit project-tempo override. Model event seconds are first mapped onto the detected-tempo beat ticks; those ticks are then retained while the exact project tempo is written. The downloaded MIDI and the linked source/MIDI result preview therefore run at `project BPM / detected BPM`. The playback-speed control displays that real ratio: changing BPM updates the rate, and changing the rate recalculates project BPM. This is not quantization or note cleanup: event payloads and musical tick positions are preserved. The source audio file itself is not rewritten, so a DAW must tempo-conform that audio by the same ratio when it is imported alongside a manually retimed MIDI.
+Every one of the seven modes and every per-track conversion uses Beat This `final0` as its only beat/downbeat detector. Competing marks are cleaned, missed musical positions are counted, and global BPM is fitted by least squares; meter is inferred independently and remains unknown rather than inventing 4/4. Constant recordings receive one tempo event, expressive recordings automatically receive a beat-level tempo map. A manual 4–400 BPM value remains an explicit project-tempo override. This is not quantization or note cleanup: event payloads and musical tick positions are preserved.
 
 The Standard MIDI tempo, meter, and every non-tempo event are verified after publication. DAWs must enable tempo-map import. MuseScore 3/4 may classify an unquantized performance MIDI as human performance, run its own beat tracker, and replace the tempo shown on the notation page. That displayed value is produced by MuseScore's MIDI importer; the project does not quantize or move model notes merely to force a notation application to display the file tempo.
 
@@ -69,7 +69,7 @@ Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Prepares all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; and ByteDance, while strictly validating the default TransKun 2.0.1 package and bundled V2 resources | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
+| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; and ByteDance, while strictly validating the default TransKun 2.0.1 package and bundled V2 resources | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
 | `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, and separator availability before launch | Missing or invalid required resources are reported explicitly. |
 | `install.ps1` / `install.sh` | Installs PyTorch 2.7, NumPy 1.26, audio-separator 0.44.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging-contract checks only | They produce no portable artifact and never use empty directories or fake models to bypass mandatory bundle validation. |
@@ -131,7 +131,7 @@ The exact files depend on the selected mode and the per-track conversions the us
 
 ### YourMT3+
 
-YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
 
 The source tree must include:
 
@@ -159,7 +159,7 @@ models/yourmt3_all
 
 ### MuScriptor Large
 
-The project pins public `muscriptor` main commit `991ceaa04800484e617484ba065ebec802eebf53` (package `0.2.2`) and overlays the SHA-256-verified overlap/restart implementation from PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`. It also pins gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
+The project pins public `muscriptor` BeatGrid commit `e2bd0fc5994f9acba7c1387ca5df67eb8d95df44` (package `0.2.2`) and overlays the SHA-256-verified overlap/restart implementation from PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`. MuScriptor receives the same authoritative Beat This `final0` grid already computed for every other backend; BeatGrid never launches another detector and no placeholder 120 BPM is accepted. The resulting tempo, reliable meter, bar phase, and verified leading-offset marker stay synchronized with manual project-speed edits and the final source/MIDI preview without quantizing or filtering notes. It also pins gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
 
 ```bash
 hf auth login
@@ -493,7 +493,7 @@ python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com
 python download_sota_models.py
 ```
 
-The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; do not overwrite it with mutable upstream `master`. `download_sota_models.py` prepares all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
+The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; do not overwrite it with mutable upstream `master`. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
 
 ### 5. Prepare Separation and Piano Models
 
@@ -654,7 +654,7 @@ src/
 
 space/app.py                 # Gradio Web UI
 colab_notebook.ipynb         # Colab entry
-download_sota_models.py      # All five YourMT3 + MIROS + separation + four piano model contracts
+download_sota_models.py      # Beat This + all five YourMT3 + MIROS + separation + four piano contracts
 download_vocal_model.py      # Leap XE vocals asset download
 download_accompaniment_model.py # PolarFormer accompaniment asset download
 download_multistem_model.py  # BS-RoFormer SW Fixed six-stem asset download

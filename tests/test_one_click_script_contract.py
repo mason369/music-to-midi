@@ -349,6 +349,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("transkun==2.0.1", requirements)
         self.assertIn("torchlibrosa>=0.1.0,<0.2", requirements)
         self.assertIn("matplotlib", requirements)
+        self.assertIn("beat-this==1.1.0", requirements)
+        self.assertIn("download_beat_this_model.py", requirements)
 
     def test_requirements_match_miros_transformers_version(self):
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")

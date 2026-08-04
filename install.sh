@@ -317,7 +317,7 @@ PY
 success "audio-separator 安装完成"
 
 info "安装并校验固定 MuScriptor 公共源码（不改写固定 PyTorch 运行时）..."
-MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/302343e8992bdfc619f77f1988168374ed5d675d.zip"
+MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip"
 "$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
 "$PYTHON" - <<'PY'
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
@@ -523,6 +523,7 @@ echo -e "  ${GREEN}✔${NC} FluidSynth 真实 MIDI 播放链"
 echo ""
 echo -e "  ${BOLD}模型维护命令：${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_sota_models.py${NC}"
+echo -e "  ${YELLOW}venv/bin/python download_beat_this_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_multistem_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_vocal_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_accompaniment_model.py${NC}"

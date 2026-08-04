@@ -50,6 +50,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_result = Path("/tmp/transkun-v2-aug/checkpointMSimplerAug")
         aria_result = Path("/tmp/aria-amt/piano-medium-double-1.0.safetensors")
         bytedance_result = Path("/tmp/bytedance/note_F1=0.9677_pedal_F1=0.9186.pth")
+        beat_this_result = Path("/tmp/beat-this/final0.ckpt")
         muscriptor_results = {
             model_size.value: (
                 Path(f"/tmp/muscriptor-{model_size.value}/model.safetensors"),
@@ -108,6 +109,11 @@ class SotaModelDownloaderTests(unittest.TestCase):
             ) as bytedance_mock,
             mock.patch.object(
                 download_sota_models,
+                "download_beat_this_model",
+                return_value=beat_this_result,
+            ) as beat_this_mock,
+            mock.patch.object(
+                download_sota_models,
                 "download_muscriptor_model",
                 side_effect=lambda model_size: muscriptor_results[model_size.value],
             ) as muscriptor_mock,
@@ -133,6 +139,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         transkun_v2_aug_mock.assert_called_once_with()
         aria_mock.assert_called_once_with()
         bytedance_mock.assert_called_once_with()
+        beat_this_mock.assert_called_once_with()
         self.assertEqual(
             muscriptor_mock.call_args_list,
             [mock.call(model_size) for model_size in MuscriptorModel],
@@ -140,6 +147,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         soundfont_mock.assert_called_once_with()
         fluidsynth_mock.assert_called_once_with()
         self.assertEqual(result["transkun"], transkun_result)
+        self.assertEqual(result["beat_this"]["checkpoint"], beat_this_result)
         self.assertEqual(result["yourmt3"], yourmt3_result)
         self.assertEqual(result["miros"]["repo_dir"], miros_result)
         self.assertEqual(result["six_stem"]["model"], six_stem_result[0])

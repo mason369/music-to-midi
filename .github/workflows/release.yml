@@ -65,6 +65,7 @@ jobs:
             musicfm_pretrained
             miros_finetuned
             muscriptor_source
+            beat_this_runtime_and_final0
             muscriptor_small_checkpoint
             muscriptor_medium_checkpoint
             muscriptor_large_checkpoint
@@ -252,7 +253,7 @@ jobs:
           pip install -r .tmp/requirements-build.txt
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
-          pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/991ceaa04800484e617484ba065ebec802eebf53.zip" --no-deps
+          pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip" --no-deps
           python patch_muscriptor_runtime.py
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime-gpu==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
@@ -338,6 +339,8 @@ jobs:
           ls -lh ~/.cache/music_ai_models/aria_amt/*
           echo "ByteDance Pedal:"
           ls -lh ~/.cache/music_ai_models/bytedance_piano/*
+          echo "Beat This final0:"
+          ls -lh ~/.music-to-midi/models/beat_this/final0.ckpt
           echo "MIROS (source + pretrained + fine-tuned):"
           ls -lh external/ai4m-miros/model/musicfm/data/pretrained_msd.pt
           ls -lh external/ai4m-miros/logs/Multi_longer_seq_length_frozen_enc_silu/le2bzt53/checkpoints/last.ckpt
@@ -388,6 +391,8 @@ jobs:
 
           cp -a "$HOME/.cache/music_ai_models/bytedance_piano" "$BUILD_ASSET_ROOT/bytedance_piano"
 
+          cp -a "$HOME/.music-to-midi/models/beat_this" "$BUILD_ASSET_ROOT/beat_this"
+
           cp -a "$HOME/.cache/music_ai_models/transkun_v2_aug" "$BUILD_ASSET_ROOT/transkun_v2_aug"
 
           cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
@@ -434,6 +439,7 @@ jobs:
             --yourmt3-source-dir "$GITHUB_WORKSPACE/YourMT3/amt/src" \
             --aria-amt-dir "$BUILD_ASSET_ROOT/aria_amt" \
             --bytedance-piano-dir "$BUILD_ASSET_ROOT/bytedance_piano" \
+            --beat-this-dir "$BUILD_ASSET_ROOT/beat_this" \
             --miros-dir "$BUILD_ASSET_ROOT/ai4m-miros" \
             --label "staged Linux portable model assets"
           python download_multistem_model.py \
@@ -476,6 +482,7 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR=$BUILD_ASSET_ROOT/yourmt3_all" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR=$BUILD_ASSET_ROOT/aria_amt" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR=$BUILD_ASSET_ROOT/bytedance_piano" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR=$BUILD_ASSET_ROOT/beat_this" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR=$BUILD_ASSET_ROOT/transkun_v2_aug" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MIROS_DIR=$BUILD_ASSET_ROOT/ai4m-miros" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR=$BUILD_ASSET_ROOT/muscriptor_small" >> "$GITHUB_ENV"
@@ -971,7 +978,7 @@ jobs:
           ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/docs/MuScriptor_vs_YourMT3.png)
           *保留上一版更新日志中的 MuScriptor Large 与 YourMT3+ 公开评测对比图*
 
-          - 固定源码升级到上游 main commit \`991ceaa04800484e617484ba065ebec802eebf53\`（package \`0.2.2\`），并以 SHA-256 身份校验叠加 PR #58 head \`edaebd3126336bd7eb4467dcf675d77f4e7772f0\` 的重叠窗口与异常重启实现。
+          - 固定源码升级到上游 beat-grid commit \`e2bd0fc5994f9acba7c1387ca5df67eb8d95df44\`（package \`0.2.2\`），并以 SHA-256 身份校验叠加 PR #58 head \`edaebd3126336bd7eb4467dcf675d77f4e7772f0\` 的重叠窗口与异常重启实现；项目使用既有权威节拍检测结果调用 BeatGrid MIDI writer，不运行会在部分真实长曲上失败的第二套检测。
           - 三档模型均固定使用 \`2.5s\` 重叠窗口、prelude forcing、双次生成与 gzip 异常重启；这是 v1.4 明确选择的最高质量路径，不提供低质量静默降级，也不会更换或量化 Small/Medium/Large 权重。与旧的不重叠路径相比，它会增加推理时间，发布说明不隐瞒这项质量成本。
           - 完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换，均支持 MuScriptor Small / Medium / Large；便携包同时内置并严格校验三套官方权重与配置。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。

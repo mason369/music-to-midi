@@ -8,6 +8,7 @@ import pytest
 from src.core.midi_tempo import (
     non_tempo_event_tick_fingerprint,
     non_tempo_event_time_fingerprint,
+    read_muscriptor_bar_offset_seconds,
     rewrite_midi_tempo_for_project_speed,
     rewrite_midi_tempo_preserving_seconds,
     rewrite_midi_tempo_preserving_ticks,
@@ -158,6 +159,94 @@ def test_tick_preserving_rewrite_changes_duration_without_moving_events(
         source.length * 100 / 160,
         abs=60 / 160 / exported.ticks_per_beat,
     )
+
+
+def test_tick_preserving_project_speed_scales_muscriptor_bar_offset_marker(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "bar-aligned-120.mid"
+    destination = tmp_path / "bar-aligned-60.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    conductor.append(
+        mido.MetaMessage("marker", text="muscriptor:bar_offset=0.2500", time=0)
+    )
+    midi.tracks.append(conductor)
+    notes = mido.MidiTrack()
+    notes.append(mido.Message("note_on", note=60, velocity=100, time=240))
+    notes.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.tracks.append(notes)
+    midi.save(source_path)
+
+    rewrite_midi_tempo_preserving_ticks(source_path, destination, 60.0)
+
+    exported = mido.MidiFile(destination)
+    assert read_muscriptor_bar_offset_seconds(exported) == pytest.approx(0.5)
+    assert [
+        message.tempo
+        for track in exported.tracks
+        for message in track
+        if message.is_meta and message.type == "set_tempo"
+    ] == [mido.bpm2tempo(60.0)]
+
+    def note_ticks(path: Path) -> list[tuple[str, int, int]]:
+        result: list[tuple[str, int, int]] = []
+        for track in mido.MidiFile(path).tracks:
+            absolute_tick = 0
+            for message in track:
+                absolute_tick += int(message.time)
+                if not message.is_meta and message.type in {"note_on", "note_off"}:
+                    result.append((message.type, int(message.note), absolute_tick))
+        return result
+
+    assert note_ticks(destination) == note_ticks(source_path)
+    assert exported.length == pytest.approx(
+        mido.MidiFile(source_path).length * 2.0,
+        abs=60 / 60 / exported.ticks_per_beat,
+    )
+
+
+def test_second_preserving_rewrite_keeps_muscriptor_bar_offset_marker(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "bar-offset-source.mid"
+    destination = tmp_path / "bar-offset-seconds.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    track.append(mido.MetaMessage("marker", text="muscriptor:bar_offset=0.3750", time=0))
+    track.append(mido.Message("note_on", note=64, velocity=90, time=120))
+    track.append(mido.Message("note_off", note=64, velocity=0, time=480))
+    midi.tracks.append(track)
+    midi.save(source_path)
+
+    rewrite_midi_tempo_preserving_seconds(source_path, destination, 77.9)
+
+    assert read_muscriptor_bar_offset_seconds(destination) == pytest.approx(0.375)
+
+
+def test_conflicting_muscriptor_bar_offset_markers_fail_without_publication(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "conflicting-offsets.mid"
+    destination = tmp_path / "existing.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    conductor.append(mido.MetaMessage("marker", text="muscriptor:bar_offset=0.1000", time=0))
+    midi.tracks.append(conductor)
+    second = mido.MidiTrack()
+    second.append(mido.MetaMessage("marker", text="muscriptor:bar_offset=0.2000", time=0))
+    midi.tracks.append(second)
+    midi.save(source_path)
+    sentinel = b"existing-user-file"
+    destination.write_bytes(sentinel)
+
+    with pytest.raises(RuntimeError, match="Conflicting MuScriptor bar-offset"):
+        rewrite_midi_tempo_preserving_ticks(source_path, destination, 90.0)
+
+    assert destination.read_bytes() == sentinel
 
 
 def test_project_speed_rewrite_maps_seconds_to_reference_ticks_then_keeps_them(

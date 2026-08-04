@@ -2,6 +2,7 @@ from pathlib import Path
 
 from download_accompaniment_model import download_accompaniment_model
 from download_aria_amt_model import download_aria_model
+from download_beat_this_model import download_beat_this_model
 from download_bytedance_piano_model import download_bytedance_piano_model
 from download_miros_model import prepare_miros_model
 from download_multistem_model import download_multistem_model
@@ -106,6 +107,11 @@ def download_sota_models() -> dict[str, object]:
     )
 
     print("")
+    print("Preparing exact Beat This final0 beat/downbeat checkpoint...")
+    beat_this_checkpoint = download_beat_this_model()
+    print(f"ready: {beat_this_checkpoint}")
+
+    print("")
     yourmt3_models = download_official_yourmt3_models()
 
     print("")
@@ -144,7 +150,7 @@ def download_sota_models() -> dict[str, object]:
     bytedance_checkpoint = download_bytedance_piano_model()
     print(f"ready: {bytedance_checkpoint}")
 
-    print("\n[10/12] Preparing all gated MuScriptor checkpoints...")
+    print("\nPreparing all gated MuScriptor checkpoints...")
     muscriptor_models = {}
     for model_size in MuscriptorModel:
         muscriptor_weights, muscriptor_config = download_muscriptor_model(model_size)
@@ -154,16 +160,19 @@ def download_sota_models() -> dict[str, object]:
         }
         print(f"ready ({model_size.value}): {muscriptor_weights}")
 
-    print("\n[11/12] Preparing MuScriptor official playback SoundFont...")
+    print("\nPreparing MuScriptor official playback SoundFont...")
     muscriptor_soundfont = download_muscriptor_soundfont()
     print(f"ready: {muscriptor_soundfont}")
 
-    print("\n[12/12] Verifying the real FluidSynth playback runtime...")
+    print("\nVerifying the real FluidSynth playback runtime...")
     fluidsynth_executable = download_fluidsynth_windows()
     print(f"ready: {fluidsynth_executable}")
 
     return {
         "transkun": transkun_runtime,
+        "beat_this": {
+            "checkpoint": beat_this_checkpoint,
+        },
         "yourmt3": yourmt3_models,
         "miros": {
             "repo_dir": miros_repo,

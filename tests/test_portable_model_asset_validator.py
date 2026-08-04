@@ -31,6 +31,7 @@ def _prepare_valid_assets(tmp_path: Path, monkeypatch) -> dict[str, object]:
     yourmt3_source_dir = tmp_path / "YourMT3" / "amt" / "src"
     aria_amt_dir = tmp_path / "aria_amt"
     bytedance_piano_dir = tmp_path / "bytedance_piano"
+    beat_this_dir = tmp_path / "beat_this"
     miros_dir = tmp_path / "ai4m-miros"
     files: dict[str, Path] = {}
 
@@ -111,6 +112,19 @@ def _prepare_valid_assets(tmp_path: Path, monkeypatch) -> dict[str, object]:
         bytedance_checkpoint,
     )
 
+    beat_this_checkpoint = b"pinned-beat-this-final0"
+    files["beat_this"] = _write(
+        beat_this_dir,
+        validator.beat_this.BEAT_THIS_CHECKPOINT_NAME,
+        beat_this_checkpoint,
+    )
+    _patch_identity(
+        monkeypatch,
+        validator.beat_this,
+        "BEAT_THIS_CHECKPOINT",
+        beat_this_checkpoint,
+    )
+
     files["miros_source"] = _write(miros_dir, "main.py", b"print('pinned miros')\n")
     _write(miros_dir, "transcribe.py", b"PINNED = True\n")
     miros_pretrained = b"pinned-miros-pretrained"
@@ -141,6 +155,7 @@ def _prepare_valid_assets(tmp_path: Path, monkeypatch) -> dict[str, object]:
         "yourmt3_source_dir": yourmt3_source_dir,
         "aria_amt_dir": aria_amt_dir,
         "bytedance_piano_dir": bytedance_piano_dir,
+        "beat_this_dir": beat_this_dir,
         "miros_dir": miros_dir,
         "files": files,
     }
@@ -153,6 +168,7 @@ def _validate(layout: dict[str, object]) -> dict[str, tuple[Path, ...]]:
         yourmt3_source_dir=layout["yourmt3_source_dir"],
         aria_amt_dir=layout["aria_amt_dir"],
         bytedance_piano_dir=layout["bytedance_piano_dir"],
+        beat_this_dir=layout["beat_this_dir"],
         miros_dir=layout["miros_dir"],
     )
 
@@ -176,6 +192,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
         "yourmt3_source",
         "aria_amt",
         "bytedance_piano",
+        "beat_this",
         "miros",
     }
     assert len(validated["leap_xe"]) == 2
@@ -184,6 +201,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
     assert len(validated["yourmt3_source"]) == 1
     assert len(validated["aria_amt"]) == 1
     assert len(validated["bytedance_piano"]) == 1
+    assert len(validated["beat_this"]) == 1
     assert len(validated["miros"]) == 4
 
 
@@ -202,6 +220,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
         ("yourmt3_source", "Patched YourMT3 source manifest mismatch"),
         ("aria", "Aria-AMT checkpoint SHA-256 mismatch"),
         ("bytedance", "ByteDance Piano checkpoint SHA-256 mismatch"),
+        ("beat_this", "Beat This final0 checkpoint SHA-256 mismatch"),
         ("miros_source", "MIROS patched source tree SHA256 mismatch"),
         ("miros_pretrained", "MIROS MusicFM pretrained weight SHA256 mismatch"),
         ("miros_finetuned", "MIROS fine-tuned checkpoint SHA256 mismatch"),
@@ -234,6 +253,8 @@ def test_cli_returns_nonzero_and_reports_identity_failure(tmp_path, monkeypatch,
             str(layout["aria_amt_dir"]),
             "--bytedance-piano-dir",
             str(layout["bytedance_piano_dir"]),
+            "--beat-this-dir",
+            str(layout["beat_this_dir"]),
             "--miros-dir",
             str(layout["miros_dir"]),
             "--label",
@@ -279,6 +300,7 @@ def _patch_valid_runtime_identities(monkeypatch):
     versions = {
         "audio-separator": validator.AUDIO_SEPARATOR_PACKAGE_VERSION,
         "onnxruntime-gpu": validator.ONNXRUNTIME_GPU_PACKAGE_VERSION,
+        "beat-this": "1.1.0",
     }
     monkeypatch.setattr(validator.metadata, "version", versions.__getitem__)
     monkeypatch.setattr(validator.importlib, "import_module", lambda _name: object())
@@ -308,12 +330,13 @@ def test_runtime_validator_accepts_exact_pinned_packages_and_sources(monkeypatch
 
     assert identities["audio-separator"] == expected_versions["audio-separator"]
     assert identities["onnxruntime-gpu"] == expected_versions["onnxruntime-gpu"]
+    assert identities["beat-this"] == expected_versions["beat-this"]
     assert identities["aria-amt-source"] == validator.aria_amt.ARIA_AMT_SOURCE_REVISION
     assert identities["piano-transcription-inference"] == "0.0.6"
     assert identities["transkun"] == "2.0.1"
 
 
-@pytest.mark.parametrize("package_name", ["audio-separator", "onnxruntime-gpu"])
+@pytest.mark.parametrize("package_name", ["audio-separator", "onnxruntime-gpu", "beat-this"])
 def test_runtime_validator_rejects_wrong_distribution_version(monkeypatch, package_name):
     versions = _patch_valid_runtime_identities(monkeypatch)
     versions[package_name] = "0.0.0-wrong"
@@ -409,6 +432,7 @@ def test_build_portable_validates_source_and_staged_assets_before_packaging():
         "$YourMt3CodeSource",
         "$AriaAmtSource",
         "$ByteDancePianoSource",
+        "$BeatThisSource",
         "$MirosSource",
     ):
         assert source_name in source_block
@@ -418,6 +442,7 @@ def test_build_portable_validates_source_and_staged_assets_before_packaging():
         "$YourMt3CodeSource",
         "$AriaAmtBundle",
         "$ByteDancePianoBundle",
+        "$BeatThisBundle",
         "$MirosBundle",
     ):
         assert bundle_name in staged_block
@@ -449,6 +474,7 @@ def test_linux_release_validates_staged_assets_before_pyinstaller():
         '--yourmt3-source-dir "$GITHUB_WORKSPACE/YourMT3/amt/src"',
         '--aria-amt-dir "$BUILD_ASSET_ROOT/aria_amt"',
         '--bytedance-piano-dir "$BUILD_ASSET_ROOT/bytedance_piano"',
+        '--beat-this-dir "$BUILD_ASSET_ROOT/beat_this"',
         '--miros-dir "$BUILD_ASSET_ROOT/ai4m-miros"',
     ):
         assert argument in release_workflow

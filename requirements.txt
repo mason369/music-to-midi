@@ -70,3 +70,7 @@ psutil>=5.9.0,<8
 
 # MuScriptor 的固定公共提交由 install.ps1 / install.sh 以 --no-deps
 # 单独安装，避免其 Web 服务依赖改写本项目固定的 Torch/FastAPI 运行时。
+# e2bd0fc 的源码元数据要求 beat-this；项目固定安装其代码依赖以保持
+# 产品直接使用这一个检测器；final0.ckpt 由独立下载器准备并按固定身份校验。
+# 唯一节拍/下拍检测运行时；final0.ckpt 由 download_beat_this_model.py 精确校验。
+beat-this==1.1.0

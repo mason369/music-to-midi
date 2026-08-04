@@ -101,7 +101,7 @@ song_other.wav
 
 ### YourMT3+
 
-YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
+YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
 
 需要满足：
 
@@ -129,7 +129,7 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large
 
-项目固定使用 `muscriptor` 当前 main 提交 `991ceaa04800484e617484ba065ebec802eebf53`（包版本 `0.2.2`），并叠加经 SHA-256 校验的 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 重叠窗口/异常重启实现；同时固定 gated 权重 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重文件为 5,465,642,136 bytes，采用 CC BY-NC 4.0 并附额外合法使用条件；下载前必须接受 Hugging Face 条款并登录：
+项目固定使用 `muscriptor` BeatGrid 提交 `e2bd0fc5994f9acba7c1387ca5df67eb8d95df44`（包版本 `0.2.2`），并叠加经 SHA-256 校验的 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 重叠窗口/异常重启实现。MuScriptor 接收与其余后端完全相同的 Beat This `final0` 权威网格，BeatGrid 内部不再启动第二检测器，也不接受占位 120 BPM；写出的 tempo、可靠拍号、小节相位和可验证前置偏移会与手动工程变速及最终原音/MIDI 试听同步，不量化或过滤模型音符。同时固定 gated 权重 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重文件为 5,465,642,136 bytes，采用 CC BY-NC 4.0 并附额外合法使用条件；下载前必须接受 Hugging Face 条款并登录：
 
 ```bash
 hf auth login
@@ -414,7 +414,7 @@ TelkNet 边界：本轮经授权核验了私有 `mason369/telknet` 的 `dev` 提
 
 桌面版、Space 和 Colab 不再提供可调质量入口。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；项目不再追加重叠分段去重、稀疏音色过滤或本地 MIDI 重新生成。MIROS 同样直接保留官方 CLI writer 输出，再只补齐 tempo 元数据。
 
-自动 BPM 来自拍点检测器；手动 4–400 BPM 是明确的工程 tempo 覆盖。模型事件先按检测 BPM 映射到音乐 tick，再保持 tick 不变并写入精确工程 tempo，因此下载 MIDI 与结果页联动的原音/MIDI 试听都会按“工程 BPM ÷ 检测 BPM”真实变速。“播放速度”直接显示这个真实倍率：修改 BPM 会同步更新倍率，修改倍率也会反算并写回工程 BPM。这不是量化或音符清理：事件内容与音乐 tick 均保持不变。源音频文件本身不会被改写；若在 DAW 中与手动变速后的 MIDI 一起导入，需让 DAW 以相同倍率适配原音。
+七种模式和逐轨转写只使用 Beat This `final0`：先清除竞争拍点、补计漏拍位置，再以全局最小二乘拟合 BPM；下拍独立推断拍号，置信不足时不伪造 4/4。恒速自动写单一 tempo，变速自动写逐拍 tempo map。手动 4–400 BPM 是明确的工程 tempo 覆盖；该流程不量化或清理音符，事件内容与音乐 tick 均保持不变。
 
 发布后的 Standard MIDI 会回读校验 tempo、拍号和全部非 tempo 事件；DAW 需启用 tempo map/速度图导入。MuseScore 3/4 可能把未量化的演奏型 MIDI 判定为 human performance，重新跟拍并覆盖乐谱页显示 BPM。该数值来自 MuseScore 的 MIDI 导入器；项目不会为了强制制谱软件显示文件 tempo 而量化或移动模型音符。
 
@@ -532,7 +532,7 @@ python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com
 python download_sota_models.py
 ```
 
-当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；不要用可变上游 `master` 覆盖。`download_sota_models.py` 会准备五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
+当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；不要用可变上游 `master` 覆盖。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
 
 ### 5. 准备分离与钢琴模型
 
@@ -693,7 +693,7 @@ src/
 
 space/app.py                 # Gradio Web 界面
 colab_notebook.ipynb         # Colab 运行入口
-download_sota_models.py      # 五种 YourMT3 + MIROS + 三种分离 + 四条钢琴模型契约
+download_sota_models.py      # Beat This + 五种 YourMT3 + MIROS + 三种分离 + 四条钢琴模型契约
 download_vocal_model.py      # Leap XE vocals 模型下载
 download_accompaniment_model.py # PolarFormer accompaniment 下载入口
 download_multistem_model.py  # BS-RoFormer SW Fixed 六声部分离模型下载

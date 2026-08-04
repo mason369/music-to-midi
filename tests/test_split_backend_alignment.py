@@ -92,6 +92,7 @@ def _run_six_stem_pipeline(monkeypatch, tmp_path, backend, save_separated_tracks
         )
     )
     merged_inputs = []
+    beat_detection_calls = []
 
     def fake_merge(midi_paths_by_track, output_path):
         merged_inputs.append(dict(midi_paths_by_track))
@@ -103,11 +104,11 @@ def _run_six_stem_pipeline(monkeypatch, tmp_path, backend, save_separated_tracks
         "src.core.multi_stem_separator.SixStemSeparator",
         FakeSixStemSeparator,
     )
-    monkeypatch.setattr(
-        pipeline,
-        "_detect_beat_or_raise",
-        lambda *_args, **_kwargs: BeatInfo(bpm=120.0),
-    )
+    def fake_detect(path, **_kwargs):
+        beat_detection_calls.append(Path(path))
+        return BeatInfo(bpm=120.0)
+
+    monkeypatch.setattr(pipeline, "_detect_beat_or_raise", fake_detect)
     monkeypatch.setattr(pipeline, "_require_multi_instrument_available", lambda: None)
     monkeypatch.setattr(pipeline, "_cleanup_multi_instrument_backend", lambda: None)
     monkeypatch.setattr(pipeline, "_merge_stem_midis", fake_merge)
@@ -120,6 +121,7 @@ def _run_six_stem_pipeline(monkeypatch, tmp_path, backend, save_separated_tracks
         "selected": selected,
         "not_selected": not_selected,
         "merged_inputs": merged_inputs,
+        "beat_detection_calls": beat_detection_calls,
         "result": result,
     }
 
@@ -139,6 +141,7 @@ def test_six_stem_transcribes_each_real_stem_once_with_selected_backend(
 
     expected_stem_paths = [Path(run["separated_paths"][stem_name]) for stem_name in STEM_KEYS]
     assert run["separator_calls"] == [run["audio_path"]]
+    assert run["beat_detection_calls"] == [run["audio_path"]]
     assert run["selected"].calls == expected_stem_paths
     assert run["audio_path"] not in run["selected"].calls
     assert run["not_selected"].calls == []

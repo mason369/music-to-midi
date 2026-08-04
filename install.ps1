@@ -542,7 +542,7 @@ if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
 
 Write-Info "安装 MuScriptor 当前 main 并应用固定最佳质量补丁（不改写固定 PyTorch 运行时）..."
-$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/991ceaa04800484e617484ba065ebec802eebf53.zip"
+$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip"
 & "$PIP" install $muscriptorRequirement --no-deps --force-reinstall
 if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 固定公共源码安装失败" }
 & "$PYTHON" (Join-Path $REPO_DIR "patch_muscriptor_runtime.py")
@@ -791,6 +791,7 @@ Write-Host "  .\run.ps1" -ForegroundColor Green
 Write-Host ""
 Write-Host "  模型维护命令：" -ForegroundColor White
 Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
+  Write-Host "  venv\Scripts\python.exe download_beat_this_model.py" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
   Write-Host "  venv\Scripts\python.exe download_accompaniment_model.py" -ForegroundColor Yellow

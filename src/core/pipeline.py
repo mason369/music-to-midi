@@ -497,7 +497,7 @@ class MusicToMidiPipeline:
         midi_path: str,
         tempo_bpm: float,
         *,
-        time_signature: Tuple[int, int],
+        time_signature: Optional[Tuple[int, int]],
         force: bool = False,
         tempo_map: Optional[List[Tuple[float, float]]] = None,
         source_bpm: Optional[float] = None,
@@ -518,10 +518,11 @@ class MusicToMidiPipeline:
         Pitch, program, velocity, controller, pitch-wheel, and note payloads are
         copied unchanged; no note quantization or filtering is performed.
 
-        The detected meter is written as an explicit ``time_signature`` event
-        in the SMF conductor track (or every independent type-2 sequence).
-        This completes the portable tempo-map metadata without snapping any
-        performance event to a rhythmic grid.
+        A reliable detected meter is written as an explicit ``time_signature``
+        event in the SMF conductor track (or every independent type-2
+        sequence). If Beat This cannot establish a meter, backend placeholder
+        meter events are removed instead of inventing 4/4. This completes the
+        portable tempo-map metadata without snapping performance events.
 
         ``tempo_map`` 为 [(秒, BPM), ...] 变速点（首点 0 秒）时按分段写入多个
         ``set_tempo``；为空或单点时写入单一 tempo（原行为）。
@@ -830,6 +831,8 @@ class MusicToMidiPipeline:
         self._check_cancelled()
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
+        if transcriber is self.muscriptor_transcriber:
+            transcriber.set_beat_info(beat_info)
         self._report_detected_bpm(beat_info, 1.0, 0.05)
 
         self._report(
@@ -922,7 +925,7 @@ class MusicToMidiPipeline:
                         stem_midi_paths[stem_name],
                         tempo,
                         force=True,
-                        tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                        tempo_map=beat_info.tempo_map,
                         source_bpm=beat_info.source_bpm,
                         time_signature=beat_info.time_signature,
                     )
@@ -1064,7 +1067,7 @@ class MusicToMidiPipeline:
             midi_path,
             tempo,
             force=True,
-            tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+            tempo_map=beat_info.tempo_map,
             source_bpm=beat_info.source_bpm,
             time_signature=beat_info.time_signature,
         )
@@ -1212,7 +1215,7 @@ class MusicToMidiPipeline:
                 midi_path,
                 tempo,
                 force=True,
-                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                tempo_map=beat_info.tempo_map,
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
@@ -1287,7 +1290,7 @@ class MusicToMidiPipeline:
                 midi_path,
                 tempo,
                 force=True,
-                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                tempo_map=beat_info.tempo_map,
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
@@ -1345,6 +1348,7 @@ class MusicToMidiPipeline:
         )
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
+        self.muscriptor_transcriber.set_beat_info(beat_info)
         self._report_detected_bpm(beat_info, 1.0, 0.1)
         self._check_cancelled()
         self._report(
@@ -1368,7 +1372,7 @@ class MusicToMidiPipeline:
                 midi_path,
                 tempo,
                 force=True,
-                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                tempo_map=beat_info.tempo_map,
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
@@ -1455,6 +1459,8 @@ class MusicToMidiPipeline:
         self._check_cancelled()
         beat_info = self._detect_beat_or_raise(audio_path)
         tempo = beat_info.bpm
+        if transcriber is self.muscriptor_transcriber:
+            transcriber.set_beat_info(beat_info)
         self._report_detected_bpm(beat_info, 1.0, 0.05)
 
         # ── 阶段2：Leap XE + PolarFormer 人声/伴奏分离 (5-35%) ──
@@ -1550,7 +1556,7 @@ class MusicToMidiPipeline:
                 accompaniment_midi_path,
                 tempo,
                 force=True,
-                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                tempo_map=beat_info.tempo_map,
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
@@ -1595,7 +1601,7 @@ class MusicToMidiPipeline:
                 vocal_midi_path,
                 tempo,
                 force=True,
-                tempo_map=(beat_info.tempo_map if self.config.enable_tempo_map else None),
+                tempo_map=beat_info.tempo_map,
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )

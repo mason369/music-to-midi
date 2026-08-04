@@ -102,6 +102,10 @@ bytedance_piano_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "bytedance_piano"),
 )
+beat_this_models_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR"),
+    os.path.join(USER_HOME, ".music-to-midi", "models", "beat_this"),
+)
 transkun_v2_aug_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR"),
     os.path.join(USER_HOME, ".cache", "music_ai_models", "transkun_v2_aug"),
@@ -184,6 +188,7 @@ datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3
 datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
+datas += _collect_tree(beat_this_models_dir, "models/beat_this")
 datas += _collect_tree(transkun_v2_aug_models_dir, "models/transkun_v2_aug")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
@@ -197,6 +202,7 @@ datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')
 datas += copy_metadata('aria-amt')
 datas += copy_metadata('piano-transcription-inference')
+datas += copy_metadata('beat-this')
 datas += copy_metadata('transkun')
 datas += copy_metadata('torchlibrosa')
 datas += copy_metadata('muscriptor')
@@ -229,6 +235,8 @@ hiddenimports = [
     'amt',
     'amt.run',
     'piano_transcription_inference',
+    'beat_this',
+    'beat_this.inference',
     'torchlibrosa',
     'matplotlib',
     'matplotlib.pyplot',
@@ -264,6 +272,7 @@ transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transku
 muscriptor_datas, muscriptor_binaries, muscriptor_hiddenimports = collect_all('muscriptor')
 aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
+beat_this_datas, beat_this_binaries, beat_this_hiddenimports = collect_all('beat_this')
 torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
 matplotlib_datas, matplotlib_binaries, matplotlib_hiddenimports = collect_all('matplotlib')
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
@@ -289,6 +298,7 @@ datas += (
     + muscriptor_datas
     + aria_amt_datas
     + bytedance_piano_datas
+    + beat_this_datas
     + torchlibrosa_datas
     + matplotlib_datas
     + wandb_datas
@@ -315,6 +325,7 @@ hiddenimports += (
     + muscriptor_hiddenimports
     + aria_amt_hiddenimports
     + bytedance_piano_hiddenimports
+    + beat_this_hiddenimports
     + torchlibrosa_hiddenimports
     + matplotlib_hiddenimports
     + wandb_hiddenimports
@@ -342,6 +353,7 @@ all_binaries = (
     + muscriptor_binaries
     + aria_amt_binaries
     + bytedance_piano_binaries
+    + beat_this_binaries
     + torchlibrosa_binaries
     + matplotlib_binaries
     + wandb_binaries

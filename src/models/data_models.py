@@ -270,7 +270,9 @@ class BeatInfo:
     bpm: float  # 每分钟节拍数
     beat_times: List[float] = field(default_factory=list)  # 所有节拍时间
     downbeats: Optional[List[float]] = None  # 重拍时间
-    time_signature: Tuple[int, int] = (4, 4)  # 拍号（分子/分母）
+    # None means Beat This could not establish a reliable meter; MIDI export
+    # must then remove placeholder meter events instead of inventing 4/4.
+    time_signature: Optional[Tuple[int, int]] = None
     # 变速点列表 [(秒, BPM), ...]，按时间升序且首点为 0 秒；空或单点表示恒速
     tempo_map: List[Tuple[float, float]] = field(default_factory=list)
     # 自定义目标 BPM 启用时保存自动识别的原曲 BPM，供实际变速与预览对齐。
@@ -527,9 +529,9 @@ class Config:
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
-    # 变速 tempo map（默认关闭）：开启后高置信变速会写入多个 set_tempo，
-    # 关闭时输出始终以全局检测 BPM 为准的单一 tempo
-    enable_tempo_map: bool = False
+    # Beat This 自动区分恒速与变速；恒速写单一 tempo，变速写逐拍 tempo map。
+    # 保留字段用于旧配置兼容，但最佳质量默认开启。
+    enable_tempo_map: bool = True
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
@@ -568,6 +570,9 @@ class Config:
 
     def validate(self) -> None:
         """Normalize and validate mutable configuration before each processing run."""
+        # Deprecated compatibility input only: the production chain always
+        # selects constant versus variable tempo from the Beat This grid.
+        self.enable_tempo_map = True
         mode = str(getattr(self, "processing_mode", "") or "").strip().lower()
         valid_modes = {
             ProcessingMode.SMART.value,

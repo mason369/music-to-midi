@@ -48,7 +48,7 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         self.assertIn(
             '"muscriptor @ https://github.com/muscriptor/muscriptor/archive/'
-            '991ceaa04800484e617484ba065ebec802eebf53.zip" --no-deps',
+            'e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip" --no-deps',
             workflow,
         )
         self.assertIn("python patch_muscriptor_runtime.py", workflow)
@@ -87,6 +87,7 @@ class CiWorkflowContractTests(unittest.TestCase):
             "YOURMT3",
             "ARIA_AMT",
             "BYTEDANCE_PIANO",
+            "BEAT_THIS",
             "TRANSKUN_V2_AUG",
             "MIROS",
             "MUSCRIPTOR",

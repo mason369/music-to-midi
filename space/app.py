@@ -1124,6 +1124,15 @@ def ensure_bytedance_piano_weights():
     logger.info("ByteDance Piano checkpoint downloaded")
 
 
+def ensure_beat_this_weights():
+    """Prepare and identity-check the only beat/downbeat model used by every route."""
+
+    from download_beat_this_model import download_beat_this_model
+
+    checkpoint = download_beat_this_model(printer=logger.info)
+    logger.info("Beat This final0 checkpoint ready: %s", checkpoint)
+
+
 # Install the pinned code before Gradio begins accepting concurrent requests.
 # Failure is fatal and visible; it never downgrades the ZeroGPU PyTorch runtime.
 ensure_aria_amt_runtime()
@@ -1212,6 +1221,7 @@ def _prepare_request_models(
         muscriptor_model,
         muscriptor_instruments,
     )
+    ensure_beat_this_weights()
     if config.processing_mode == ProcessingMode.PIANO_ARIA_AMT.value:
         ensure_aria_amt_weights()
     elif config.processing_mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:

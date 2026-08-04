@@ -507,6 +507,42 @@ def _load_reference_mono_44k(path: Path):
     )
 
 
+def _write_bar_aligned_reference_audio(
+    source: Path,
+    output_dir: Path,
+    offset_seconds: float,
+) -> Path:
+    """Prepend the same e2bd0fc delay carried by the final MIDI marker."""
+
+    offset = float(offset_seconds)
+    if not math.isfinite(offset) or offset < 0.0:
+        raise ValueError(f"Invalid MuScriptor bar-alignment offset: {offset_seconds!r}")
+    if offset == 0.0:
+        return source
+
+    import numpy as np
+    import soundfile as sf
+
+    padding_frames = int(round(offset * _SAMPLE_RATE))
+    if padding_frames <= 0:
+        raise RuntimeError(
+            "Positive MuScriptor bar offset rounded to zero audio frames: "
+            f"offset={offset}, sample_rate={_SAMPLE_RATE}"
+        )
+    original = _load_reference_mono_44k(source)
+    aligned = np.pad(original, (padding_frames, 0))
+    destination = output_dir / "bar-aligned-original.wav"
+    sf.write(destination, aligned, _SAMPLE_RATE, subtype="PCM_16")
+    info = sf.info(str(destination))
+    if info.frames != len(aligned) or info.samplerate != _SAMPLE_RATE:
+        raise RuntimeError(
+            "Bar-aligned reference audio verification failed: "
+            f"path={destination}, expected_frames={len(aligned)}, "
+            f"actual_frames={info.frames}, sample_rate={info.samplerate}"
+        )
+    return destination
+
+
 def _audio_rms(audio) -> float:
     import numpy as np
 
@@ -813,6 +849,14 @@ def prepare_midi_playback_assets(
             f"MIDI playback input missing: midi={midi_path}, audio={original_audio}"
         )
     output_dir.mkdir(parents=True, exist_ok=True)
+    from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
+
+    bar_offset_seconds = read_muscriptor_bar_offset_seconds(midi_path)
+    playback_reference = _write_bar_aligned_reference_audio(
+        original_audio,
+        output_dir,
+        bar_offset_seconds,
+    )
     report = progress_callback or (lambda _progress, _message: None)
     check_cancelled = cancel_check or (lambda: False)
 
@@ -823,7 +867,7 @@ def prepare_midi_playback_assets(
     notes = read_midi_roll_notes(midi_path, muscriptor_groups=muscriptor_groups)
     if not notes and not allow_empty_notes:
         raise RuntimeError("MIDI result contains no completed notes to play")
-    source_frames = len(_load_reference_mono_44k(original_audio))
+    source_frames = len(_load_reference_mono_44k(playback_reference))
     if source_frames <= 0:
         raise RuntimeError(f"Playback reference audio is empty: {original_audio}")
     if not notes:
@@ -837,13 +881,13 @@ def prepare_midi_playback_assets(
         transcription_wav = output_dir / "transcription.wav"
         sf.write(transcription_wav, silence, _SAMPLE_RATE)
         original_left, transcription_right, instrument_rights = _write_channelized_playback(
-            original_audio,
+            playback_reference,
             transcription_wav,
             {},
             output_dir,
         )
         stereo_mix = output_dir / "original-and-midi-stereo.wav"
-        _write_official_stereo_mix(original_audio, transcription_wav, stereo_mix)
+        _write_official_stereo_mix(playback_reference, transcription_wav, stereo_mix)
         report(1.0, "Empty edited MIDI playback assets ready")
         return MuscriptorPlaybackAssets(
             notes=(),
@@ -909,7 +953,7 @@ def prepare_midi_playback_assets(
     checkpoint()
     report(0.84, "Preparing loudness-matched live MIDI buses")
     live_buses = _write_live_playback_buses(
-        original_audio,
+        playback_reference,
         instrument_wavs,
         output_dir,
         combined_source=transcription_wav,
@@ -948,7 +992,7 @@ def prepare_midi_playback_assets(
     stereo_mix = output_dir / "original-and-midi-stereo.wav"
     checkpoint()
     report(0.92, "Rendering the downloadable stereo mix")
-    _write_official_stereo_mix(original_audio, live_buses.transcription_wav, stereo_mix)
+    _write_official_stereo_mix(playback_reference, live_buses.transcription_wav, stereo_mix)
     report(1.0, "MuScriptor playback assets ready")
     return MuscriptorPlaybackAssets(
         notes=notes,

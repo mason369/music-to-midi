@@ -13,8 +13,9 @@ from src.core.muscriptor_midi import (
     require_allowed_muscriptor_event_instrument,
     validate_muscriptor_midi_constraint,
 )
+from src.core.muscriptor_model_loader import load_muscriptor_model_memory_bounded
 from src.i18n.translator import Translator
-from src.models.data_models import Config
+from src.models.data_models import BeatInfo, Config
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_REPRESENTATIVE_PROGRAMS,
     validate_muscriptor_instruments,
@@ -50,8 +51,10 @@ class MuscriptorTranscriber:
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._event_callback: Optional[Callable[[dict[str, object]], None]] = None
+        self._beat_info: BeatInfo | None = None
         self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
         self.last_detected_instruments: list[str] = []
+        self.last_bar_offset_seconds = 0.0
 
     @staticmethod
     def _runtime_unavailable_reason() -> str:
@@ -66,6 +69,7 @@ class MuscriptorTranscriber:
         try:
             from muscriptor import TranscriptionModel
             from muscriptor.tokenizer.mt3 import MT3Tokenizer
+            from muscriptor.utils.beats import BeatGrid
         except Exception as exc:
             return f"MuScriptor 运行时导入失败：{exc}"
 
@@ -91,6 +95,14 @@ class MuscriptorTranscriber:
             return (
                 "MuScriptor tokenizer is missing overlap_prompt_token_ids; "
                 "best-quality overlapping-window transcription cannot run."
+            )
+        midi_parameters = inspect.signature(TranscriptionModel.events_to_midi_bytes).parameters
+        if "beat_grid" not in midi_parameters or not callable(
+            getattr(BeatGrid, "bar_offset", None)
+        ):
+            return (
+                "MuScriptor runtime is missing the e2bd0fc BeatGrid MIDI API. "
+                f"Required source commit: {MUSCRIPTOR_SOURCE_COMMIT}."
             )
         return ""
 
@@ -123,6 +135,67 @@ class MuscriptorTranscriber:
     def set_event_callback(self, callback: Optional[Callable[[dict[str, object]], None]]) -> None:
         self._event_callback = callback
 
+    def set_beat_info(self, beat_info: BeatInfo) -> None:
+        """Provide the one authoritative project beat analysis for MIDI writing."""
+
+        if not isinstance(beat_info, BeatInfo):
+            raise TypeError(
+                f"MuScriptor beat information must be BeatInfo, got {type(beat_info)!r}"
+            )
+        self._beat_info = beat_info
+
+    def _project_beat_grid(self):
+        """Build e2bd0fc's BeatGrid without running a second beat detector."""
+
+        from math import isclose, isfinite
+
+        from muscriptor.utils.beats import BeatGrid
+
+        from src.core.midi_tempo import validated_midi_bpm, validated_midi_time_signature
+
+        if self._beat_info is None:
+            raise RuntimeError(
+                "MuScriptor BeatGrid was not configured. The pipeline must run its "
+                "authoritative beat analysis and call set_beat_info() before transcription."
+            )
+        info = self._beat_info
+        reference_bpm = info.bpm if info.source_bpm is None else info.source_bpm
+        bpm = validated_midi_bpm(reference_bpm, "MuScriptor BeatGrid reference")
+        beats_per_bar = None
+        if info.time_signature is not None:
+            numerator, denominator = validated_midi_time_signature(info.time_signature)
+            quarter_beats_per_bar = numerator * 4.0 / denominator
+            rounded_beats_per_bar = round(quarter_beats_per_bar)
+            if not isclose(
+                quarter_beats_per_bar,
+                rounded_beats_per_bar,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise RuntimeError(
+                    "MuScriptor e2bd0fc cannot encode this meter as a quarter-note BeatGrid: "
+                    f"time_signature={info.time_signature!r}, "
+                    f"quarter_beats={quarter_beats_per_bar}"
+                )
+            beats_per_bar = int(rounded_beats_per_bar)
+        phase_candidates = list(info.downbeats or []) or list(info.beat_times)
+        if not phase_candidates:
+            raise RuntimeError(
+                "MuScriptor bar alignment requires at least one detected downbeat or beat"
+            )
+        first_downbeat = float(phase_candidates[0])
+        if not isfinite(first_downbeat) or first_downbeat < 0.0:
+            raise RuntimeError(
+                f"Invalid MuScriptor first downbeat for bar alignment: {first_downbeat!r}"
+            )
+        grid = BeatGrid(
+            bpm=bpm,
+            beats_per_bar=beats_per_bar,
+            first_downbeat=first_downbeat,
+        )
+        self.last_bar_offset_seconds = float(grid.bar_offset())
+        return grid
+
     def cancel(self) -> None:
         self._cancelled = True
 
@@ -142,7 +215,6 @@ class MuscriptorTranscriber:
         weights, _config = get_cached_muscriptor_paths(model_size, validate_hashes=True)
 
         import torch
-        from muscriptor import TranscriptionModel
 
         if self.config.use_gpu:
             if not torch.cuda.is_available():
@@ -156,9 +228,9 @@ class MuscriptorTranscriber:
 
         self._check_cancelled()
         logger.info("Loading pinned %s on %s from %s", artifact.display_name, device, weights)
-        self._model = TranscriptionModel.load_model(weights_path=weights, device=device)
+        self._model = load_muscriptor_model_memory_bounded(weights, device)
         logger.info(
-            "%s loaded with its pinned upstream precision and cache configuration",
+            "%s loaded in place with its pinned upstream precision and cache configuration",
             artifact.display_name,
         )
         self._runtime_details = {
@@ -168,6 +240,7 @@ class MuscriptorTranscriber:
             "gpu": device,
             "compute_dtype": "upstream",
             "kv_cache_dtype": "upstream",
+            "weight_load_strategy": "safetensors_cpu_tensor_stream",
             "kv_cache_reused_layers": 0,
             "batch_size": 1,
             "prelude_forcing": True,
@@ -201,6 +274,7 @@ class MuscriptorTranscriber:
             getattr(self.config, "muscriptor_instruments", [])
         )
         model = self.load_model()
+        beat_grid = self._project_beat_grid()
 
         from muscriptor.events import NoteEndEvent, NoteStartEvent, ProgressEvent
 
@@ -211,6 +285,15 @@ class MuscriptorTranscriber:
         pending_note_ends: list[dict[str, object]] = []
         self._check_cancelled()
         if self._runtime_details is not None:
+            self._runtime_details.update(
+                {
+                    "beat_grid_source": "project_authoritative",
+                    "beat_grid_bpm": float(beat_grid.bpm),
+                    "beat_grid_beats_per_bar": beat_grid.beats_per_bar,
+                    "beat_grid_first_downbeat": float(beat_grid.first_downbeat),
+                    "bar_offset_seconds": self.last_bar_offset_seconds,
+                }
+            )
             self._emit_event(dict(self._runtime_details))
 
         def flush_note_ends() -> None:
@@ -299,7 +382,10 @@ class MuscriptorTranscriber:
         flush_note_ends()
 
         self._check_cancelled()
-        midi_bytes = model.events_to_midi_bytes(iter(official_events))
+        midi_bytes = model.events_to_midi_bytes(
+            iter(official_events),
+            beat_grid=beat_grid,
+        )
         temporary = unique_midi_temp_path(output_path, "muscriptor-official")
         try:
             temporary.write_bytes(midi_bytes)

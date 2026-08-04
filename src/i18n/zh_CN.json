@@ -418,7 +418,11 @@
   },
   "progress": {
     "loading_audio_for_beat": "正在加载音频进行节拍检测...",
-    "analyzing_tempo": "正在使用多算法分析速度...",
+    "analyzing_tempo": "正在使用 Beat This final0 分析速度...",
+    "loading_beat_this": "正在加载 Beat This final0...",
+    "running_beat_this": "正在使用 Beat This 检测拍点和下拍...",
+    "validating_beat_grid": "正在清理并验证节拍网格...",
+    "beat_this_complete": "Beat This 节拍检测完成：{bpm} BPM",
     "custom_bpm": "原曲速度识别完成，工程 BPM 覆盖为 {bpm}；导出 MIDI 和原音/MIDI 联动试听会按工程 BPM ÷ 检测 BPM 真实变速",
     "finding_beats": "正在查找节拍位置...",
     "detecting_downbeats": "正在检测下拍...",

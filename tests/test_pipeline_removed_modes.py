@@ -216,7 +216,13 @@ class TestVocalSplitMode(unittest.TestCase):
             pipeline.yourmt3_transcriber = transcriber
             pipeline.midi_generator = FakeMidiGenerator()
             pipeline._merge_stem_midis = fake_merge
-            pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(bpm=120.0)
+            beat_detection_calls = []
+
+            def fake_detect(path, **_kwargs):
+                beat_detection_calls.append(Path(path))
+                return BeatInfo(bpm=120.0)
+
+            pipeline._detect_beat_or_raise = fake_detect
 
             with (
                 patch("src.core.vocal_separator.VocalSeparator", FakeVocalSeparator),
@@ -250,6 +256,7 @@ class TestVocalSplitMode(unittest.TestCase):
                 )
             self.assertEqual(result.total_notes, 2)
             self.assertEqual(result.beat_info, BeatInfo(bpm=120.0))
+            self.assertEqual(beat_detection_calls, [audio_path])
             self.assertIsNone(result.separated_audio)
             self.assertTrue(all(not Path(path).exists() for path in transcriber.calls))
             self.assertEqual(

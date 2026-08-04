@@ -180,6 +180,7 @@ function Assert-PortableModelIdentities {
         [string]$YourMt3SourceDir,
         [string]$AriaAmtDir,
         [string]$ByteDancePianoDir,
+        [string]$BeatThisDir,
         [string]$MirosDir,
         [string]$PythonPath,
         [string]$Label
@@ -191,6 +192,7 @@ function Assert-PortableModelIdentities {
         "patched YourMT3 source" = $YourMt3SourceDir
         "Aria-AMT" = $AriaAmtDir
         "ByteDance Piano" = $ByteDancePianoDir
+        "Beat This final0" = $BeatThisDir
         "MIROS" = $MirosDir
     }
     foreach ($entry in $requiredDirectories.GetEnumerator()) {
@@ -210,6 +212,7 @@ function Assert-PortableModelIdentities {
         --yourmt3-source-dir $YourMt3SourceDir `
         --aria-amt-dir $AriaAmtDir `
         --bytedance-piano-dir $ByteDancePianoDir `
+        --beat-this-dir $BeatThisDir `
         --miros-dir $MirosDir `
         --label $Label
     if ($LASTEXITCODE -ne 0) {
@@ -331,6 +334,14 @@ $ByteDancePianoSource = Resolve-ExistingDir @(
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\bytedance_piano"),
     (Join-Path $Root "checkpoints\bytedance_piano")
 )
+$beatThisSourceText = & $Python -c "from src.core.beat_this_tracker import validate_beat_this_checkpoint; print(validate_beat_this_checkpoint().parent)"
+if ($LASTEXITCODE -ne 0) {
+    throw "Beat This final0 checkpoint is unavailable or failed exact identity validation. Run download_beat_this_model.py."
+}
+$BeatThisSource = Resolve-ExistingDir @(
+    $env:MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR,
+    ($beatThisSourceText | Select-Object -Last 1)
+)
 $TransKunV2AugSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR,
     (Join-Path $env:USERPROFILE ".cache\music_ai_models\transkun_v2_aug"),
@@ -395,6 +406,7 @@ $AudioSeparatorBundle = Join-Path $BuildAssetRoot "audio-separator"
 $YourMt3Bundle = Join-Path $BuildAssetRoot "yourmt3_all"
 $AriaAmtBundle = Join-Path $BuildAssetRoot "aria_amt"
 $ByteDancePianoBundle = Join-Path $BuildAssetRoot "bytedance_piano"
+$BeatThisBundle = Join-Path $BuildAssetRoot "beat_this"
 $TransKunV2AugBundle = Join-Path $BuildAssetRoot "transkun_v2_aug"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $MuscriptorSmallBundle = Join-Path $BuildAssetRoot "muscriptor_small"
@@ -410,6 +422,7 @@ Assert-PortableModelIdentities `
     -YourMt3SourceDir $YourMt3CodeSource `
     -AriaAmtDir $AriaAmtSource `
     -ByteDancePianoDir $ByteDancePianoSource `
+    -BeatThisDir $BeatThisSource `
     -MirosDir $MirosSource `
     -PythonPath $Python `
     -Label "portable source assets"
@@ -419,6 +432,7 @@ Assert-SixStemAssets -ModelDir $AudioSeparatorBundle -PythonPath $Python -Label 
 Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required | Out-Null
 Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required | Out-Null
 Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required | Out-Null
+Copy-Tree -Source $BeatThisSource -Destination $BeatThisBundle -Label "Beat This final0 model" -Required | Out-Null
 Copy-Tree -Source $TransKunV2AugSource -Destination $TransKunV2AugBundle -Label "TransKun V2 Aug models" -Required | Out-Null
 $transkunV2AugCheck = @"
 from pathlib import Path
@@ -483,6 +497,7 @@ Assert-PortableModelIdentities `
     -YourMt3SourceDir $YourMt3CodeSource `
     -AriaAmtDir $AriaAmtBundle `
     -ByteDancePianoDir $ByteDancePianoBundle `
+    -BeatThisDir $BeatThisBundle `
     -MirosDir $MirosBundle `
     -PythonPath $Python `
     -Label "staged portable model assets"
@@ -510,6 +525,7 @@ $env:MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR = $AudioSeparatorBundle
 $env:MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR = $YourMt3Bundle
 $env:MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR = $AriaAmtBundle
 $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
+$env:MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR = $BeatThisBundle
 $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR = $TransKunV2AugBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR = $MuscriptorSmallBundle
@@ -548,6 +564,7 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_YOURMT3_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_ARIA_AMT_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR -ErrorAction SilentlyContinue
@@ -596,6 +613,10 @@ Write-Host "[ok] Portable GUI + Qt + ONNX Runtime CUDA load order verified"
 $muscriptorDistCheck = @"
 from pathlib import Path
 from src.utils.artifact_identity import validate_file_identity
+from src.core.beat_this_tracker import (
+    BEAT_THIS_CHECKPOINT_NAME,
+    validate_beat_this_checkpoint,
+)
 from src.utils.muscriptor_downloader import (
     MUSCRIPTOR_ARTIFACTS,
     MUSCRIPTOR_CONFIG_FILENAME,
@@ -608,6 +629,10 @@ for model_size, artifact in MUSCRIPTOR_ARTIFACTS.items():
     validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=artifact.model_bytes, expected_sha256=artifact.model_sha256, label=f'packaged MuScriptor-{model_size} model')
     validate_file_identity(model_dir / MUSCRIPTOR_CONFIG_FILENAME, expected_size=artifact.config_bytes, expected_sha256=artifact.config_sha256, label=f'packaged MuScriptor-{model_size} config')
 print('Packaged MuScriptor Small/Medium/Large assets verified')
+validate_beat_this_checkpoint(
+    Path(r'$DistDir') / '_internal' / 'models' / 'beat_this' / BEAT_THIS_CHECKPOINT_NAME
+)
+print('Packaged Beat This final0 asset verified')
 "@
 & $Python -c $muscriptorDistCheck
 if ($LASTEXITCODE -ne 0) {

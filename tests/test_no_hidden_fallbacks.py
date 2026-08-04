@@ -3,10 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import math
 
 from src.core.pipeline import MusicToMidiPipeline
-from src.core.beat_detector import BeatDetector
 from src.models.data_models import Config, NoteEvent
 from src.utils import yourmt3_downloader
 
@@ -44,100 +42,6 @@ class NoHiddenFallbackTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "未返回 BPM"):
             pipeline._detect_beat_or_raise("song.wav")
-
-    def test_beat_detector_raises_when_all_methods_fail(self):
-        detector = BeatDetector(Config())
-
-        with self.assertRaisesRegex(RuntimeError, "所有 BPM 检测方法均失败"):
-            detector._detect_multi_method([], 22050)
-
-    def test_beat_detector_rejects_invalid_tempo_values(self):
-        detector = BeatDetector(Config())
-
-        for tempo in (0.0, -1.0, math.nan):
-            with self.subTest(tempo=tempo):
-                with self.assertRaisesRegex(RuntimeError, "无效 BPM"):
-                    detector._correct_octave_error(tempo)
-
-    def test_beat_detector_empty_primary_tempo_does_not_become_120(self):
-        detector = BeatDetector(Config())
-
-        class EmptyBeat:
-            @staticmethod
-            def beat_track(**_kwargs):
-                return [], []
-
-            @staticmethod
-            def tempo(**_kwargs):
-                raise RuntimeError("tempo unavailable")
-
-        fake_librosa = type(
-            "FakeLibrosa",
-            (),
-            {
-                "beat": EmptyBeat,
-                "onset": type(
-                    "Onset",
-                    (),
-                    {"onset_strength": staticmethod(lambda **_kwargs: [])},
-                ),
-                "feature": type(
-                    "Feature",
-                    (),
-                    {"tempogram": staticmethod(lambda **_kwargs: [])},
-                ),
-                "tempo_frequencies": staticmethod(lambda *_args, **_kwargs: []),
-            },
-        )
-
-        with patch.dict("sys.modules", {"librosa": fake_librosa}):
-            with self.assertRaisesRegex(RuntimeError, "所有 BPM 检测方法均失败"):
-                detector._detect_multi_method([], 22050)
-
-    def test_beat_detector_uses_current_librosa_tempo_api(self):
-        detector = BeatDetector(Config())
-
-        class Beat:
-            @staticmethod
-            def beat_track(**_kwargs):
-                return 120.0, []
-
-            @staticmethod
-            def tempo(**_kwargs):
-                raise AssertionError("deprecated librosa.beat.tempo should not be used")
-
-        class Rhythm:
-            @staticmethod
-            def tempo(**_kwargs):
-                return [118.0, 120.0, 122.0]
-
-        fake_librosa = type(
-            "FakeLibrosa",
-            (),
-            {
-                "beat": Beat,
-                "onset": type(
-                    "Onset",
-                    (),
-                    {"onset_strength": staticmethod(lambda **_kwargs: [0.0, 1.0, 0.0])},
-                ),
-                "feature": type(
-                    "Feature",
-                    (),
-                    {
-                        "rhythm": Rhythm,
-                        "tempogram": staticmethod(lambda **_kwargs: [[0.0], [1.0], [0.0]]),
-                    },
-                ),
-                "tempo_frequencies": staticmethod(lambda *_args, **_kwargs: [60.0, 120.0, 240.0]),
-            },
-        )
-
-        with patch.dict("sys.modules", {"librosa": fake_librosa}):
-            tempo, candidates = detector._detect_multi_method([0.0, 1.0, 0.0], 22050)
-
-        self.assertGreater(tempo, 0)
-        self.assertIn(120.0, candidates)
 
     def test_vocal_filter_does_not_guess_from_largest_non_vocal_program(self):
         pipeline = MusicToMidiPipeline(Config())

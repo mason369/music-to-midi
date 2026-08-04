@@ -325,6 +325,9 @@ def test_muscriptor_official_writes_detected_bpm_into_backend_midi(tmp_path):
     class FakeMuScriptorTranscriber:
         last_detected_instruments = ["acoustic_piano"]
 
+        def set_beat_info(self, beat_info):
+            self.beat_info = beat_info
+
         def transcribe_to_midi(self, audio_path, output_path, progress_callback=None):
             midi = mido.MidiFile(type=1, ticks_per_beat=480)
             conductor = mido.MidiTrack()
@@ -349,9 +352,16 @@ def test_muscriptor_official_writes_detected_bpm_into_backend_midi(tmp_path):
     pipeline = MusicToMidiPipeline(config)
     pipeline._require_multi_instrument_available = lambda: None
     pipeline.muscriptor_transcriber = FakeMuScriptorTranscriber()
-    pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(bpm=90.0)
+    pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(
+        bpm=90.0,
+        beat_times=[0.0, 2.0 / 3.0, 4.0 / 3.0, 2.0],
+        downbeats=[0.0],
+        time_signature=(4, 4),
+    )
 
     result = pipeline._process_muscriptor_official(str(audio_path), str(tmp_path / "out"))
+
+    assert pipeline.muscriptor_transcriber.beat_info.bpm == pytest.approx(90.0)
 
     normalized = mido.MidiFile(result.midi_path)
     tempo_messages = [
@@ -564,8 +574,8 @@ def test_report_detected_bpm_exposes_source_and_custom_target():
     assert reports[0].target_bpm == pytest.approx(23.0)
 
 
-def test_specialized_piano_ignores_tempo_map_when_disabled_by_default(tmp_path):
-    """默认（enable_tempo_map=False）即使 BeatInfo 带变速点，也只写单一全局 tempo。"""
+def test_specialized_piano_writes_automatic_tempo_map_by_default(tmp_path):
+    """Beat This 识别到变速后，默认写入真实 tempo map。"""
     from src.models.data_models import BeatInfo, Config
 
     audio_path = tmp_path / "song.wav"
@@ -592,7 +602,7 @@ def test_specialized_piano_ignores_tempo_map_when_disabled_by_default(tmp_path):
             midi.save(output_path)
             return output_path
 
-    pipeline = MusicToMidiPipeline(Config())  # enable_tempo_map 默认 False
+    pipeline = MusicToMidiPipeline(Config())
     pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(
         bpm=90.0,
         tempo_map=[(0.0, 60.0), (0.25, 120.0)],
@@ -615,6 +625,8 @@ def test_specialized_piano_ignores_tempo_map_when_disabled_by_default(tmp_path):
         for message in track
         if message.is_meta and message.type == "set_tempo"
     ]
-    # 只有一个 set_tempo，且是全局 bpm（90.0）而非变速点
-    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
+    assert tempo_messages == [
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(60.0), time=0),
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120.0), time=240),
+    ]
     assert normalized.length == pytest.approx(0.5, abs=1e-3)

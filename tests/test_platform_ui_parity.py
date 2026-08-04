@@ -253,6 +253,19 @@ def test_colab_notebook_remains_valid_json_and_python():
             ast.parse("".join(cell["source"]))
 
 
+def test_every_platform_prepares_the_same_required_beat_this_final0_model():
+    space = _space_source()
+    colab = _colab_source()
+    detector = Path("src/core/beat_detector.py").read_text(encoding="utf-8")
+    pipeline = Path("src/core/pipeline.py").read_text(encoding="utf-8")
+
+    assert "BeatThisTracker" in detector
+    assert "librosa" not in detector
+    assert "download_beat_this_model(printer=logger.info)" in space
+    assert "download_beat_this_model(printer=logger.info)" in colab
+    assert "beat_info.tempo_map if self.config.enable_tempo_map" not in pipeline
+
+
 def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
     desktop = _desktop_source()
     space = _space_source()
