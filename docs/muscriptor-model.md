@@ -1,6 +1,6 @@
 # MuScriptor 模型研究、分数与项目定位
 
-> 核验日期：2026-07-19。本文只记录可追溯到官方模型卡、论文、代码仓库、Mirelo 官方文章或公开挑战论文的结论。不同数据集和评测协议的分数不混排。
+> 核验日期：2026-08-06。本文只记录可追溯到官方模型卡、论文、代码仓库、Mirelo 官方文章或公开挑战论文的结论。不同数据集和评测协议的分数不混排。
 
 ## 1. 结论
 
@@ -20,10 +20,10 @@
 |---|---|
 | 开发者 | Kyutai、Mirelo AI、IRCAM 研究人员 |
 | 论文 | [MuScriptor: An Open Model for Multi-Instrument Music Transcription](https://arxiv.org/abs/2607.08168)，arXiv v1：2026-07-09 |
-| 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；公开 release `v0.2.1`：2026-07-10 |
+| 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.3.0`：2026-08-05 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | BeatGrid commit `e2bd0fc5994f9acba7c1387ca5df67eb8d95df44`，包版本 `0.2.2`；叠加 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的两个经 SHA-256 校验的质量补丁文件。全项目唯一的 Beat This `final0` 网格直接传给 BeatGrid writer，内部不再启动第二检测器，也不接受占位 120 BPM |
+| 本项目固定代码 | 官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`；叠加 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的两个经 SHA-256 校验的质量补丁文件。完整 Beat This `final0` 网格驱动官方 onset 相位校正、真实 tempo/拍号/小节相位；卷帘显示拍线/强拍/小节，tempo 在归一化后复制到每个音符轨 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
 
 这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布，GitHub release 与当前权重 revision 在 7 月 10 日更新。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。

@@ -449,7 +449,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         for expected_update in (
-            "新增 MuScriptor Small / Medium / Large 多乐器转写",
+            "MuScriptor Small / Medium / Large：v0.3.0 节拍对齐与长音频高质量推理",
+            "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
+            "卷帘拍线/强拍/小节底色",
+            "MuseScore 音符轨 tempo",
             r"\`SMART\` 模式",
             "生成阶段的硬约束",
             "按 5 秒分片边转写边预览",

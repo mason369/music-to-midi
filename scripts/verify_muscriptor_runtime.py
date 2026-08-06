@@ -44,6 +44,37 @@ def _count_note_ons(path: Path) -> int:
     )
 
 
+def _verified_note_track_tempo_maps(path: Path) -> dict[int, list[tuple[int, int]]]:
+    midi = mido.MidiFile(str(path))
+    canonical: list[tuple[int, int]] | None = None
+    result: dict[int, list[tuple[int, int]]] = {}
+    for track_index, track in enumerate(midi.tracks):
+        tick = 0
+        tempos: list[tuple[int, int]] = []
+        has_notes = False
+        for message in track:
+            tick += int(message.time)
+            if message.is_meta and message.type == "set_tempo":
+                tempos.append((tick, int(message.tempo)))
+            elif not message.is_meta and message.type in {"note_on", "note_off"}:
+                has_notes = True
+        if track_index == 0:
+            canonical = tempos
+        if has_notes:
+            result[track_index] = tempos
+    if not canonical:
+        raise RuntimeError(f"MuScriptor MIDI has no conductor tempo map: {path}")
+    if not result:
+        raise RuntimeError(f"MuScriptor MIDI has no note-bearing tracks: {path}")
+    mismatches = {index: tempos for index, tempos in result.items() if tempos != canonical}
+    if mismatches:
+        raise RuntimeError(
+            "MuScriptor note tracks do not repeat the conductor tempo map: "
+            f"canonical={canonical!r}, mismatches={mismatches!r}"
+        )
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("audio", type=Path)
@@ -98,6 +129,7 @@ def main() -> int:
         output = (args.output_dir / f"{source.stem}-{args.model}-{index + 1}.mid").resolve()
         started = time.perf_counter()
         transcriber.transcribe_to_midi(str(source), str(output))
+        note_track_tempos = _verified_note_track_tempo_maps(output)
         runs.append(
             {
                 "output": str(output),
@@ -105,6 +137,9 @@ def main() -> int:
                 "sha256": _sha256(output),
                 "note_ons": _count_note_ons(output),
                 "bytes": output.stat().st_size,
+                "onset_delay_seconds": transcriber.last_onset_delay_seconds,
+                "bar_offset_seconds": transcriber.last_bar_offset_seconds,
+                "note_track_tempo_maps": note_track_tempos,
             }
         )
 
@@ -129,6 +164,7 @@ def main() -> int:
                 "quality_mode": "overlap_restart",
                 "overlap_seconds": 2.5,
                 "allow_reset": True,
+                "onset_phase_correction": "official_v0.3.0",
                 "runs": runs,
             },
             ensure_ascii=False,

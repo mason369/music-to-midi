@@ -65,6 +65,9 @@ def build_muscriptor_result_html(
         "duration": float(state.get("duration", 0.0)),
         "referenceBpm": float(state.get("reference_bpm", 0.0)),
         "targetBpm": float(state.get("target_bpm", 0.0)),
+        "beatTimes": [float(value) for value in state.get("beat_times", [])],
+        "downbeats": [float(value) for value in state.get("downbeats", [])],
+        "repeatTempoPerNoteTrack": bool(state.get("repeat_tempo_per_note_track", False)),
         "backendLabel": str(state.get("backend_label", "")),
         "sourceTrackName": str(state.get("source_track_name", "")),
         "originalUrl": track_file_url(str(state["audio_path"])),
@@ -561,7 +564,13 @@ MUSCRIPTOR_RESULT_JS = r"""
     output.sort();
     return { notes: output, tempos: tempoValues, retained: retained };
   }
-  function buildEditedSmf(arrayBuffer, notes, targetBpm, referenceBpm) {
+  function buildEditedSmf(
+    arrayBuffer,
+    notes,
+    targetBpm,
+    referenceBpm,
+    repeatTempoPerNoteTrack
+  ) {
     if (!Number.isFinite(targetBpm) || targetBpm < MIN_BPM || targetBpm > MAX_BPM) {
       throw new Error("Invalid target BPM for edited MIDI: " + targetBpm);
     }
@@ -683,6 +692,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
     var tempoBytes = [255, 81, 3, (tempo >>> 16) & 255, (tempo >>> 8) & 255, tempo & 255];
     var tempoTracks = parsed.format === 2 ? trackEvents.map(function (_track, index) { return index; }) : [0];
+    if (parsed.format !== 2 && Boolean(repeatTempoPerNoteTrack)) {
+      normalizedNotes.forEach(function (note) {
+        if (tempoTracks.indexOf(note.track) < 0) tempoTracks.push(note.track);
+      });
+      tempoTracks.sort(function (left, right) { return left - right; });
+    }
     tempoTracks.forEach(function (trackIndex) {
       trackEvents[trackIndex].push({ tick: 0, order: 0, sequence: 0, bytes: tempoBytes.slice() });
     });
@@ -764,7 +779,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (JSON.stringify(expected) !== JSON.stringify(verified.notes)) {
       throw new Error("Edited MIDI note verification failed");
     }
-    var expectedTempoCount = parsed.format === 2 ? parsed.tracks.length : 1;
+    var expectedTempoCount = tempoTracks.length;
     if (
       verified.tempos.length !== expectedTempoCount ||
       verified.tempos.some(function (value) { return value !== tempo; })
@@ -838,6 +853,18 @@ MUSCRIPTOR_RESULT_JS = r"""
           channel: Number(note.channel)
         };
       });
+      this.m.beatTimes = (this.m.beatTimes || []).map(Number);
+      this.m.downbeats = (this.m.downbeats || []).map(Number);
+      [this.m.beatTimes, this.m.downbeats].forEach(function (marks) {
+        if (marks.some(function (value, index) {
+          return !Number.isFinite(value) || value < 0 || (index > 0 && value <= marks[index - 1]);
+        })) {
+          throw new Error("Invalid Beat This grid in piano-roll manifest");
+        }
+      });
+      if (this.m.beatTimes.length === 1) {
+        throw new Error("Piano-roll beat grid requires at least two beats");
+      }
       this.originalNotes = cloneNotes(this.m.notes);
       this.targetBpm = Number(this.m.targetBpm);
       this.activeInstrument = this.m.notes.length ? this.m.notes[0].instrument : "";
@@ -1398,20 +1425,64 @@ MUSCRIPTOR_RESULT_JS = r"""
         painter.fillText("C" + (Math.floor(pitch / 12) - 1), 3, y + 6);
       }
     }
-    var step = this.pps >= 180 ? 0.5 : (this.pps >= 80 ? 1 : 2);
-    var first = Math.max(0, Math.floor(start / step) * step);
-    for (var second = first; second <= end + step; second += step) {
-      var gridX = LEFT + second * this.pps - scrollX;
-      painter.strokeStyle = "#36506f";
-      painter.beginPath();
-      painter.moveTo(gridX, 0);
-      painter.lineTo(gridX, HEIGHT);
-      painter.stroke();
-      painter.fillStyle = "#7f94b7";
-      painter.font = "8px monospace";
-      painter.fillText(second.toFixed(step < 1 ? 1 : 0) + "s", gridX + 3, 11);
-    }
     var self = this;
+    if (this.m.beatTimes.length) {
+      var barMarks = this.m.downbeats;
+      for (var barIndex = 0; barIndex + 1 < barMarks.length; barIndex++) {
+        if (barIndex % 2 === 0 || barMarks[barIndex + 1] < start || barMarks[barIndex] > end) {
+          continue;
+        }
+        var barLeft = LEFT + barMarks[barIndex] * this.pps - scrollX;
+        var barRight = LEFT + barMarks[barIndex + 1] * this.pps - scrollX;
+        painter.fillStyle = "rgba(255,255,255,0.03)";
+        painter.fillRect(barLeft, 0, Math.max(0, barRight - barLeft), HEIGHT);
+      }
+      var gaps = [];
+      for (var gapIndex = 1; gapIndex < this.m.beatTimes.length; gapIndex++) {
+        gaps.push(this.m.beatTimes[gapIndex] - this.m.beatTimes[gapIndex - 1]);
+      }
+      gaps.sort(function (left, right) { return left - right; });
+      var medianGap = gaps[Math.floor((gaps.length - 1) / 2)], beatStride = 1;
+      while (medianGap * this.pps * beatStride < 12) beatStride *= 2;
+      this.m.beatTimes.forEach(function (beat, beatIndex) {
+        if (beatIndex % beatStride || beat < start || beat > end) return;
+        var beatX = LEFT + beat * self.pps - scrollX;
+        painter.strokeStyle = "#36506f";
+        painter.lineWidth = 1;
+        painter.beginPath();
+        painter.moveTo(beatX, 0);
+        painter.lineTo(beatX, HEIGHT);
+        painter.stroke();
+      });
+      barMarks.forEach(function (downbeat, barIndex) {
+        if (downbeat < start || downbeat > end) return;
+        var barX = LEFT + downbeat * self.pps - scrollX;
+        painter.strokeStyle = "#78aee8";
+        painter.lineWidth = 1.5;
+        painter.beginPath();
+        painter.moveTo(barX, 0);
+        painter.lineTo(barX, HEIGHT);
+        painter.stroke();
+        painter.fillStyle = "#a9c8e8";
+        painter.font = "8px monospace";
+        painter.fillText("B" + (barIndex + 1), barX + 3, 11);
+      });
+      painter.lineWidth = 1;
+    } else {
+      var step = this.pps >= 180 ? 0.5 : (this.pps >= 80 ? 1 : 2);
+      var first = Math.max(0, Math.floor(start / step) * step);
+      for (var second = first; second <= end + step; second += step) {
+        var gridX = LEFT + second * this.pps - scrollX;
+        painter.strokeStyle = "#36506f";
+        painter.beginPath();
+        painter.moveTo(gridX, 0);
+        painter.lineTo(gridX, HEIGHT);
+        painter.stroke();
+        painter.fillStyle = "#7f94b7";
+        painter.font = "8px monospace";
+        painter.fillText(second.toFixed(step < 1 ? 1 : 0) + "s", gridX + 3, 11);
+      }
+    }
     this.m.notes.forEach(function (note, index) {
       if (note.pitch < 21 || note.pitch > 108 || note.end < start || note.start > end) return;
       var x = LEFT + note.start * self.pps - scrollX;
@@ -1969,7 +2040,8 @@ MUSCRIPTOR_RESULT_JS = r"""
           arrayBuffer,
           self.m.notes,
           self.targetBpm,
-          Number(self.m.referenceBpm)
+          Number(self.m.referenceBpm),
+          Boolean(self.m.repeatTempoPerNoteTrack)
         );
         var blobUrl = URL.createObjectURL(new Blob([encoded], { type: "audio/midi" }));
         var anchor = document.createElement("a");

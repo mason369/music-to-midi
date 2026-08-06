@@ -370,7 +370,10 @@ def test_muscriptor_official_writes_detected_bpm_into_backend_midi(tmp_path):
         for message in track
         if message.is_meta and message.type == "set_tempo"
     ]
-    assert tempo_messages == [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0)]
+    assert tempo_messages == [
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0),
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90.0), time=0),
+    ]
     # 音符绝对时长不变：480 ticks @120BPM/480tpb = 0.5s，归一化后仍为 0.5s
     assert normalized.length == pytest.approx(0.5, abs=1e-3)
 

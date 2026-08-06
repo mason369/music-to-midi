@@ -512,7 +512,7 @@ def _write_bar_aligned_reference_audio(
     output_dir: Path,
     offset_seconds: float,
 ) -> Path:
-    """Prepend the same e2bd0fc delay carried by the final MIDI marker."""
+    """Prepend the same MuScriptor delay carried by the final MIDI marker."""
 
     offset = float(offset_seconds)
     if not math.isfinite(offset) or offset < 0.0:

@@ -37,7 +37,7 @@ def _bar_offset_value(message: mido.MetaMessage) -> float | None:
 
 
 def read_muscriptor_bar_offset_seconds(source: str | Path | mido.MidiFile) -> float:
-    """Read one strict e2bd0fc bar-alignment offset, or zero when absent."""
+    """Read one strict MuScriptor bar-alignment offset, or zero when absent."""
 
     midi = source if isinstance(source, mido.MidiFile) else mido.MidiFile(str(source))
     values = [
@@ -79,9 +79,7 @@ def _rescale_bar_offset_message(
         return message
     scaled = value * float(scale)
     if not isfinite(scaled) or scaled < 0.0:
-        raise RuntimeError(
-            f"Invalid scaled MuScriptor bar offset: source={value}, scale={scale}"
-        )
+        raise RuntimeError(f"Invalid scaled MuScriptor bar offset: source={value}, scale={scale}")
     return message.copy(text=f"{_MUSCRIPTOR_BAR_OFFSET_PREFIX}{scaled:.4f}")
 
 
@@ -303,9 +301,7 @@ def write_midi_time_signature_preserving_ticks(
     clocks_per_click = 24
     if validated_signature is not None:
         numerator, denominator = validated_signature
-        clocks_per_click = (
-            36 if denominator == 8 and numerator > 3 and numerator % 3 == 0 else 24
-        )
+        clocks_per_click = 36 if denominator == 8 and numerator > 3 and numerator % 3 == 0 else 24
 
     for track_index, source_track in enumerate(source_midi.tracks):
         absolute_tick = 0
@@ -380,8 +376,7 @@ def write_midi_time_signature_preserving_ticks(
         if validated_signature is not None:
             numerator, denominator = validated_signature
             expected_signatures = [
-                (track_index, 0, numerator, denominator)
-                for track_index in sorted(conductor_tracks)
+                (track_index, 0, numerator, denominator) for track_index in sorted(conductor_tracks)
             ]
         if published_signatures != expected_signatures:
             raise RuntimeError(
@@ -725,11 +720,145 @@ def rewrite_midi_tempo_for_project_speed(
         remove_temporary_midi(reference_tempo_midi)
 
 
+def repeat_tempo_events_on_note_tracks(
+    source_path: str | Path,
+    destination_path: str | Path | None = None,
+    *,
+    label: str = "MuseScore-compatible MIDI tempo metadata",
+) -> Path:
+    """Repeat the canonical tempo map on every note-bearing SMF track.
+
+    MuScriptor v0.3.0 does this because MuseScore can ignore tempo metadata in
+    a conductor track without notes. This project normalizes tempo after the
+    official writer, so the repetition must happen after that normalization.
+    All non-tempo messages and their absolute ticks are verified unchanged.
+    """
+
+    source = Path(source_path).resolve()
+    destination = source if destination_path is None else Path(destination_path).resolve()
+    midi = mido.MidiFile(str(source))
+    if midi.type == 2:
+        raise RuntimeError(
+            "MuScriptor tempo repetition requires one shared type-0/type-1 timeline; "
+            "type-2 MIDI has independent sequences"
+        )
+
+    tempo_by_tick: dict[int, int] = {}
+    for track in midi.tracks:
+        tick = 0
+        for message in track:
+            tick += int(message.time)
+            if not (message.is_meta and message.type == "set_tempo"):
+                continue
+            tempo = int(message.tempo)
+            previous = tempo_by_tick.get(tick)
+            if previous is not None and previous != tempo:
+                raise RuntimeError(
+                    "Conflicting global tempo events at one tick: "
+                    f"tick={tick}, tempos={[previous, tempo]!r}"
+                )
+            tempo_by_tick[tick] = tempo
+    if not tempo_by_tick:
+        raise RuntimeError(f"MuScriptor MIDI has no tempo map to repeat: {source}")
+    canonical_tempos = sorted(tempo_by_tick.items())
+    note_track_indices = {
+        index
+        for index, track in enumerate(midi.tracks)
+        if any(not message.is_meta and message.type in {"note_on", "note_off"} for message in track)
+    }
+    if not note_track_indices:
+        if source == destination:
+            return source
+        temporary = unique_midi_temp_path(destination, "tempo-empty-midi")
+        try:
+            temporary.write_bytes(source.read_bytes())
+            return Path(publish_midi_output(temporary, destination, label))
+        finally:
+            remove_temporary_midi(temporary)
+
+    source_fingerprint = non_tempo_event_tick_fingerprint(midi)
+    output = mido.MidiFile(type=midi.type, ticks_per_beat=midi.ticks_per_beat)
+    for track_index, source_track in enumerate(midi.tracks):
+        if track_index not in note_track_indices:
+            copied = mido.MidiTrack()
+            copied.extend(message.copy(time=message.time) for message in source_track)
+            output.tracks.append(copied)
+            continue
+
+        absolute_tick = 0
+        sequence = 0
+        events: list[tuple[int, int, int, mido.Message | mido.MetaMessage]] = []
+        end_tick = 0
+        for message in source_track:
+            absolute_tick += int(message.time)
+            if message.is_meta and message.type == "set_tempo":
+                continue
+            if message.is_meta and message.type == "end_of_track":
+                end_tick = max(end_tick, absolute_tick)
+                continue
+            priority = 0 if message.is_meta and message.type == "track_name" else 2
+            events.append((absolute_tick, priority, sequence, message.copy(time=0)))
+            sequence += 1
+        for tempo_tick, tempo in canonical_tempos:
+            events.append(
+                (
+                    tempo_tick,
+                    1,
+                    sequence,
+                    mido.MetaMessage("set_tempo", tempo=tempo, time=0),
+                )
+            )
+            sequence += 1
+        final_tick = max([end_tick, canonical_tempos[-1][0], *(tick for tick, _, _, _ in events)])
+        events.append((final_tick, 3, sequence, mido.MetaMessage("end_of_track", time=0)))
+        events.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        target_track = mido.MidiTrack()
+        previous_tick = 0
+        for event_tick, _priority, _sequence, message in events:
+            target_track.append(message.copy(time=event_tick - previous_tick))
+            previous_tick = event_tick
+        output.tracks.append(target_track)
+
+    temporary = unique_midi_temp_path(destination, "tempo-per-note-track")
+    try:
+        output.save(str(temporary))
+        verified = mido.MidiFile(str(temporary))
+        if non_tempo_event_tick_fingerprint(verified) != source_fingerprint:
+            raise RuntimeError(
+                "MuScriptor tempo repetition changed a non-tempo message or its "
+                f"absolute tick: {temporary}"
+            )
+        for track_index in sorted(note_track_indices):
+            tick = 0
+            actual_tempos: list[tuple[int, int]] = []
+            for message in verified.tracks[track_index]:
+                tick += int(message.time)
+                if message.is_meta and message.type == "set_tempo":
+                    actual_tempos.append((tick, int(message.tempo)))
+            if actual_tempos != canonical_tempos:
+                raise RuntimeError(
+                    "MuScriptor note track does not contain the canonical tempo map: "
+                    f"track={track_index}, expected={canonical_tempos!r}, "
+                    f"actual={actual_tempos!r}"
+                )
+        expected_bytes = temporary.read_bytes()
+        published = Path(publish_midi_output(temporary, destination, label))
+        if published.read_bytes() != expected_bytes:
+            raise RuntimeError(
+                "MuScriptor tempo repetition changed during atomic publication: " f"{published}"
+            )
+        return published
+    finally:
+        remove_temporary_midi(temporary)
+
+
 __all__ = [
     "message_payload",
     "non_tempo_event_tick_fingerprint",
     "non_tempo_event_time_fingerprint",
     "read_muscriptor_bar_offset_seconds",
+    "repeat_tempo_events_on_note_tracks",
     "rewrite_midi_tempo_for_project_speed",
     "rewrite_midi_tempo_preserving_seconds",
     "rewrite_midi_tempo_preserving_ticks",

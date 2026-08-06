@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import inspect
 import logging
+import math
 import warnings
 from pathlib import Path
 from typing import Callable, Optional
@@ -55,6 +56,7 @@ class MuscriptorTranscriber:
         self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
         self.last_detected_instruments: list[str] = []
         self.last_bar_offset_seconds = 0.0
+        self.last_onset_delay_seconds = 0.0
 
     @staticmethod
     def _runtime_unavailable_reason() -> str:
@@ -97,11 +99,16 @@ class MuscriptorTranscriber:
                 "best-quality overlapping-window transcription cannot run."
             )
         midi_parameters = inspect.signature(TranscriptionModel.events_to_midi_bytes).parameters
-        if "beat_grid" not in midi_parameters or not callable(
-            getattr(BeatGrid, "bar_offset", None)
+        beat_grid_parameters = inspect.signature(BeatGrid).parameters
+        if (
+            "beat_grid" not in midi_parameters
+            or "beats" not in beat_grid_parameters
+            or "onset_delay" not in beat_grid_parameters
+            or not callable(getattr(BeatGrid, "bar_offset", None))
+            or not callable(getattr(BeatGrid, "with_onset_delay", None))
         ):
             return (
-                "MuScriptor runtime is missing the e2bd0fc BeatGrid MIDI API. "
+                "MuScriptor runtime is missing the v0.3.0 BeatGrid/onset-correction API. "
                 f"Required source commit: {MUSCRIPTOR_SOURCE_COMMIT}."
             )
         return ""
@@ -145,10 +152,11 @@ class MuscriptorTranscriber:
         self._beat_info = beat_info
 
     def _project_beat_grid(self):
-        """Build e2bd0fc's BeatGrid without running a second beat detector."""
+        """Build v0.3.0's BeatGrid from the authoritative project analysis."""
 
         from math import isclose, isfinite
 
+        import numpy as np
         from muscriptor.utils.beats import BeatGrid
 
         from src.core.midi_tempo import validated_midi_bpm, validated_midi_time_signature
@@ -173,11 +181,23 @@ class MuscriptorTranscriber:
                 abs_tol=1e-9,
             ):
                 raise RuntimeError(
-                    "MuScriptor e2bd0fc cannot encode this meter as a quarter-note BeatGrid: "
+                    "MuScriptor cannot encode this meter as a quarter-note BeatGrid: "
                     f"time_signature={info.time_signature!r}, "
                     f"quarter_beats={quarter_beats_per_bar}"
                 )
             beats_per_bar = int(rounded_beats_per_bar)
+        beats = np.asarray(info.beat_times, dtype=float)
+        if (
+            beats.ndim != 1
+            or len(beats) < 2
+            or not np.isfinite(beats).all()
+            or (beats < 0.0).any()
+            or (np.diff(beats) <= 0.0).any()
+        ):
+            raise RuntimeError(
+                "MuScriptor onset correction requires at least two finite, "
+                "strictly increasing project beat times"
+            )
         phase_candidates = list(info.downbeats or []) or list(info.beat_times)
         if not phase_candidates:
             raise RuntimeError(
@@ -192,8 +212,10 @@ class MuscriptorTranscriber:
             bpm=bpm,
             beats_per_bar=beats_per_bar,
             first_downbeat=first_downbeat,
+            beats=beats,
         )
         self.last_bar_offset_seconds = float(grid.bar_offset())
+        self.last_onset_delay_seconds = 0.0
         return grid
 
     def cancel(self) -> None:
@@ -282,6 +304,7 @@ class MuscriptorTranscriber:
         self.last_detected_instruments = []
         detected: set[str] = set()
         official_events: list[object] = []
+        completed_onsets: list[float] = []
         pending_note_ends: list[dict[str, object]] = []
         self._check_cancelled()
         if self._runtime_details is not None:
@@ -291,6 +314,8 @@ class MuscriptorTranscriber:
                     "beat_grid_bpm": float(beat_grid.bpm),
                     "beat_grid_beats_per_bar": beat_grid.beats_per_bar,
                     "beat_grid_first_downbeat": float(beat_grid.first_downbeat),
+                    "beat_grid_count": int(len(beat_grid.beats)),
+                    "onset_phase_correction": "pending",
                     "bar_offset_seconds": self.last_bar_offset_seconds,
                 }
             )
@@ -362,6 +387,7 @@ class MuscriptorTranscriber:
                 elif isinstance(event, NoteEndEvent):
                     instrument = str(event.start_event.instrument)
                     require_allowed_muscriptor_event_instrument(instrument, selected)
+                    completed_onsets.append(float(event.start_event.start_time))
                     pending_note_ends.append(
                         {
                             "index": int(event.start_event_index),
@@ -382,6 +408,34 @@ class MuscriptorTranscriber:
         flush_note_ends()
 
         self._check_cancelled()
+        beat_grid = beat_grid.with_onset_delay(completed_onsets)
+        onset_delay = float(beat_grid.onset_delay)
+        if not math.isfinite(onset_delay):
+            raise RuntimeError(
+                f"MuScriptor returned an invalid onset-phase correction: {onset_delay!r}"
+            )
+        self.last_onset_delay_seconds = onset_delay
+        self.last_bar_offset_seconds = float(beat_grid.bar_offset(min_shift=onset_delay))
+        if self._runtime_details is not None:
+            self._runtime_details.update(
+                {
+                    "onset_phase_correction": "official_v0.3.0",
+                    "onset_delay_seconds": self.last_onset_delay_seconds,
+                    "onset_correction_applied": abs(self.last_onset_delay_seconds) > 1e-9,
+                    "completed_onset_count": len(
+                        set(round(value, 3) for value in completed_onsets)
+                    ),
+                    "bar_offset_seconds": self.last_bar_offset_seconds,
+                }
+            )
+            self._emit_event(dict(self._runtime_details))
+        logger.info(
+            "MuScriptor v0.3.0 onset phase correction: delay=%+.3f ms, "
+            "completed_onsets=%d, bar_offset=%.4f s",
+            self.last_onset_delay_seconds * 1000.0,
+            len(set(round(value, 3) for value in completed_onsets)),
+            self.last_bar_offset_seconds,
+        )
         midi_bytes = model.events_to_midi_bytes(
             iter(official_events),
             beat_grid=beat_grid,

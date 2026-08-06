@@ -650,6 +650,17 @@ def _normalize_midi_result_state(
             "Linked MIDI result contains an invalid BPM context: "
             f"reference={reference_bpm!r}, target={target_bpm!r}"
         )
+    beat_times = [float(value) for value in raw_state.get("beat_times", [])]
+    downbeats = [float(value) for value in raw_state.get("downbeats", [])]
+    repeat_tempo_per_note_track = bool(raw_state.get("repeat_tempo_per_note_track", False))
+    for label, marks in (("beat", beat_times), ("downbeat", downbeats)):
+        if any(
+            not math.isfinite(value) or value < 0.0 or (index > 0 and value <= marks[index - 1])
+            for index, value in enumerate(marks)
+        ):
+            raise RuntimeError(f"Linked MIDI result contains an invalid {label} grid")
+    if repeat_tempo_per_note_track and len(beat_times) < 2:
+        raise RuntimeError("MuScriptor linked MIDI result is missing its Beat This grid")
     return {
         "kind": "midi_result",
         "audio_path": str(audio_path),
@@ -660,6 +671,9 @@ def _normalize_midi_result_state(
         "duration": duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "beat_times": beat_times,
+        "downbeats": downbeats,
+        "repeat_tempo_per_note_track": repeat_tempo_per_note_track,
         "transcription_wav": owned_file("transcription_wav", "Linked MIDI transcription audio"),
         "stereo_mix_wav": owned_file("stereo_mix_wav", "Linked MIDI stereo audio"),
         "instrument_wavs": instrument_wavs,
@@ -822,7 +836,10 @@ def _build_midi_result_state(
     progress_callback=None,
 ) -> dict:
     """Build the shared playable MIDI workbench for any transcription backend."""
-    from src.core.midi_tempo import rewrite_midi_tempo_preserving_ticks
+    from src.core.midi_tempo import (
+        read_muscriptor_bar_offset_seconds,
+        rewrite_midi_tempo_preserving_ticks,
+    )
     from src.core.muscriptor_result_assets import prepare_midi_playback_assets
 
     if result.beat_info is None:
@@ -847,6 +864,9 @@ def _build_midi_result_state(
         playback_dir,
         progress_callback=progress_callback,
         muscriptor_groups=muscriptor_groups,
+    )
+    bar_offset_seconds = (
+        read_muscriptor_bar_offset_seconds(playback_midi_path) if muscriptor_groups else 0.0
     )
     detected = list(dict.fromkeys(note.instrument for note in assets.notes))
     selected = list(result.selected_instruments) if muscriptor_groups else detected
@@ -873,6 +893,17 @@ def _build_midi_result_state(
         "duration": assets.duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "beat_times": (
+            [float(value) + bar_offset_seconds for value in result.beat_info.beat_times]
+            if muscriptor_groups
+            else []
+        ),
+        "downbeats": (
+            [float(value) + bar_offset_seconds for value in (result.beat_info.downbeats or [])]
+            if muscriptor_groups
+            else []
+        ),
+        "repeat_tempo_per_note_track": bool(muscriptor_groups),
         "transcription_wav": str(assets.transcription_wav),
         "stereo_mix_wav": str(assets.stereo_mix_wav),
         "instrument_wavs": {name: str(path) for name, path in assets.instrument_wavs.items()},

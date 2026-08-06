@@ -44,8 +44,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSplitter,
     QSpinBox,
+    QSplitter,
     QStyle,
     QStyleOptionSlider,
     QToolButton,
@@ -392,6 +392,8 @@ class _PianoRollCanvas(QWidget):
         self._selected_index: int | None = None
         self._selected_indices: set[int] = set()
         self._grid_seconds = 0.125
+        self._beat_times: tuple[float, ...] = ()
+        self._downbeat_times: tuple[float, ...] = ()
         self._drag_mode: str | None = None
         self._drag_origin_position = None
         self._drag_origin_note: MuscriptorRollNote | None = None
@@ -566,6 +568,53 @@ class _PianoRollCanvas(QWidget):
         if not math.isfinite(grid) or grid <= 0:
             raise ValueError(f"Piano-roll grid must be finite and positive: {seconds}")
         self._grid_seconds = grid
+
+    def set_beat_grid(
+        self,
+        beat_times: Iterable[float] | None,
+        downbeats: Iterable[float] | None = None,
+        *,
+        beats_per_bar: int | None = None,
+    ) -> None:
+        """Set the final audio-aligned Beat This grid used by the roll."""
+
+        if beat_times is None:
+            beats: tuple[float, ...] = ()
+            bars: tuple[float, ...] = ()
+        else:
+            beats = tuple(float(value) for value in beat_times)
+            if (
+                len(beats) < 2
+                or any(not math.isfinite(value) or value < 0.0 for value in beats)
+                or any(right <= left for left, right in zip(beats, beats[1:]))
+            ):
+                raise ValueError(
+                    "Piano-roll beat grid must contain at least two finite, "
+                    "strictly increasing times"
+                )
+            bars = tuple(float(value) for value in (downbeats or ()))
+            if any(not math.isfinite(value) or value < 0.0 for value in bars) or any(
+                right <= left for left, right in zip(bars, bars[1:])
+            ):
+                raise ValueError("Piano-roll downbeats must be finite and strictly increasing")
+            if len(bars) < 2 and beats_per_bar is not None:
+                meter = int(beats_per_bar)
+                if meter <= 0:
+                    raise ValueError(f"Piano-roll beats per bar must be positive: {meter}")
+                anchor_time = bars[0] if bars else beats[0]
+                anchor_index = min(
+                    range(len(beats)),
+                    key=lambda index: abs(beats[index] - anchor_time),
+                )
+                bars = tuple(
+                    beats[index] for index in range(anchor_index % meter, len(beats), meter)
+                )
+        if beats == self._beat_times and bars == self._downbeat_times:
+            return
+        self._beat_times = beats
+        self._downbeat_times = bars
+        self._tile_cache.clear()
+        self.update()
 
     def snap_time(self, seconds: float) -> float:
         return round(max(0.0, float(seconds)) / self._grid_seconds) * self._grid_seconds
@@ -763,21 +812,69 @@ class _PianoRollCanvas(QWidget):
                 painter.drawText(3, y + self._row_height - 1, f"C{pitch // 12 - 1}")
 
         painter.setFont(QFont("Consolas", 8))
-        max_second = int(self._duration) + 2
-        first_second = max(
-            0,
-            int((logical_left - roll_left) / self._pixels_per_second) - 1,
-        )
-        last_second = min(
-            max_second,
-            int((logical_right - roll_left) / self._pixels_per_second) + 2,
-        )
-        for second in range(first_second, last_second + 1):
-            x = self.x_for_time(second)
-            painter.setPen(QPen(QColor("#36506f"), 1))
-            painter.drawLine(x, 0, x, self.height())
-            painter.setPen(QColor("#7f94b7"))
-            painter.drawText(x + 3, 11, f"{second}s")
+        if self._beat_times:
+            visible_start = max(0.0, (logical_left - roll_left) / self._pixels_per_second)
+            visible_end = max(
+                visible_start,
+                (logical_right - roll_left) / self._pixels_per_second,
+            )
+            first_bar = max(0, bisect_right(self._downbeat_times, visible_start) - 1)
+            last_bar = min(
+                len(self._downbeat_times) - 1,
+                bisect_right(self._downbeat_times, visible_end),
+            )
+            for bar_index in range(first_bar, last_bar):
+                if bar_index % 2 == 0:
+                    continue
+                left = self.x_for_time_float(self._downbeat_times[bar_index])
+                right = self.x_for_time_float(self._downbeat_times[bar_index + 1])
+                painter.fillRect(
+                    QRectF(left, 0.0, max(0.0, right - left), float(self.height())),
+                    QColor(255, 255, 255, 8),
+                )
+
+            first_beat = bisect_left(self._beat_times, visible_start)
+            last_beat = bisect_right(self._beat_times, visible_end)
+            median_spacing = sorted(
+                right - left for left, right in zip(self._beat_times, self._beat_times[1:])
+            )[len(self._beat_times) // 2 - 1]
+            beat_stride = 1
+            while median_spacing * self._pixels_per_second * beat_stride < 12.0:
+                beat_stride *= 2
+            for beat_index in range(first_beat, last_beat):
+                if beat_index % beat_stride:
+                    continue
+                x = self.x_for_time_float(self._beat_times[beat_index])
+                painter.setPen(QPen(QColor("#36506f"), 1))
+                painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
+
+            first_downbeat = bisect_left(self._downbeat_times, visible_start)
+            last_downbeat = bisect_right(self._downbeat_times, visible_end)
+            for bar_index in range(first_downbeat, last_downbeat):
+                x = self.x_for_time_float(self._downbeat_times[bar_index])
+                downbeat_pen = QPen(QColor("#78aee8"))
+                downbeat_pen.setWidthF(1.5)
+                downbeat_pen.setCosmetic(True)
+                painter.setPen(downbeat_pen)
+                painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
+                painter.setPen(QColor("#a9c8e8"))
+                painter.drawText(QPointF(x + 3.0, 11.0), f"B{bar_index + 1}")
+        else:
+            max_second = int(self._duration) + 2
+            first_second = max(
+                0,
+                int((logical_left - roll_left) / self._pixels_per_second) - 1,
+            )
+            last_second = min(
+                max_second,
+                int((logical_right - roll_left) / self._pixels_per_second) + 2,
+            )
+            for second in range(first_second, last_second + 1):
+                x = self.x_for_time(second)
+                painter.setPen(QPen(QColor("#36506f"), 1))
+                painter.drawLine(x, 0, x, self.height())
+                painter.setPen(QColor("#7f94b7"))
+                painter.drawText(x + 3, 11, f"{second}s")
 
         visible_start = max(0.0, (logical_left - roll_left) / self._pixels_per_second)
         visible_end = max(visible_start, (logical_right - roll_left) / self._pixels_per_second)
@@ -2029,6 +2126,24 @@ class MuscriptorResultWidget(QFrame):
                 output_dir / "source-tempo-playback.mid",
                 self._detected_bpm,
             )
+        if self.muscriptor_groups and result.beat_info is not None:
+            from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
+
+            bar_offset = read_muscriptor_bar_offset_seconds(playback_midi_path)
+            beats_per_bar = None
+            if result.beat_info.time_signature is not None:
+                numerator, denominator = result.beat_info.time_signature
+                quarter_beats = float(numerator) * 4.0 / float(denominator)
+                rounded = round(quarter_beats)
+                if math.isclose(quarter_beats, rounded, rel_tol=0.0, abs_tol=1e-9):
+                    beats_per_bar = int(rounded)
+            self.roll.set_beat_grid(
+                (float(value) + bar_offset for value in result.beat_info.beat_times),
+                (float(value) + bar_offset for value in (result.beat_info.downbeats or ())),
+                beats_per_bar=beats_per_bar,
+            )
+        else:
+            self.roll.set_beat_grid(None)
         read_midi_roll_notes(
             playback_midi_path,
             muscriptor_groups=self.muscriptor_groups,
@@ -3403,9 +3518,7 @@ class MuscriptorResultWidget(QFrame):
                 )
             project_rate = target_bpm / source_bpm
             if not math.isfinite(project_rate) or project_rate <= 0.0:
-                raise RuntimeError(
-                    f"Invalid project playback rate: {project_rate!r}"
-                )
+                raise RuntimeError(f"Invalid project playback rate: {project_rate!r}")
             return project_rate
         speed = float(self.speed_spin.value())
         if not math.isfinite(speed) or speed <= 0.0:
@@ -3935,6 +4048,13 @@ class MuscriptorResultWidget(QFrame):
                             destination,
                             self._detected_bpm,
                             target_bpm,
+                        )
+                    if self.muscriptor_groups:
+                        from src.core.midi_tempo import repeat_tempo_events_on_note_tracks
+
+                        published_path = repeat_tempo_events_on_note_tracks(
+                            published_path,
+                            label="MuScriptor exported MuseScore tempo metadata",
                         )
                 except Exception as exc:
                     self.playback_status_label.setText(

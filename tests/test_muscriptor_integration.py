@@ -46,18 +46,18 @@ from src.core.muscriptor_result_assets import (
 )
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.gui.web.muscriptor_result_runtime import (
+    _COLORS,
     MUSCRIPTOR_RESULT_CSS,
     MUSCRIPTOR_RESULT_JS,
-    _COLORS,
     build_muscriptor_result_html,
 )
 from src.gui.widgets.muscriptor_instrument_selector import (
     MuscriptorInstrumentSelector,
 )
 from src.gui.widgets.muscriptor_result import (
+    _INSTRUMENT_COLORS,
     MuscriptorResultWidget,
     _ChunkProgressEstimator,
-    _INSTRUMENT_COLORS,
     _export_midi_at_project_speed,
     _export_midi_with_bpm,
     _PianoRollCanvas,
@@ -259,14 +259,42 @@ def _install_fake_event_module(monkeypatch):
     beats = types.ModuleType("muscriptor.utils.beats")
 
     class BeatGrid:
-        def __init__(self, *, bpm: float, beats_per_bar: int, first_downbeat: float):
+        def __init__(
+            self,
+            *,
+            bpm: float,
+            beats_per_bar: int | None,
+            first_downbeat: float,
+            beats=None,
+            onset_delay=None,
+        ):
             self.bpm = bpm
             self.beats_per_bar = beats_per_bar
             self.first_downbeat = first_downbeat
+            self.beats = beats
+            self.onset_delay = onset_delay
 
-        def bar_offset(self) -> float:
-            bar = self.beats_per_bar * 60.0 / self.bpm
-            return (bar - self.first_downbeat % bar) % bar
+        def bar_offset(self, min_shift: float = 0.0) -> float:
+            step = (self.beats_per_bar or 1) * 60.0 / self.bpm
+            offset = (
+                (step - self.first_downbeat % step) % step
+                if self.beats_per_bar is not None
+                else 0.0
+            )
+            while offset < min_shift:
+                offset += step
+            return offset
+
+        def with_onset_delay(self, onsets):
+            unique_onsets = {round(float(value), 3) for value in onsets}
+            delay = 0.012 if len(unique_onsets) >= 40 else 0.0
+            return BeatGrid(
+                bpm=self.bpm,
+                beats_per_bar=self.beats_per_bar,
+                first_downbeat=self.first_downbeat,
+                beats=self.beats,
+                onset_delay=delay,
+            )
 
     beats.BeatGrid = BeatGrid
     utils = types.ModuleType("muscriptor.utils")
@@ -350,8 +378,8 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "overlap_seconds": 2.5,
         "allow_reset": True,
         "strict_eos": True,
-        "package_version": "0.2.2",
-        "source_commit": "e2bd0fc5994f9acba7c1387ca5df67eb8d95df44",
+        "package_version": "0.3.0",
+        "source_commit": "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
         "quality_patch_commit": "edaebd3126336bd7eb4467dcf675d77f4e7772f0",
     }
 
@@ -376,6 +404,8 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
             assert beat_grid.bpm == pytest.approx(120.0)
             assert beat_grid.beats_per_bar == 4
             assert beat_grid.first_downbeat == pytest.approx(0.0)
+            assert beat_grid.beats.tolist() == pytest.approx([0.0, 0.5, 1.0, 1.5])
+            assert beat_grid.onset_delay == pytest.approx(0.0)
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -448,8 +478,50 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
     transcriber.transcribe_to_midi(str(audio), str(output))
 
     assert inference_states == [True]
-    assert received[0] == transcriber._runtime_details
+    assert received[0]["onset_phase_correction"] == "pending"
     assert received[1] == {"type": "progress", "completed": 1, "total": 1}
+    assert received[2] == transcriber._runtime_details
+    assert received[2]["onset_phase_correction"] == "official_v0.3.0"
+    assert received[2]["onset_delay_seconds"] == pytest.approx(0.0)
+
+
+def test_transcriber_applies_official_onset_phase_before_midi_writer(
+    tmp_path: Path,
+    monkeypatch,
+):
+    ProgressEvent, NoteStartEvent, NoteEndEvent = _install_fake_event_module(monkeypatch)
+    starts = [
+        NoteStartEvent(index, "acoustic_piano", 60 + index % 12, index * 0.025)
+        for index in range(40)
+    ]
+    events = [ProgressEvent(0, 1)]
+    for start in starts:
+        events.extend((start, NoteEndEvent(start.index, start, start.start_time + 0.1)))
+    events.append(ProgressEvent(1, 1))
+
+    class FakeModel:
+        written_grid = None
+
+        def transcribe(self, _source, **_kwargs):
+            return iter(events)
+
+        def events_to_midi_bytes(self, streamed, *, beat_grid=None):
+            assert len(list(streamed)) == len(events)
+            self.written_grid = beat_grid
+            return _midi_bytes(0)
+
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"wav")
+    output = tmp_path / "output.mid"
+    transcriber = MuscriptorTranscriber(Config(use_gpu=False))
+    transcriber._model = FakeModel()
+    _configure_test_beat_grid(transcriber)
+
+    transcriber.transcribe_to_midi(str(audio), str(output))
+
+    assert transcriber._model.written_grid.onset_delay == pytest.approx(0.012)
+    assert transcriber.last_onset_delay_seconds == pytest.approx(0.012)
+    assert transcriber.last_bar_offset_seconds >= transcriber.last_onset_delay_seconds
 
 
 def test_transcriber_refuses_backend_event_outside_selected_instruments(
@@ -2788,7 +2860,8 @@ def test_edited_midi_download_publishes_current_notes_and_exact_77_9_bpm(
     tempo_messages = [
         message for track in downloaded.tracks for message in track if message.type == "set_tempo"
     ]
-    assert len(tempo_messages) == 1
+    assert len(tempo_messages) == 2
+    assert {message.tempo for message in tempo_messages} == {mido.bpm2tempo(77.9)}
     assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(77.9, abs=0.001)
     assert [
         (note.pitch, note.velocity, note.track_index, note.channel)
@@ -3036,6 +3109,36 @@ def test_desktop_view_zoom_grows_notes_beyond_one_x_and_is_not_playback_speed(
     finally:
         widget.shutdown()
         widget.close()
+
+
+def test_desktop_piano_roll_draws_beat_lines_downbeats_and_alternating_bars():
+    app = QApplication.instance() or QApplication([])
+    roll = _PianoRollCanvas()
+    roll.set_notes((), duration=4.0)
+    roll.set_beat_grid(
+        (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5),
+        (0.0, 1.0, 2.0, 3.0),
+    )
+    roll.show()
+    app.processEvents()
+    try:
+        image = roll.grab().toImage()
+        beat_x = round(roll.x_for_time_float(0.5))
+        downbeat_x = round(roll.x_for_time_float(1.0))
+        plain_x = round(roll.x_for_time_float(0.75))
+        shaded_x = round(roll.x_for_time_float(1.75))
+        y = 30
+        beat_color = image.pixelColor(beat_x, y)
+        downbeat_color = image.pixelColor(downbeat_x, y)
+        plain_color = image.pixelColor(plain_x, y)
+        shaded_color = image.pixelColor(shaded_x, y)
+        assert beat_color != plain_color
+        assert downbeat_color != beat_color
+        assert shaded_color != plain_color
+        assert roll._beat_times == pytest.approx((0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5))
+        assert roll._downbeat_times == pytest.approx((0.0, 1.0, 2.0, 3.0))
+    finally:
+        roll.close()
 
 
 @pytest.mark.parametrize(
@@ -3606,6 +3709,9 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
         "duration": 1.0,
         "reference_bpm": 117.9,
         "target_bpm": 132.5,
+        "beat_times": [0.25, 0.75, 1.25],
+        "downbeats": [0.25, 1.25],
+        "repeat_tempo_per_note_track": True,
         "backend_label": "MIROS",
         "source_track_name": "guitar",
     }
@@ -3614,6 +3720,9 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
 
     assert '"referenceBpm": 117.9' in markup
     assert '"targetBpm": 132.5' in markup
+    assert '"beatTimes": [0.25, 0.75, 1.25]' in markup
+    assert '"downbeats": [0.25, 1.25]' in markup
+    assert '"repeatTempoPerNoteTrack": true' in markup
     assert '"program": 24' in markup
     assert '"track_index": 2' in markup
     assert '"channel": 3' in markup
@@ -3622,6 +3731,8 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert "this.undoStack" in MUSCRIPTOR_RESULT_JS
     assert "onPointerMove" in MUSCRIPTOR_RESULT_JS
     assert "downloadEditedMidi" in MUSCRIPTOR_RESULT_JS
+    assert "Invalid Beat This grid in piano-roll manifest" in MUSCRIPTOR_RESULT_JS
+    assert "repeatTempoPerNoteTrack" in MUSCRIPTOR_RESULT_JS
 
 
 def test_browser_midi_editor_builds_verified_smf_and_preserves_controller_events(

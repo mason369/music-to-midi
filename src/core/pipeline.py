@@ -26,6 +26,7 @@ from src.core.bytedance_piano_transcriber import (
     ByteDancePianoTranscriber,
 )
 from src.core.midi_generator import MidiGenerator
+from src.core.midi_tempo import repeat_tempo_events_on_note_tracks
 from src.core.muscriptor_midi import validate_muscriptor_midi_constraint
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.core.transkun_transcriber import TRANSKUN_PACKAGE_VERSION, TranskunTranscriber
@@ -929,6 +930,13 @@ class MusicToMidiPipeline:
                         source_bpm=beat_info.source_bpm,
                         time_signature=beat_info.time_signature,
                     )
+                    if transcriber is self.muscriptor_transcriber:
+                        stem_midi_paths[stem_name] = str(
+                            repeat_tempo_events_on_note_tracks(
+                                stem_midi_paths[stem_name],
+                                label=f"MuScriptor {stem_name} MuseScore tempo metadata",
+                            )
+                        )
                 except InterruptedError:
                     raise
                 except Exception as exc:
@@ -1376,6 +1384,12 @@ class MusicToMidiPipeline:
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
+            midi_path = str(
+                repeat_tempo_events_on_note_tracks(
+                    midi_path,
+                    label="MuScriptor MuseScore tempo metadata",
+                )
+            )
             # Tempo normalization cannot add notes, but the published result is
             # checked again so the user-visible artifact itself is the proof.
             validate_muscriptor_midi_constraint(midi_path, selected)
@@ -1560,6 +1574,13 @@ class MusicToMidiPipeline:
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
+            if transcriber is self.muscriptor_transcriber:
+                accompaniment_midi_path = str(
+                    repeat_tempo_events_on_note_tracks(
+                        accompaniment_midi_path,
+                        label="MuScriptor accompaniment MuseScore tempo metadata",
+                    )
+                )
         except InterruptedError:
             self._cleanup_multi_instrument_backend()
             raise
@@ -1605,6 +1626,13 @@ class MusicToMidiPipeline:
                 source_bpm=beat_info.source_bpm,
                 time_signature=beat_info.time_signature,
             )
+            if transcriber is self.muscriptor_transcriber:
+                vocal_midi_path = str(
+                    repeat_tempo_events_on_note_tracks(
+                        vocal_midi_path,
+                        label="MuScriptor vocal MuseScore tempo metadata",
+                    )
+                )
         except InterruptedError:
             raise
         except Exception as e:

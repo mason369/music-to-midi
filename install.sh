@@ -317,7 +317,7 @@ PY
 success "audio-separator 安装完成"
 
 info "安装并校验固定 MuScriptor 公共源码（不改写固定 PyTorch 运行时）..."
-MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip"
+MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
 "$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
 "$PYTHON" - <<'PY'
 from src.core.muscriptor_transcriber import MuscriptorTranscriber

@@ -542,7 +542,7 @@ if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
 
 Write-Info "安装 MuScriptor 当前 main 并应用固定最佳质量补丁（不改写固定 PyTorch 运行时）..."
-$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip"
+$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
 & "$PIP" install $muscriptorRequirement --no-deps --force-reinstall
 if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor 固定公共源码安装失败" }
 & "$PYTHON" (Join-Path $REPO_DIR "patch_muscriptor_runtime.py")

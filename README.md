@@ -158,13 +158,15 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
-项目固定使用上游 BeatGrid 提交 `e2bd0fc5994f9acba7c1387ca5df67eb8d95df44`
-（包版本 `0.2.2`），并以 SHA-256 校验后叠加 PR #58 固定 head
-`edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的重叠窗口与 gzip 异常重启实现。上游 BeatGrid
-内部不会再另跑 best-effort 检测，也不会在失败时写入占位 120 BPM；全项目唯一的
-Beat This `final0` 分析得到 BPM、可靠拍号和首个强拍，并直接传给 BeatGrid MIDI writer，用于写入真实 tempo、拍号、小节相位和
-可验证的前置偏移标记。该标记在手动 BPM 变速时按相同比例变化，最终试听的原音也补入同等静音，
-因此 MIDI、钢琴卷帘、原音和下载文件使用同一时间轴，不量化、不过滤、不重跑模型。固定 gated 权重仓库
+项目固定使用上游 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，
+并以 SHA-256 校验后叠加 PR #58 固定 head
+`edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的重叠窗口与 gzip 异常重启实现。全项目唯一的
+Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍直接传给 v0.3.0 BeatGrid：官方 onset
+相位估计在满足样本数与集中度阈值时校正系统性起音偏移，不满足阈值时明确记录 0 校正；项目不再启动第二套节拍检测，也不接受占位
+120 BPM。写出的 MIDI 包含真实 tempo、拍号、小节相位和可验证的前置偏移标记；tempo 归一化后还会严格复制到每个含音符轨，
+兼容 MuseScore 的 conductor-track 行为。桌面、Space 和 Colab 的 MuScriptor 钢琴卷帘使用同一 Beat This 网格显示拍线、强拍线和交替小节底色。
+该偏移标记在手动 BPM 变速时按相同比例变化，最终试听的原音也补入同等静音，因此 MIDI、钢琴卷帘、原音和下载文件使用同一时间轴，
+不量化、不过滤、不重跑模型。固定 gated 权重仓库
 [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) 的
 revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重约 5.47 GB，许可为
 CC BY-NC 4.0；必须先在 Hugging Face 接受仓库条款并登录：
@@ -203,7 +205,7 @@ MuScriptor 是 Kyutai、Mirelo AI 与 IRCAM 研究人员在 2026 年 7 月公开
 
 这些分数表明 MuScriptor Large 是很强的公开完整混音候选，但不是“所有 benchmark 的无条件 SOTA”：`D_Test` 是作者自建留出集，尚无公共下载入口；在论文列出的 8 个公共跨域数据集上，MuScriptor 的 Multi F1 高于 YourMT3+ 其中 6 个、低于其中 2 个。它也不输出 velocity，只提供 36 组乐器分类，并受 CC BY-NC 4.0 非商用许可约束。
 
-发布时间也应分开理解：[Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录模型仓库创建于 2026-06-30；[论文](https://arxiv.org/abs/2607.08168)与 [Mirelo 官方文章](https://mirelo.ai/blog/turning-audio-to-midi)发表于 2026-07-09；GitHub `v0.2.1` 和当前公开权重 revision 更新于 2026-07-10。仓库日期只是发布流程元数据，不表示更早已有同一套最终代码和权重。
+发布时间也应分开理解：[Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录模型仓库创建于 2026-06-30；[论文](https://arxiv.org/abs/2607.08168)与 [Mirelo 官方文章](https://mirelo.ai/blog/turning-audio-to-midi)发表于 2026-07-09；当前公开权重 revision 更新于 2026-07-10，而本项目固定的官方 MuScriptor `v0.3.0` 源码发布于 2026-08-05。仓库与源码发布日期不等于权重被重新训练；三个公开模型 revision 仍按各自 SHA 精确固定。
 
 完整训练消融、8 个公共数据集逐项分数、模型规模对比、乐器条件收益、Mirelo Studio 私有增强版边界与后续模型观察清单见 [MuScriptor 模型研究、分数与项目定位](docs/muscriptor-model.md)。
 
@@ -654,7 +656,7 @@ AMD/ROCm 当前不能完成七模式：即使 PyTorch 提供 ROCm wheel，PolarF
 pip install -r requirements.txt
 python -m pip install --no-deps "audio-separator==0.44.1"
 python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip"
-python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/e2bd0fc5994f9acba7c1387ca5df67eb8d95df44.zip"
+python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
 python patch_muscriptor_runtime.py
 ```
 

@@ -1,12 +1,12 @@
 """Reproducible MuScriptor source identity and best-quality runtime patching.
 
-The project installs the fixed upstream beat-grid commit, overlays the two
-runtime files from the fixed overlap/restart PR head, and then deterministically
-restores the beat-grid API in the one file touched by both changes.  Every
-source file is verified by SHA-256 before and after replacement.  The installed
-runtime is therefore an explicit composite of two reviewed upstream revisions,
-not an ephemeral GitHub merge ref or a whole-file overwrite that drops either
-feature.
+The project installs official v0.3.0 (beat/bar display support, onset-phase
+correction, and MuseScore tempo metadata), overlays the two runtime files from
+the fixed overlap/restart PR head, and then deterministically restores the
+v0.3.0 BeatGrid API in the one file touched by both changes. Every source file
+is verified by SHA-256 before and after replacement. The installed runtime is
+therefore an explicit composite of two reviewed upstream revisions, not an
+ephemeral GitHub merge ref or a whole-file overwrite that drops either feature.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-MUSCRIPTOR_PACKAGE_VERSION = "0.2.2"
-MUSCRIPTOR_SOURCE_COMMIT = "e2bd0fc5994f9acba7c1387ca5df67eb8d95df44"
+MUSCRIPTOR_PACKAGE_VERSION = "0.3.0"
+MUSCRIPTOR_SOURCE_COMMIT = "d73147e75e5b9b0c0a79ebe154587db4fd603e0c"
 MUSCRIPTOR_QUALITY_PATCH_COMMIT = "edaebd3126336bd7eb4467dcf675d77f4e7772f0"
 MUSCRIPTOR_SOURCE_REQUIREMENT = (
     "muscriptor @ https://github.com/muscriptor/muscriptor/archive/"
@@ -38,7 +38,7 @@ _RAW_PATCH_ROOT = (
 # hashes prove the exact composite of beat-grid and overlap/restart behavior.
 _PATCH_FILES = {
     "transcription_model.py": {
-        "base_sha256": "e3a7d2df13e60914564cf68bce2f4110d80d6abdf3d900c4c97353b1e5eecde6",
+        "base_sha256": "d301cee911ad0e2fdf90bf4ad659a7e2a55e30d9028fa3604df3bb31b12fc88d",
         "overlay_sha256": "16b9a27e4b35f117a8b9bd439fd98cf3a7228030216d42596dbc393cf9a6d2ea",
         "patched_sha256": "229206d5bb2411e9f29df48e3bf863a74d7aca8ab18f3e7c41661eec3e91369f",
         "url": _RAW_PATCH_ROOT + "muscriptor/transcription_model.py",
@@ -51,19 +51,19 @@ _PATCH_FILES = {
     },
 }
 
-# These unchanged files distinguish current main from the older 0.2.2 PyPI
-# wheel and prove that native inference_mode plus the accelerator fixes exist.
+# These files distinguish official v0.3.0 from older wheels and prove that its
+# native precision, onset correction, and MuseScore tempo changes all exist.
 _MAIN_IDENTITY_FILES = {
     "models/lm.py": "8600f40d7b5242b37d0db5dbf16eddde6b493d2243ac4177bc86750bcea554a2",
     "accelerator.py": "1bc8001093c7fbc888191fc649c874c238d3966b3363d6458833157761ae40e5",
-    "tokenizer/notes.py": "bdf0b31c673f0d7fae6797313591024974c1720814f2c7ab5d2990e7e82a1049",
-    "utils/beats.py": "15f3a9e4de94d0c38c409bc5e48255d848be5f7f33d7e130157419818c7b9da4",
-    "utils/midi.py": "72f891540b5b66a6b3795c8201b28a316d7b7ea6b339e39dfa49fcf4e9cb8388",
+    "tokenizer/notes.py": "686ee5a6d336bf74a67390c72af376c00e42061e0d72354346e2e52b95363f33",
+    "utils/beats.py": "58da8484da7c0372aa54690d5d6a801c9ae14c6897ac52aaf81acdee85af6bd9",
+    "utils/midi.py": "21d16e15b073ec0522b31c6468a166dac4ae7c76f5ea318077945330ca572348",
 }
 
 
 def _compose_beat_grid_overlay(relative: str, payload: bytes) -> bytes:
-    """Restore e2bd0fc's BeatGrid API after applying PR #58's older file."""
+    """Restore v0.3.0's BeatGrid API after applying PR #58's older file."""
 
     if relative != "transcription_model.py":
         return payload
@@ -85,13 +85,13 @@ def _compose_beat_grid_overlay(relative: str, payload: bytes) -> bytes:
             "        overlap: float = 0.0,\n"
             "        allow_reset: bool = False,\n"
             "    ) -> bytes:\n"
-            "        \"\"\"Same as :meth:`transcribe` but returns a MIDI file as bytes.\"\"\"\n"
+            '        """Same as :meth:`transcribe` but returns a MIDI file as bytes."""\n'
             "        events = self.transcribe(\n",
             "        overlap: float = 0.0,\n"
             "        allow_reset: bool = False,\n"
-            "        detect_tempo: TempoDetection = \"best-effort\",\n"
+            '        detect_tempo: TempoDetection = "best-effort",\n'
             "    ) -> bytes:\n"
-            "        \"\"\"Same as :meth:`transcribe` but returns a MIDI file as bytes.\"\"\"\n"
+            '        """Same as :meth:`transcribe` but returns a MIDI file as bytes."""\n'
             "        beat_grid = self.detect_beat_grid_for(audio, detect_tempo)\n"
             "        events = self.transcribe(\n",
         ),
@@ -104,14 +104,14 @@ def _compose_beat_grid_overlay(relative: str, payload: bytes) -> bytes:
             "    def detect_beat_grid_for(\n"
             "        self,\n"
             "        audio: str | Path | tuple[torch.Tensor, int],\n"
-            "        mode: TempoDetection = \"best-effort\",\n"
+            '        mode: TempoDetection = "best-effort",\n'
             "    ) -> BeatGrid | None:\n"
-            "        \"\"\"Detect the beat grid of `audio`, or None if there isn't a usable one.\n\n"
+            '        """Detect the beat grid of `audio`, or None if there isn\'t a usable one.\n\n'
             "        Accepts the same input forms as :meth:`transcribe`.\n"
             "        `mode` decides what a failed detection means: raise (True), skip detection\n"
             "        entirely (False), or warn and fall back to the placeholder tempo\n"
-            "        (\"best-effort\").\n"
-            "        \"\"\"\n"
+            '        ("best-effort").\n'
+            '        """\n'
             "        if mode is False:\n"
             "            return None\n"
             "        tensor, sample_rate = audio if isinstance(audio, tuple) else (audio, None)\n"
@@ -121,7 +121,7 @@ def _compose_beat_grid_overlay(relative: str, payload: bytes) -> bytes:
             "            if mode is True:\n"
             "                raise\n"
             "            print(\n"
-            "                f\"Warning: {e}; falling back to the placeholder tempo\",\n"
+            '                f"Warning: {e}; falling back to the placeholder tempo",\n'
             "                file=sys.stderr,\n"
             "            )\n"
             "            return None\n\n"

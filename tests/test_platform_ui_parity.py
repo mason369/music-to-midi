@@ -8,6 +8,7 @@ summaries for direct conversions and separation-only runs.
 import ast
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _colab_source() -> str:
@@ -23,6 +24,21 @@ def _space_source() -> str:
 
 def _desktop_source() -> str:
     return Path("src/gui/main_window.py").read_text(encoding="utf-8")
+
+
+def _isolated_function(source: str, name: str, **globals_):
+    function = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    )
+    module = ast.Module(body=[function], type_ignores=[])
+    namespace = dict(globals_)
+    exec(
+        compile(ast.fix_missing_locations(module), "<isolated-platform-function>", "exec"),
+        namespace,
+    )
+    return namespace[name]
 
 
 def test_project_bpm_contract_is_shared_by_desktop_space_and_colab():
@@ -305,3 +321,130 @@ def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context()
         ):
             assert field in source
         assert "The browser MIDI editor requires result beat information" in source
+
+
+def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeypatch):
+    from src.core import midi_tempo, muscriptor_result_assets
+
+    playback_midi = tmp_path / "source-tempo-playback.mid"
+    monkeypatch.setattr(
+        midi_tempo,
+        "rewrite_midi_tempo_preserving_ticks",
+        lambda *_args, **_kwargs: playback_midi,
+    )
+    monkeypatch.setattr(
+        midi_tempo,
+        "read_muscriptor_bar_offset_seconds",
+        lambda _path: 0.25,
+    )
+    assets = SimpleNamespace(
+        notes=(
+            SimpleNamespace(
+                instrument="acoustic_piano",
+                pitch=60,
+                velocity=90,
+                start=0.25,
+                end=0.75,
+                program=0,
+                is_drum=False,
+                track_index=1,
+                channel=0,
+            ),
+        ),
+        duration=2.0,
+        transcription_wav=tmp_path / "transcription.wav",
+        stereo_mix_wav=tmp_path / "stereo.wav",
+        instrument_wavs={"acoustic_piano": tmp_path / "piano.wav"},
+    )
+    monkeypatch.setattr(
+        muscriptor_result_assets,
+        "prepare_midi_playback_assets",
+        lambda *_args, **_kwargs: assets,
+    )
+    result = SimpleNamespace(
+        midi_path=str(tmp_path / "result.mid"),
+        selected_instruments=["acoustic_piano"],
+        beat_info=SimpleNamespace(
+            bpm=120.0,
+            source_bpm=None,
+            beat_times=[0.0, 0.5, 1.0],
+            downbeats=[0.0, 1.0],
+        ),
+    )
+
+    for source in (_space_source(), _colab_source()):
+        build_state = _isolated_function(source, "_build_midi_result_state", Path=Path)
+        state = build_state(
+            result,
+            tmp_path / "audio.wav",
+            tmp_path / "playback",
+            backend_label="MuScriptor-small",
+            muscriptor_groups=True,
+        )
+        assert state["beat_times"] == [0.25, 0.75, 1.25]
+        assert state["downbeats"] == [0.25, 1.25]
+        assert state["repeat_tempo_per_note_track"] is True
+
+
+def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_path):
+    raw_state = {
+        "kind": "midi_result",
+        "audio_path": str(tmp_path / "audio.wav"),
+        "midi_path": str(tmp_path / "result.mid"),
+        "transcription_wav": str(tmp_path / "transcription.wav"),
+        "stereo_mix_wav": str(tmp_path / "stereo.wav"),
+        "instrument_wavs": {"acoustic_piano": str(tmp_path / "piano.wav")},
+        "notes": [
+            {
+                "instrument": "acoustic_piano",
+                "pitch": 60,
+                "velocity": 90,
+                "start": 0.25,
+                "end": 0.75,
+                "program": 0,
+                "is_drum": False,
+                "track_index": 1,
+                "channel": 0,
+            }
+        ],
+        "duration": 2.0,
+        "reference_bpm": 120.0,
+        "target_bpm": 120.0,
+        "beat_times": [0.25, 0.75, 1.25],
+        "downbeats": [0.25, 1.25],
+        "repeat_tempo_per_note_track": True,
+    }
+    require_file = lambda _root, path, *_args: Path(path).resolve()
+    common_globals = {
+        "Path": Path,
+        "math": __import__("math"),
+        "MIN_MIDI_BPM": 4.0,
+        "MAX_MIDI_BPM": 400.0,
+        "SUPPORTED_AUDIO_SUFFIXES": {".wav"},
+        "_require_owned_request_file": require_file,
+    }
+
+    space_normalize = _isolated_function(
+        _space_source(),
+        "_normalize_midi_result_state",
+        **common_globals,
+    )
+    space_state = space_normalize(
+        raw_state,
+        tmp_path,
+        expected_audio_path=raw_state["audio_path"],
+    )
+
+    colab_normalize = _isolated_function(
+        _colab_source(),
+        "_normalize_midi_result_state",
+        gr=SimpleNamespace(Error=RuntimeError),
+        ct=lambda *_args, **_kwargs: "error",
+        **common_globals,
+    )
+    colab_state = colab_normalize(raw_state, tmp_path, raw_state["audio_path"])
+
+    for state in (space_state, colab_state):
+        assert state["beat_times"] == raw_state["beat_times"]
+        assert state["downbeats"] == raw_state["downbeats"]
+        assert state["repeat_tempo_per_note_track"] is True

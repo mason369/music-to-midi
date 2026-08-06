@@ -9,6 +9,7 @@ from src.core.midi_tempo import (
     non_tempo_event_tick_fingerprint,
     non_tempo_event_time_fingerprint,
     read_muscriptor_bar_offset_seconds,
+    repeat_tempo_events_on_note_tracks,
     rewrite_midi_tempo_for_project_speed,
     rewrite_midi_tempo_preserving_seconds,
     rewrite_midi_tempo_preserving_ticks,
@@ -169,9 +170,7 @@ def test_tick_preserving_project_speed_scales_muscriptor_bar_offset_marker(
     midi = mido.MidiFile(type=1, ticks_per_beat=480)
     conductor = mido.MidiTrack()
     conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
-    conductor.append(
-        mido.MetaMessage("marker", text="muscriptor:bar_offset=0.2500", time=0)
-    )
+    conductor.append(mido.MetaMessage("marker", text="muscriptor:bar_offset=0.2500", time=0))
     midi.tracks.append(conductor)
     notes = mido.MidiTrack()
     notes.append(mido.Message("note_on", note=60, velocity=100, time=240))
@@ -335,3 +334,60 @@ def test_conductor_meter_rewrite_preserves_every_non_meter_event_tick(
 
     assert signatures == [(0, 0, 6, 8, 36)]
     assert non_meter_events(destination) == before
+
+
+def test_muscriptor_repeats_complete_tempo_map_on_every_note_track(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "muscriptor-tempo-map.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90), time=960))
+    midi.tracks.append(conductor)
+    for channel, pitch in ((0, 60), (1, 67)):
+        track = mido.MidiTrack()
+        track.append(mido.MetaMessage("track_name", name=f"notes-{channel}", time=0))
+        track.append(mido.Message("program_change", channel=channel, program=channel, time=0))
+        track.append(mido.Message("note_on", channel=channel, note=pitch, velocity=90, time=37))
+        track.append(mido.Message("note_off", channel=channel, note=pitch, velocity=0, time=1200))
+        midi.tracks.append(track)
+    midi.save(path)
+    before = non_tempo_event_tick_fingerprint(mido.MidiFile(path))
+
+    published = repeat_tempo_events_on_note_tracks(path)
+
+    assert published == path.resolve()
+    verified = mido.MidiFile(path)
+    assert non_tempo_event_tick_fingerprint(verified) == before
+    expected = [(0, mido.bpm2tempo(120)), (960, mido.bpm2tempo(90))]
+    for track in verified.tracks[1:]:
+        tick = 0
+        tempos = []
+        for message in track:
+            tick += message.time
+            if message.is_meta and message.type == "set_tempo":
+                tempos.append((tick, message.tempo))
+        assert tempos == expected
+
+
+def test_muscriptor_tempo_repetition_rejects_conflicting_global_map(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "conflicting-tempo.mid"
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    first = mido.MidiTrack()
+    first.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120), time=0))
+    midi.tracks.append(first)
+    notes = mido.MidiTrack()
+    notes.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(90), time=0))
+    notes.append(mido.Message("note_on", channel=0, note=60, velocity=90, time=0))
+    notes.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=480))
+    midi.tracks.append(notes)
+    midi.save(path)
+    original = path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="Conflicting global tempo"):
+        repeat_tempo_events_on_note_tracks(path)
+
+    assert path.read_bytes() == original
