@@ -135,7 +135,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('"audio-separator==0.44.1"', source_text)
         self.assertIn('"gradio==4.44.1"', source_text)
         self.assertIn('"fastapi==0.136.3"', source_text)
-        self.assertIn('"starlette==1.5.0"', source_text)
+        self.assertIn('"starlette==0.52.1"', source_text)
         self.assertIn('" --no-deps"', source_text)
         self.assertNotIn('"audio-separator>=0.38.0"', source_text)
         self.assertNotIn('"gradio>=4.44.0"', source_text)

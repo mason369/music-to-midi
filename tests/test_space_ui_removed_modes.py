@@ -99,7 +99,7 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     assert "audio-separator==0.44.1" in requirements_text
     assert "gradio==4.44.1" in requirements_text
     assert "fastapi==0.136.3" in requirements_text
-    assert "starlette==1.5.0" in requirements_text
+    assert "starlette==0.52.1" in requirements_text
     assert "piano-transcription-inference==0.0.6" in requirements_text
     assert "transkun==2.0.1" in requirements_text
     assert "matplotlib" in requirements_text

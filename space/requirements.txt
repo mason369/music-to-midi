@@ -60,7 +60,7 @@ matplotlib>=3.7.0,<4
 # Web UI（满足 MuScriptor v0.3.0 官方下限，并锁定已实测组合）
 gradio==4.44.1
 fastapi==0.136.3
-starlette==1.5.0
+starlette==0.52.1
 
 # ZeroGPU 支持
 spaces==0.51.0

@@ -12,6 +12,7 @@ from unittest import mock
 
 import gradio as gradio
 import pytest
+from starlette.testclient import TestClient
 
 
 def _function_source(path: str, name: str) -> str:
@@ -32,6 +33,18 @@ def _colab_code() -> str:
         for cell in notebook.get("cells", [])
         if cell.get("cell_type") == "code"
     )
+
+
+def test_pinned_gradio_fastapi_starlette_stack_serves_the_homepage():
+    with gradio.Blocks() as demo:
+        gradio.Markdown("runtime-health")
+
+    app = gradio.routes.App.create_app(demo)
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert "gradio" in response.text.lower()
 
 
 def test_space_request_outputs_have_failure_and_success_cleanup_contracts():

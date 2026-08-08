@@ -72,7 +72,7 @@ psutil>=5.9.0,<8
 # 单独安装，避免其依赖解析器改写固定的 Torch 运行时；这里显式满足
 # v0.3.0 的其余官方运行依赖，版本不得低于上游元数据要求。
 fastapi==0.136.3
-starlette==1.5.0
+starlette==0.52.1
 httpx>=0.28.1,<1
 python-multipart>=0.0.29,<1
 uvicorn[standard]>=0.48.0,<1
