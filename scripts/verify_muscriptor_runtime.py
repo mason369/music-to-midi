@@ -20,8 +20,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from src.core.beat_detector import BeatDetector
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.models.data_models import Config
-from src.utils.muscriptor_source_patch import (
-    MUSCRIPTOR_QUALITY_PATCH_COMMIT,
+from src.utils.muscriptor_source_identity import (
     MUSCRIPTOR_SOURCE_COMMIT,
     validate_muscriptor_runtime_identity,
 )
@@ -154,16 +153,14 @@ def main() -> int:
         json.dumps(
             {
                 "source_commit": MUSCRIPTOR_SOURCE_COMMIT,
-                "quality_patch_commit": MUSCRIPTOR_QUALITY_PATCH_COMMIT,
                 "model": args.model,
                 "gpu": torch.cuda.get_device_name(0),
                 "parameter_dtypes": dict(parameter_dtypes),
                 "precision_policy": "official_cuda_default",
                 "autocast_enabled": True,
                 "autocast_dtype": str(torch.float16),
-                "quality_mode": "overlap_restart",
-                "overlap_seconds": 2.5,
-                "allow_reset": True,
+                "quality_mode": "official_v0.3.0",
+                "window_seconds": 5.0,
                 "onset_phase_correction": "official_v0.3.0",
                 "runs": runs,
             },

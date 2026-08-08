@@ -316,7 +316,7 @@ PY
 "$PIP" install "audio-separator==0.44.1" --no-deps
 success "audio-separator 安装完成"
 
-info "安装并校验固定 MuScriptor 公共源码（不改写固定 PyTorch 运行时）..."
+info "安装并严格校验官方 MuScriptor v0.3.0（不改写固定 PyTorch 运行时）..."
 MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
 "$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
 "$PYTHON" - <<'PY'
@@ -327,7 +327,7 @@ if reason:
     raise RuntimeError(reason)
 print("MuScriptor public runtime identity/API verified")
 PY
-success "MuScriptor 固定公共源码与硬乐器约束 API 校验通过"
+success "MuScriptor v0.3.0 官方源码与硬乐器约束 API 校验通过"
 
 validate_default_transkun_runtime() {
     "$PYTHON" - <<'PY'

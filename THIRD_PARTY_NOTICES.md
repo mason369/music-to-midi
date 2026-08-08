@@ -43,7 +43,7 @@ PORTABLE_COMPONENT: bytedance_checkpoint | bundle=models/bytedance_piano | artif
 PORTABLE_COMPONENT: miros_source | bundle=external/ai4m-miros | artifact=patched-source-tree | revision=668a0aa6357bb3f09e767c9ece378956c2ffd182 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: musicfm_pretrained | bundle=external/ai4m-miros/model/musicfm/data/pretrained_msd.pt | artifact=checkpoint | revision=546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: miros_finetuned | bundle=external/ai4m-miros/logs/.../last.ckpt | artifact=checkpoint | revision=sha256:b1b8c167b3d2e3eaeb19202cd3fd366bb43492cd7720ff1516e1553c72e356e5 | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
-PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=v0.3.0-beat-onset-musescore-source+verified-overlap-restart-overlay+metadata | revision=d73147e75e5b9b0c0a79ebe154587db4fd603e0c+edaebd3126336bd7eb4467dcf675d77f4e7772f0 | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: muscriptor_source | bundle=python/muscriptor | artifact=v0.3.0-beat-onset-musescore-source+metadata | revision=d73147e75e5b9b0c0a79ebe154587db4fd603e0c | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: beat_this_runtime_and_final0 | bundle=python/beat_this+models/beat_this | artifact=beat-this-1.1.0+final0.ckpt | revision=sha256:8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331 | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_small_checkpoint | bundle=models/muscriptor_small | artifact=model.safetensors+config.json | revision=8c127f603b807520fa465c838e9bfee8a91ada4e | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_medium_checkpoint | bundle=models/muscriptor_medium | artifact=model.safetensors+config.json | revision=f32236969308476e01fd3aae67357de5feb05a2d | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
@@ -67,9 +67,8 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
 ### MuScriptor public runtime, three gated checkpoints, and demo playback assets
 
 - Runtime source: [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor/tree/d73147e75e5b9b0c0a79ebe154587db4fd603e0c),
-  pinned v0.3.0 commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`,
-  package version `0.3.0`, plus the two SHA-256-verified runtime files from
-  PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`; declared source license: MIT.
+  pinned v0.3.0 commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`, package version `0.3.0`,
+  with seven runtime source files verified by SHA-256; declared source license: MIT.
 - [Beat This](https://github.com/CPJKU/beat_this) `1.1.0` and the official
   `final0.ckpt` are the product's only beat/downbeat detector. The source and
   published model are MIT-licensed. The exact checkpoint is 81,058,141 bytes with

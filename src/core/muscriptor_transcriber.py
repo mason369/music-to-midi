@@ -6,7 +6,6 @@ import gc
 import inspect
 import logging
 import math
-import warnings
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -31,9 +30,8 @@ from src.utils.muscriptor_downloader import (
     get_muscriptor_artifact,
     normalize_muscriptor_model,
 )
-from src.utils.muscriptor_source_patch import (
+from src.utils.muscriptor_source_identity import (
     MUSCRIPTOR_PACKAGE_VERSION,
-    MUSCRIPTOR_QUALITY_PATCH_COMMIT,
     MUSCRIPTOR_SOURCE_COMMIT,
     MUSCRIPTOR_SOURCE_REQUIREMENT,
     validate_muscriptor_runtime_identity,
@@ -64,8 +62,7 @@ class MuscriptorTranscriber:
         if identity_error:
             return (
                 "MuScriptor runtime source identity is invalid. "
-                f"{identity_error}. Install {MUSCRIPTOR_SOURCE_REQUIREMENT}, then run "
-                "python patch_muscriptor_runtime.py."
+                f"{identity_error}. Install {MUSCRIPTOR_SOURCE_REQUIREMENT}."
             )
 
         try:
@@ -79,24 +76,15 @@ class MuscriptorTranscriber:
         if (
             "instruments" not in transcribe_parameters
             or "prelude_forcing" not in transcribe_parameters
-            or "overlap" not in transcribe_parameters
-            or "allow_reset" not in transcribe_parameters
         ):
             return (
-                "MuScriptor runtime is missing the required hard-mask or "
-                "overlap/restart API. Required identity: "
-                f"main={MUSCRIPTOR_SOURCE_COMMIT}, "
-                f"quality_patch={MUSCRIPTOR_QUALITY_PATCH_COMMIT}."
+                "MuScriptor runtime is missing the released hard-mask/prelude API. "
+                f"Required source commit: {MUSCRIPTOR_SOURCE_COMMIT}."
             )
         if not callable(getattr(MT3Tokenizer, "forbidden_token_ids", None)):
             return (
                 "MuScriptor tokenizer is missing forbidden_token_ids; "
                 "decode-time instrument constraints cannot be guaranteed."
-            )
-        if not callable(getattr(MT3Tokenizer, "overlap_prompt_token_ids", None)):
-            return (
-                "MuScriptor tokenizer is missing overlap_prompt_token_ids; "
-                "best-quality overlapping-window transcription cannot run."
             )
         midi_parameters = inspect.signature(TranscriptionModel.events_to_midi_bytes).parameters
         beat_grid_parameters = inspect.signature(BeatGrid).parameters
@@ -266,13 +254,11 @@ class MuscriptorTranscriber:
             "kv_cache_reused_layers": 0,
             "batch_size": 1,
             "prelude_forcing": True,
-            "quality_mode": "overlap_restart",
-            "overlap_seconds": 2.5,
-            "allow_reset": True,
+            "quality_mode": "official_v0.3.0",
+            "window_seconds": 5.0,
             "strict_eos": True,
             "package_version": MUSCRIPTOR_PACKAGE_VERSION,
             "source_commit": MUSCRIPTOR_SOURCE_COMMIT,
-            "quality_patch_commit": MUSCRIPTOR_QUALITY_PATCH_COMMIT,
         }
         self._check_cancelled()
         return self._model
@@ -333,20 +319,7 @@ class MuscriptorTranscriber:
         # inference context also covers condition construction, event streaming,
         # and the per-chunk state tensors. This removes autograd view/version
         # bookkeeping without changing model precision or chunk ordering.
-        with warnings.catch_warnings(), torch.inference_mode():
-            # A quality-mode prompt overflow is a real loss of the requested
-            # overlap context. Upstream currently warns and continues; the
-            # product contract exposes that downgrade as a hard failure.
-            warnings.filterwarnings(
-                "error",
-                category=RuntimeWarning,
-                message=r"chunk .*: overlap prompt .*exceeds the generation budget.*",
-            )
-            warnings.filterwarnings(
-                "error",
-                category=RuntimeWarning,
-                message=r"chunk .*: tie prologue .*exceeds the generation budget.*",
-            )
+        with torch.inference_mode():
             events = model.transcribe(
                 source,
                 instruments=selected or None,
@@ -355,8 +328,6 @@ class MuscriptorTranscriber:
                 beam_size=1,
                 prelude_forcing=True,
                 no_eos_is_ok=False,
-                overlap=2.5,
-                allow_reset=True,
             )
             for event in events:
                 self._check_cancelled()

@@ -507,7 +507,9 @@ def _run_leap_vocals_leg(
         batch_data = []
         batch_locations = []
         processed_chunks = 0
-        with torch.inference_mode(), torch.cuda.amp.autocast(enabled=use_amp):
+        with torch.inference_mode(), torch.amp.autocast(
+            device_type="cuda", enabled=use_amp
+        ):
             for index, start in enumerate(starts):
                 cancel_check()
                 part = mix_tensor[:, start : start + chunk_size].to(device)

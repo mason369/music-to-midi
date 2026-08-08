@@ -1,10 +1,10 @@
 # MuScriptor 模型研究、分数与项目定位
 
-> 核验日期：2026-08-06。本文只记录可追溯到官方模型卡、论文、代码仓库、Mirelo 官方文章或公开挑战论文的结论。不同数据集和评测协议的分数不混排。
+> 核验日期：2026-08-08。本文只记录可追溯到官方模型卡、论文、代码仓库、Mirelo 官方文章或公开挑战论文的结论。不同数据集和评测协议的分数不混排。
 
 ## 1. 结论
 
-`MuScriptor/muscriptor-large` 是当前很有竞争力的**开放权重、完整混音、多乐器音频转 MIDI**模型。本项目把它作为 `SMART` 和分离后逐 WAV 转 MIDI 的高质量候选，而不是宣称它在所有 AMT 数据集、所有乐器和所有指标上都是绝对 SOTA。
+MuScriptor Large / Medium / Small 是当前很有竞争力的**开放权重、完整混音、多乐器音频转 MIDI**模型族。本项目把三档都作为 `SMART` 和分离后逐 WAV 转 MIDI 的独立显式选择；Large 是质量优先基准，但不宣称它在所有 AMT 数据集、所有乐器和所有指标上都是绝对 SOTA。
 
 这个判断基于三点：
 
@@ -23,10 +23,10 @@
 | 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.3.0`：2026-08-05 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | 官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`；叠加 PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的两个经 SHA-256 校验的质量补丁文件。完整 Beat This `final0` 网格驱动官方 onset 相位校正、真实 tempo/拍号/小节相位；卷帘显示拍线/强拍/小节，tempo 在归一化后复制到每个音符轨 |
+| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。完整 Beat This `final0` 网格驱动官方 onset 相位校正、真实 tempo/拍号/小节相位；卷帘显示拍线/强拍/小节，tempo 在归一化后复制到每个音符轨 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
 
-这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布，GitHub release 与当前权重 revision 在 7 月 10 日更新。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
+这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.3.0` 在 8 月 5 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
 
 ## 3. 架构、训练数据与输出能力
 
@@ -103,13 +103,13 @@
 - 与公开 Large 同协议的分数；
 - 可离线调用的代码/模型映射。
 
-所以它**不能被认定为** `MuScriptor/muscriptor-large` 的同一权重，也不能在本项目里通过重命名或切换 revision 获得。当前项目只集成可下载并可做哈希校验的公开 Large 权重。
+所以它**不能被认定为**任何公开 MuScriptor checkpoint 的同一权重，也不能在本项目里通过重命名或切换 revision 获得。当前项目只集成可下载并可做哈希校验的公开 Large / Medium / Small 固定权重。
 
-## 8. 前沿与未来候选
+## 8. 已接入模型档位与未来候选
 
 | 方向 | 当前证据 | 项目判断 |
 |---|---|---|
-| MuScriptor Small / Medium | 官方公开 103M / 307M 权重，与 Large 共用接口；官方代码把 Medium 作为速度/质量折中、Small 作为 CPU 实用选项 | 最接近可落地的后续候选。接入前应在同一批本地音频上测质量、速度、首段延迟和显存，不因体积小就静默替代 Large。 |
+| MuScriptor Small / Medium | 官方公开 103M / 307M 权重，与 Large 共用接口；官方代码把 Medium 作为速度/质量折中、Small 作为 CPU 实用选项 | 已作为独立显式选择接入并固定各自 revision；三档不互相静默替代，继续用同一批真实音频分别记录质量、速度、首段延迟和显存。 |
 | Mirelo Studio 改进版 | 官方只确认“更多数据、更准确”，没有公开权重或同协议分数 | 仅列观察项；在公开可下载、许可明确、可复现前不能集成。 |
 | MIROS / MusicFM 路线 | [2025 AMT Challenge 论文](https://arxiv.org/abs/2603.27528)给出 MIROS F1 0.5998、YourMT3-YPTF-MoE-M 0.5938、MT3 0.3932；测试集是 76 个受约束合成短片段 | 已作为独立后端集成，但挑战分数不能与 MuScriptor `D_Test` 或 Slakh 分数横比。 |
 | 更强乐器检测与抗泄漏 | 挑战论文指出密集复音、相似音色、乐器 hallucination/leakage 仍是主要失败模式，并计划扩大 jazz/pop、稀有乐器与乐器检测评测 | 新模型优先看 instrument-aware F1、泄漏率和三乐器以上退化，而不只看单一 note F1。 |

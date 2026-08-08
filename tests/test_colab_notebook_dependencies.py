@@ -134,8 +134,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('"onnxruntime-gpu==1.23.2"', source_text)
         self.assertIn('"audio-separator==0.44.1"', source_text)
         self.assertIn('"gradio==4.44.1"', source_text)
-        self.assertIn('"fastapi==0.115.2"', source_text)
-        self.assertIn('"starlette==0.40.0"', source_text)
+        self.assertIn('"fastapi==0.136.3"', source_text)
+        self.assertIn('"starlette==1.5.0"', source_text)
         self.assertIn('" --no-deps"', source_text)
         self.assertNotIn('"audio-separator>=0.38.0"', source_text)
         self.assertNotIn('"gradio>=4.44.0"', source_text)
@@ -149,7 +149,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             '"pretty-midi>=0.2.10"',
             '"soxr>=0.3.7"',
             '"mido"',
-            '"soundfile"',
+            '"soundfile>=0.14.0,<1"',
             '"h5py>=3.10,<4"',
             '"mirdata>=0.3.8,<1"',
         ):

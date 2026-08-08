@@ -998,14 +998,12 @@ def ensure_miros_weights():
 
 
 def ensure_muscriptor_runtime():
-    """Install current main plus the fixed, verified best-quality overlay."""
+    """Install and strictly verify the released MuScriptor v0.3.0 source."""
     from src.core.muscriptor_transcriber import (
         MUSCRIPTOR_SOURCE_COMMIT,
         MUSCRIPTOR_SOURCE_REQUIREMENT,
         MuscriptorTranscriber,
     )
-    from src.utils.muscriptor_source_patch import apply_muscriptor_quality_patch
-
     unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
     if not unavailable:
         return
@@ -1036,8 +1034,6 @@ def ensure_muscriptor_runtime():
             "Pinned MuScriptor runtime installation failed "
             f"for commit {MUSCRIPTOR_SOURCE_COMMIT} (exit={completed.returncode})"
         )
-    importlib.invalidate_caches()
-    apply_muscriptor_quality_patch(printer=logger.info)
     importlib.invalidate_caches()
     unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
     if unavailable:
@@ -1544,11 +1540,9 @@ ZERO_GPU_MULTI_BACKEND_RUNTIME_FACTORS = {
     MultiInstrumentModel.MUSCRIPTOR.value: 3.0,
 }
 ZERO_GPU_MUSCRIPTOR_MODEL_RUNTIME_FACTORS = {
-    # Fixed best-quality overlap plus restart performs roughly four times the
-    # default-window generation work in the worst case.
-    MuscriptorModel.LARGE.value: 12.0,
-    MuscriptorModel.MEDIUM.value: 4.8,
-    MuscriptorModel.SMALL.value: 2.8,
+    MuscriptorModel.LARGE.value: 3.0,
+    MuscriptorModel.MEDIUM.value: 1.2,
+    MuscriptorModel.SMALL.value: 0.7,
 }
 ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS = {
     YourMT3Model.YMT3_PLUS.value: 1.0,

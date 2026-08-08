@@ -193,6 +193,7 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
         "ZERO_GPU_MULTI_BACKEND_RUNTIME_FACTORS": {
             "yourmt3": 1.0,
             "miros": 2.5,
+            "muscriptor": 3.0,
         },
         "ZERO_GPU_YOURMT3_MODEL_RUNTIME_FACTORS": {
             "yptf_moe_multi_nops": 1.25,
@@ -226,6 +227,24 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
         assert yourmt3_estimate == 190
         assert miros_estimate == 200
         assert miros_estimate > yourmt3_estimate
+
+        for model, accepted_duration, rejected_duration in (
+            ("large", 0.833, 0.834),
+            ("medium", 2.083, 2.084),
+            ("small", 3.571, 3.572),
+        ):
+            fake_librosa.get_duration = lambda *, path, value=accepted_duration: value
+            assert (
+                namespace["_estimate_zerogpu_duration"](
+                    "clip.mp3", "smart", "muscriptor", "unused", model
+                )
+                == 200
+            )
+            fake_librosa.get_duration = lambda *, path, value=rejected_duration: value
+            with pytest.raises(RuntimeError, match="zerogpu_clip_too_long"):
+                namespace["_estimate_zerogpu_duration"](
+                    "clip.mp3", "smart", "muscriptor", "unused", model
+                )
 
         with pytest.raises(RuntimeError, match="Unsupported YourMT3 checkpoint"):
             namespace["_estimate_zerogpu_duration"]("clip.mp3", "smart", "yourmt3", "unknown")

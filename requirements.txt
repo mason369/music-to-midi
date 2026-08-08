@@ -51,7 +51,7 @@ python-rtmidi>=1.5.0,<2
 
 # 音频分析（节拍/BPM 检测）
 librosa>=0.10.0,<1
-soundfile>=0.12.0,<1
+soundfile>=0.14.0,<1
 
 # GUI
 PyQt6>=6.6.0,<7
@@ -69,7 +69,15 @@ pyyaml>=6.0.0,<7
 psutil>=5.9.0,<8
 
 # MuScriptor 的固定公共提交由 install.ps1 / install.sh 以 --no-deps
-# 单独安装，避免其 Web 服务依赖改写本项目固定的 Torch/FastAPI 运行时。
+# 单独安装，避免其依赖解析器改写固定的 Torch 运行时；这里显式满足
+# v0.3.0 的其余官方运行依赖，版本不得低于上游元数据要求。
+fastapi==0.136.3
+starlette==1.5.0
+httpx>=0.28.1,<1
+python-multipart>=0.0.29,<1
+uvicorn[standard]>=0.48.0,<1
+typer>=0.12,<1
+packaging>=20,<27
 # MuScriptor v0.3.0 的源码元数据要求 beat-this；项目固定安装其代码依赖以保持
 # 产品直接使用这一个检测器；final0.ckpt 由独立下载器准备并按固定身份校验。
 # 唯一节拍/下拍检测运行时；final0.ckpt 由 download_beat_this_model.py 精确校验。

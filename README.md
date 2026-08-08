@@ -73,14 +73,14 @@
 | `install.ps1` / `install.sh` | 安装 PyTorch 2.7、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | 完整七模式要求 NVIDIA 驱动兼容 CUDA 12.8，并使用精确 `cu128` wheel；`audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
 | `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 28 项第三方组件必须全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`，否则构建立即停止；目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
-| `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台同步提供 YourMT3+、MIROS、MuScriptor Large；逐轨菜单另含四条钢琴路线。 |
+| `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台同步提供 YourMT3+、MIROS、MuScriptor Large / Medium / Small；逐轨菜单共含 13 条路线。 |
 
 ## 处理模式
 
 | 模式 | 内部流程 | 主要输出 | 说明 |
 |------|----------|----------|------|
-| `SMART` | 音频 -> 所选 YourMT3+ / MIROS / MuScriptor Large -> MIDI | `<歌曲名>.mid` | 不做音源分离；MuScriptor 非空乐器选择会成为真实解码约束。 |
-| `VOCAL_SPLIT` | 音频 -> Leap XE 90-band vocals + PolarFormer accompaniment -> 两条 WAV -> 逐轨显式转 MIDI | `<歌曲名>_vocals.wav`、`<歌曲名>_accompaniment.wav`；按需生成逐轨 MIDI | 分离阶段不自动转 MIDI；每条 WAV 可独立选择五个 YourMT3+ checkpoint、MIROS、MuScriptor Large 或四个钢琴后端。 |
+| `SMART` | 音频 -> 所选 YourMT3+ / MIROS / MuScriptor Large、Medium 或 Small -> MIDI | `<歌曲名>.mid` | 不做音源分离；MuScriptor 非空乐器选择会成为真实解码约束。 |
+| `VOCAL_SPLIT` | 音频 -> Leap XE 90-band vocals + PolarFormer accompaniment -> 两条 WAV -> 逐轨显式转 MIDI | `<歌曲名>_vocals.wav`、`<歌曲名>_accompaniment.wav`；按需生成逐轨 MIDI | 分离阶段不自动转 MIDI；每条 WAV 可独立选择五个 YourMT3+ checkpoint、MIROS、三档 MuScriptor 或四个钢琴后端，共 13 条路线。 |
 | `SIX_STEM_SPLIT` | 音频 -> `BS-Rofo-SW-Fixed.ckpt` -> 六条 WAV -> 逐轨显式转 MIDI | `<歌曲名>_<stem>.wav`；按需生成逐轨 MIDI | 不对原混音伪造 stem MIDI，也不自动合并；每条真实 WAV 的转写路线和是否转换均由用户明确选择。 |
 | `PIANO_TRANSKUN` | 音频 -> TransKun 默认 V2 模型 -> MIDI | `<歌曲名>_piano_transkun.mid` | 适合纯钢琴音频；使用 PyPI 包随附 checkpoint。 |
 | `PIANO_TRANSKUN_V2_AUG` | 音频 -> 官方 TransKun V2 Aug checkpoint -> MIDI | `<歌曲名>_piano_transkun_v2_aug.mid` | 独立模式，不会在默认 TransKun 失败时静默替代；需要先下载并校验 V2 Aug 资源。 |
@@ -158,9 +158,8 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
-项目固定使用上游 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，
-并以 SHA-256 校验后叠加 PR #58 固定 head
-`edaebd3126336bd7eb4467dcf675d77f4e7772f0` 的重叠窗口与 gzip 异常重启实现。全项目唯一的
+项目严格固定上游官方 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，
+并对七个运行时源码文件执行 SHA-256 身份校验，不叠加未合并分支。全项目唯一的
 Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍直接传给 v0.3.0 BeatGrid：官方 onset
 相位估计在满足样本数与集中度阈值时校正系统性起音偏移，不满足阈值时明确记录 0 校正；项目不再启动第二套节拍检测，也不接受占位
 120 BPM。写出的 MIDI 包含真实 tempo、拍号、小节相位和可验证的前置偏移标记；tempo 归一化后还会严格复制到每个含音符轨，
@@ -178,7 +177,7 @@ python download_muscriptor_model.py --size medium
 python download_muscriptor_model.py --size small
 ```
 
-三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；三档均固定启用 `2.5s` 重叠窗口、prelude forcing、双次生成与 gzip 异常重启，不提供低质量静默降级。桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
+三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；三档均严格使用官方 5 秒窗口、prelude forcing 和单次生成路径，不提供自动降档。桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
 
 Windows 结果工作台还需要固定 FluidSynth 2.5.6；安装脚本会准备，也可单独运行：
 
@@ -413,7 +412,7 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / Byte
 
 ### 当前人声分离模型：Leap XE vocals + PolarFormer accompaniment
 
-`VOCAL_SPLIT` 的模型与输入输出契约对齐当前公开 TelkNet 工具：BS-RoFormer Leap XE 90-band 对原混音生成 vocals，BS PolarFormer public ONNX 也对原混音独立生成 accompaniment。两路规范 WAV 进入音轨工作台后，可分别选择五个 YourMT3+ checkpoint、MIROS、MuScriptor Large 或四个钢琴后端。
+`VOCAL_SPLIT` 的模型与输入输出契约对齐当前公开 TelkNet 工具：BS-RoFormer Leap XE 90-band 对原混音生成 vocals，BS PolarFormer public ONNX 也对原混音独立生成 accompaniment。两路规范 WAV 进入音轨工作台后，可分别选择五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small 或四个钢琴后端，共 13 条路线。
 
 对齐边界：本轮经授权核验了私有 `mason369/telknet` 的 `dev` 提交 `52be6fec179be492f5229ba149545ac2833b284a`。当前工程只对齐其 YourMT3/MIROS“官方 writer 后只补 tempo、不做通用音符清理”的核心语义；本项目的两个分离主流程同样只交付 WAV，MIDI 由用户在逐轨工作台显式触发。没有证据证明该 `dev` 已部署线上，也不声称模式路由逐行一致、推理环境相同或输出文件位级一致。
 
@@ -458,22 +457,22 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / Byte
 
 | 流程 | 当前仓库状态 | 上游模型/实现 | 可核验公开数据 | 与当前 `SMART` / `VOCAL_SPLIT` 的关系 |
 |------|--------------|---------------|----------------|---------------------------------------|
-| 六声部分离 + 逐轨显式转写 | `six_stem_split` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | `BS-Rofo-SW-Fixed.ckpt`（vocals, bass, drums, guitar, piano, other）+ 每条 WAV 独立选择 11 条转写路线 | MVSEP Algorithms #77 给出 6-stem SDR：vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71 | 这些是音源分离 SDR，不是最终 MIDI 转写 F1；逐轨 AMT 的端到端质量没有公开统一 benchmark。 |
+| 六声部分离 + 逐轨显式转写 | `six_stem_split` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | `BS-Rofo-SW-Fixed.ckpt`（vocals, bass, drums, guitar, piano, other）+ 每条 WAV 独立选择 13 条转写路线 | MVSEP Algorithms #77 给出 6-stem SDR：vocals 11.30 / instrum 17.50 / bass 14.62 / drums 14.11 / guitar 9.05 / piano 7.83 / other 8.71 | 这些是音源分离 SDR，不是最终 MIDI 转写 F1；逐轨 AMT 的端到端质量没有公开统一 benchmark。 |
 | 钢琴专用转写（TransKun 默认 V2） | `piano_transkun` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | `transkun==2.0.1`，使用该 wheel 随附并严格校验的资源 | 官方 model cards：TransKun V2 在 MAESTRO V3 上 Note Onset / Onset+Offset / Onset+Offset+Velocity F1 为 0.9832 / 0.9349 / 0.9296；pip 随包 No Ext checkpoint 为 0.9833 / 0.8149 / 0.8109 | 这是钢琴专精协议，适合纯钢琴；不能与 YourMT3+ 的 Slakh2100 多乐器 F1 直接横比。 |
 | 钢琴专用转写（TransKun V2 Aug） | `piano_transkun_v2_aug` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | 官方 `checkpointTransformerAug.zip`，固定校验后加载 `checkpointMSimplerAug/checkpoint.pt` + `model.conf` | `Aug` 表示数据增强 checkpoint；README 不把其他 V2 checkpoint 的指标直接移植给它 | 与默认 V2 并列，供同一音频显式 A/B，不是失败回退。 |
 | 钢琴专用转写（Aria-AMT） | `piano_aria_amt` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | EleutherAI `aria-amt`，公开 preliminary piano v1 checkpoint `piano-medium-double-1.0.safetensors` | 官方 README 提供安装、checkpoint 下载和 CLI 用法；未给出与 TransKun 同口径的 MAESTRO/MAPS benchmark。本地打包资源中的 checkpoint 约 425.9 MiB。 | 已集成为钢琴转写 A/B 选项，但 README 不写入不存在的统一分数；比较时应使用同一批本地音频。 |
 | 钢琴专用转写（ByteDance Pedal） | `piano_bytedance_pedal` 已在 pipeline、桌面 UI、Space 和 Colab 中开放 | `piano-transcription-inference`，checkpoint `note_F1=0.9677_pedal_F1=0.9186.pth` | 论文报告 MAESTRO onset F1 96.72% 与 pedal onset F1 91.86%；本项目保留上游 MIDI 中的 sustain pedal CC64。 | 上游 ByteDance 主仓库已归档，推理包兼容性需在目标环境验证；不作为 TransKun / Aria-AMT 的静默替代。 |
 
-### 未来可关注的转写模型
+### 已接入与未来可关注的转写模型
 
-下列对比按 2026-07-19 的公开资料更新。`MuScriptor D_Test Multi F1`、`Slakh2100 Multi (Onset-Offset) F1`、`MAESTRO onset F1`、官方挑战名次、以及主观听感/下游任务增益并不是同一协议，不能当成同一张排行榜直接横比。
+下列对比按 2026-08-08 的公开资料更新。`MuScriptor D_Test Multi F1`、`Slakh2100 Multi (Onset-Offset) F1`、`MAESTRO onset F1`、官方挑战名次、以及主观听感/下游任务增益并不是同一协议，不能当成同一张排行榜直接横比。
 
 #### 多乐器模型（公开可核实）
 
 | 模型 | 公开来源 | Benchmark / 协议 | 公开结果 | 状态 | 说明 |
 |------|----------|------------------|----------|------|------|
 | [MuScriptor Large](https://huggingface.co/MuScriptor/muscriptor-large) | [论文](https://arxiv.org/abs/2607.08168) / [代码](https://github.com/muscriptor/muscriptor) | 作者 `D_Test`，372 首真实多乐器曲目；完整训练，CFG=2 | Onset / Frame / Offset / Drums / Multi F1 = **60.4 / 72.4 / 48.6 / 49.6 / 47.8**；同表 YourMT3+ Multi F1 = 21.9 | 已集成 | 作者数据上提升很大；8 个公共跨域集的 Multi F1 赢 6、输 2，因此不写成所有协议的绝对 SOTA |
-| MuScriptor Small / Medium | [官方代码与三档权重](https://github.com/muscriptor/muscriptor#models) | 论文 `D_Real` only、CFG=2 规模消融 | Small Multi F1 38.2；Medium 39.7；Large 40.5 | 未来候选 | 103M / 307M 权重已公开，适合评估低显存与 CPU；必须先做本地同音频 A/B，不会静默替代 Large |
+| MuScriptor Small / Medium | [官方代码与三档权重](https://github.com/muscriptor/muscriptor#models) | 论文 `D_Real` only、CFG=2 规模消融 | Small Multi F1 38.2；Medium 39.7；Large 40.5 | 已集成 | 103M / 307M 固定权重已作为独立显式选择接入；三档不会互相静默替代，质量、速度和显存需按同一真实音频分别验收 |
 | YPTF.MoE+Multi (noPS)（当前默认） | [官方 Space app.py](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/app.py) / [Space noPS 结果文件](https://huggingface.co/spaces/mimbres/YourMT3/blob/main/amt/logs/2024/mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops/result_mc13_full_plus_256_default_all_eval_final.json) | Slakh `multi_f` | **0.7398 / 73.98%** | 使用中 | 当前项目默认 YourMT3+ checkpoint；对齐官方 Hugging Face Space 默认项 |
 | YPTF.MoE+Multi（论文表最终模型） | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) | Slakh2100 `Multi (Onset-Offset) F1` | **74.84**；同表 `MT3 = 62.0` | 论文公开结果 | 这是论文表中的最终模型口径，不把它写成当前 noPS 默认 checkpoint 的单独成绩 |
 | [MT3](https://github.com/magenta/mt3) | [YourMT3+ 论文](https://arxiv.org/abs/2407.04822) / [Magenta 仓库](https://github.com/magenta/mt3) | Slakh2100 `Multi (Onset-Offset) F1` | **62.0** | 开源基线 | YourMT3+ 继承并扩展的 token-based 多乐器基线 |
@@ -517,11 +516,11 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，不能与上表的钢琴�
 - [Basic Pitch](https://github.com/spotify/basic-pitch) 依然是很有价值的轻量方案，但它不发布与上表同口径的 Slakh/MAESTRO 综合榜单。
 - [Omnizart](https://github.com/Music-and-Culture-Technology-Lab/omnizart) 仍是有参考价值的多任务工具链，但其 GitHub latest release 仍为 `0.5.0`（2021-12-09），与当前多乐器/钢琴专精 SOTA 的公开比较协议并不一致。
 
-趋势总结：截至 2026-07-19，多乐器 AMT 已形成三条清晰路线：`MT3 / YourMT3+ / MR-MT3` 的 token-based 架构演进、MIROS 的 MusicFM 预训练编码器路线，以及 MuScriptor 依靠大规模真实数据与 RL 后训练的 decoder-only 路线。下一阶段最重要的不是再堆一个不可比的单分数，而是改善密集复音、相似音色乐器泄漏、稀有乐器和真实 jazz/pop 泛化，并同时公布可复现权重、许可、速度与显存数据。钢琴 AMT 的公开成熟度仍然更高，但 `TransKun pip 权重`、`V2 Aug checkpoint`、`论文 checkpoint`、`pedal-aware 论文系统` 之间的协议差异必须写清楚，不能简单合并成一个“钢琴榜单”。
+趋势总结：截至 2026-08-08，多乐器 AMT 已形成三条清晰路线：`MT3 / YourMT3+ / MR-MT3` 的 token-based 架构演进、MIROS 的 MusicFM 预训练编码器路线，以及 MuScriptor 依靠大规模真实数据与 RL 后训练的 decoder-only 路线。下一阶段最重要的不是再堆一个不可比的单分数，而是改善密集复音、相似音色乐器泄漏、稀有乐器和真实 jazz/pop 泛化，并同时公布可复现权重、许可、速度与显存数据。钢琴 AMT 的公开成熟度仍然更高，但 `TransKun pip 权重`、`V2 Aug checkpoint`、`论文 checkpoint`、`pedal-aware 论文系统` 之间的协议差异必须写清楚，不能简单合并成一个“钢琴榜单”。
 
 ## 默认处理策略
 
-桌面版、Space 和 Colab 不再提供可调质量入口。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；MIROS 保留官方 CLI writer 输出；MuScriptor 使用官方分段生成、事件流与 MIDI writer。项目不追加重叠分段去重、稀疏音色过滤或本地 MIDI 重新生成。
+桌面版、Space 和 Colab 不再提供可调质量入口。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；MIROS 保留官方 CLI writer 输出；MuScriptor 严格使用官方 v0.3.0 的 5 秒窗口、prelude forcing、单次生成、事件流和 MIDI writer。三条后端都不做项目级音符量化、过滤或 NoteEvent 重建。
 
 ## 失败处理原则
 
@@ -657,10 +656,10 @@ pip install -r requirements.txt
 python -m pip install --no-deps "audio-separator==0.44.1"
 python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip"
 python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
-python patch_muscriptor_runtime.py
+python -c "from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason=MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or 'MuScriptor v0.3.0 identity/API verified'); raise SystemExit(bool(reason))"
 ```
 
-`requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 或 MuScriptor 的服务端依赖覆盖当前 Torch/FastAPI 运行时。上述三项因此必须按固定版本以 `--no-deps` 单独安装；需要完整伴随依赖时优先运行 `install.ps1` / `install.sh`。
+`requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 的旧 torchaudio 约束覆盖 CUDA 12.8 运行时，因此这两项必须按固定版本以 `--no-deps` 单独安装。MuScriptor 仍以 `--no-deps` 固定源码身份，但其 v0.3.0 非 Torch 依赖（包括 FastAPI 0.136.3、Starlette 1.5.0 与 SoundFile 0.14.0）已在项目依赖中显式满足；需要完整伴随依赖时优先运行 `install.ps1` / `install.sh`。
 
 ### 4. 准备 YourMT3+ 源码与模型
 

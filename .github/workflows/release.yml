@@ -254,7 +254,6 @@ jobs:
           pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url ${{ matrix.pytorch_url }}
           pip install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps
           pip install "muscriptor @ https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip" --no-deps
-          python patch_muscriptor_runtime.py
           pip install Pillow==12.0.0 pytorch-lightning==2.6.1 torchmetrics==1.8.2 onnxruntime-gpu==1.23.2
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
@@ -978,8 +977,8 @@ jobs:
           ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/docs/MuScriptor_vs_YourMT3.png)
           *保留上一版更新日志中的 MuScriptor Large 与 YourMT3+ 公开评测对比图*
 
-          - 固定源码升级到上游 \`v0.3.0\` commit \`d73147e75e5b9b0c0a79ebe154587db4fd603e0c\`，并以 SHA-256 身份校验叠加 PR #58 head \`edaebd3126336bd7eb4467dcf675d77f4e7772f0\` 的重叠窗口与异常重启实现；项目唯一的 Beat This 网格驱动官方 onset 相位校正、卷帘拍线/强拍/小节底色与 MuseScore 音符轨 tempo，不运行第二套检测。
-          - 三档模型均固定使用 \`2.5s\` 重叠窗口、prelude forcing、双次生成与 gzip 异常重启；这是 v1.4 明确选择的最高质量路径，不提供低质量静默降级，也不会更换或量化 Small/Medium/Large 权重。与旧的不重叠路径相比，它会增加推理时间，发布说明不隐瞒这项质量成本。
+          - 固定源码升级到未修改的上游官方 \`v0.3.0\` commit \`d73147e75e5b9b0c0a79ebe154587db4fd603e0c\`，并对七个运行时源码文件执行 SHA-256 身份校验；项目唯一的 Beat This 网格驱动官方 onset 相位校正、卷帘拍线/强拍/小节底色与 MuseScore 音符轨 tempo，不运行第二套检测。
+          - 三档模型均严格使用官方 5 秒窗口、prelude forcing 与单次生成路径，不叠加未合并分支，不提供静默降档，也不会更换或量化 Small/Medium/Large 权重。
           - 完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换，均支持 MuScriptor Small / Medium / Large；便携包同时内置并严格校验三套官方权重与配置。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI。Small/Medium 为显存或速度受限设备提供更实用的选择，Large 保留最高容量。

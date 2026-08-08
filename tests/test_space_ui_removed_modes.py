@@ -98,8 +98,8 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     assert "aria-amt" not in requirements_text
     assert "audio-separator==0.44.1" in requirements_text
     assert "gradio==4.44.1" in requirements_text
-    assert "fastapi==0.115.2" in requirements_text
-    assert "starlette==0.40.0" in requirements_text
+    assert "fastapi==0.136.3" in requirements_text
+    assert "starlette==1.5.0" in requirements_text
     assert "piano-transcription-inference==0.0.6" in requirements_text
     assert "transkun==2.0.1" in requirements_text
     assert "matplotlib" in requirements_text
@@ -346,6 +346,10 @@ def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
     assert "必须逐项接受条款" in readme
     assert "`SMART` + MuScriptor Large" in readme
     assert "约 0.833 秒" in readme
+    assert "`SMART` + MuScriptor Medium" in readme
+    assert "约 2.083 秒" in readme
+    assert "`SMART` + MuScriptor Small" in readme
+    assert "约 3.571 秒" in readme
     assert "开始分离" in readme
     assert "不会自动生成 vocal、accompaniment 或 merged MIDI" in readme
     assert "不会自动生成六个 stem MIDI 或 merged MIDI" in readme

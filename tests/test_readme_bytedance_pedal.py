@@ -71,7 +71,8 @@ def test_readme_documents_official_yourmt3_mode_and_delivery_sync_status():
         "YPTF.MoE+Multi (PS) | 8 专家 | 有 | 可选 pitch-shift MoE checkpoint",
         "### 当前人声分离模型：Leap XE vocals + PolarFormer accompaniment",
         "`BS-Rofo-SW-Fixed.ckpt` -> 六条 WAV",
-        "每条 WAV 独立选择 11 条转写路线",
+        "每条 WAV 独立选择 13 条转写路线",
+        "MuScriptor Large / Medium / Small",
         "`PIANO_TRANSKUN_V2_AUG`",
     ):
         assert expected in readme
@@ -116,7 +117,8 @@ def test_readmes_match_current_processing_routes_and_packaged_paths():
         "BS-Rofo-SW-Fixed.ckpt",
         "Leap XE 90-band",
         "PolarFormer accompaniment",
-        "每条 WAV 独立选择 11 条转写路线",
+        "每条 WAV 独立选择 13 条转写路线",
+        "MuScriptor Large / Medium / Small",
         "PIANO_TRANSKUN_V2_AUG",
         "download_transkun_v2_aug_model.py",
         "models/bytedance_piano",

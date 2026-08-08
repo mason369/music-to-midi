@@ -337,7 +337,14 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("pretty-midi>=0.2.10,<1", requirements)
         self.assertIn("soxr>=0.3.7,<1", requirements)
         self.assertIn("mido>=1.3.0,<2", requirements)
-        self.assertIn("soundfile>=0.12.0,<1", requirements)
+        self.assertIn("soundfile>=0.14.0,<1", requirements)
+        self.assertIn("fastapi==0.136.3", requirements)
+        self.assertIn("starlette==1.5.0", requirements)
+        self.assertIn("httpx>=0.28.1,<1", requirements)
+        self.assertIn("python-multipart>=0.0.29,<1", requirements)
+        self.assertIn("uvicorn[standard]>=0.48.0,<1", requirements)
+        self.assertIn("typer>=0.12,<1", requirements)
+        self.assertIn("packaging>=20,<27", requirements)
         self.assertIn("chardet>=5,<6", requirements)
         self.assertIn('onnxruntime-gpu==1.23.2; platform_system != "Darwin"', requirements)
         self.assertIn('onnxruntime==1.23.2; platform_system == "Darwin"', requirements)
@@ -382,6 +389,16 @@ class OneClickScriptContractTests(unittest.TestCase):
             self.assertIn("transkun==2.0.1", script)
             self.assertIn("--force-reinstall", script)
             self.assertIn("validate_patched_yourmt3_source", script)
+
+    def test_linux_installer_validates_official_muscriptor_after_installation(self):
+        script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        install_command = '"$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall'
+        identity_check = "reason = MuscriptorTranscriber._runtime_unavailable_reason()"
+        for command in (install_command, identity_check):
+            self.assertIn(command, script)
+        self.assertLess(script.index(install_command), script.index(identity_check))
+        self.assertNotIn("patch_muscriptor_runtime.py", script)
 
     def test_linux_installer_rejects_unsupported_rocm_full_stack_explicitly(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")

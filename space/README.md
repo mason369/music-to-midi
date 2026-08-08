@@ -50,6 +50,8 @@ tags:
 | `SMART` + 默认 `YPTF.MoE+Multi (noPS)` | 2.00 秒 |
 | `SMART` + MIROS | 1.00 秒 |
 | `SMART` + MuScriptor Large | ≤ 5/6 秒（约 0.833 秒） |
+| `SMART` + MuScriptor Medium | ≤ 25/12 秒（约 2.083 秒） |
+| `SMART` + MuScriptor Small | ≤ 25/7 秒（约 3.571 秒） |
 | `VOCAL_SPLIT`（仅分离） | ≤ 2/3 秒（约 0.666 秒） |
 | `SIX_STEM_SPLIT`（仅分离） | ≤ 5/18 秒（约 0.277 秒） |
 | 任一钢琴专用直接转写 | 2.50 秒 |
@@ -60,7 +62,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Spac
 
 | 功能 | 实际来源与固定版本 | 在本 Space 中的用途 | 许可/使用边界 |
 |---|---|---|---|
-| MuScriptor Large / Medium / Small | [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large)、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium)、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) 的固定 revision；推理源码 [`v0.3.0`](https://github.com/muscriptor/muscriptor/tree/d73147e75e5b9b0c0a79ebe154587db4fd603e0c) 加经 SHA-256 校验的 PR #58 head `edaebd3` 质量补丁 | `SMART` 和逐轨多乐器转写；三档显式选择，固定启用 2.5 秒重叠窗口与 gzip 异常重启；完整 Beat This 网格驱动官方 onset 校正、真实 tempo/小节相位，tempo 复制到每个音符轨，卷帘显示拍线/强拍/交替小节；空选自动识别，非空多选成为真实生成约束 | 三个权重仓库均 gated、CC BY-NC 4.0；部署者必须逐项接受条款并配置有权限的 `HF_TOKEN`。未授权、节拍信息缺失或质量运行时身份不符时明确失败，不改用其他模型或占位 120 BPM |
+| MuScriptor Large / Medium / Small | [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large)、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium)、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) 的固定 revision；推理源码严格固定为官方 [`v0.3.0`](https://github.com/muscriptor/muscriptor/tree/d73147e75e5b9b0c0a79ebe154587db4fd603e0c) | `SMART` 和逐轨多乐器转写；三档显式选择，使用官方 5 秒窗口与 prelude forcing；完整 Beat This 网格驱动官方 onset 校正、真实 tempo/小节相位，tempo 复制到每个音符轨，卷帘显示拍线/强拍/交替小节；空选自动识别，非空多选成为真实生成约束 | 三个权重仓库均 gated、CC BY-NC 4.0；部署者必须逐项接受条款并配置有权限的 `HF_TOKEN`。未授权、节拍信息缺失或官方运行时身份不符时明确失败，不改用其他模型或占位 120 BPM |
 | MuScriptor 播放资源 | [`MuScriptor/assets`](https://huggingface.co/MuScriptor/assets/tree/7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f)；FluidSynth `2.5.6` | 把 MIDI 及其乐器分轨合成为可试听预览 | 资源仓库声明 MIT；FluidSynth 为 LGPL-2.1-or-later。只用于真实合成，不用静音或假音频冒充 MIDI 预览 |
 | YourMT3+ 五个 checkpoint | [`mimbres/YourMT3`](https://huggingface.co/mimbres/YourMT3/tree/5e66c1ea173a8186e0d20432b841d3180cc015b5) @ `5e66c1ea173a8186e0d20432b841d3180cc015b5` | 默认多乐器路线及五个逐轨选择项 | 固定 Space revision 声明 Apache-2.0；本项目携带受控兼容补丁，不运行时切换可变上游源码 |
 | MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目仅保留完整归属与维护者责任记录，不声称额外许可 |
@@ -80,7 +82,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Spac
 - **人声/伴奏 WAV 分离**：Leap XE 90-band 与 PolarFormer 分别读取原混音，只输出 vocals、accompaniment 两条 WAV，不自动生成 MIDI。
 - **六声部 WAV 分离**：`BS-Rofo-SW-Fixed.ckpt` 输出 bass、drums、guitar、piano、vocals、other 六条 WAV，不自动生成 MIDI。
 - **真实波形音轨面板**：分离完成后，每条音轨用 `gr.Audio` 显示对应波形，可试听、下载，也可添加本地音频。新增音频会复制到当前请求专属目录。
-- **逐轨显式 MIDI**：每条音轨都有“转 MIDI”复选框、十三个明确路线的下拉框和独立“开始转换”按钮。十三路线为五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small，以及 TransKun V2、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 四个钢琴模型。一次点击只转换该音轨。
+- **逐轨显式 MIDI**：每条音轨都有“转 MIDI”复选框、十三个明确路线的下拉框和独立“开始转换”按钮。十三条路线为五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small，以及 TransKun V2、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 四个钢琴模型。一次点击只转换该音轨。
 - **工程 BPM 与播放对齐**：可使用自动 BPM，也可输入 4–400 BPM 手动工程 BPM；设置值是最终下载 MIDI 的权威 tempo。模型事件先按检测 BPM 映射到音乐 tick，再保持 tick 并写入工程 tempo；下载 MIDI 与结果页原音/MIDI 联动试听按“工程 BPM ÷ 检测 BPM”真实变速，不做量化、过滤或音符重建。源音频文件本身不会被改写。
 - **钢琴专用直接转写**：四个钢琴模式直接生成一个 MIDI，不显示分离音轨面板；ByteDance Pedal 保留延音踏板 CC64。
 - **严格任务隔离**：分离音频、添加音频和逐轨 MIDI 的所有可见路径都必须位于当前请求目录；过期、越界或空文件会明确失败。
@@ -94,7 +96,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Spac
 
 [官方模型卡](https://huggingface.co/MuScriptor/muscriptor-large)在作者自建的 372 首真实多乐器 `D_Test` 上报告 Onset / Frame / Offset / Drums / Multi F1 为 **60.4 / 72.4 / 48.6 / 49.6 / 47.8**；同表 YourMT3+ Multi F1 为 21.9。它是很强的公开完整混音候选，但这些分数不是 Space 本地实测，也不是跨所有数据集的统一 SOTA：论文的 8 个公共跨域集里 Multi F1 赢 6、输 2，模型还不输出 velocity，并受 CC BY-NC 4.0 非商用许可约束。
 
-Mirelo Studio 另有一个“使用更多数据训练”的私有增强版；截至 2026-07-19 没有公开权重、revision 或同协议分数，所以本 Space 使用的是可固定、可校验的公开 Large 权重，不把私有服务版本冒充成本地模型。完整分数与前沿观察见仓库的 [`docs/muscriptor-model.md`](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md)。
+Mirelo Studio 另有一个“使用更多数据训练”的私有增强版；截至 2026-08-08 没有公开权重、revision 或同协议分数，所以本 Space 只使用可固定、可校验的公开 Large / Medium / Small 权重，不把私有服务版本冒充成本地模型。完整分数与前沿观察见仓库的 [`docs/muscriptor-model.md`](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md)。
 
 MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所选模型失败、未授权或额度不足时静默切换到另一档。Small 与 Medium 的真实质量、速度、显存和首段延迟仍应在部署 GPU 上分别验收，不能只凭参数量推断实测性能。
 
@@ -103,7 +105,7 @@ MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所�
 - `SMART` 输出一个所选后端生成的 MIDI。
 - `VOCAL_SPLIT` 主按钮只输出两条经过校验的 WAV；不会自动生成 vocal、accompaniment 或 merged MIDI。
 - `SIX_STEM_SPLIT` 主按钮只输出六条经过校验的 WAV；不会自动生成六个 stem MIDI 或 merged MIDI。
-- 分离完成后，用户可以对任意一条分离或新增音轨选择十一路线之一，并点击该行“开始转换”生成一个独立 MIDI。未勾选、未选择模型或仅改变选项都不会转换。
+- 分离完成后，用户可以对任意一条分离或新增音轨选择十三条路线之一，并点击该行“开始转换”生成一个独立 MIDI。未勾选、未选择模型或仅改变选项都不会转换。
 - 四个钢琴模式各直接输出一个固定后端 MIDI，不创建音轨面板。
 
 ## 输出文件生命周期
@@ -125,7 +127,7 @@ MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所�
 - **Space 运行时**：Python 3.12.12、Torch 2.8.0、torchaudio 2.8.0、torchvision 0.23.0、NumPy `>=2,<2.5`
 - **ZeroGPU / Web**：`spaces==0.51.0`、Gradio 4.44.1
 - **分离运行时**：`audio-separator==0.44.1`、`onnxruntime-gpu==1.23.2`
-- **转写引擎**：YourMT3+、MIROS、MuScriptor Large、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal
+- **转写引擎**：YourMT3+、MIROS、MuScriptor Large / Medium / Small、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal
 - **分离模型**：Leap XE vocals、PolarFormer accompaniment、BS-RoFormer SW Fixed
 - **节拍检测**：Beat This `final0`（所有模式唯一检测器；固定 checkpoint 身份，无 librosa/第二检测器/120 BPM 回退）
 

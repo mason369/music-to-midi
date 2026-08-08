@@ -38,13 +38,13 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 
 ## Current Capabilities
 
-- **Full-mix transcription**: `SMART` mode sends the whole song to YourMT3+, MIROS, or MuScriptor Large and exports MIDI with notes, drums, and instrument tracks.
-- **Vocal/accompaniment separation and per-track transcription**: `VOCAL_SPLIT` uses BS-RoFormer Leap XE 90-band for vocals and BS PolarFormer for accompaniment, and first delivers two real WAV tracks. Each track can then select one of 11 explicit MIDI routes in the track workbench.
+- **Full-mix transcription**: `SMART` mode sends the whole song to YourMT3+, MIROS, or MuScriptor Large / Medium / Small and exports MIDI with notes, drums, and instrument tracks.
+- **Vocal/accompaniment separation and per-track transcription**: `VOCAL_SPLIT` uses BS-RoFormer Leap XE 90-band for vocals and BS PolarFormer for accompaniment, and first delivers two real WAV tracks. Each track can then select one of 13 explicit MIDI routes in the track workbench.
 - **Six-stem separation and per-track transcription**: `SIX_STEM_SPLIT` uses `BS-Rofo-SW-Fixed.ckpt` to deliver six real `bass / drums / guitar / piano / vocals / other` WAV tracks. Separation does not silently transcribe or merge MIDI.
 - **Dedicated piano transcription**: `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` target pure piano audio through TransKun default V2, the official V2 Aug checkpoint, Aria-AMT, or ByteDance's pedal-aware model.
-- **Default backend semantics**: the multi-instrument default remains the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint. `SMART` can explicitly select YourMT3+, MIROS, or MuScriptor Large, and every separated WAV can select the same three multi-instrument families independently.
+- **Default backend semantics**: the multi-instrument default remains the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint. `SMART` can explicitly select YourMT3+, MIROS, or one of the three MuScriptor tiers, and every separated WAV can select the same multi-instrument families independently.
 - **Real MuScriptor constraints**: an empty instrument list enables model detection. A non-empty list is passed to the official `instruments` plus `prelude_forcing` decoding path, masks every unselected instrument token during generation, and is validated again against streamed events and final MIDI.
-- **Explicit multi-instrument routes**: `SMART` and every separated WAV can select YourMT3+, MIROS, or MuScriptor Large. The per-track menu also exposes four piano-specialized routes, for 11 routes in total.
+- **Explicit multi-instrument routes**: `SMART` and every separated WAV can select five YourMT3+ checkpoints, MIROS, or MuScriptor Large / Medium / Small. The per-track menu also exposes four piano-specialized routes, for 13 routes in total.
 - **Official transcription output**: YourMT3+ and MIROS preserve their official writer results; MuScriptor uses its official events and MIDI writer plus strict selected-instrument validation. The project does not add quantization, de-duplication, short-note filtering, velocity smoothing, polyphony limiting, or local `NoteEvent` regeneration.
 - **Common audio formats**: `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted. Non-WAV input must be converted to 44.1 kHz PCM WAV through FFmpeg; FFmpeg failures stop processing and show the stderr root cause.
 - **Consistent mode set**: desktop, Space, and Colab expose the same seven processing modes.
@@ -53,7 +53,7 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 
 | Interface | Modes | Backend Selection | Best For |
 |-----------|-------|-------------------|----------|
-| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | `SMART` selects YourMT3+ / MIROS / MuScriptor; separated WAV tracks expose 11 routes; piano modes use their dedicated backend | Local GPU use, persistent output folders, and dedicated piano transcription |
+| PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | `SMART` selects YourMT3+ / MIROS / MuScriptor; separated WAV tracks expose 13 routes; piano modes use their dedicated backend | Local GPU use, persistent output folders, and dedicated piano transcription |
 | Gradio Space | Same seven modes as desktop | MuScriptor instrument search/multi-select, hard decoding constraint, and real MIDI workbench are synchronized | Browser-based use or hosted demos |
 | Google Colab | Same seven modes as desktop | Same MuScriptor constraint and linked WAV/MIDI result workbench as Space | Temporary Colab GPU sessions |
 
@@ -63,25 +63,25 @@ This repository keeps project workflows separate from official YourMT3+ checkpoi
 
 - `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` are this project's seven processing workflows.
 - `YMT3+`, `YPTF+Single (noPS)`, `YPTF+Multi (PS)`, `YPTF.MoE+Multi (noPS)`, and `YPTF.MoE+Multi (PS)` are the five checkpoint / architecture modes exposed by the official YourMT3 demo.
-- Desktop, Gradio Space, and Colab expose the same seven workflows. `SMART` selects YourMT3+, MIROS, or MuScriptor Large; both separation workflows first deliver WAV tracks, and each track then exposes 11 explicit MIDI routes.
+- Desktop, Gradio Space, and Colab expose the same seven workflows. `SMART` selects YourMT3+, MIROS, or MuScriptor Large / Medium / Small; both separation workflows first deliver WAV tracks, and each track then exposes 13 explicit MIDI routes.
 
 Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; and ByteDance, while strictly validating the default TransKun 2.0.1 package and bundled V2 resources | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
-| `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, and separator availability before launch | Missing or invalid required resources are reported explicitly. |
-| `install.ps1` / `install.sh` | Installs PyTorch 2.7, NumPy 1.26, audio-separator 0.44.1 runtime pins, and required models | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
+| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; and FluidSynth, while strictly validating the default TransKun 2.0.1 package and bundled V2 resources | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
+| `run.ps1` / `run.sh` | Checks all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources are reported explicitly. |
+| `install.ps1` / `install.sh` | Installs PyTorch 2.7, NumPy 1.26, audio-separator 0.44.1 runtime pins, the identity-verified official MuScriptor v0.3.0 runtime, and every required model/runtime asset | `audio-separator` is installed with `--no-deps` to avoid pulling NumPy 2 into the current PyTorch / desktop stack. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging-contract checks only | They produce no portable artifact and never use empty directories or fake models to bypass mandatory bundle validation. |
 | `.github/workflows/release.yml` | The target complete portable-build pipeline; it is designed to download and strictly verify every YourMT3+, separator, MIROS, TransKun, Aria-AMT, and ByteDance asset | A closed third-party-license gate currently stops the workflow before any build; no portable artifact is produced or published until every component is cleared. The target GPU runtime is PyTorch 2.7 + CUDA 12.8. |
-| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large; the per-track menu also includes four piano routes. |
+| `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large / Medium / Small; the per-track menu contains 13 routes in total. |
 
 ## Processing Modes
 
 | Mode | Internal Pipeline | Main Output | Notes |
 |------|-------------------|-------------|-------|
-| `SMART` | Audio -> selected YourMT3+ / MIROS / MuScriptor Large -> MIDI | `<song>.mid` | No source separation. A non-empty MuScriptor instrument selection is a real decoding constraint. |
-| `VOCAL_SPLIT` | Audio -> Leap XE vocals + PolarFormer accompaniment -> two WAV tracks -> explicit per-track MIDI | `<song>_vocals.wav`, `<song>_accompaniment.wav`; per-track MIDI on request | Separation does not auto-transcribe. Each WAV independently selects one of 11 routes. |
+| `SMART` | Audio -> selected YourMT3+ / MIROS / MuScriptor Large, Medium, or Small -> MIDI | `<song>.mid` | No source separation. A non-empty MuScriptor instrument selection is a real decoding constraint. |
+| `VOCAL_SPLIT` | Audio -> Leap XE vocals + PolarFormer accompaniment -> two WAV tracks -> explicit per-track MIDI | `<song>_vocals.wav`, `<song>_accompaniment.wav`; per-track MIDI on request | Separation does not auto-transcribe. Each WAV independently selects one of 13 routes. |
 | `SIX_STEM_SPLIT` | Audio -> `BS-Rofo-SW-Fixed.ckpt` -> six WAV tracks -> explicit per-track MIDI | `<song>_<stem>.wav`; per-track MIDI on request | Each real WAV independently selects its route and whether to convert; MIDI is not auto-merged. |
 | `PIANO_TRANSKUN` | Audio -> TransKun default V2 model -> MIDI | `<song>_piano_transkun.mid` | Best for pure piano audio; uses the checkpoint resources bundled with the PyPI package. |
 | `PIANO_TRANSKUN_V2_AUG` | Audio -> official TransKun V2 Aug checkpoint -> MIDI | `<song>_piano_transkun_v2_aug.mid` | Independent mode with a separately downloaded and verified checkpoint; it is not a fallback for default V2. |
@@ -131,7 +131,7 @@ The exact files depend on the selected mode and the per-track conversions the us
 
 ### YourMT3+
 
-YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, and FluidSynth, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
 
 The source tree must include:
 
@@ -157,16 +157,20 @@ runtime/models/yourmt3_all
 models/yourmt3_all
 ```
 
-### MuScriptor Large
+### MuScriptor Large / Medium / Small
 
-The project pins public `muscriptor` BeatGrid commit `e2bd0fc5994f9acba7c1387ca5df67eb8d95df44` (package `0.2.2`) and overlays the SHA-256-verified overlap/restart implementation from PR #58 head `edaebd3126336bd7eb4467dcf675d77f4e7772f0`. MuScriptor receives the same authoritative Beat This `final0` grid already computed for every other backend; BeatGrid never launches another detector and no placeholder 120 BPM is accepted. The resulting tempo, reliable meter, bar phase, and verified leading-offset marker stay synchronized with manual project-speed edits and the final source/MIDI preview without quantizing or filtering notes. It also pins gated [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`. The weight file is 5,465,642,136 bytes. It is licensed under CC BY-NC 4.0 with additional lawful-use terms, so the user must accept the Hugging Face conditions and authenticate before download:
+The project pins the unmodified upstream `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c` and validates seven runtime source files by SHA-256. The single project-wide Beat This `final0` analysis passes the complete grid, BPM, reliable meter, and first downbeat into the official v0.3.0 BeatGrid. Official onset-phase correction is applied only when its sample-count and concentration thresholds are met; otherwise a zero correction is recorded explicitly. No second beat detector or placeholder 120 BPM is accepted. Normalized tempo metadata is repeated on every note-bearing track for MuseScore compatibility, and desktop, Space, and Colab render the same beat, downbeat, and alternating-bar piano-roll grid.
+
+The three gated checkpoints are pinned independently: [`muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`, [`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium) revision `f32236969308476e01fd3aae67357de5feb05a2d`, and [`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) revision `8c127f603b807520fa465c838e9bfee8a91ada4e`. All use CC BY-NC 4.0 with additional lawful-use terms, so the user must accept each Hugging Face repository's conditions and authenticate before download:
 
 ```bash
 hf auth login
-python download_muscriptor_model.py
+python download_muscriptor_model.py --size large
+python download_muscriptor_model.py --size medium
+python download_muscriptor_model.py --size small
 ```
 
-Large is a decoder-only Transformer with roughly 1.3B parameters (the current code README rounds it to 1.4B), 48 layers, and hidden dimension 1536. It consumes 5-second 16 kHz mono chunks and emits MT3-style onset, offset, pitch, and 36-group instrument events. Training combines about 1.45 million MIDI files for synthetic pretraining, 170,000 real recordings / about 11,000 hours for fine-tuning, and 300 curated tracks for RL post-training.
+All three are explicit choices and never silently replace one another. Large prioritizes quality, Medium trades speed against quality, and Small has the fewest parameters and fastest runtime. Every tier uses the official 5-second window, prelude forcing, and single-generation path. Large is a decoder-only Transformer with roughly 1.3B parameters (the current code README rounds it to 1.4B), 48 layers, and hidden dimension 1536. It consumes 5-second 16 kHz mono chunks and emits MT3-style onset, offset, pitch, and 36-group instrument events. Training combines about 1.45 million MIDI files for synthetic pretraining, 170,000 real recordings / about 11,000 hours for fine-tuning, and 300 curated tracks for RL post-training.
 
 The official model card reports the following scores on the authors' 372-track real multi-instrument `D_Test` set, using the full training pipeline and CFG=2:
 
@@ -177,9 +181,9 @@ The official model card reports the following scores on the authors' 372-track r
 
 This is strong evidence that MuScriptor is a leading public full-mix candidate, but not proof of universal SOTA: `D_Test` is an author-held set without a public download path, and MuScriptor wins Multi F1 on six of the paper's eight public cross-domain datasets while losing on RWC-C and RWC-R. It also does not emit velocity, uses a fixed 36-group instrument taxonomy, and the weights are non-commercial.
 
-The release chronology is also explicit: the [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) records repository creation on 2026-06-30; the [paper](https://arxiv.org/abs/2607.08168) and [Mirelo article](https://mirelo.ai/blog/turning-audio-to-midi) were published on 2026-07-09; the GitHub release and current public weight revision followed on 2026-07-10. Repository timestamps are publishing metadata, not model-training dates.
+The release chronology is also explicit: the [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) records repository creation on 2026-06-30; the [paper](https://arxiv.org/abs/2607.08168) and [Mirelo article](https://mirelo.ai/blog/turning-audio-to-midi) were published on 2026-07-09; the current public weight revisions were updated on 2026-07-10; and official source `v0.3.0` was released on 2026-08-05. Repository timestamps are publishing metadata, not model-training dates.
 
-Mirelo separately says that Studio hosts a more accurate version trained on more data. No public checkpoint, revision, parameter count, or comparable score has been published for that service model, so it is not the same verifiable artifact as `muscriptor-large` and is not integrated here. Full ablations, all eight public-dataset comparisons, scale results, conditioning gains, and the frontier watchlist are documented in [the MuScriptor research note](muscriptor-model.md).
+Mirelo separately says that Studio hosts a more accurate version trained on more data. No public checkpoint, revision, parameter count, or comparable score has been published for that service model, so it is not the same verifiable artifact as any public MuScriptor checkpoint and is not integrated here. Full ablations, all eight public-dataset comparisons, scale results, conditioning gains, and the frontier watchlist are documented in [the MuScriptor research note](muscriptor-model.md).
 
 ### MIROS
 
@@ -214,7 +218,7 @@ The downloader checks out a pinned `amt-os/ai4m-miros` source commit and applies
 - [BS-RoFormer Leap XE](https://huggingface.co/pcunwa/BS-Roformer-Leap) uses `Xe/bs_leap_xe_voc.ckpt` with `Xe/leap_xe_config_voc.yaml` to produce vocals.
 - [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer) uses `bs_polarformer.onnx` with `model_bs_polarformer_float16.yaml` to produce accompaniment.
 
-The canonical separated outputs are `vocals` and `accompaniment`. Each enters the track workbench with 11 explicit routes: five YourMT3+ checkpoints, MIROS, MuScriptor Large, and four piano-specialized backends. The two separation calls are not substitutes for one another, and a failure in either route is surfaced instead of synthesizing a missing stem.
+The canonical separated outputs are `vocals` and `accompaniment`. Each enters the track workbench with 13 explicit routes: five YourMT3+ checkpoints, MIROS, MuScriptor Large / Medium / Small, and four piano-specialized backends. The two separation calls are not substitutes for one another, and a failure in either route is surfaced instead of synthesizing a missing stem.
 
 TelkNet boundary: with authorization, this audit inspected private `mason369/telknet` dev commit `52be6fec179be492f5229ba149545ac2833b284a`. This project only aligns its core YourMT3/MIROS rule—official writer output followed only by tempo metadata, with no generic note cleanup. Both separation workflows likewise deliver WAV first; MIDI is explicitly triggered in this project's per-track workbench. There is no evidence that this dev commit is the deployed production revision, and no line-for-line routing, environment, or bit-identical-output claim is made.
 
@@ -337,11 +341,11 @@ This section separates public benchmark claims from project integration status. 
 
 YourMT3+ / MuScriptor / MIROS are multi-instrument backends, TransKun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and Leap XE / PolarFormer / BS-RoFormer SW Fixed are source-separation backends. Their public metrics must not be collapsed into one leaderboard.
 
-#### MuScriptor and Frontier Watchlist (verified 2026-07-19)
+#### MuScriptor and Frontier Watchlist (verified 2026-08-08)
 
 | Model / Direction | Public Evidence | Status | Project Decision |
 |---|---|---|---|
-| MuScriptor Small / Medium | Official 103M / 307M weights; `D_Real`-only Multi F1 38.2 / 39.7, versus Large 40.5 in the same scale ablation | Public, not integrated | Closest deployable future candidates for lower VRAM or CPU. Require same-audio local quality, speed, latency, and memory tests before adding a selector. |
+| MuScriptor Small / Medium | Official 103M / 307M weights; `D_Real`-only Multi F1 38.2 / 39.7, versus Large 40.5 in the same scale ablation | Integrated | Pinned independent selectors for lower VRAM and faster inference. They do not silently replace Large; quality, speed, latency, and memory are validated on the same real audio. |
 | Mirelo Studio improved model | Mirelo says it uses more training data and is more accurate | Private service | Watch only. No public weights, revision, license mapping, or comparable score; it cannot be relabeled as `muscriptor-large`. |
 | MIROS / MusicFM | 2025 AMT Challenge winner at F1 0.5998 on its own 76-clip protocol | Integrated | Keep as a separate backend and protocol, not as a numeric MuScriptor replacement. |
 | Dense polyphony and instrument detection | The challenge paper reports MIROS F-measure dropping from 0.7193 for one instrument to 0.4367 for three and identifies leakage, similar timbres, and polyphonic confusion as persistent failures | Research priority | Prefer future models that publish instrument-aware F1, leakage, polyphony degradation, real jazz/pop coverage, weights, licensing, speed, and VRAM—not just one incompatible note score. |
@@ -385,7 +389,7 @@ YourMT3+ / MuScriptor / MIROS are multi-instrument backends and should not be di
 
 ## Default Processing Strategy
 
-The desktop, Space, and Colab interfaces no longer expose a user-adjustable quality preset. YourMT3+ uses official non-overlapping slices, fixed `bsz=8`, per-channel detokenization/merge, `mix_notes`, and its MIDI writer; MIROS preserves the official CLI writer result; MuScriptor uses its official segmented generation, events, and MIDI writer. The project does not add overlap de-duplication, sparse-program filtering, or local MIDI regeneration.
+The desktop, Space, and Colab interfaces no longer expose a user-adjustable quality preset. YourMT3+ uses official non-overlapping slices, fixed `bsz=8`, per-channel detokenization/merge, `mix_notes`, and its MIDI writer; MIROS preserves the official CLI writer result; MuScriptor strictly uses the official v0.3.0 5-second window, prelude forcing, single generation, events, and MIDI writer. None of the three backends receives project-level note quantization, filtering, or local `NoteEvent` regeneration.
 
 For `SIX_STEM_SPLIT`, `BS-Rofo-SW-Fixed.ckpt` produces six real WAV stems. Each stem keeps an independent route selector and explicit conversion action; no MIDI backend is invoked merely because separation completed.
 
@@ -403,7 +407,7 @@ Each platform has its own pinned compatibility envelope. Do not force one platfo
 
 | Platform | Python / Torch | NumPy and GPU runtime | Release boundary |
 |----------|----------------|-----------------------|------------------|
-| Windows / NVIDIA desktop and portable target | Python 3.11-3.12; Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4; CUDA 12.8 wheels | Source launchers enforce this contract; `release.yml` currently produces no artifact because third-party redistribution review is incomplete |
+| Windows / NVIDIA desktop and portable target | Python 3.11-3.12; Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4; CUDA 12.8 wheels | Source launchers enforce this contract; `release.yml` revalidates the closed third-party inventory, exact model identities, and finished portable smoke tests before publishing |
 | Linux / NVIDIA source | Python 3.11+; Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4; NVIDIA driver compatible with CUDA 12.8; `cu128` only | `install.sh` / `run.sh` verify the exact complete seven-mode runtime; `build.yml` performs source, test, and packaging-contract checks only |
 | Linux / AMD/ROCm | No complete seven-mode compatibility runtime | PolarFormer requires ONNX Runtime `CUDAExecutionProvider` | Currently unsupported; the installer stops explicitly instead of silently switching to CPU |
 | Hugging Face Space | Python 3.12.12; Torch 2.8.0 / torchaudio 2.8.0 / torchvision 0.23.0 | NumPy `>=2,<2.5`; ZeroGPU | Uses `space/requirements.txt`; do not apply the desktop NumPy 1.26 pin |
@@ -426,7 +430,7 @@ Paths containing non-ASCII characters, spaces, or parentheses can cause PyTorch 
 powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
-You can also double-click `run.bat`. `run.ps1` checks the virtual environment, all five YourMT3+ modes, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, and MIROS, then calls `install.ps1` if something is missing or invalid.
+You can also double-click `run.bat`. `run.ps1` checks the virtual environment, all five YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, and FluidSynth, then calls `install.ps1` if something is missing or invalid.
 
 ### Linux / WSL2
 
@@ -475,7 +479,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 AMD/ROCm cannot currently run the complete seven-mode surface: even though PyTorch publishes ROCm wheels, PolarFormer requires ONNX Runtime `CUDAExecutionProvider`. The installer stops explicitly instead of silently switching to CPU. The complete seven-mode path is currently validated only on NVIDIA CUDA.
 
-`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 26 third-party components: 22 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
+`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 28 third-party components: 24 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 
@@ -493,7 +497,7 @@ python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com
 python download_sota_models.py
 ```
 
-The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; do not overwrite it with mutable upstream `master`. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, and ByteDance, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
+The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; do not overwrite it with mutable upstream `master`. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, and FluidSynth, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
 
 ### 5. Prepare Separation and Piano Models
 
@@ -654,7 +658,7 @@ src/
 
 space/app.py                 # Gradio Web UI
 colab_notebook.ipynb         # Colab entry
-download_sota_models.py      # Beat This + all five YourMT3 + MIROS + separation + four piano contracts
+download_sota_models.py      # Beat This + five YourMT3 + MIROS + three MuScriptor + separation + four piano + playback assets
 download_vocal_model.py      # Leap XE vocals asset download
 download_accompaniment_model.py # PolarFormer accompaniment asset download
 download_multistem_model.py  # BS-RoFormer SW Fixed six-stem asset download

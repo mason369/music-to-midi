@@ -30,7 +30,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pip install gradio==4.44.1 fastapi==0.115.2 starlette==0.40.0",
+            "pip install gradio==4.44.1 fastapi==0.136.3 starlette==1.5.0 soundfile==0.14.0",
             workflow,
         )
 
@@ -51,7 +51,7 @@ class CiWorkflowContractTests(unittest.TestCase):
             'd73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip" --no-deps',
             workflow,
         )
-        self.assertIn("python patch_muscriptor_runtime.py", workflow)
+        self.assertNotIn("patch_muscriptor_runtime.py", workflow)
 
     def test_build_workflow_installs_audio_separator_runtime_pins(self):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")

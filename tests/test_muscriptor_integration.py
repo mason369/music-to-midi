@@ -374,13 +374,11 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "kv_cache_reused_layers": 0,
         "batch_size": 1,
         "prelude_forcing": True,
-        "quality_mode": "overlap_restart",
-        "overlap_seconds": 2.5,
-        "allow_reset": True,
+        "quality_mode": "official_v0.3.0",
+        "window_seconds": 5.0,
         "strict_eos": True,
         "package_version": "0.3.0",
         "source_commit": "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
-        "quality_patch_commit": "edaebd3126336bd7eb4467dcf675d77f4e7772f0",
     }
 
 
@@ -431,8 +429,6 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
         "beam_size": 1,
         "prelude_forcing": True,
         "no_eos_is_ok": False,
-        "overlap": 2.5,
-        "allow_reset": True,
     }
 
 
