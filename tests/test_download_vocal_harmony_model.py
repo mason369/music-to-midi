@@ -10,6 +10,7 @@ from download_vocal_harmony_model import (
     POLARFORMER_ONNX_NAME,
     POLARFORMER_REPO_ID,
     POLARFORMER_REVISION,
+    REMOVED_POLARFORMER_FP32_ONNX_NAME,
     download_accompaniment_model,
     download_chorus_model,
     is_accompaniment_model_available,
@@ -47,9 +48,15 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
 
             with (
                 patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", hashlib.sha256(b"model").hexdigest()),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
+                    hashlib.sha256(b"model").hexdigest(),
+                ),
                 patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(b"config").hexdigest()),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
+                    hashlib.sha256(b"config").hexdigest(),
+                ),
             ):
                 self.assertTrue(is_accompaniment_model_available(cache_dir))
                 self.assertTrue(is_chorus_model_available(cache_dir))
@@ -75,7 +82,10 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
                 patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", len(payload)),
                 patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", expected_hash),
                 patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", len(config_payload)),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(config_payload).hexdigest()),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
+                    hashlib.sha256(config_payload).hexdigest(),
+                ),
             ):
                 result = download_accompaniment_model(
                     cache_dir=cache_dir,
@@ -111,9 +121,15 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
 
             with (
                 patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", hashlib.sha256(b"model").hexdigest()),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
+                    hashlib.sha256(b"model").hexdigest(),
+                ),
                 patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256", hashlib.sha256(b"config").hexdigest()),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
+                    hashlib.sha256(b"config").hexdigest(),
+                ),
             ):
                 result = download_accompaniment_model(
                     cache_dir=cache_dir,
@@ -122,6 +138,63 @@ class TestDownloadVocalHarmonyModel(unittest.TestCase):
                 )
             self.assertEqual(result, model)
             downloader.assert_not_called()
+
+    def test_download_removes_only_the_verified_retired_fp32_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            model = cache_dir / POLARFORMER_ONNX_NAME
+            config = cache_dir / POLARFORMER_CONFIG_NAME
+            retired = cache_dir / REMOVED_POLARFORMER_FP32_ONNX_NAME
+            model.write_bytes(b"model")
+            config.write_bytes(b"config")
+            retired.write_bytes(b"retired-fp32")
+            messages = []
+
+            with (
+                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
+                    hashlib.sha256(b"model").hexdigest(),
+                ),
+                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
+                patch(
+                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
+                    hashlib.sha256(b"config").hexdigest(),
+                ),
+                patch(
+                    "download_vocal_harmony_model.REMOVED_POLARFORMER_FP32_ONNX_SIZE",
+                    12,
+                ),
+                patch(
+                    "download_vocal_harmony_model.REMOVED_POLARFORMER_FP32_ONNX_SHA256",
+                    hashlib.sha256(b"retired-fp32").hexdigest(),
+                ),
+            ):
+                result = download_accompaniment_model(
+                    cache_dir=cache_dir,
+                    downloader=Mock(side_effect=AssertionError("download must not run")),
+                    printer=messages.append,
+                )
+
+            self.assertEqual(result, model)
+            self.assertFalse(retired.exists())
+            self.assertTrue(
+                any("Removed retired PolarFormer FP32 asset" in message for message in messages)
+            )
+
+    def test_download_refuses_to_delete_an_unknown_retired_filename_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            retired = cache_dir / REMOVED_POLARFORMER_FP32_ONNX_NAME
+            retired.write_bytes(b"unknown")
+
+            with self.assertRaisesRegex(RuntimeError, "Refusing to delete it automatically"):
+                download_accompaniment_model(
+                    cache_dir=cache_dir,
+                    downloader=Mock(),
+                    printer=lambda *_: None,
+                )
+            self.assertTrue(retired.is_file())
 
     def test_download_rejects_onnx_hash_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:

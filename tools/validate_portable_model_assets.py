@@ -59,6 +59,16 @@ def _validate_leap_assets(model_dir: Path) -> tuple[Path, Path]:
 
 
 def _validate_polarformer_assets(model_dir: Path) -> tuple[Path, Path]:
+    retired = tuple(
+        path
+        for path in model_dir.rglob(polarformer.REMOVED_POLARFORMER_FP32_ONNX_NAME)
+        if path.is_file()
+    )
+    if retired:
+        raise RuntimeError(
+            "Retired PolarFormer FP32 assets must not be included in a portable build: "
+            + ", ".join(str(path) for path in retired)
+        )
     checkpoint = polarformer.resolve_accompaniment_model_path(model_dir)
     config = polarformer.resolve_accompaniment_config_path(model_dir)
     validate_file_identity(

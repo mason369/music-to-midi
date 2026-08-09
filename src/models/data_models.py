@@ -167,8 +167,8 @@ class ProcessingMode(Enum):
     """处理模式枚举"""
 
     SMART = "smart"  # YourMT3+ 多乐器转写
-    VOCAL_SPLIT = "vocal_split"  # 人声分离 + 分别转写
-    SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离 + 分别转写
+    VOCAL_SPLIT = "vocal_split"  # 人声/伴奏分离，仅先输出 WAV
+    SIX_STEM_SPLIT = "six_stem_split"  # 六声部分离，仅先输出 WAV
     PIANO_TRANSKUN = "piano_transkun"  # Transkun 钢琴专用转写
     PIANO_TRANSKUN_V2_AUG = "piano_transkun_v2_aug"  # TransKun V2 Aug 钢琴专用转写
     PIANO_ARIA_AMT = "piano_aria_amt"  # Aria-AMT 钢琴专用转写

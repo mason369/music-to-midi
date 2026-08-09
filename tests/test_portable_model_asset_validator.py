@@ -205,6 +205,18 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
     assert len(validated["miros"]) == 4
 
 
+def test_validator_rejects_retired_polarformer_fp32_asset(tmp_path, monkeypatch):
+    layout = _prepare_valid_assets(tmp_path, monkeypatch)
+    _write(
+        layout["audio_separator_dir"],
+        validator.polarformer.REMOVED_POLARFORMER_FP32_ONNX_NAME,
+        b"retired-fp32",
+    )
+
+    with pytest.raises(RuntimeError, match="Retired PolarFormer FP32 assets"):
+        _validate(layout)
+
+
 @pytest.mark.parametrize(
     ("asset_key", "expected_error"),
     [

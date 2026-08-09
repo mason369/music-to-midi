@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from mido import Message, MidiFile, MidiTrack
@@ -77,11 +78,14 @@ def _prepare_transcriber(tmp_path: Path, monkeypatch) -> TranskunV2AugTranscribe
     monkeypatch.setattr(transcriber, "get_unavailable_reason", lambda: "")
     monkeypatch.setattr(transcriber, "get_model_validation_error", lambda: "")
     monkeypatch.setattr(transcriber, "_resolve_runtime_device", lambda: "cpu")
-    monkeypatch.setattr(transcriber_module.multiprocessing, "Queue", _FakeQueue)
     monkeypatch.setattr(
         transcriber_module.multiprocessing,
-        "Process",
-        _SynchronousProcess,
+        "get_context",
+        lambda method: (
+            SimpleNamespace(Queue=_FakeQueue, Process=_SynchronousProcess)
+            if method == "spawn"
+            else pytest.fail(f"unexpected multiprocessing context: {method}")
+        ),
     )
     monkeypatch.setattr(transcriber_module, "clear_gpu_memory", lambda: None)
     return transcriber
@@ -139,8 +143,8 @@ def test_transcribe_reports_invalid_aug_model_without_starting_process(tmp_path,
     )
     process = monkeypatch.setattr(
         transcriber_module.multiprocessing,
-        "Process",
-        lambda **_kwargs: pytest.fail("process must not start"),
+        "get_context",
+        lambda *_args, **_kwargs: pytest.fail("process context must not be created"),
     )
     del process
 

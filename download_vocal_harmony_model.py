@@ -8,14 +8,17 @@ from typing import Callable, Optional
 
 POLARFORMER_REPO_ID = "bgkb/bs_polarformer"
 POLARFORMER_REVISION = "9158719ee2173edd480a735764627526506fe4af"
-POLARFORMER_ONNX_NAME = "bs_polarformer.onnx"
+POLARFORMER_ONNX_NAME = "bs_polarformer_fp16.onnx"
 POLARFORMER_CONFIG_NAME = "model_bs_polarformer_float16.yaml"
-POLARFORMER_ONNX_SIZE = 210_652_828
-POLARFORMER_ONNX_SHA256 = "1c6857c34556c72d4094d4515c5725549bf987a63a1a8c37a7e7fc111b525c50"
-POLARFORMER_CONFIG_SIZE = 3_599
-POLARFORMER_CONFIG_SHA256 = (
-    "0348205cb562a58e9724870a4cf43e5d2c49ae87258159b2827c4e42ed51b00d"
+POLARFORMER_ONNX_SIZE = 108_325_429
+POLARFORMER_ONNX_SHA256 = "76424289ea586bae4bbdb289383b0269b099416471e2b05068d02aa0b0c01467"
+REMOVED_POLARFORMER_FP32_ONNX_NAME = "bs_polarformer.onnx"
+REMOVED_POLARFORMER_FP32_ONNX_SIZE = 210_652_828
+REMOVED_POLARFORMER_FP32_ONNX_SHA256 = (
+    "1c6857c34556c72d4094d4515c5725549bf987a63a1a8c37a7e7fc111b525c50"
 )
+POLARFORMER_CONFIG_SIZE = 3_599
+POLARFORMER_CONFIG_SHA256 = "0348205cb562a58e9724870a4cf43e5d2c49ae87258159b2827c4e42ed51b00d"
 
 # Compatibility names retained for installers that still import this module by its
 # historical filename. These now refer exclusively to the PolarFormer accompaniment leg.
@@ -81,6 +84,29 @@ def _config_has_expected_identity(path: Path) -> bool:
     )
 
 
+def _remove_verified_legacy_fp32_assets(
+    root: Path,
+    printer: Callable[[str], None],
+) -> None:
+    """Remove only the exact retired FP32 artifact; reject unknown collisions."""
+
+    for path in sorted(root.rglob(REMOVED_POLARFORMER_FP32_ONNX_NAME)):
+        if not path.is_file():
+            continue
+        if (
+            path.stat().st_size != REMOVED_POLARFORMER_FP32_ONNX_SIZE
+            or _sha256(path) != REMOVED_POLARFORMER_FP32_ONNX_SHA256
+        ):
+            raise RuntimeError(
+                "An unrecognized retired PolarFormer artifact exists at "
+                f"{path}. Refusing to delete it automatically."
+            )
+        path.unlink()
+        if path.exists():
+            raise RuntimeError(f"Failed to remove retired PolarFormer FP32 asset: {path}")
+        printer(f"Removed retired PolarFormer FP32 asset: {path}")
+
+
 def is_accompaniment_model_available(cache_dir: Optional[Path] = None) -> bool:
     model = resolve_accompaniment_model_path(cache_dir)
     config = resolve_accompaniment_config_path(cache_dir)
@@ -121,7 +147,7 @@ def download_accompaniment_model(
     printer: Callable[[str], None] = print,
     downloader=None,
 ) -> Path:
-    """Download the pinned public FP32 BS PolarFormer ONNX model and config."""
+    """Download the pinned official FP16 BS PolarFormer ONNX model and config."""
     del separator_cls  # Kept only for source compatibility with older callers.
     if model_name not in (CHORUS_MODEL, POLARFORMER_ONNX_NAME):
         raise ValueError(
@@ -131,14 +157,12 @@ def download_accompaniment_model(
 
     cache_dir = _resolve_cache_dir(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _remove_verified_legacy_fp32_assets(cache_dir, printer)
 
     onnx_path = resolve_accompaniment_model_path(cache_dir)
     config_path = resolve_accompaniment_config_path(cache_dir)
-    if (
-        _onnx_has_expected_identity(onnx_path)
-        and _config_has_expected_identity(config_path)
-    ):
-        printer("BS PolarFormer public FP32 ONNX assets already exist; skipping download.")
+    if _onnx_has_expected_identity(onnx_path) and _config_has_expected_identity(config_path):
+        printer("BS PolarFormer official FP16 ONNX assets already exist; skipping download.")
         return onnx_path
 
     if downloader is None:
@@ -151,7 +175,7 @@ def download_accompaniment_model(
         downloader = hf_hub_download
 
     printer(
-        f"Downloading BS PolarFormer public ONNX from "
+        f"Downloading BS PolarFormer official FP16 ONNX from "
         f"{POLARFORMER_REPO_ID}@{POLARFORMER_REVISION}"
     )
     onnx_path = _download_asset(cache_dir, POLARFORMER_ONNX_NAME, downloader)
@@ -199,7 +223,7 @@ def download_chorus_model(
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Download BS PolarFormer public FP32 ONNX accompaniment assets"
+        description="Download BS PolarFormer official FP16 ONNX accompaniment assets"
     )
     parser.add_argument(
         "--cache-dir",

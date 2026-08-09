@@ -3,8 +3,8 @@
 
 处理模式：
 1. SMART: 所选 YourMT3+ / MIROS 后端直接转写完整混音
-2. VOCAL_SPLIT: Leap XE + PolarFormer 分离后，用所选后端分别转写两路 stem
-3. SIX_STEM_SPLIT: BS-RoFormer SW 分离六个 stem，再逐 stem 调用所选后端
+2. VOCAL_SPLIT: Leap XE + PolarFormer 分离为两条 WAV，之后由用户逐轨显式转 MIDI
+3. SIX_STEM_SPLIT: BS-RoFormer SW 分离为六条 WAV，之后由用户逐轨显式转 MIDI
 4. PIANO_TRANSKUN: 官方 TransKun 2.0 钢琴转写
 5. PIANO_TRANSKUN_V2_AUG: TransKun V2 Aug 钢琴与踏板转写
 6. PIANO_ARIA_AMT: Aria-AMT 钢琴转写
@@ -13,7 +13,6 @@
 
 import inspect
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -90,9 +89,9 @@ class MusicToMidiPipeline:
 
         处理模式：
         SMART: 使用所选多乐器后端直接对完整混音进行转写。
-        VOCAL_SPLIT: Leap XE + PolarFormer 分离人声与伴奏，均使用多乐器后端分别转写。
-                     可选额外输出一个“人声+伴奏合并 MIDI”。
-        SIX_STEM_SPLIT: BS-RoFormer SW 分离六个 stem，每个真实 stem 都独立调用所选后端。
+        VOCAL_SPLIT: Leap XE + PolarFormer 只先交付人声与伴奏 WAV。
+        SIX_STEM_SPLIT: BS-RoFormer SW 只先交付六条 stem WAV。
+        两个分离模式的 MIDI 均由用户在逐轨工作台显式触发。
         四个钢琴模式分别固定路由到 TransKun、TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
     """
 
@@ -325,34 +324,6 @@ class MusicToMidiPipeline:
             return wav_path
 
         raise RuntimeError(f"FFmpeg 转换 {Path(audio_path).name} 未生成有效 WAV 文件，已停止。")
-
-    @staticmethod
-    def _format_file_size(path: str) -> str:
-        size_mb = Path(path).stat().st_size / (1024 * 1024)
-        return f"{size_mb:.1f} MB"
-
-    @classmethod
-    def _format_output_file_list(cls, output_paths: Dict[str, str]) -> str:
-        lines = []
-        for name, path in sorted(output_paths.items()):
-            size_text = cls._format_file_size(path) if Path(path).is_file() else "missing"
-            lines.append(f"{name}: {path} ({size_text})")
-        return "\n".join(lines)
-
-    def _report_output_files(
-        self,
-        stage: ProcessingStage,
-        stage_progress: float,
-        overall_progress: float,
-        title: str,
-        output_paths: Dict[str, str],
-    ) -> None:
-        file_list = self._format_output_file_list(output_paths)
-        logger.info("%s:\n%s", title, file_list)
-        summary = ", ".join(
-            f"{name}={Path(path).name}" for name, path in sorted(output_paths.items())
-        )
-        self._report(stage, stage_progress, overall_progress, f"{title}: {summary}")
 
     def _detect_beat_or_raise(
         self,
@@ -780,237 +751,37 @@ class MusicToMidiPipeline:
         except Exception as exc:
             raise RuntimeError(f"无法读取 MIDI 输出 {path.resolve()}: {exc}") from exc
 
-    def _finalize_separated_audio(
+    def _process_separation_only(
         self,
-        separated_audio: Dict[str, str],
-    ) -> Optional[Dict[str, str]]:
-        """Honor save_separated_tracks after every requested MIDI has been written."""
-        if self.config.save_separated_tracks:
-            return dict(separated_audio)
+        audio_path: str,
+        output_dir: str,
+    ) -> ProcessingResult:
+        """Run a split mode through the shared WAV-only service."""
+        from src.core.separation_service import AudioSeparationService
 
-        unique_paths = {Path(path).resolve() for path in separated_audio.values()}
-        for path in sorted(unique_paths, key=str):
-            if not path.is_file():
-                raise RuntimeError(f"无法清理分离音频，文件不存在: {path}")
-            try:
-                path.unlink()
-            except OSError as exc:
-                raise RuntimeError(f"无法清理分离音频 {path}: {exc}") from exc
-        return None
-
-    def _process_six_stem_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """
-        六声部分离模式：
-        1. BS-RoFormer SW 分离六个 stem（用于 WAV 输出）
-        2. 所选 YourMT3+ / MIROS 后端分别转写每个 stem
-        3. 输出六个 stem MIDI 和一个合并 MIDI
-        """
-        from src.core.multi_stem_separator import STEM_KEYS, SixStemSeparator
-
-        start_time = time.time()
-        audio_path = str(audio_path)
-        output_dir = str(output_dir)
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        input_stem = Path(audio_path).stem
-
-        logger.info(f"开始处理(六声部分离模式): {audio_path}")
-
-        if not SixStemSeparator.is_available():
-            raise RuntimeError(
-                "六声部分离不可用，请安装: pip install audio-separator==0.44.1 --no-deps"
-            )
-        self._require_multi_instrument_available()
-        transcriber = self._get_multi_instrument_transcriber()
-        model_label = self._get_multi_instrument_label()
-
-        self._report(
-            ProcessingStage.PREPROCESSING,
-            0.0,
-            0.0,
-            self._pt("progress.preparing_six_stem_separator"),
+        service = AudioSeparationService(
+            self.config,
+            progress_callback=self._progress_callback,
+            cancel_check=lambda: self._cancelled,
         )
-        self._check_cancelled()
-        beat_info = self._detect_beat_or_raise(audio_path)
-        tempo = beat_info.bpm
-        if transcriber is self.muscriptor_transcriber:
-            transcriber.set_beat_info(beat_info)
-        self._report_detected_bpm(beat_info, 1.0, 0.05)
-
-        self._report(
-            ProcessingStage.SEPARATION, 0.0, 0.05, self._pt("progress.six_stem_separating")
-        )
-        separator_device = "cuda:0" if self.config.use_gpu else "cpu"
-        separator = SixStemSeparator(
-            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE),
-            target_device=separator_device,
-        )
-
-        def _sep_cb(p: float, msg: str) -> None:
-            overall = 0.05 + p * 0.25
-            self._report(ProcessingStage.SEPARATION, p, overall, msg)
-
-        separated = separator.separate(
-            audio_path=audio_path,
-            output_dir=output_dir,
-            progress_callback=_sep_cb,
-        )
-
-        missing_stems = [stem for stem in STEM_KEYS if stem not in separated]
-        if missing_stems:
-            raise RuntimeError(f"六声部分离输出不完整，缺少: {missing_stems}")
-
-        self._report_output_files(
-            ProcessingStage.SEPARATION,
-            1.0,
-            0.30,
-            self._pt("progress.six_stem_wav_outputs"),
-            separated,
-        )
-        self._report(ProcessingStage.SEPARATION, 1.0, 0.30, self._pt("progress.six_stem_complete"))
-        self._check_cancelled()
-
-        stem_midi_paths: Dict[str, str] = {}
-        total_notes = 0
-        total_stems = len(STEM_KEYS)
-        per_stem_span = 0.60 / total_stems
-
-        logger.info(
-            "使用 %s 分别转写 %s 个分离 stem（不会对原混音做一次性路由）",
-            model_label,
-            total_stems,
-        )
+        self._active_separator = service
         try:
-            for stem_index, stem_name in enumerate(STEM_KEYS):
-                self._check_cancelled()
-                stem_audio_path = str(separated[stem_name])
-                if not Path(stem_audio_path).is_file():
-                    raise RuntimeError(
-                        f"六声部分离输出不存在: stem={stem_name}, path={stem_audio_path}"
-                    )
-
-                segment_start = 0.30 + stem_index * per_stem_span
-                self._report(
-                    ProcessingStage.TRANSCRIPTION,
-                    stem_index / total_stems,
-                    segment_start,
-                    self._pt(
-                        "progress.running_backend",
-                        backend=f"{model_label} [{stem_name}]",
-                    ),
-                )
-
-                def _stem_transcribe_cb(
-                    p: float,
-                    msg: str,
-                    *,
-                    _stem_index: int = stem_index,
-                    _stem_name: str = stem_name,
-                ) -> None:
-                    normalized = max(0.0, min(1.0, p))
-                    overall = 0.30 + _stem_index * per_stem_span + normalized * per_stem_span * 0.85
-                    self._report(
-                        ProcessingStage.TRANSCRIPTION,
-                        (_stem_index + normalized) / total_stems,
-                        overall,
-                        f"{_stem_name}: {msg}",
-                    )
-
-                stem_midi_path = str(Path(output_dir) / f"{input_stem}_{stem_name}.mid")
-                try:
-                    stem_midi_paths[stem_name] = transcriber.transcribe_to_midi(
-                        audio_path=stem_audio_path,
-                        output_path=stem_midi_path,
-                        progress_callback=_stem_transcribe_cb,
-                    )
-                    stem_midi_paths[stem_name] = self._normalize_midi_tempo_metadata(
-                        stem_midi_paths[stem_name],
-                        tempo,
-                        force=True,
-                        tempo_map=beat_info.tempo_map,
-                        source_bpm=beat_info.source_bpm,
-                        time_signature=beat_info.time_signature,
-                    )
-                    if transcriber is self.muscriptor_transcriber:
-                        stem_midi_paths[stem_name] = str(
-                            repeat_tempo_events_on_note_tracks(
-                                stem_midi_paths[stem_name],
-                                label=f"MuScriptor {stem_name} MuseScore tempo metadata",
-                            )
-                        )
-                except InterruptedError:
-                    raise
-                except Exception as exc:
-                    logger.error(
-                        "%s 转写 stem %s 失败: %s",
-                        model_label,
-                        stem_name,
-                        exc,
-                        exc_info=True,
-                    )
-                    raise RuntimeError(
-                        self._format_backend_error(
-                            model_label,
-                            f"转写 stem {stem_name} 失败",
-                            exc,
-                        )
-                    ) from exc
-
-                stem_note_count = self._count_midi_notes(stem_midi_paths[stem_name])
-                total_notes += stem_note_count
-                synthesis_progress = segment_start + per_stem_span * 0.90
-                self._report(
-                    ProcessingStage.SYNTHESIS,
-                    (stem_index + 1) / total_stems,
-                    synthesis_progress,
-                    self._pt(
-                        "progress.generating_stem_midi",
-                        stem=stem_name,
-                        note_count=stem_note_count,
-                    ),
-                )
+            separation = service.process(audio_path, output_dir)
         finally:
-            self._cleanup_multi_instrument_backend()
-
-        self._report(
-            ProcessingStage.TRANSCRIPTION,
-            1.0,
-            0.90,
-            self._pt(
-                "progress.transcription_complete",
-                instrument_count=len(STEM_KEYS),
-                note_count=total_notes,
-            ),
-        )
-        self._check_cancelled()
-
-        self._check_cancelled()
-        merged_midi_path = str(Path(output_dir) / f"{input_stem}_all_stems_merged.mid")
-        self._report(ProcessingStage.SYNTHESIS, 0.95, 0.93, self._pt("progress.merging_stem_midi"))
-        merged_midi_path = self._merge_stem_midis(stem_midi_paths, merged_midi_path)
-        self._report(
-            ProcessingStage.SYNTHESIS, 1.0, 0.97, self._pt("progress.six_stem_midi_complete")
-        )
-
-        retained_separated_audio = self._finalize_separated_audio(separated)
-
-        processing_time = time.time() - start_time
-        self._report(
-            ProcessingStage.COMPLETE,
-            1.0,
-            1.0,
-            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
-        )
+            if self._active_separator is service:
+                self._active_separator = None
 
         return ProcessingResult(
-            midi_path=merged_midi_path,
-            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
-            beat_info=beat_info,
-            processing_time=processing_time,
-            total_notes=total_notes,
-            separated_audio=retained_separated_audio,
-            stem_midi_paths=stem_midi_paths,
-            merged_midi_path=merged_midi_path,
+            midi_path="",
+            tracks=[Track(type=TrackType.OTHER, audio_path=separation.source_path)],
+            processing_time=separation.processing_time,
+            total_notes=0,
+            separated_audio=dict(separation.separated_audio),
         )
+
+    def _process_six_stem_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
+        """Separate six WAV stems and stop before manual MIDI transcription."""
+        return self._process_separation_only(audio_path, output_dir)
 
     def _process_specialized_piano(
         self,
@@ -1439,272 +1210,5 @@ class MusicToMidiPipeline:
         raise ValueError(f"Unsupported multi-instrument backend: {model_name!r}")
 
     def _process_vocal_split(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """人声分离模式：Leap XE + PolarFormer → 分别转写伴奏和人声。"""
-        from src.core.vocal_separator import VocalSeparator
-
-        start_time = time.time()
-
-        audio_path = str(audio_path)
-        output_dir = str(output_dir)
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-        stem = Path(Path(audio_path).name).stem
-
-        logger.info(f"开始处理 (人声分离模式): {audio_path}")
-        transcriber = self._get_multi_instrument_transcriber()
-        model_label = self._get_multi_instrument_label()
-
-        # ── 检查依赖 ──
-        logger.info("正在检查依赖: Leap XE vocals + PolarFormer accompaniment, %s...", model_label)
-        if not VocalSeparator.is_available():
-            raise RuntimeError(
-                "人声分离不可用。请安装: pip install audio-separator==0.44.1 --no-deps"
-            )
-        if not VocalSeparator.is_model_available():
-            raise RuntimeError(
-                "人声分离模型未下载。请运行 python download_sota_models.py，"
-                "或分别运行 python download_vocal_model.py 和 python download_accompaniment_model.py 后重试。"
-            )
-        self._require_multi_instrument_available()
-        logger.info("所有依赖检查通过")
-
-        # ── 阶段1：预处理 / 节拍检测 (0-5%) ──
-        self._report(ProcessingStage.PREPROCESSING, 0.0, 0.0, self._pt("progress.analyzing_audio"))
-        self._check_cancelled()
-        beat_info = self._detect_beat_or_raise(audio_path)
-        tempo = beat_info.bpm
-        if transcriber is self.muscriptor_transcriber:
-            transcriber.set_beat_info(beat_info)
-        self._report_detected_bpm(beat_info, 1.0, 0.05)
-
-        # ── 阶段2：Leap XE + PolarFormer 人声/伴奏分离 (5-35%) ──
-        self._report(
-            ProcessingStage.SEPARATION,
-            0.0,
-            0.05,
-            self._pt("progress.separating_vocals_accompaniment"),
-        )
-
-        separator_device = "cuda:0" if self.config.use_gpu else "cpu"
-        separator = VocalSeparator(
-            language=getattr(self.config, "language", Translator.DEFAULT_LANGUAGE),
-            primary_device=separator_device,
-            accompaniment_device=separator_device,
-        )
-        separator.set_cancel_check(lambda: self._cancelled)
-
-        def _sep_cb(p: float, msg: str) -> None:
-            overall = 0.05 + p * 0.30
-            self._report(ProcessingStage.SEPARATION, p, overall, msg)
-
-        self._active_separator = separator
-        try:
-            separated = separator.separate(
-                audio_path=audio_path,
-                output_dir=output_dir,
-                progress_callback=_sep_cb,
-            )
-        except InterruptedError:
-            raise
-        except Exception as e:
-            logger.error(f"人声分离失败: {e}", exc_info=True)
-            raise RuntimeError(f"人声分离失败: {e}") from e
-        finally:
-            if self._active_separator is separator:
-                self._active_separator = None
-
-        if not separated or "vocals" not in separated or "accompaniment" not in separated:
-            raise RuntimeError("人声分离失败: 输出不完整，缺少 vocals 或 accompaniment")
-
-        vocals_path = separated["vocals"]
-        accompaniment_path = separated["accompaniment"]
-        separated = {
-            "vocals": vocals_path,
-            "accompaniment": accompaniment_path,
-        }
-
-        if not os.path.exists(vocals_path) or not os.path.exists(accompaniment_path):
-            raise RuntimeError(
-                f"分离文件不存在: vocals={os.path.exists(vocals_path)}, "
-                f"accompaniment={os.path.exists(accompaniment_path)}"
-            )
-
-        logger.info(f"人声文件: {vocals_path}")
-        logger.info(f"伴奏文件: {accompaniment_path}")
-
-        self._report_output_files(
-            ProcessingStage.SEPARATION,
-            1.0,
-            0.35,
-            self._pt("progress.vocal_wav_outputs"),
-            separated,
-        )
-        self._report(
-            ProcessingStage.SEPARATION, 1.0, 0.35, self._pt("progress.vocal_separation_complete")
-        )
-        self._check_cancelled()
-
-        # ── 阶段3：多乐器后端转写伴奏 (35-70%) ──
-        self._report(
-            ProcessingStage.TRANSCRIPTION,
-            0.0,
-            0.35,
-            self._pt("progress.loading_model", model=model_label),
-        )
-        logger.info("使用 %s 转写伴奏", model_label)
-
-        accompaniment_midi_path = str(Path(output_dir) / f"{stem}_accompaniment.mid")
-        vocal_midi_path = str(Path(output_dir) / f"{stem}_vocal.mid")
-
-        def _transcribe_cb(p: float, msg: str) -> None:
-            overall = 0.35 + p * 0.25
-            self._report(ProcessingStage.TRANSCRIPTION, p, overall, msg)
-
-        try:
-            accompaniment_midi_path = transcriber.transcribe_to_midi(
-                audio_path=accompaniment_path,
-                output_path=accompaniment_midi_path,
-                progress_callback=_transcribe_cb,
-            )
-            accompaniment_midi_path = self._normalize_midi_tempo_metadata(
-                accompaniment_midi_path,
-                tempo,
-                force=True,
-                tempo_map=beat_info.tempo_map,
-                source_bpm=beat_info.source_bpm,
-                time_signature=beat_info.time_signature,
-            )
-            if transcriber is self.muscriptor_transcriber:
-                accompaniment_midi_path = str(
-                    repeat_tempo_events_on_note_tracks(
-                        accompaniment_midi_path,
-                        label="MuScriptor accompaniment MuseScore tempo metadata",
-                    )
-                )
-        except InterruptedError:
-            self._cleanup_multi_instrument_backend()
-            raise
-        except Exception as e:
-            self._cleanup_multi_instrument_backend()
-            logger.error("%s 伴奏转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(self._format_backend_error(model_label, "伴奏转写失败", e)) from e
-        self._check_cancelled()
-        acc_total = self._count_midi_notes(accompaniment_midi_path)
-        logger.info("伴奏官方 MIDI 转写完成: %s 个音符", acc_total)
-
-        self._report(
-            ProcessingStage.TRANSCRIPTION,
-            1.0,
-            0.60,
-            self._pt("progress.accompaniment_transcription_complete", note_count=acc_total),
-        )
-
-        # ── 阶段4：多乐器后端转写人声 (60-85%) ──
-        self._report(
-            ProcessingStage.VOCAL_TRANSCRIPTION,
-            0.0,
-            0.60,
-            self._pt("progress.transcribing_vocals_with", model=model_label),
-        )
-        logger.info("开始 %s 人声转写: %s", model_label, vocals_path)
-
-        def _vocal_cb(p: float, msg: str) -> None:
-            overall = 0.60 + p * 0.25
-            self._report(ProcessingStage.VOCAL_TRANSCRIPTION, p, overall, msg)
-
-        try:
-            vocal_midi_path = transcriber.transcribe_to_midi(
-                audio_path=vocals_path,
-                output_path=vocal_midi_path,
-                progress_callback=_vocal_cb,
-            )
-            vocal_midi_path = self._normalize_midi_tempo_metadata(
-                vocal_midi_path,
-                tempo,
-                force=True,
-                tempo_map=beat_info.tempo_map,
-                source_bpm=beat_info.source_bpm,
-                time_signature=beat_info.time_signature,
-            )
-            if transcriber is self.muscriptor_transcriber:
-                vocal_midi_path = str(
-                    repeat_tempo_events_on_note_tracks(
-                        vocal_midi_path,
-                        label="MuScriptor vocal MuseScore tempo metadata",
-                    )
-                )
-        except InterruptedError:
-            raise
-        except Exception as e:
-            logger.error("%s 人声转写失败: %s", model_label, e, exc_info=True)
-            raise RuntimeError(self._format_backend_error(model_label, "人声转写失败", e)) from e
-        finally:
-            self._cleanup_multi_instrument_backend()
-
-        vocal_total = self._count_midi_notes(vocal_midi_path)
-        logger.info("人声官方 MIDI 转写完成: %s 个音符", vocal_total)
-
-        self._report(
-            ProcessingStage.VOCAL_TRANSCRIPTION,
-            1.0,
-            0.85,
-            self._pt("progress.vocal_transcription_complete", note_count=vocal_total),
-        )
-        self._check_cancelled()
-
-        # ── 阶段5：生成两个 MIDI 文件 (85-95%) ──
-        self._check_cancelled()
-        self._report(ProcessingStage.SYNTHESIS, 0.0, 0.85, self._pt("progress.generating_midi"))
-        logger.info("后端官方音符已保留；仅补 tempo 元数据，未执行音符过滤或 NoteEvent 重建")
-
-        merged_midi_path = None
-        if getattr(self.config, "vocal_split_merge_midi", False):
-            self._check_cancelled()
-            self._report(
-                ProcessingStage.SYNTHESIS,
-                0.85,
-                0.92,
-                self._pt("progress.merging_vocal_accompaniment_midi"),
-            )
-            merged_midi_path = str(Path(output_dir) / f"{stem}_vocal_accompaniment_merged.mid")
-            merged_midi_path = self._merge_stem_midis(
-                {
-                    "accompaniment": accompaniment_midi_path,
-                    "vocal": vocal_midi_path,
-                },
-                merged_midi_path,
-            )
-            self._report(
-                ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated_with_merge")
-            )
-        else:
-            self._report(ProcessingStage.SYNTHESIS, 1.0, 0.95, self._pt("progress.midi_generated"))
-
-        final_midi_path = merged_midi_path or accompaniment_midi_path
-        retained_separated_audio = self._finalize_separated_audio(separated)
-
-        # ── 完成 ──
-        processing_time = time.time() - start_time
-        self._report(
-            ProcessingStage.COMPLETE,
-            1.0,
-            1.0,
-            self._pt("progress.complete_elapsed", seconds=f"{processing_time:.1f}"),
-        )
-
-        logger.info(
-            f"处理完成: 伴奏={accompaniment_midi_path}, 人声={vocal_midi_path}, "
-            f"合并={merged_midi_path or '未启用'} (耗时 {processing_time:.1f}s)"
-        )
-
-        return ProcessingResult(
-            midi_path=final_midi_path,
-            tracks=[Track(type=TrackType.OTHER, audio_path=audio_path)],
-            beat_info=beat_info,
-            processing_time=processing_time,
-            total_notes=acc_total + vocal_total,
-            vocal_midi_path=vocal_midi_path,
-            accompaniment_midi_path=accompaniment_midi_path,
-            separated_audio=retained_separated_audio,
-            merged_midi_path=merged_midi_path,
-        )
+        """Separate vocals/accompaniment WAVs and stop before manual MIDI transcription."""
+        return self._process_separation_only(audio_path, output_dir)

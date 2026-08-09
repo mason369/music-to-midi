@@ -1,30 +1,11 @@
 import importlib.util
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-try:
-    import mido  # noqa: F401
-except ImportError:
-    mido_stub = types.ModuleType("mido")
-    mido_stub.__spec__ = None
-
-    class _Dummy:
-        pass
-
-    mido_stub.MidiFile = _Dummy
-    mido_stub.MidiTrack = _Dummy
-    mido_stub.Message = _Dummy
-    mido_stub.MetaMessage = _Dummy
-    sys.modules.setdefault("mido", mido_stub)
-
-import mido
-
 from src.core.pipeline import MusicToMidiPipeline
-from src.models.data_models import BeatInfo, Config, NoteEvent
+from src.models.data_models import Config
 
 
 class TestRestoredProcessingModes(unittest.TestCase):
@@ -130,17 +111,14 @@ class TestRestoredProcessingModes(unittest.TestCase):
 
 
 class TestVocalSplitMode(unittest.TestCase):
-    def test_vocal_split_optionally_outputs_merged_midi(self):
+    def test_vocal_split_outputs_only_verified_wavs_even_with_legacy_midi_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            audio_path = tmp_path / "song.wav"
-            audio_path.write_bytes(b"audio")
-            out_dir = tmp_path / "out"
+            root = Path(tmp)
+            audio_path = root / "song.wav"
+            audio_path.write_bytes(b"real input")
+            output_dir = root / "out"
 
             class FakeVocalSeparator:
-                def __init__(self, *_args, **_kwargs):
-                    pass
-
                 @staticmethod
                 def is_available():
                     return True
@@ -149,120 +127,65 @@ class TestVocalSplitMode(unittest.TestCase):
                 def is_model_available():
                     return True
 
-                def set_cancel_check(self, _cancel_check):
-                    return None
+                def __init__(self, *_args, **_kwargs):
+                    self.cancel_check = None
+
+                def set_cancel_check(self, cancel_check):
+                    self.cancel_check = cancel_check
 
                 def separate(self, audio_path, output_dir, progress_callback=None):
-                    if progress_callback:
-                        progress_callback(1.0, "ok")
+                    self.assert_not_cancelled()
                     base = Path(output_dir)
+                    base.mkdir(parents=True, exist_ok=True)
                     vocals = base / f"{Path(audio_path).stem}_vocals.wav"
                     accompaniment = base / f"{Path(audio_path).stem}_accompaniment.wav"
-                    vocals.parent.mkdir(parents=True, exist_ok=True)
-                    vocals.write_bytes(b"wav")
-                    accompaniment.write_bytes(b"wav")
+                    vocals.write_bytes(b"vocals")
+                    accompaniment.write_bytes(b"accompaniment")
+                    if progress_callback is not None:
+                        progress_callback(1.0, "separated")
                     return {
                         "vocals": str(vocals),
                         "accompaniment": str(accompaniment),
                     }
 
-            class FakeTranscriber:
-                def __init__(self):
-                    self.calls = []
+                def assert_not_cancelled(self):
+                    if self.cancel_check is None or self.cancel_check():
+                        raise AssertionError("cancel callback was not installed correctly")
 
-                def transcribe_to_midi(self, audio_path, output_path, progress_callback=None):
-                    self.calls.append(audio_path)
-                    midi = mido.MidiFile(type=1, ticks_per_beat=480)
-                    track = mido.MidiTrack()
-                    track.append(mido.MetaMessage("track_name", name="official rare", time=0))
-                    track.append(mido.Message("program_change", program=73, channel=0, time=0))
-                    track.append(
-                        mido.Message("control_change", control=11, value=91, channel=0, time=0)
-                    )
-                    track.append(mido.Message("note_on", note=60, velocity=90, channel=0, time=0))
-                    track.append(mido.Message("note_off", note=60, velocity=0, channel=0, time=1))
-                    midi.tracks.append(track)
-                    midi.save(output_path)
-                    if progress_callback:
-                        progress_callback(1.0, "done")
-                    return output_path
-
-                def unload_model(self):
-                    return None
-
-            class FakeMidiGenerator:
-                def generate_from_precise_instruments_v2(
-                    self, instrument_notes, drum_notes, tempo, output_path, quality
-                ):
-                    raise AssertionError("official split outputs must not be regenerated")
-
-            merged_calls = []
-
-            def fake_merge(stem_paths, output_path):
-                merged_calls.append(set(stem_paths.keys()))
-                merged_path = Path(output_path)
-                merged_path.parent.mkdir(parents=True, exist_ok=True)
-                midi = mido.MidiFile(type=1, ticks_per_beat=480)
-                midi.tracks.append(mido.MidiTrack())
-                midi.save(str(merged_path))
-                return str(merged_path)
-
-            config = Config()
-            config.processing_mode = "vocal_split"
-            config.vocal_split_merge_midi = True
-            config.save_separated_tracks = False
-            pipeline = MusicToMidiPipeline(config)
-            transcriber = FakeTranscriber()
-            pipeline.yourmt3_transcriber = transcriber
-            pipeline.midi_generator = FakeMidiGenerator()
-            pipeline._merge_stem_midis = fake_merge
-            beat_detection_calls = []
-
-            def fake_detect(path, **_kwargs):
-                beat_detection_calls.append(Path(path))
-                return BeatInfo(bpm=120.0)
-
-            pipeline._detect_beat_or_raise = fake_detect
-
-            with (
-                patch("src.core.vocal_separator.VocalSeparator", FakeVocalSeparator),
-                patch("src.core.pipeline.YourMT3Transcriber.is_available", return_value=True),
-            ):
-                result = pipeline._process_vocal_split(str(audio_path), str(out_dir))
-
-            self.assertEqual(result.merged_midi_path, result.midi_path)
-            self.assertTrue(Path(result.midi_path).name.endswith("_vocal_accompaniment_merged.mid"))
-            self.assertEqual(merged_calls, [{"accompaniment", "vocal"}])
-            self.assertTrue(Path(result.accompaniment_midi_path).exists())
-            self.assertTrue(Path(result.vocal_midi_path).exists())
-            for midi_path in (result.accompaniment_midi_path, result.vocal_midi_path):
-                messages = [
-                    message for track in mido.MidiFile(midi_path).tracks for message in track
-                ]
-                self.assertTrue(
-                    any(
-                        message.type == "program_change" and message.program == 73
-                        for message in messages
-                    )
+            def unexpected_midi_work(*_args, **_kwargs):
+                raise AssertionError(
+                    "vocal split must stop before beat detection or MIDI transcription"
                 )
-                self.assertTrue(
-                    any(
-                        message.type == "control_change" and message.control == 11
-                        for message in messages
-                    )
-                )
-                self.assertTrue(
-                    any(message.type == "note_off" and message.time == 1 for message in messages)
-                )
-            self.assertEqual(result.total_notes, 2)
-            self.assertEqual(result.beat_info, BeatInfo(bpm=120.0))
-            self.assertEqual(beat_detection_calls, [audio_path])
-            self.assertIsNone(result.separated_audio)
-            self.assertTrue(all(not Path(path).exists() for path in transcriber.calls))
-            self.assertEqual(
-                [Path(path).name for path in transcriber.calls],
-                ["song_accompaniment.wav", "song_vocals.wav"],
+
+            config = Config(
+                processing_mode="vocal_split",
+                vocal_split_merge_midi=True,
+                save_separated_tracks=False,
             )
+            pipeline = MusicToMidiPipeline(config)
+            for transcriber in (
+                pipeline.yourmt3_transcriber,
+                pipeline.miros_transcriber,
+                pipeline.muscriptor_transcriber,
+            ):
+                transcriber.transcribe_to_midi = unexpected_midi_work
+            pipeline._detect_beat_or_raise = unexpected_midi_work
+            pipeline._merge_stem_midis = unexpected_midi_work
+
+            with patch("src.core.vocal_separator.VocalSeparator", FakeVocalSeparator):
+                result = pipeline.process(str(audio_path), str(output_dir))
+
+            self.assertEqual(result.midi_path, "")
+            self.assertEqual(result.total_notes, 0)
+            self.assertIsNone(result.beat_info)
+            self.assertIsNone(result.vocal_midi_path)
+            self.assertIsNone(result.accompaniment_midi_path)
+            self.assertIsNone(result.merged_midi_path)
+            self.assertEqual(set(result.separated_audio or {}), {"vocals", "accompaniment"})
+            self.assertTrue(
+                all(Path(path).is_file() for path in (result.separated_audio or {}).values())
+            )
+            self.assertEqual(list(output_dir.rglob("*.mid")), [])
 
     def test_vocal_split_rejects_legacy_no_vocals_without_canonical_accompaniment(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -296,9 +219,6 @@ class TestVocalSplitMode(unittest.TestCase):
                     }
 
             pipeline = MusicToMidiPipeline(Config(processing_mode="vocal_split"))
-            pipeline._detect_beat_or_raise = lambda *_args, **_kwargs: BeatInfo(bpm=120.0)
-            pipeline._require_multi_instrument_available = lambda: None
-
             with patch("src.core.vocal_separator.VocalSeparator", LegacySeparator):
                 with self.assertRaisesRegex(RuntimeError, "accompaniment"):
                     pipeline._process_vocal_split(str(audio_path), str(root / "out"))

@@ -3,6 +3,7 @@
 This helper is intentionally file-backed because Windows multiprocessing cannot
 re-import a stdin-based ``__main__`` module.
 """
+
 import argparse
 import json
 import shutil
@@ -11,6 +12,7 @@ import traceback
 from pathlib import Path
 
 from mido import MidiFile
+import soundfile as sf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -48,6 +50,28 @@ def midi_stats(path: str) -> dict:
     }
 
 
+def audio_stats(path: str) -> dict:
+    audio_path = Path(path)
+    if not audio_path.is_file() or audio_path.stat().st_size <= 0:
+        raise RuntimeError(f"missing or empty separated WAV: {audio_path}")
+    info = sf.info(str(audio_path))
+    if info.frames <= 0 or info.samplerate <= 0 or info.channels <= 0:
+        raise RuntimeError(
+            "invalid separated WAV metadata: "
+            f"path={audio_path}, frames={info.frames}, "
+            f"samplerate={info.samplerate}, channels={info.channels}"
+        )
+    return {
+        "path": str(audio_path),
+        "exists": True,
+        "bytes": audio_path.stat().st_size,
+        "frames": int(info.frames),
+        "samplerate": int(info.samplerate),
+        "channels": int(info.channels),
+        "duration": float(info.duration),
+    }
+
+
 def build_case_config(case: dict, output_dir: Path) -> Config:
     """Build the same fixed-quality config used by a real matrix case."""
     return Config(
@@ -55,6 +79,8 @@ def build_case_config(case: dict, output_dir: Path) -> Config:
         transcription_backend=case["backend"],
         multi_instrument_model=case.get("multi_model", "yourmt3"),
         midi_track_mode=case.get("track_mode", "multi_track"),
+        yourmt3_model=case.get("yourmt3_model", "yptf_moe_multi_nops"),
+        muscriptor_model=case.get("muscriptor_model", "large"),
         vocal_split_merge_midi=case.get("merge", False),
         output_dir=str(output_dir),
         save_separated_tracks=True,
@@ -76,7 +102,9 @@ def run_case(case: dict, mix_audio: Path, piano_audio: Path, root: Path) -> dict
         progress_tail.append(getattr(progress_item, "message", str(progress_item)))
         del progress_tail[:-8]
 
-    result = MusicToMidiPipeline(config).process(str(audio_path), str(output_dir), progress_callback=progress)
+    result = MusicToMidiPipeline(config).process(
+        str(audio_path), str(output_dir), progress_callback=progress
+    )
 
     midi_paths = []
     for attr in ("midi_path", "merged_midi_path", "vocal_midi_path", "accompaniment_midi_path"):
@@ -89,6 +117,43 @@ def run_case(case: dict, mix_audio: Path, piano_audio: Path, root: Path) -> dict
     for path in midi_paths:
         if path not in unique_paths:
             unique_paths.append(path)
+
+    separated_paths = dict(getattr(result, "separated_audio", None) or {})
+    expected_separated_keys = {
+        "vocal_split": {"vocals", "accompaniment"},
+        "six_stem_split": {"bass", "drums", "guitar", "piano", "vocals", "other"},
+    }.get(config.processing_mode)
+    if expected_separated_keys is not None:
+        if unique_paths:
+            raise RuntimeError(
+                f"{config.processing_mode} unexpectedly returned MIDI paths: {unique_paths!r}"
+            )
+        actual_keys = set(separated_paths)
+        if actual_keys != expected_separated_keys:
+            raise RuntimeError(
+                f"{config.processing_mode} separated WAV keys mismatch: "
+                f"expected={sorted(expected_separated_keys)!r}, "
+                f"actual={sorted(actual_keys)!r}"
+            )
+        separated_stats = {
+            key: audio_stats(separated_paths[key]) for key in sorted(separated_paths)
+        }
+        return {
+            "case": case["name"],
+            "status": "PASS",
+            "audio": str(audio_path),
+            "mode": case["mode"],
+            "backend": config.transcription_backend,
+            "multi_model": config.multi_instrument_model,
+            "track_mode": config.midi_track_mode,
+            "yourmt3_model": config.yourmt3_model,
+            "muscriptor_model": config.muscriptor_model,
+            "merge": config.vocal_split_merge_midi,
+            "total_notes": getattr(result, "total_notes", None),
+            "midi": [],
+            "separated_audio": separated_stats,
+            "progress_tail": progress_tail,
+        }
 
     stats = [midi_stats(path) for path in unique_paths]
     if not stats:
@@ -104,9 +169,12 @@ def run_case(case: dict, mix_audio: Path, piano_audio: Path, root: Path) -> dict
         "backend": config.transcription_backend,
         "multi_model": config.multi_instrument_model,
         "track_mode": config.midi_track_mode,
+        "yourmt3_model": config.yourmt3_model,
+        "muscriptor_model": config.muscriptor_model,
         "merge": config.vocal_split_merge_midi,
         "total_notes": getattr(result, "total_notes", None),
         "midi": stats,
+        "separated_audio": {},
         "progress_tail": progress_tail,
     }
 

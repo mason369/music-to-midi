@@ -353,8 +353,9 @@ class TranskunTranscriber:
                 if progress_callback:
                     progress_callback(0.05, self._pt("progress.preparing_transkun", device=device))
 
-                result_queue = multiprocessing.Queue()
-                process = multiprocessing.Process(
+                process_context = multiprocessing.get_context("spawn")
+                result_queue = process_context.Queue()
+                process = process_context.Process(
                     target=_transkun_worker,
                     args=(
                         str(input_path),

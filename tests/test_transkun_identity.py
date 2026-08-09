@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import queue
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,14 +182,21 @@ def test_transkun_parent_forwards_worker_snapshot_before_publishing(tmp_path):
         patch.object(transcriber, "is_model_available", return_value=True),
         patch.object(transcriber, "_get_packaged_resource", side_effect=get_resource),
         patch.object(transcriber, "_resolve_runtime_device", return_value="cpu"),
-        patch.object(transkun_module.multiprocessing, "Queue", _FakeQueue),
-        patch.object(transkun_module.multiprocessing, "Process", _SynchronousProcess),
+        patch.object(
+            transkun_module.multiprocessing,
+            "get_context",
+            return_value=SimpleNamespace(
+                Queue=_FakeQueue,
+                Process=_SynchronousProcess,
+            ),
+        ) as get_context,
         patch.object(transkun_module, "_transkun_worker", streamed_worker),
         patch.object(transkun_module, "clear_gpu_memory", return_value=None),
     ):
         result = transcriber.transcribe(str(audio_path), str(output_path))
 
     assert result == str(output_path)
+    get_context.assert_called_once_with("spawn")
     assert events == [event]
     assert output_path.is_file()
 
@@ -234,14 +242,12 @@ def test_transkun_does_not_accept_a_stale_final_when_worker_writes_nothing(tmp_p
         ),
         patch.object(
             transkun_module.multiprocessing,
-            "Queue",
-            _FakeQueue,
-        ),
-        patch.object(
-            transkun_module.multiprocessing,
-            "Process",
-            _SynchronousProcess,
-        ),
+            "get_context",
+            return_value=SimpleNamespace(
+                Queue=_FakeQueue,
+                Process=_SynchronousProcess,
+            ),
+        ) as get_context,
         patch.object(
             transkun_module,
             "_transkun_worker",
@@ -261,4 +267,5 @@ def test_transkun_does_not_accept_a_stale_final_when_worker_writes_nothing(tmp_p
             raise AssertionError("Expected missing current-run MIDI output to fail")
 
     assert output_path.read_bytes() == stale_bytes
+    get_context.assert_called_once_with("spawn")
     assert list(tmp_path.glob(".out.transkun.*.tmp.mid")) == []

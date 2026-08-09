@@ -80,11 +80,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             self.assertEqual(polar_leg.call_args.kwargs["audio_path"], str(audio_path))
             self.assertTrue(callable(leap_leg.call_args.kwargs["translate"]))
             self.assertTrue(callable(polar_leg.call_args.kwargs["translate"]))
-            self.assertEqual(outputs["no_vocals"], outputs["accompaniment"])
             self.assertNotEqual(outputs["vocals"], outputs["accompaniment"])
             self.assertEqual(
                 set(outputs),
-                {"vocals", "accompaniment", "no_vocals"},
+                {"vocals", "accompaniment"},
             )
             for path in {Path(value) for value in outputs.values()}:
                 self.assertTrue(path.is_file())
@@ -281,7 +280,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             ):
                 vocal_separator._run_polarformer_accompaniment_leg(
                     audio_path="song.wav",
-                    onnx_path=Path("bs_polarformer.onnx"),
+                    onnx_path=Path("bs_polarformer_fp16.onnx"),
                     config_path=Path("config.yaml"),
                     requested_device="cuda:0",
                     progress_callback=report_progress,
@@ -308,7 +307,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertLess(session_index, running_index)
         self.assertLess(running_index, prepare_index)
         self.assertLess(prepare_index, run_index)
-        self.assertIn("bs_polarformer.onnx", events[running_index][1])
+        self.assertIn("bs_polarformer_fp16.onnx", events[running_index][1])
         self.assertIn(
             "ONNX Runtime · CUDAExecutionProvider + CPUExecutionProvider",
             events[running_index][1],
@@ -380,7 +379,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertLess(leap_index, switching_index)
         self.assertLess(switching_index, first_write_index)
         self.assertLess(first_write_index, polar_index)
-        self.assertIn("bs_polarformer.onnx", events[switching_index][1])
+        self.assertIn("bs_polarformer_fp16.onnx", events[switching_index][1])
 
     def test_polarformer_cancel_terminates_active_onnx_run(self):
         config = {
@@ -603,8 +602,8 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                 Translator("zh_CN").t,
                 **kwargs,
             ),
-            "音频分片进度：PolarFormer 伴奏 2/24（约 20 秒/片，相邻重叠约 10 秒；"
-            "不是处理阶段或重试）",
+            "音频分片进度：PolarFormer 伴奏 2/24（每片覆盖约 20 秒音频，相邻重叠约 10 秒音频；"
+            "不是预计耗时、处理阶段或重试）",
         )
         self.assertEqual(
             vocal_separator._audio_chunk_progress_message(
@@ -612,7 +611,8 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                 **kwargs,
             ),
             "Audio chunk progress: PolarFormer accompaniment 2/24 "
-            "(~20s/chunk, ~10s adjacent overlap; not workflow stages or retries)",
+            "(each chunk covers ~20s of audio with ~10s of adjacent audio overlap; "
+            "not time estimates, workflow stages, or retries)",
         )
 
     def test_leap_reference_demix_uses_configured_overlap_batching_and_reconstructs(self):
@@ -665,7 +665,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertEqual(observed_batch_sizes, [2, 2, 1])
         self.assertIn("Running inference: Leap XE (vocals) audio chunk 5/5", progress_messages[-1])
         self.assertIn("model model.ckpt", progress_messages[-1])
-        self.assertIn("not workflow stages or retries", progress_messages[-1])
+        self.assertIn(
+            "not time estimates, workflow stages, or retries",
+            progress_messages[-1],
+        )
         np.testing.assert_allclose(vocals, audio, atol=1e-6, rtol=0.0)
 
     def test_leap_reference_forward_preserves_length_and_zeroes_dc(self):

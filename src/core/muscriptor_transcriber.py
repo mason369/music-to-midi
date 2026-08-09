@@ -256,7 +256,7 @@ class MuscriptorTranscriber:
             "prelude_forcing": True,
             "quality_mode": "official_v0.3.0",
             "window_seconds": 5.0,
-            "strict_eos": True,
+            "no_eos_is_ok": True,
             "package_version": MUSCRIPTOR_PACKAGE_VERSION,
             "source_commit": MUSCRIPTOR_SOURCE_COMMIT,
         }
@@ -327,7 +327,6 @@ class MuscriptorTranscriber:
                 batch_size=1,
                 beam_size=1,
                 prelude_forcing=True,
-                no_eos_is_ok=False,
             )
             for event in events:
                 self._check_cancelled()
