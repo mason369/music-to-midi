@@ -65,11 +65,14 @@ def build_muscriptor_result_html(
         "duration": float(state.get("duration", 0.0)),
         "referenceBpm": float(state.get("reference_bpm", 0.0)),
         "targetBpm": float(state.get("target_bpm", 0.0)),
+        "timeSignature": [int(value) for value in state.get("time_signature", (4, 4))],
         "beatTimes": [float(value) for value in state.get("beat_times", [])],
         "downbeats": [float(value) for value in state.get("downbeats", [])],
         "repeatTempoPerNoteTrack": bool(state.get("repeat_tempo_per_note_track", False)),
         "backendLabel": str(state.get("backend_label", "")),
         "sourceTrackName": str(state.get("source_track_name", "")),
+        "previewApi": str(state.get("preview_api", "")),
+        "previewToken": str(state.get("preview_token", "")),
         "originalUrl": track_file_url(str(state["audio_path"])),
         "instruments": instruments,
         "downloads": {
@@ -116,6 +119,9 @@ def build_muscriptor_result_html(
                 "editor_view_zoom_tooltip",
                 "editor_summary",
                 "editor_audio_notice",
+                "editor_audio_rendering",
+                "editor_audio_ready",
+                "editor_audio_failed",
                 "editor_export_failed",
                 "export_edited_midi",
             )
@@ -835,6 +841,10 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.targetBpm = 0;
     this.activeInstrument = "";
     this.rollHeight = 390;
+    this.previewRevision = 0;
+    this.previewTimer = 0;
+    this.originalPreview = null;
+    this.downloadAnchors = {};
     this.onExternalPlayback = this.handleExternalPlayback.bind(this);
   }
   ResultSession.prototype.init = function () {
@@ -855,6 +865,17 @@ MUSCRIPTOR_RESULT_JS = r"""
       });
       this.m.beatTimes = (this.m.beatTimes || []).map(Number);
       this.m.downbeats = (this.m.downbeats || []).map(Number);
+      this.m.timeSignature = (this.m.timeSignature || [4, 4]).map(Number);
+      if (this.m.timeSignature.length !== 2
+          || !Number.isInteger(this.m.timeSignature[0])
+          || this.m.timeSignature[0] < 1
+          || this.m.timeSignature[0] > 255
+          || !Number.isInteger(this.m.timeSignature[1])
+          || this.m.timeSignature[1] < 1
+          || this.m.timeSignature[1] > 128
+          || (this.m.timeSignature[1] & (this.m.timeSignature[1] - 1)) !== 0) {
+        throw new Error("Invalid MIDI time signature in piano-roll manifest");
+      }
       [this.m.beatTimes, this.m.downbeats].forEach(function (marks) {
         if (marks.some(function (value, index) {
           return !Number.isFinite(value) || value < 0 || (index > 0 && value <= marks[index - 1]);
@@ -874,17 +895,30 @@ MUSCRIPTOR_RESULT_JS = r"""
     }
     this.build();
     window.addEventListener("music-to-midi-playback-start", this.onExternalPlayback);
-    var self = this;
-    var jobs = [load(this.m.originalUrl).then(function (buffer) { self.buffers.original = buffer; })];
+    var self = this, initialBuffers = {};
+    var jobs = [load(this.m.originalUrl).then(function (buffer) { initialBuffers.original = buffer; })];
     this.m.instruments.forEach(function (instrument) {
       if (instrument.detected && instrument.url) {
-        jobs.push(load(instrument.url).then(function (buffer) { self.buffers[instrument.id] = buffer; }));
+        jobs.push(load(instrument.url).then(function (buffer) { initialBuffers[instrument.id] = buffer; }));
       }
     });
     Promise.all(jobs).then(function () {
       if (self.disposed) return;
-      self.play.disabled = false;
-      self.status.textContent = self.m.strings.ready;
+      self.originalPreview = {
+        buffers: initialBuffers,
+        duration: self.m.duration,
+        instruments: self.m.instruments.map(function (instrument) {
+          return { id: instrument.id, detected: instrument.detected, url: instrument.url };
+        }),
+        transcriptionUrl: self.m.downloads.transcription,
+        stereoUrl: self.m.downloads.stereo
+      };
+      if (self.previewRevision === 0) {
+        self.buffers = Object.assign({}, initialBuffers);
+        self.play.disabled = false;
+        self.progress.disabled = false;
+        self.status.textContent = self.m.strings.ready;
+      }
       self.drawStatic();
       self.layoutPlayhead();
     }).catch(function (error) {
@@ -948,9 +982,11 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.progress.max = String(this.m.duration);
     this.progress.step = ".01";
     this.progress.value = "0";
+    this.progress.disabled = true;
     this.progress.oninput = function () { self.seek(parseFloat(this.value)); };
     transport.appendChild(this.progress);
-    transport.appendChild(el("span", "msr-duration", "/ " + this.m.duration.toFixed(1) + "s"));
+    this.durationLabel = el("span", "msr-duration", "/ " + this.m.duration.toFixed(1) + "s");
+    transport.appendChild(this.durationLabel);
     this.host.appendChild(transport);
     this.buildEditor();
 
@@ -1020,6 +1056,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     grid.appendChild(scroll);
 
     var aside = el("aside", "msr-instruments");
+    this.instrumentAside = aside;
     aside.appendChild(el("h3", "", strings.instruments));
     this.m.instruments.forEach(function (instrument) {
       var row = el("div", "msr-row" + (instrument.detected ? "" : " undetected"));
@@ -1054,12 +1091,169 @@ MUSCRIPTOR_RESULT_JS = r"""
       var anchor = el("a", "msr-btn", strings[spec[1]]);
       anchor.href = self.m.downloads[spec[0]];
       anchor.download = "";
+      self.downloadAnchors[spec[0]] = anchor;
       downloads.appendChild(anchor);
     });
     this.host.appendChild(downloads);
     this.resizeObserver = new ResizeObserver(function () { self.layout(); });
     this.resizeObserver.observe(scroll);
     this.layout();
+  };
+  ResultSession.prototype.setDownloadAudioEnabled = function (enabled) {
+    ["transcription", "stereo"].forEach(function (key) {
+      var anchor = this.downloadAnchors[key];
+      if (!anchor) return;
+      if (enabled) {
+        anchor.href = this.m.downloads[key];
+        anchor.removeAttribute("aria-disabled");
+      } else {
+        anchor.removeAttribute("href");
+        anchor.setAttribute("aria-disabled", "true");
+      }
+    }, this);
+  };
+  ResultSession.prototype.syncInstrumentAvailability = function (instrumentUrls) {
+    var self = this;
+    this.m.instruments.forEach(function (instrument) {
+      var detected = Object.prototype.hasOwnProperty.call(instrumentUrls, instrument.id);
+      instrument.detected = detected;
+      instrument.url = detected ? String(instrumentUrls[instrument.id]) : "";
+      if (instrument.row) {
+        instrument.row.classList.toggle("undetected", !detected);
+      }
+      if (instrument.soloButton) instrument.soloButton.disabled = !detected;
+      if (instrument.muteButton) instrument.muteButton.disabled = !detected;
+      if (!detected) self.muted.delete(instrument.id);
+    });
+    if (this.solo && !Object.prototype.hasOwnProperty.call(instrumentUrls, this.solo)) {
+      this.solo = null;
+    }
+    this.syncRows();
+  };
+  ResultSession.prototype.applyPlaybackPreview = function (preview, nextBuffers, statusText) {
+    this.buffers = nextBuffers;
+    this.m.duration = Number(preview.duration);
+    this.progress.max = String(this.m.duration);
+    this.position = clamp(this.position, 0, this.m.duration);
+    this.durationLabel.textContent = "/ " + this.m.duration.toFixed(1) + "s";
+    this.m.downloads.transcription = String(preview.transcriptionUrl);
+    this.m.downloads.stereo = String(preview.stereoUrl);
+    this.syncInstrumentAvailability(preview.instrumentUrls || {});
+    this.setDownloadAudioEnabled(true);
+    this.play.disabled = false;
+    this.progress.disabled = false;
+    this.status.textContent = statusText;
+    this.drawStatic();
+    this.layoutPlayhead();
+  };
+  ResultSession.prototype.restoreOriginalPreview = function () {
+    if (!this.originalPreview) {
+      throw new Error("Original SoundFont preview has not finished loading");
+    }
+    var instrumentUrls = {};
+    this.originalPreview.instruments.forEach(function (instrument) {
+      if (instrument.detected && instrument.url) instrumentUrls[instrument.id] = instrument.url;
+    });
+    this.m.downloads.transcription = this.originalPreview.transcriptionUrl;
+    this.m.downloads.stereo = this.originalPreview.stereoUrl;
+    this.applyPlaybackPreview(
+      {
+        duration: this.originalPreview.duration,
+        instrumentUrls: instrumentUrls,
+        transcriptionUrl: this.originalPreview.transcriptionUrl,
+        stereoUrl: this.originalPreview.stereoUrl
+      },
+      Object.assign({}, this.originalPreview.buffers),
+      this.m.strings.ready
+    );
+  };
+  ResultSession.prototype.scheduleEditedPreview = function () {
+    var self = this, revision = ++this.previewRevision;
+    clearTimeout(this.previewTimer);
+    if (this.playing) this.pause();
+    this.buffers = this.buffers.original ? { original: this.buffers.original } : {};
+    this.play.disabled = true;
+    this.progress.disabled = true;
+    this.setDownloadAudioEnabled(false);
+    if (notesEqual(this.m.notes, this.originalNotes) && this.originalPreview) {
+      try {
+        this.restoreOriginalPreview();
+        this.syncEditor();
+      } catch (error) {
+        this.status.textContent = this.m.strings.editor_audio_failed
+          .replace("{error}", String(error));
+      }
+      return;
+    }
+    this.editNotice.textContent = this.m.strings.editor_audio_notice;
+    this.status.textContent = this.m.strings.editor_audio_rendering;
+    this.previewTimer = setTimeout(function () {
+      self.renderEditedPreview(revision);
+    }, 300);
+  };
+  ResultSession.prototype.renderEditedPreview = function (revision) {
+    var self = this;
+    if (!this.m.previewApi || !this.m.previewToken) {
+      this.status.textContent = this.m.strings.editor_audio_failed
+        .replace("{error}", "server render context is unavailable");
+      return;
+    }
+    fetch(this.m.previewApi, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [JSON.stringify({ token: this.m.previewToken, notes: this.m.notes })]
+      })
+    })
+      .then(function (response) {
+        return response.text().then(function (body) {
+          if (!response.ok) throw new Error("HTTP " + response.status + " " + body);
+          var envelope = JSON.parse(body);
+          if (!envelope.data || envelope.data.length !== 1) {
+            throw new Error("Edited preview endpoint returned no result");
+          }
+          return typeof envelope.data[0] === "string"
+            ? JSON.parse(envelope.data[0])
+            : envelope.data[0];
+        });
+      })
+      .then(function (preview) {
+        if (self.disposed || revision !== self.previewRevision) return null;
+        var nextBuffers = {};
+        var jobs = [];
+        if (self.originalPreview && self.originalPreview.buffers.original) {
+          nextBuffers.original = self.originalPreview.buffers.original;
+        } else if (self.buffers.original) {
+          nextBuffers.original = self.buffers.original;
+        }
+        Object.keys(preview.instrumentUrls || {}).forEach(function (instrumentId) {
+          jobs.push(load(preview.instrumentUrls[instrumentId]).then(function (buffer) {
+            nextBuffers[instrumentId] = buffer;
+          }));
+        });
+        return Promise.all(jobs).then(function () {
+          return { preview: preview, buffers: nextBuffers };
+        });
+      })
+      .then(function (loaded) {
+        if (!loaded || self.disposed || revision !== self.previewRevision) return;
+        self.applyPlaybackPreview(
+          loaded.preview,
+          loaded.buffers,
+          self.m.strings.editor_audio_ready
+        );
+        self.editNotice.textContent = self.m.strings.editor_audio_ready;
+      })
+      .catch(function (error) {
+        if (self.disposed || revision !== self.previewRevision) return;
+        self.buffers = self.buffers.original ? { original: self.buffers.original } : {};
+        self.play.disabled = true;
+        self.progress.disabled = true;
+        self.setDownloadAudioEnabled(false);
+        self.status.textContent = self.m.strings.editor_audio_failed
+          .replace("{error}", String(error));
+      });
   };
   ResultSession.prototype.buildEditor = function () {
     var self = this, strings = this.m.strings;
@@ -1189,11 +1383,11 @@ MUSCRIPTOR_RESULT_JS = r"""
     }
   };
   ResultSession.prototype.gridSeconds = function () {
-    var targetBpm = Number(this.targetBpm);
-    if (!Number.isFinite(targetBpm) || targetBpm <= 0) {
-      throw new Error("Cannot derive MIDI editor grid from BPM " + targetBpm);
+    var referenceBpm = Number(this.m.referenceBpm);
+    if (!Number.isFinite(referenceBpm) || referenceBpm <= 0) {
+      throw new Error("Cannot derive MIDI editor grid from reference BPM " + referenceBpm);
     }
-    return 60 / targetBpm / 4;
+    return 60 / referenceBpm / 4;
   };
   ResultSession.prototype.snapTime = function (value) {
     var grid = this.gridSeconds();
@@ -1426,63 +1620,69 @@ MUSCRIPTOR_RESULT_JS = r"""
       }
     }
     var self = this;
-    if (this.m.beatTimes.length) {
-      var barMarks = this.m.downbeats;
-      for (var barIndex = 0; barIndex + 1 < barMarks.length; barIndex++) {
-        if (barIndex % 2 === 0 || barMarks[barIndex + 1] < start || barMarks[barIndex] > end) {
-          continue;
-        }
-        var barLeft = LEFT + barMarks[barIndex] * this.pps - scrollX;
-        var barRight = LEFT + barMarks[barIndex + 1] * this.pps - scrollX;
+    var referenceBpm = Number(this.m.referenceBpm);
+    var numerator = this.m.timeSignature[0], denominator = this.m.timeSignature[1];
+    var quarterSeconds = 60 / referenceBpm;
+    var subdivisionSeconds = quarterSeconds / 4;
+    var beatSeconds = quarterSeconds * 4 / denominator;
+    var barSeconds = beatSeconds * numerator;
+    var firstBar = Math.max(0, Math.floor(start / barSeconds));
+    var lastBar = Math.ceil(end / barSeconds) + 1;
+    for (var barIndex = firstBar; barIndex <= lastBar; barIndex++) {
+      var barTime = barIndex * barSeconds;
+      var barX = LEFT + barTime * this.pps - scrollX;
+      if (barIndex % 2 === 1) {
+        var barRight = LEFT + (barTime + barSeconds) * this.pps - scrollX;
         painter.fillStyle = "rgba(255,255,255,0.03)";
-        painter.fillRect(barLeft, 0, Math.max(0, barRight - barLeft), HEIGHT);
-      }
-      var gaps = [];
-      for (var gapIndex = 1; gapIndex < this.m.beatTimes.length; gapIndex++) {
-        gaps.push(this.m.beatTimes[gapIndex] - this.m.beatTimes[gapIndex - 1]);
-      }
-      gaps.sort(function (left, right) { return left - right; });
-      var medianGap = gaps[Math.floor((gaps.length - 1) / 2)], beatStride = 1;
-      while (medianGap * this.pps * beatStride < 12) beatStride *= 2;
-      this.m.beatTimes.forEach(function (beat, beatIndex) {
-        if (beatIndex % beatStride || beat < start || beat > end) return;
-        var beatX = LEFT + beat * self.pps - scrollX;
-        painter.strokeStyle = "#36506f";
-        painter.lineWidth = 1;
-        painter.beginPath();
-        painter.moveTo(beatX, 0);
-        painter.lineTo(beatX, HEIGHT);
-        painter.stroke();
-      });
-      barMarks.forEach(function (downbeat, barIndex) {
-        if (downbeat < start || downbeat > end) return;
-        var barX = LEFT + downbeat * self.pps - scrollX;
-        painter.strokeStyle = "#78aee8";
-        painter.lineWidth = 1.5;
-        painter.beginPath();
-        painter.moveTo(barX, 0);
-        painter.lineTo(barX, HEIGHT);
-        painter.stroke();
-        painter.fillStyle = "#a9c8e8";
-        painter.font = "8px monospace";
-        painter.fillText("B" + (barIndex + 1), barX + 3, 11);
-      });
-      painter.lineWidth = 1;
-    } else {
-      var step = this.pps >= 180 ? 0.5 : (this.pps >= 80 ? 1 : 2);
-      var first = Math.max(0, Math.floor(start / step) * step);
-      for (var second = first; second <= end + step; second += step) {
-        var gridX = LEFT + second * this.pps - scrollX;
-        painter.strokeStyle = "#36506f";
-        painter.beginPath();
-        painter.moveTo(gridX, 0);
-        painter.lineTo(gridX, HEIGHT);
-        painter.stroke();
-        painter.fillStyle = "#7f94b7";
-        painter.font = "8px monospace";
-        painter.fillText(second.toFixed(step < 1 ? 1 : 0) + "s", gridX + 3, 11);
+        painter.fillRect(barX, 0, Math.max(0, barRight - barX), HEIGHT);
       }
     }
+    var subdivisionStride = 1;
+    while (subdivisionSeconds * this.pps * subdivisionStride < 5) subdivisionStride *= 2;
+    var firstSubdivision = Math.max(0, Math.floor(start / subdivisionSeconds) - 1);
+    var lastSubdivision = Math.ceil(end / subdivisionSeconds) + 1;
+    painter.strokeStyle = "#263d59";
+    painter.lineWidth = 1;
+    for (var subdivisionIndex = firstSubdivision;
+         subdivisionIndex <= lastSubdivision;
+         subdivisionIndex += subdivisionStride) {
+      var subdivisionX = LEFT + subdivisionIndex * subdivisionSeconds * this.pps - scrollX;
+      painter.beginPath();
+      painter.moveTo(subdivisionX, 0);
+      painter.lineTo(subdivisionX, HEIGHT);
+      painter.stroke();
+    }
+    var firstBeat = Math.max(0, Math.floor(start / beatSeconds) - 1);
+    var lastBeat = Math.ceil(end / beatSeconds) + 1;
+    var labelBeats = beatSeconds * this.pps >= 38;
+    for (var beatIndex = firstBeat; beatIndex <= lastBeat; beatIndex++) {
+      var beatInBar = beatIndex % numerator;
+      if (beatInBar === 0) continue;
+      var beatX = LEFT + beatIndex * beatSeconds * this.pps - scrollX;
+      painter.strokeStyle = "#36506f";
+      painter.beginPath();
+      painter.moveTo(beatX, 0);
+      painter.lineTo(beatX, HEIGHT);
+      painter.stroke();
+      if (labelBeats) {
+        painter.fillStyle = "#7f9dbd";
+        painter.font = "8px monospace";
+        painter.fillText((Math.floor(beatIndex / numerator) + 1) + "." + (beatInBar + 1), beatX + 3, 11);
+      }
+    }
+    for (var downbeatIndex = firstBar; downbeatIndex <= lastBar; downbeatIndex++) {
+      var downbeatX = LEFT + downbeatIndex * barSeconds * this.pps - scrollX;
+      painter.strokeStyle = "#78aee8";
+      painter.lineWidth = 1.5;
+      painter.beginPath();
+      painter.moveTo(downbeatX, 0);
+      painter.lineTo(downbeatX, HEIGHT);
+      painter.stroke();
+      painter.fillStyle = "#a9c8e8";
+      painter.font = "8px monospace";
+      painter.fillText((downbeatIndex + 1) + ".1", downbeatX + 3, 11);
+    }
+    painter.lineWidth = 1;
     this.m.notes.forEach(function (note, index) {
       if (note.pitch < 21 || note.pitch > 108 || note.end < start || note.start > end) return;
       var x = LEFT + note.start * self.pps - scrollX;
@@ -1972,6 +2172,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.redoStack = [];
     this.syncEditor();
     this.drawStatic();
+    this.scheduleEditedPreview();
   };
   ResultSession.prototype.undo = function () {
     if (!this.undoStack.length) return;
@@ -1981,6 +2182,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.selectedIndices = new Set();
     this.syncEditor();
     this.drawStatic();
+    this.scheduleEditedPreview();
   };
   ResultSession.prototype.redo = function () {
     if (!this.redoStack.length) return;
@@ -1990,6 +2192,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.selectedIndices = new Set();
     this.syncEditor();
     this.drawStatic();
+    this.scheduleEditedPreview();
   };
   ResultSession.prototype.resetEdits = function () {
     if (notesEqual(this.m.notes, this.originalNotes)) return;
@@ -2059,6 +2262,8 @@ MUSCRIPTOR_RESULT_JS = r"""
   ResultSession.prototype.dispose = function () {
     if (this.disposed) return;
     this.disposed = true;
+    clearTimeout(this.previewTimer);
+    this.previewRevision += 1;
     this.pause();
     window.removeEventListener("music-to-midi-playback-start", this.onExternalPlayback);
     if (this.resizeObserver) this.resizeObserver.disconnect();

@@ -130,12 +130,21 @@ class TestColabNotebookDependencies(unittest.TestCase):
         source_text = self._load_notebook_source_text()
 
         self.assertIn("audio_separator_runtime_packages = [", source_text)
-        self.assertIn('"numpy==1.26.4"', source_text)
+        self.assertNotIn('"numpy==1.26.4"', source_text)
+        self.assertIn('"numpy>=2,<2.1"', source_text)
+        self.assertIn("preinstalled_numpy_version = np.__version__", source_text)
+        self.assertIn("Colab NumPy preserved", source_text)
+        self.assertIn("Critical Colab runtime import failed", source_text)
+        self.assertIn('"onnx-weekly==1.21.0.dev20260223"', source_text)
         self.assertIn('"onnxruntime-gpu==1.23.2"', source_text)
         self.assertIn('"audio-separator==0.44.1"', source_text)
         self.assertIn('"gradio==4.44.1"', source_text)
         self.assertIn('"fastapi==0.136.3"', source_text)
         self.assertIn('"starlette==0.52.1"', source_text)
+        self.assertIn('"pydantic==2.10.6"', source_text)
+        self.assertIn('"pydantic-core==2.27.2"', source_text)
+        self.assertIn('"huggingface_hub==0.36.0"', source_text)
+        self.assertIn('"hf_xet==1.5.2"', source_text)
         self.assertIn('" --no-deps"', source_text)
         self.assertNotIn('"audio-separator>=0.38.0"', source_text)
         self.assertNotIn('"gradio>=4.44.0"', source_text)
@@ -160,6 +169,8 @@ class TestColabNotebookDependencies(unittest.TestCase):
         source_text = self._load_notebook_source_text()
 
         self.assertIn('"transkun==2.0.1"', source_text)
+        self.assertIn('"ncls==0.0.68"', source_text)
+        self.assertIn('"setuptools==80.10.2"', source_text)
         self.assertIn('"piano-transcription-inference==0.0.6"', source_text)
         self.assertIn("--no-deps --force-reinstall", source_text)
         self.assertIn("get_aria_amt_runtime_unavailable_reason", source_text)
@@ -764,7 +775,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         package_block = package_block_match.group("block")
 
         self.assertIn(
-            "检测 Colab 预装 torch 版本",
+            "检测 Colab 预装 torch / NumPy 版本",
             source_text,
         )
         self.assertIn(
@@ -817,7 +828,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "SMART 与四种钢琴模式",
             "主按钮只生成 2/6 个 WAV",
             "分离完成后显示真实波形音轨",
-            "11 种转写路线",
+            "13 种转写路线",
             "选择或滚动控件本身不会触发转换",
             "The two split modes create WAV files only",
         ):
@@ -835,7 +846,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "输出说明",
             "主按钮只分离并保留 vocals/accompaniment 两个 WAV",
             "不会自动生成 MIDI 或合并 MIDI",
-            "每条音轨可独立勾选、选择 11 种转写路线之一",
+            "每条音轨可独立勾选、选择 13 种转写路线之一",
             "only separates and keeps vocals/accompaniment WAV files",
             "does not generate stem or merged MIDI automatically",
             "converted only by an explicit Start click",

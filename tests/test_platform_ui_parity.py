@@ -49,12 +49,18 @@ def test_project_bpm_contract_is_shared_by_desktop_space_and_colab():
     en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
 
     assert "self.custom_bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)" in track_panel
-    assert "minimum=4.0" in space
+    assert "value=0.0" in space
+    assert "minimum=0.0" in space
     assert "maximum=400.0" in space
-    assert "minimum=4.0" in colab
+    assert "value=0.0" in colab
+    assert "minimum=0.0" in colab
     assert "maximum=400.0" in colab
+    assert "normalize_optional_project_bpm(custom_bpm)" in space
+    assert "normalize_optional_project_bpm(custom_bpm)" in colab
     assert zh["main"]["tempo"]["label"] == "工程 BPM"
     assert en["main"]["tempo"]["label"] == "Project BPM"
+    assert zh["main"]["tempo"]["custom_tooltip"].startswith("0 表示保持自动检测")
+    assert en["main"]["tempo"]["custom_tooltip"].startswith("0 keeps automatic detection")
     assert "保留 tick" in zh["main"]["tempo"]["custom_tooltip"]
     assert "真实变速" in zh["main"]["tempo"]["custom_tooltip"]
     assert "those ticks are retained" in en["main"]["tempo"]["custom_tooltip"]
@@ -116,8 +122,12 @@ def test_all_platforms_offer_cooperative_cancellation():
         assert "def _unregister_active_job(job)" in source
         assert "def request_stop_current_job()" in source
         assert "job.cancel()" in source
-        # Stop button events bypass the queue so they fire while a job runs.
-        assert "fn=request_stop_current_job" in source
+        # The visible event uses an independent unqueued HTTP request. Gradio
+        # otherwise serializes a same-session stop click behind the GPU job.
+        assert "def _stop_current_job_client_js" in source
+        assert 'api_name="stop_current_job"' in source
+        assert "js=_stop_current_job_client_js()" in source
+        assert "./run/stop_current_job" in source
         assert "queue=False" in source
         # Cancellation is a first-class outcome, not a failure.
         assert "except InterruptedError" in source
@@ -130,6 +140,13 @@ def test_all_platforms_offer_cooperative_cancellation():
     # Manual per-track cancellation reports the shared cancelled status.
     assert "manual_midi.cancelled" in space
     assert "manual_midi.cancelled" in colab
+
+
+def test_web_reruns_replace_their_previous_ui_log_handler():
+    for source in (_space_source(), _colab_source()):
+        assert "_music_to_midi_ui_log_handler" in source
+        assert "removeHandler(_existing_handler)" in source
+        assert "_existing_handler.close()" in source
 
     # The desktop pipeline/separation raise InterruptedError cooperatively.
     pipeline = Path("src/core/pipeline.py").read_text(encoding="utf-8")
@@ -369,11 +386,20 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
             source_bpm=None,
             beat_times=[0.0, 0.5, 1.0],
             downbeats=[0.0, 1.0],
+            time_signature=(3, 4),
         ),
     )
 
+    preview_registry = SimpleNamespace(register=lambda **_kwargs: "preview-token")
     for source in (_space_source(), _colab_source()):
-        build_state = _isolated_function(source, "_build_midi_result_state", Path=Path)
+        build_state = _isolated_function(
+            source,
+            "_build_midi_result_state",
+            Path=Path,
+            _request_root_for_owned_path=lambda _path: tmp_path,
+            _EDITED_MIDI_PREVIEWS=preview_registry,
+            EDITED_MIDI_PREVIEWS=preview_registry,
+        )
         state = build_state(
             result,
             tmp_path / "audio.wav",
@@ -383,7 +409,10 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
         )
         assert state["beat_times"] == [0.25, 0.75, 1.25]
         assert state["downbeats"] == [0.25, 1.25]
+        assert state["time_signature"] == (3, 4)
         assert state["repeat_tempo_per_note_track"] is True
+        assert state["preview_api"] == "./api/render_edited_midi_preview"
+        assert state["preview_token"] == "preview-token"
 
 
 def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_path):
@@ -410,9 +439,11 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         "duration": 2.0,
         "reference_bpm": 120.0,
         "target_bpm": 120.0,
+        "time_signature": (3, 4),
         "beat_times": [0.25, 0.75, 1.25],
         "downbeats": [0.25, 1.25],
         "repeat_tempo_per_note_track": True,
+        "preview_token": "preview-token",
     }
     require_file = lambda _root, path, *_args: Path(path).resolve()
     common_globals = {
@@ -422,6 +453,8 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         "MAX_MIDI_BPM": 400.0,
         "SUPPORTED_AUDIO_SUFFIXES": {".wav"},
         "_require_owned_request_file": require_file,
+        "_EDITED_MIDI_PREVIEWS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
+        "EDITED_MIDI_PREVIEWS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
     }
 
     space_normalize = _isolated_function(
@@ -447,4 +480,7 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
     for state in (space_state, colab_state):
         assert state["beat_times"] == raw_state["beat_times"]
         assert state["downbeats"] == raw_state["downbeats"]
+        assert state["time_signature"] == raw_state["time_signature"]
         assert state["repeat_tempo_per_note_track"] is True
+        assert state["preview_api"] == "./api/render_edited_midi_preview"
+        assert state["preview_token"] == "preview-token"

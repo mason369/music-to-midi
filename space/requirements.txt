@@ -27,7 +27,8 @@ soxr>=0.3.7
 h5py>=3.10,<4
 
 # 模型下载
-huggingface_hub>=0.20.0
+huggingface_hub==0.36.0
+hf_xet==1.5.2
 
 # 固定 MuScriptor 公共提交由 space/app.py 以 --no-deps 按需安装；模型权重
 # 来自 gated MuScriptor/muscriptor-large，并在用户已获授权时按精确 revision 校验。
@@ -47,6 +48,8 @@ onnxruntime-gpu==1.23.2
 
 # 钢琴专用转写
 transkun==2.0.1
+ncls==0.0.68
+setuptools==80.10.2
 # Aria-AMT upstream pins torchaudio<=2.5, which conflicts with ZeroGPU's
 # torch/torchaudio>=2.8 runtime.  Its exact code revision is installed with
 # --no-deps at app startup; declare every runtime dependency here instead.
@@ -61,9 +64,11 @@ matplotlib>=3.7.0,<4
 gradio==4.44.1
 fastapi==0.136.3
 starlette==0.52.1
+pydantic==2.10.6
+pydantic-core==2.27.2
 
 # ZeroGPU 支持
-spaces==0.51.0
+spaces==0.51.1
 
 # 工具
 tqdm>=4.66.0

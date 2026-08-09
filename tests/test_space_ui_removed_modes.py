@@ -100,8 +100,13 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     assert "gradio==4.44.1" in requirements_text
     assert "fastapi==0.136.3" in requirements_text
     assert "starlette==0.52.1" in requirements_text
+    assert "pydantic==2.10.6" in requirements_text
+    assert "pydantic-core==2.27.2" in requirements_text
     assert "piano-transcription-inference==0.0.6" in requirements_text
     assert "transkun==2.0.1" in requirements_text
+    assert "ncls==0.0.68" in requirements_text
+    assert "setuptools==80.10.2" in requirements_text
+    assert "hf_xet==1.5.2" in requirements_text
     assert "matplotlib" in requirements_text
 
     for package_name in (
@@ -227,7 +232,7 @@ def test_space_split_modes_stop_after_wav_and_only_start_midi_from_row_button():
     separation_source = ast.get_source_segment(source_text, functions["_separate_impl"])
     selection_source = ast.get_source_segment(
         source_text,
-        functions["_track_control_updates"],
+        functions["_track_control_client_js"],
     )
     per_track_source = ast.get_source_segment(
         source_text,
@@ -244,24 +249,90 @@ def test_space_split_modes_stop_after_wav_and_only_start_midi_from_row_button():
 
     assert "_prepare_request_models" not in selection_source
     assert "_convert_manual_midi_on_gpu" not in selection_source
+    assert "__type__" in selection_source
+    assert "import json" in source_text
     assert "_prepare_request_models" in per_track_source
     assert "_convert_manual_midi_on_gpu" in per_track_source
 
-    assert "midi_enabled.change(" in source_text
-    assert "midi_route.change(" in source_text
-    assert source_text.count("fn=_track_control_updates") == 2
+    assert "midi_enabled.input(" in source_text
+    assert "midi_route.input(" in source_text
+    assert "midi_enabled.change(" not in source_text
+    assert "midi_route.change(" not in source_text
+    assert source_text.count("fn=None") >= 2
+    assert source_text.count("js=_track_control_client_js()") == 2
+    assert "fn=_track_control_updates" not in source_text
     assert "start_midi.click(" in source_text
     assert "fn=_convert_one_track" in source_text
     assert "vocal_split_merge_midi = gr.Checkbox(" not in source_text
     assert "save_separated_tracks = gr.Checkbox(" not in source_text
 
 
+def test_space_split_wrapper_forwards_the_complete_web_config_signature():
+    source_text = Path("space/app.py").read_text(encoding="utf-8")
+    module = ast.parse(source_text)
+    separator = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_separate_impl"
+    )
+    assert [argument.arg for argument in separator.args.args[:7]] == [
+        "audio_path",
+        "mode",
+        "transcription_backend",
+        "yourmt3_model",
+        "muscriptor_model",
+        "muscriptor_instruments",
+        "custom_bpm",
+    ]
+    build_call = next(
+        node
+        for node in ast.walk(separator)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_build_space_request_config"
+    )
+    assert [argument.id for argument in build_call.args[:6]] == [
+        "mode",
+        "transcription_backend",
+        "yourmt3_model",
+        "muscriptor_model",
+        "muscriptor_instruments",
+        "custom_bpm",
+    ]
+
+    gpu_wrappers = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "_convert_audio_to_midi_on_gpu"
+    ]
+    assert len(gpu_wrappers) == 2
+    for wrapper in gpu_wrappers:
+        split_call = next(
+            node
+            for node in ast.walk(wrapper)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_separate_impl"
+        )
+        assert [argument.id for argument in split_call.args[:7]] == [
+            "audio_path",
+            "mode",
+            "transcription_backend",
+            "yourmt3_model",
+            "muscriptor_model",
+            "muscriptor_instruments",
+            "custom_bpm",
+        ]
+
+
 def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes():
     source_text = Path("space/app.py").read_text(encoding="utf-8")
     manual_source = Path("src/core/manual_midi.py").read_text(encoding="utf-8")
 
-    assert "@gr.render(inputs=[track_state, mode_radio])" in source_text
-    assert "def render_track_workbench(current_state, selected_mode):" in source_text
+    assert "@gr.render(inputs=[track_state, mode_radio, render_revision])" in source_text
+    assert (
+        "def render_track_workbench(current_state, selected_mode, _render_revision):" in source_text
+    )
     assert "selected_mode not in SPLIT_MODE_IDS" in source_text
 
     # The workbench renders real waveforms through the shared browser mixer
@@ -290,6 +361,56 @@ def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes()
     assert "MIDI_ROUTE_PIANO_TRANSKUN_V2_AUG" in manual_source
     assert "MIDI_ROUTE_PIANO_ARIA_AMT" in manual_source
     assert "MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL" in manual_source
+
+
+def test_space_result_html_keys_are_scoped_to_each_real_midi_output():
+    source_text = Path("space/app.py").read_text(encoding="utf-8")
+
+    assert '"muscriptor-result-workbench::"' in source_text
+    assert "current_state['midi_path']" in source_text
+    assert '"linked-midi-result-workbench::"' in source_text
+    assert "active_midi_result['midi_path']" in source_text
+    assert 'key="muscriptor-result-workbench"' not in source_text
+    assert 'key="linked-midi-result-workbench"' not in source_text
+
+
+def test_space_add_audio_change_does_not_clear_and_retrigger_itself():
+    source_text = Path("space/app.py").read_text(encoding="utf-8")
+    module = ast.parse(source_text)
+    functions = {
+        node.name: node
+        for node in ast.walk(module)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    add_source = ast.get_source_segment(source_text, functions["_add_audio_tracks"])
+
+    assert "return state" in add_source
+    assert 'return _normalize_track_state({**state, "tracks": tracks})' in add_source
+    assert "outputs=[track_state]," in source_text
+    assert "outputs=[track_state, add_audio]" not in source_text
+
+
+def test_space_dynamic_state_actions_explicitly_advance_render_revision():
+    source_text = Path("space/app.py").read_text(encoding="utf-8")
+
+    assert "render_revision = gr.Number(value=0, visible=False)" in source_text
+    assert "def _next_render_revision(current_revision):" in source_text
+    for event_name in (
+        "another_event",
+        "add_audio_event",
+        "remove_event",
+        "start_midi_event",
+        "close_detail_event",
+    ):
+        assert f"{event_name}.then(" in source_text
+    assert source_text.count("fn=_next_render_revision") == 5
+
+
+def test_space_per_track_midi_download_key_is_scoped_to_the_real_output():
+    source_text = Path("space/app.py").read_text(encoding="utf-8")
+
+    assert "f\"midi-file-{track['id']}::\"" in source_text
+    assert "f\"{Path(str(track['midi_path'])).resolve()}\"" in source_text
 
 
 def test_space_track_state_is_request_owned_and_added_audio_is_copied():

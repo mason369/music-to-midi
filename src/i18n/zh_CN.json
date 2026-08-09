@@ -104,7 +104,7 @@
       "piano_aria_amt_hint": "适合独奏钢琴，直接输出钢琴 MIDI。",
       "piano_bytedance_pedal_desc": "🎹  ByteDance Pedal  —  带踏板钢琴转写",
       "piano_bytedance_pedal_hint": "适合包含延音踏板的独奏钢琴，并保留 CC64 踏板信息。",
-      "vocal_split_merge_midi": "输出 1 个人声+伴奏合并 MIDI（人声分离模式）"
+      "vocal_split_merge_midi": "旧版选项（当前人声分离只先输出两条 WAV）"
     },
     "engine": {
       "active_label": "多乐器后端",
@@ -117,14 +117,14 @@
       "yourmt3_tooltip": "支持多种模型结构的多乐器转写后端。",
       "yourmt3_midi_tooltip": "这里只是分离后的 MIDI 转写后端；不参与人声分离或六声部音频分离。",
       "yourmt3_general_hint": "将完整混音直接转换为 GM 多乐器 MIDI；可在上方选择模型结构。",
-      "yourmt3_six_stem_hint": "六声部音频分离固定使用 BS-RoFormer SW Fixed；所选 YourMT3+ checkpoint 会分别转写 bass/drums/guitar/piano/vocals/other 六个真实 stem，再生成对应 MIDI。",
-      "vocal_split_yourmt3_midi_hint": "人声分离固定使用 Leap XE vocals + PolarFormer accompaniment；所选 YourMT3+ checkpoint 只负责分别转写两个真实 stem。",
+      "yourmt3_six_stem_hint": "六声部音频分离固定使用 BS-RoFormer SW Fixed，并且只先输出六条 WAV；分离完成后可在结果工作台逐轨显式选择 YourMT3+ checkpoint。",
+      "vocal_split_yourmt3_midi_hint": "人声分离固定使用 Leap XE vocals + PolarFormer accompaniment，并且只先输出两条 WAV；分离完成后可在结果工作台逐轨显式选择 YourMT3+ checkpoint。",
       "miros": "MIROS (MusicFM)",
       "miros_midi": "MIROS（仅转 MIDI）",
       "miros_tooltip": "基于 MusicFM multi-decoder 的多乐器转写后端。",
       "miros_general_hint": "将完整混音直接转换为 GM 多乐器 MIDI。",
-      "miros_six_stem_hint": "六声部音频分离固定使用 BS-RoFormer SW Fixed；MIROS 会分别转写 bass/drums/guitar/piano/vocals/other 六个真实 stem，再生成对应 MIDI。",
-      "vocal_split_miros_midi_hint": "人声分离固定使用 Leap XE vocals + PolarFormer accompaniment；MIROS 只负责分别转写两个真实 stem。",
+      "miros_six_stem_hint": "六声部音频分离固定使用 BS-RoFormer SW Fixed，并且只先输出六条 WAV；分离完成后可在结果工作台逐轨显式选择 MIROS。",
+      "vocal_split_miros_midi_hint": "人声分离固定使用 Leap XE vocals + PolarFormer accompaniment，并且只先输出两条 WAV；分离完成后可在结果工作台逐轨显式选择 MIROS。",
       "muscriptor": "MuScriptor",
       "muscriptor_midi": "MuScriptor（仅转 MIDI）",
       "muscriptor_tooltip": "可显式选择 Large、Medium 或 Small；支持自动识别或按乐器限制输出。",
@@ -148,7 +148,7 @@
       "label": "工程 BPM",
       "auto": "自动检测",
       "custom": "自定义",
-      "custom_tooltip": "手动覆盖最终 MIDI 的工程 BPM，支持 4–400 BPM。事件先映射到自动检测 BPM 的音乐 tick，再保留 tick 并写入目标 tempo，因此导出 MIDI 和联动试听会按“工程 BPM ÷ 检测 BPM”真实变速；不会量化、过滤或重建模型音符。"
+      "custom_tooltip": "0 表示保持自动检测；手动覆盖最终 MIDI 的工程 BPM 时支持 4–400 BPM。事件先映射到自动检测 BPM 的音乐 tick，再保留 tick 并写入目标 tempo，因此导出 MIDI 和联动试听会按“工程 BPM ÷ 检测 BPM”真实变速；不会量化、过滤或重建模型音符。"
     },
     "tracks": {
       "title": "处理设置"
@@ -358,7 +358,7 @@
       "audio_hint": "支持 MP3, WAV, FLAC, OGG, M4A（自动转换为 WAV 处理）",
       "track_section": "处理设置",
       "mode_label": "处理模式",
-      "vocal_split_merge_midi": "输出 1 个人声+伴奏合并 MIDI（人声分离模式）",
+      "vocal_split_merge_midi": "旧版选项（当前人声分离只先输出两条 WAV）",
       "convert_button": "▶  开始转换",
       "device": "当前设备",
       "zerogpu_device": "ZeroGPU（仅在处理时分配 GPU）",
@@ -473,8 +473,8 @@
     "loading_vocal_separator": "正在准备人声/伴奏分离：先运行 Leap XE，再运行 PolarFormer...",
     "separation_model_loading": "正在加载 {model}（{role}）模型：{model_file}（{engine}）...",
     "separation_model_switching": "{from_model}（{from_role}）已完成；正在保存 WAV 并切换到 {to_model}（{to_role}）模型：{model_file}...",
-    "audio_chunk_running": "正在推理：{model}（{role}）音频分片 {current}/{total}；模型 {model_file}；{engine}；约 {chunk_seconds} 秒/片，相邻重叠约 {overlap_seconds} 秒；不是处理阶段或重试",
-    "audio_chunk_progress": "音频分片进度：{model} {role} {done}/{total}（约 {chunk_seconds} 秒/片，相邻重叠约 {overlap_seconds} 秒；不是处理阶段或重试）",
+    "audio_chunk_running": "正在推理：{model}（{role}）音频分片 {current}/{total}；模型 {model_file}；{engine}；每片覆盖约 {chunk_seconds} 秒音频，相邻重叠约 {overlap_seconds} 秒音频；这不是预计耗时，也不是处理阶段或重试",
+    "audio_chunk_progress": "音频分片进度：{model} {role} {done}/{total}（每片覆盖约 {chunk_seconds} 秒音频，相邻重叠约 {overlap_seconds} 秒音频；不是预计耗时、处理阶段或重试）",
     "audio_chunk_role_vocals": "人声",
     "audio_chunk_role_accompaniment": "伴奏",
     "cpu_retry": "检测到当前 NVIDIA 显卡与内置 PyTorch/CUDA 不兼容，正在改用 CPU 推理...",

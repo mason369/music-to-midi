@@ -15,8 +15,6 @@ from dataclasses import replace
 from pathlib import Path
 
 from PyQt6.QtCore import (
-    QCoreApplication,
-    QEvent,
     QLineF,
     QPointF,
     QRectF,
@@ -54,6 +52,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.midi_editor import export_edited_midi
+from src.core.midi_tempo import validated_midi_time_signature
 from src.core.muscriptor_result_assets import (
     MuscriptorPlaybackAssets,
     MuscriptorPreviewAssets,
@@ -392,6 +391,8 @@ class _PianoRollCanvas(QWidget):
         self._selected_index: int | None = None
         self._selected_indices: set[int] = set()
         self._grid_seconds = 0.125
+        self._daw_reference_bpm: float | None = None
+        self._daw_time_signature: tuple[int, int] = (4, 4)
         self._beat_times: tuple[float, ...] = ()
         self._downbeat_times: tuple[float, ...] = ()
         self._drag_mode: str | None = None
@@ -568,6 +569,28 @@ class _PianoRollCanvas(QWidget):
         if not math.isfinite(grid) or grid <= 0:
             raise ValueError(f"Piano-roll grid must be finite and positive: {seconds}")
         self._grid_seconds = grid
+
+    def set_daw_grid(
+        self,
+        reference_bpm: float,
+        time_signature: tuple[int, int] = (4, 4),
+    ) -> None:
+        """Display the same bar/beat/1/16 grid represented by exported MIDI ticks."""
+
+        bpm = float(reference_bpm)
+        if not math.isfinite(bpm) or not MIN_MIDI_BPM <= bpm <= MAX_MIDI_BPM:
+            raise ValueError(f"Invalid DAW-grid reference BPM: {reference_bpm!r}")
+        signature = validated_midi_time_signature(time_signature)
+        if (
+            self._daw_reference_bpm is not None
+            and math.isclose(self._daw_reference_bpm, bpm, rel_tol=0.0, abs_tol=1e-9)
+            and self._daw_time_signature == signature
+        ):
+            return
+        self._daw_reference_bpm = bpm
+        self._daw_time_signature = signature
+        self._tile_cache.clear()
+        self.update()
 
     def set_beat_grid(
         self,
@@ -812,7 +835,76 @@ class _PianoRollCanvas(QWidget):
                 painter.drawText(3, y + self._row_height - 1, f"C{pitch // 12 - 1}")
 
         painter.setFont(QFont("Consolas", 8))
-        if self._beat_times:
+        if self._daw_reference_bpm is not None:
+            visible_start = max(0.0, (logical_left - roll_left) / self._pixels_per_second)
+            visible_end = max(
+                visible_start,
+                (logical_right - roll_left) / self._pixels_per_second,
+            )
+            numerator, denominator = self._daw_time_signature
+            quarter_seconds = 60.0 / self._daw_reference_bpm
+            subdivision_seconds = quarter_seconds / 4.0
+            beat_seconds = quarter_seconds * 4.0 / float(denominator)
+            bar_seconds = beat_seconds * float(numerator)
+
+            first_bar = max(0, int(math.floor(visible_start / bar_seconds)))
+            last_bar = int(math.ceil(visible_end / bar_seconds)) + 1
+            for bar_index in range(first_bar, last_bar):
+                if bar_index % 2 == 0:
+                    continue
+                left = self.x_for_time_float(bar_index * bar_seconds)
+                right = self.x_for_time_float((bar_index + 1) * bar_seconds)
+                painter.fillRect(
+                    QRectF(left, 0.0, max(0.0, right - left), float(self.height())),
+                    QColor(255, 255, 255, 8),
+                )
+
+            first_subdivision = max(
+                0,
+                int(math.floor(visible_start / subdivision_seconds)) - 1,
+            )
+            last_subdivision = int(math.ceil(visible_end / subdivision_seconds)) + 1
+            subdivision_stride = 1
+            while subdivision_seconds * self._pixels_per_second * subdivision_stride < 5.0:
+                subdivision_stride *= 2
+            painter.setPen(QPen(QColor("#263d59"), 1))
+            for subdivision_index in range(
+                first_subdivision,
+                last_subdivision + 1,
+                subdivision_stride,
+            ):
+                x = self.x_for_time_float(subdivision_index * subdivision_seconds)
+                painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
+
+            first_beat = max(0, int(math.floor(visible_start / beat_seconds)) - 1)
+            last_beat = int(math.ceil(visible_end / beat_seconds)) + 1
+            label_beats = beat_seconds * self._pixels_per_second >= 38.0
+            for beat_index in range(first_beat, last_beat + 1):
+                beat_in_bar = beat_index % numerator
+                if beat_in_bar == 0:
+                    continue
+                x = self.x_for_time_float(beat_index * beat_seconds)
+                painter.setPen(QPen(QColor("#36506f"), 1))
+                painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
+                if label_beats:
+                    painter.setPen(QColor("#7f9dbd"))
+                    painter.drawText(
+                        QPointF(x + 3.0, 11.0),
+                        f"{beat_index // numerator + 1}.{beat_in_bar + 1}",
+                    )
+
+            first_downbeat = max(0, int(math.floor(visible_start / bar_seconds)) - 1)
+            last_downbeat = int(math.ceil(visible_end / bar_seconds)) + 1
+            for bar_index in range(first_downbeat, last_downbeat + 1):
+                x = self.x_for_time_float(bar_index * bar_seconds)
+                downbeat_pen = QPen(QColor("#78aee8"))
+                downbeat_pen.setWidthF(1.5)
+                downbeat_pen.setCosmetic(True)
+                painter.setPen(downbeat_pen)
+                painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
+                painter.setPen(QColor("#a9c8e8"))
+                painter.drawText(QPointF(x + 3.0, 11.0), f"{bar_index + 1}.1")
+        elif self._beat_times:
             visible_start = max(0.0, (logical_left - roll_left) / self._pixels_per_second)
             visible_end = max(
                 visible_start,
@@ -1557,6 +1649,7 @@ class MuscriptorResultWidget(QFrame):
         self._deferred_assets_timer.setSingleShot(True)
         self._deferred_assets_timer.timeout.connect(self._try_apply_deferred_assets)
         self._detected_bpm: float | None = None
+        self._time_signature: tuple[int, int] = (4, 4)
         self._bpm_user_overridden = False
         self._last_tempo_editor: str | None = None
         self._muted: set[str] = set()
@@ -1774,6 +1867,25 @@ class MuscriptorResultWidget(QFrame):
         result_controls.addLayout(transport)
 
         self.editor_panel = QWidget()
+        self.editor_panel.setObjectName("midiEditorToolbar")
+        self.editor_panel.setStyleSheet(
+            "QWidget#midiEditorToolbar QPushButton, "
+            "QWidget#midiEditorToolbar QToolButton {"
+            " min-height: 32px; padding: 0 12px;"
+            " border: 1px solid #3b5577; border-radius: 6px;"
+            " background: #1d3150; color: #d7e6f8; }"
+            "QWidget#midiEditorToolbar QPushButton:hover, "
+            "QWidget#midiEditorToolbar QToolButton:hover {"
+            " border-color: #5b91c9; background: #29466e; }"
+            "QWidget#midiEditorToolbar QPushButton:pressed, "
+            "QWidget#midiEditorToolbar QToolButton:pressed {"
+            " background: #152941; }"
+            "QWidget#midiEditorToolbar QToolButton:checked {"
+            " border-color: #4a9eff; background: #2f67a4; color: white; }"
+            "QWidget#midiEditorToolbar QPushButton:disabled, "
+            "QWidget#midiEditorToolbar QToolButton:disabled {"
+            " border-color: #2a3b55; background: #182943; color: #607796; }"
+        )
         editor = QVBoxLayout(self.editor_panel)
         editor.setContentsMargins(0, 0, 0, 0)
         editor.setSpacing(5)
@@ -1849,9 +1961,10 @@ class MuscriptorResultWidget(QFrame):
             self.edit_quantize_button,
         ):
             command_button.setSizePolicy(
-                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Minimum,
                 QSizePolicy.Policy.Fixed,
             )
+            command_button.setMinimumHeight(34)
         self.edit_instrument_label = QLabel()
         editor_fields.addWidget(self.edit_instrument_label)
         self.edit_instrument_combo = QComboBox()
@@ -1888,8 +2001,16 @@ class MuscriptorResultWidget(QFrame):
         )
         editor_fields.addWidget(self.roll_zoom_spin)
         self.edit_summary_label = QLabel()
-        self.edit_summary_label.setStyleSheet("color: #8da4c9;")
-        self.edit_summary_label.setWordWrap(True)
+        self.edit_summary_label.setStyleSheet(
+            "color: #9bb4d5; background: #15263f; border: 1px solid #304b6c; "
+            "border-radius: 5px; padding: 5px 9px;"
+        )
+        self.edit_summary_label.setWordWrap(False)
+        self.edit_summary_label.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.edit_summary_label.setMinimumHeight(32)
         editor_fields.addWidget(self.edit_summary_label)
         editor_fields.addStretch()
         editor.addLayout(primary_commands)
@@ -2116,6 +2237,7 @@ class MuscriptorResultWidget(QFrame):
                     else result.beat_info.bpm
                 ),
                 result.beat_info.bpm,
+                time_signature=result.beat_info.time_signature or (4, 4),
             )
         output_dir = Path(self._midi_path).parent / "midi-playback"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -2464,12 +2586,8 @@ class MuscriptorResultWidget(QFrame):
             player.setSource(QUrl())
             player.setAudioOutput(None)
             player.deleteLater()
-            # Flush only this object's DeferredDelete event. The previous global
-            # flush could re-enter deletion of unrelated workers and widgets.
-            QCoreApplication.sendPostedEvents(player, QEvent.Type.DeferredDelete)
             if output is not None:
                 output.deleteLater()
-                QCoreApplication.sendPostedEvents(output, QEvent.Type.DeferredDelete)
 
     def _on_source_duration_changed(self, duration_ms: int) -> None:
         if duration_ms > 0:
@@ -3253,7 +3371,9 @@ class MuscriptorResultWidget(QFrame):
         self._transform_selected_editor_notes(name, int(amount_text))
 
     def _editor_grid_seconds(self) -> float:
-        bpm = float(self.bpm_spin.value())
+        if self._detected_bpm is None:
+            raise RuntimeError("Cannot derive MIDI editor grid without a reference BPM")
+        bpm = float(self._detected_bpm)
         if not math.isfinite(bpm) or bpm <= 0:
             raise RuntimeError(f"Cannot derive MIDI editor grid from BPM {bpm!r}")
         return 60.0 / bpm / 4.0
@@ -3471,10 +3591,21 @@ class MuscriptorResultWidget(QFrame):
             return
         self.set_bpm_context(bpm, bpm)
 
-    def set_bpm_context(self, source_bpm: float, target_bpm: float) -> None:
-        """Set source/project BPM and expose their real playback-rate ratio."""
+    def set_bpm_context(
+        self,
+        source_bpm: float,
+        target_bpm: float,
+        *,
+        time_signature: tuple[int, int] | None = None,
+    ) -> None:
+        """Set source/project tempo while keeping the editor on source MIDI ticks."""
+
+        if time_signature is not None:
+            self._time_signature = validated_midi_time_signature(time_signature)
 
         if self._bpm_user_overridden:
+            if self._detected_bpm is not None:
+                self.roll.set_daw_grid(self._detected_bpm, self._time_signature)
             return
         source = float(source_bpm)
         target = float(target_bpm)
@@ -3500,6 +3631,7 @@ class MuscriptorResultWidget(QFrame):
         self.speed_label.show()
         self.speed_spin.show()
         self.roll.set_grid_seconds(self._editor_grid_seconds())
+        self.roll.set_daw_grid(source, self._time_signature)
         self._apply_result_playback_rate()
 
     def _result_playback_rate(self) -> float:

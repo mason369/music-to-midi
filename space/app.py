@@ -5,6 +5,7 @@ Music to MIDI - Gradio Web 界面
 
 import atexit
 import importlib
+import json
 import logging
 import math
 import os
@@ -98,6 +99,19 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("music-to-midi-web")
+for _logger_name in ("music-to-midi-web", "src.core", "src.utils"):
+    _startup_logger = logging.getLogger(_logger_name)
+    for _existing_handler in list(_startup_logger.handlers):
+        _handler_path = getattr(_existing_handler, "filename", None)
+        _is_legacy_ui_handler = (
+            _existing_handler.__class__.__name__ == "_RobustFileHandler"
+            and _handler_path == LOG_FILE
+        )
+        if getattr(
+            _existing_handler, "_music_to_midi_ui_log_handler", False
+        ) or _is_legacy_ui_handler:
+            _startup_logger.removeHandler(_existing_handler)
+            _existing_handler.close()
 
 SPACE_OUTPUT_RETENTION_SECONDS = int(
     os.environ.get("MUSIC_TO_MIDI_SPACE_OUTPUT_RETENTION_SECONDS", "86400")
@@ -221,8 +235,21 @@ _file_handler.setFormatter(
     logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 )
 _file_handler.setLevel(logging.INFO)
+_file_handler._music_to_midi_ui_log_handler = True
 for _name in ("music-to-midi-web", "src.core", "src.utils"):
-    logging.getLogger(_name).addHandler(_file_handler)
+    _target_logger = logging.getLogger(_name)
+    for _existing_handler in list(_target_logger.handlers):
+        _handler_path = getattr(_existing_handler, "filename", None)
+        _is_legacy_ui_handler = (
+            _existing_handler.__class__.__name__ == "_RobustFileHandler"
+            and _handler_path == LOG_FILE
+        )
+        if getattr(
+            _existing_handler, "_music_to_midi_ui_log_handler", False
+        ) or _is_legacy_ui_handler:
+            _target_logger.removeHandler(_existing_handler)
+            _existing_handler.close()
+    _target_logger.addHandler(_file_handler)
 
 
 def clear_logs():
@@ -259,21 +286,6 @@ def ensure_yourmt3_code():
 
 
 try:
-    import gradio_client.utils as _gcu
-
-    _original_json_schema = _gcu._json_schema_to_python_type
-
-    def _patched_json_schema(schema, defs=None):
-        if isinstance(schema, bool):
-            return "bool"
-        return _original_json_schema(schema, defs)
-
-    _gcu._json_schema_to_python_type = _patched_json_schema
-except Exception:
-    pass
-
-
-try:
     import spaces
 except ImportError as exc:
     # Match spaces.config.boolean exactly so a requested ZeroGPU deployment
@@ -299,6 +311,12 @@ else:
 import gradio as gr
 from gradio.components.base import Component
 
+# The mixer embeds request-owned WAV files in an HTML/Web Audio surface.  Gradio
+# does not automatically register paths referenced only by custom HTML, so use
+# its supported static-file API for the same tightly scoped instance directory
+# that is already passed to launch(allowed_paths=...).
+gr.set_static_paths(paths=[SPACE_OUTPUT_INSTANCE])
+
 from src.core.manual_midi import (
     MANUAL_MIDI_ROUTES,
     MIDI_ROUTE_MIROS,
@@ -316,10 +334,12 @@ from src.core.manual_midi import (
 )
 from src.core.multi_stem_separator import STEM_KEYS
 from src.core.separation_service import AudioSeparationService, SeparationResult
+from src.gui.web.edited_midi_preview import EditedMidiPreviewRegistry
 from src.gui.web.muscriptor_result_runtime import (
     build_muscriptor_result_html,
     muscriptor_result_head,
 )
+from src.gui.web.form_values import normalize_optional_project_bpm
 from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
     build_track_mixer_html,
@@ -341,7 +361,10 @@ from src.models.muscriptor_instruments import (
     muscriptor_instrument_label,
     validate_muscriptor_instruments,
 )
+
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
+
+_EDITED_MIDI_PREVIEWS = EditedMidiPreviewRegistry()
 
 SPACE_LANGUAGE = os.environ.get("MUSIC_TO_MIDI_LANGUAGE", "zh_CN")
 if SPACE_LANGUAGE not in Translator.AVAILABLE_LANGUAGES:
@@ -556,6 +579,37 @@ def _require_owned_request_output_dir(
     return candidate
 
 
+def _request_root_for_owned_path(path_value: str | Path) -> Path:
+    candidate = Path(path_value).resolve()
+    for parent in (candidate, *candidate.parents):
+        if (
+            parent.parent == SPACE_OUTPUT_INSTANCE
+            and parent.name.startswith(SPACE_REQUEST_PREFIX)
+            and parent.is_dir()
+        ):
+            return parent
+    raise RuntimeError(f"Path does not belong to an active Space request: {candidate}")
+
+
+def render_edited_midi_preview(payload_json: str) -> str:
+    """Render the exact server-side SoundFont audition for browser note edits."""
+
+    started_at = time.perf_counter()
+    try:
+        rendered = _EDITED_MIDI_PREVIEWS.render(payload_json)
+    except Exception as exc:
+        logger.error("Edited browser MIDI preview failed: %s", exc)
+        raise gr.Error(st("muscriptor_result.editor_audio_failed", error=exc)) from exc
+    logger.info(
+        "Edited browser MIDI preview ready: notes=%s duration=%.3fs elapsed=%.3fs digest=%s",
+        rendered["noteCount"],
+        rendered["duration"],
+        time.perf_counter() - started_at,
+        rendered["digest"],
+    )
+    return json.dumps(rendered, ensure_ascii=False)
+
+
 def _normalize_midi_result_state(
     raw_state,
     request_root: Path,
@@ -650,6 +704,13 @@ def _normalize_midi_result_state(
             "Linked MIDI result contains an invalid BPM context: "
             f"reference={reference_bpm!r}, target={target_bpm!r}"
         )
+    from src.core.midi_tempo import validated_midi_time_signature
+
+    raw_time_signature = raw_state.get("time_signature", (4, 4))
+    try:
+        time_signature = validated_midi_time_signature(tuple(raw_time_signature))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Linked MIDI result contains an invalid time signature") from exc
     beat_times = [float(value) for value in raw_state.get("beat_times", [])]
     downbeats = [float(value) for value in raw_state.get("downbeats", [])]
     repeat_tempo_per_note_track = bool(raw_state.get("repeat_tempo_per_note_track", False))
@@ -661,16 +722,24 @@ def _normalize_midi_result_state(
             raise RuntimeError(f"Linked MIDI result contains an invalid {label} grid")
     if repeat_tempo_per_note_track and len(beat_times) < 2:
         raise RuntimeError("MuScriptor linked MIDI result is missing its Beat This grid")
+    midi_path = owned_file("midi_path", "Linked MIDI file")
+    preview_token = _EDITED_MIDI_PREVIEWS.require_matching(
+        raw_state.get("preview_token"),
+        request_dir=request_root,
+        source_midi_path=midi_path,
+        original_audio_path=audio_path,
+    )
     return {
         "kind": "midi_result",
         "audio_path": str(audio_path),
-        "midi_path": owned_file("midi_path", "Linked MIDI file"),
+        "midi_path": midi_path,
         "selected_instruments": [str(item) for item in raw_state.get("selected_instruments", [])],
         "detected_instruments": [str(item) for item in raw_state.get("detected_instruments", [])],
         "notes": notes,
         "duration": duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "time_signature": time_signature,
         "beat_times": beat_times,
         "downbeats": downbeats,
         "repeat_tempo_per_note_track": repeat_tempo_per_note_track,
@@ -679,6 +748,8 @@ def _normalize_midi_result_state(
         "instrument_wavs": instrument_wavs,
         "backend_label": str(raw_state.get("backend_label", "")).strip(),
         "source_track_name": str(raw_state.get("source_track_name", "")).strip(),
+        "preview_api": "./api/render_edited_midi_preview",
+        "preview_token": preview_token,
     }
 
 
@@ -839,6 +910,7 @@ def _build_midi_result_state(
     from src.core.midi_tempo import (
         read_muscriptor_bar_offset_seconds,
         rewrite_midi_tempo_preserving_ticks,
+        validated_midi_time_signature,
     )
     from src.core.muscriptor_result_assets import prepare_midi_playback_assets
 
@@ -850,6 +922,7 @@ def _build_midi_result_state(
         else result.beat_info.bpm
     )
     target_bpm = float(result.beat_info.bpm)
+    time_signature = validated_midi_time_signature(result.beat_info.time_signature or (4, 4))
     playback_dir = Path(output_dir).resolve()
     playback_dir.mkdir(parents=True, exist_ok=True)
     playback_midi_path = rewrite_midi_tempo_preserving_ticks(
@@ -863,6 +936,14 @@ def _build_midi_result_state(
         audio_path,
         playback_dir,
         progress_callback=progress_callback,
+        muscriptor_groups=muscriptor_groups,
+    )
+    request_root = _request_root_for_owned_path(playback_dir)
+    preview_token = _EDITED_MIDI_PREVIEWS.register(
+        request_dir=request_root,
+        source_midi_path=result.midi_path,
+        original_audio_path=audio_path,
+        reference_bpm=reference_bpm,
         muscriptor_groups=muscriptor_groups,
     )
     bar_offset_seconds = (
@@ -893,6 +974,7 @@ def _build_midi_result_state(
         "duration": assets.duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "time_signature": time_signature,
         "beat_times": (
             [float(value) + bar_offset_seconds for value in result.beat_info.beat_times]
             if muscriptor_groups
@@ -909,6 +991,8 @@ def _build_midi_result_state(
         "instrument_wavs": {name: str(path) for name, path in assets.instrument_wavs.items()},
         "backend_label": str(backend_label),
         "source_track_name": str(source_track_name),
+        "preview_api": "./api/render_edited_midi_preview",
+        "preview_token": preview_token,
     }
 
 
@@ -1004,6 +1088,7 @@ def ensure_muscriptor_runtime():
         MUSCRIPTOR_SOURCE_REQUIREMENT,
         MuscriptorTranscriber,
     )
+
     unavailable = MuscriptorTranscriber._runtime_unavailable_reason()
     if not unavailable:
         return
@@ -1223,7 +1308,7 @@ def _build_space_request_config(
     config.yourmt3_model = yourmt3_model
     config.muscriptor_model = muscriptor_model
     config.muscriptor_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
-    config.custom_bpm = custom_bpm
+    config.custom_bpm = normalize_optional_project_bpm(custom_bpm)
     config.vocal_split_merge_midi = bool(
         config.processing_mode == ProcessingMode.VOCAL_SPLIT.value and vocal_split_merge_midi
     )
@@ -1280,6 +1365,7 @@ def _register_active_job(job) -> None:
     global _ACTIVE_JOB
     with _ACTIVE_JOB_LOCK:
         _ACTIVE_JOB = job
+    logger.info("Registered active job for cancellation: %s", type(job).__name__)
 
 
 def _unregister_active_job(job) -> None:
@@ -1289,6 +1375,7 @@ def _unregister_active_job(job) -> None:
     with _ACTIVE_JOB_LOCK:
         if _ACTIVE_JOB is job:
             _ACTIVE_JOB = None
+            logger.info("Unregistered active job: %s", type(job).__name__)
 
 
 def request_stop_current_job():
@@ -1300,9 +1387,40 @@ def request_stop_current_job():
     with _ACTIVE_JOB_LOCK:
         job = _ACTIVE_JOB
     if job is None:
+        logger.info("Stop requested, but no active job is registered")
         return gr.update()
+    logger.info("Stop requested for active job: %s", type(job).__name__)
     job.cancel()
+    logger.info("Cancellation signal delivered to active job: %s", type(job).__name__)
     return st("status.cancelling")
+
+
+def _stop_current_job_client_js() -> str:
+    """Send cancellation on an independent HTTP request.
+
+    Gradio serializes ordinary events from one browser session behind the
+    running conversion, even when the listener itself uses ``queue=False``.
+    Calling the unqueued endpoint from the browser lets the cooperative cancel
+    flag reach the active backend while inference is still running.
+    """
+    cancelling_text = json.dumps(st("status.cancelling"), ensure_ascii=False)
+    return f"""
+async () => {{
+  const stopUrl = new URL("./run/stop_current_job", window.location.href);
+  const response = await fetch(stopUrl, {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{
+      data: [],
+      session_hash: `stop-${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`,
+    }}),
+  }});
+  if (!response.ok) {{
+    throw new Error(`Stop request failed: HTTP ${{response.status}}`);
+  }}
+  return [{cancelling_text}];
+}}
+"""
 
 
 def _convert_impl(
@@ -1431,6 +1549,9 @@ def _separate_impl(
     mode,
     transcription_backend,
     yourmt3_model,
+    muscriptor_model,
+    muscriptor_instruments,
+    custom_bpm,
     progress=gr.Progress(),
 ):
     """Separate two or six WAV tracks and return a request-owned workbench state."""
@@ -1449,6 +1570,9 @@ def _separate_impl(
         mode,
         transcription_backend,
         yourmt3_model,
+        muscriptor_model,
+        muscriptor_instruments,
+        custom_bpm,
         vocal_split_merge_midi=False,
         save_separated_tracks=True,
     )
@@ -1519,7 +1643,7 @@ def _separate_impl(
 
 
 ZERO_GPU_FREE_ACCOUNT_BUDGET_SECONDS = 300
-# spaces==0.51.0 applies a 1.5 duration factor to the default Blackwell
+# spaces==0.51.1 applies a 1.5 duration factor to the default Blackwell
 # ``large`` allocation.  Treat that as the pinned-package upper bound so the
 # dynamic request cannot exceed one logged-in free-account window; H200's 1.0
 # factor is therefore admitted conservatively.
@@ -1638,6 +1762,9 @@ if ZERO_GPU:
                 mode,
                 transcription_backend,
                 yourmt3_model,
+                muscriptor_model,
+                muscriptor_instruments,
+                custom_bpm,
                 progress=progress,
             )
         return _convert_impl(
@@ -1670,6 +1797,9 @@ else:
                 mode,
                 transcription_backend,
                 yourmt3_model,
+                muscriptor_model,
+                muscriptor_instruments,
+                custom_bpm,
                 progress=progress,
             )
         return _convert_impl(
@@ -1738,7 +1868,7 @@ def _manual_route_config(route: str, muscriptor_instruments=None, custom_bpm=Non
         raise RuntimeError(f"Unsupported manual MIDI route: {route!r}")
     base_config = Config()
     base_config.language = SPACE_LANGUAGE
-    base_config.custom_bpm = custom_bpm
+    base_config.custom_bpm = normalize_optional_project_bpm(custom_bpm)
     return build_manual_midi_config(
         base_config,
         route,
@@ -1987,27 +2117,53 @@ if ZERO_GPU:
     setattr(_convert_one_track, "zerogpu", None)
 
 
-def _track_control_updates(enabled, route):
-    is_enabled = bool(enabled)
-    normalized_route = str(route or "")
-    if not is_enabled:
-        status = st("dialogs.complete.audio_tracks.manual_midi.not_selected")
-    elif normalized_route not in MANUAL_MIDI_ROUTES:
-        status = st("dialogs.complete.audio_tracks.manual_midi.model_required")
-    else:
-        status = st(
-            "dialogs.complete.audio_tracks.manual_midi.selected",
-            model=_manual_midi_route_label(normalized_route),
-        )
-    return (
-        gr.update(interactive=is_enabled),
-        gr.update(interactive=is_enabled and normalized_route in MANUAL_MIDI_ROUTES),
-        status,
-        gr.update(
-            visible=is_muscriptor_midi_route(normalized_route),
-            interactive=is_enabled and is_muscriptor_midi_route(normalized_route),
-        ),
+def _track_control_client_js() -> str:
+    """Return a client-only controller for dynamic per-track form controls.
+
+    Gradio 4.44 can dispatch component input/change events while an
+    ``@gr.render`` tree is being replaced. A Python callback from the retired
+    tree then targets a function id that no longer exists and produces an HTTP
+    500. These updates do not need the server: model loading remains exclusively
+    behind the explicit conversion button, while interactivity and copy are
+    updated in the browser.
+    """
+
+    route_labels = {route: _manual_midi_route_label(route) for route in MANUAL_MIDI_ROUTES}
+    muscriptor_routes = [route for route in MANUAL_MIDI_ROUTES if is_muscriptor_midi_route(route)]
+    selected_template = st(
+        "dialogs.complete.audio_tracks.manual_midi.selected",
+        model="__MODEL__",
     )
+    return f"""
+(enabled, route) => {{
+  const normalizedRoute = typeof route === "string" ? route : "";
+  const validRoutes = new Set({json.dumps(list(MANUAL_MIDI_ROUTES), ensure_ascii=False)});
+  const routeLabels = {json.dumps(route_labels, ensure_ascii=False)};
+  const muscriptorRoutes = new Set({json.dumps(muscriptor_routes, ensure_ascii=False)});
+  const isEnabled = Boolean(enabled);
+  const isValid = validRoutes.has(normalizedRoute);
+  const isMuscriptor = muscriptorRoutes.has(normalizedRoute);
+  let status = {json.dumps(st("dialogs.complete.audio_tracks.manual_midi.not_selected"), ensure_ascii=False)};
+  if (isEnabled && !isValid) {{
+    status = {json.dumps(st("dialogs.complete.audio_tracks.manual_midi.model_required"), ensure_ascii=False)};
+  }} else if (isEnabled && isValid) {{
+    status = {json.dumps(selected_template, ensure_ascii=False)}.replace(
+      "__MODEL__",
+      routeLabels[normalizedRoute]
+    );
+  }}
+  return [
+    {{__type__: "update", interactive: isEnabled}},
+    {{__type__: "update", interactive: isEnabled && isValid}},
+    status,
+    {{
+      __type__: "update",
+      visible: isMuscriptor,
+      interactive: isEnabled && isMuscriptor,
+    }},
+  ];
+}}
+""".strip()
 
 
 def _add_audio_tracks(uploaded_files, track_state):
@@ -2016,7 +2172,9 @@ def _add_audio_tracks(uploaded_files, track_state):
         raise gr.Error("A separation result is required before adding audio tracks")
     raw_files = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
     if not raw_files or raw_files == [None]:
-        raise gr.Error(st("space.error.upload_required"))
+        # Clearing the File component is itself a change event.  It is not an
+        # add request and must leave the existing timeline untouched.
+        return state
 
     validated_sources = []
     for raw_file in raw_files:
@@ -2085,7 +2243,7 @@ def _add_audio_tracks(uploaded_files, track_state):
             }
         )
 
-    return _normalize_track_state({**state, "tracks": tracks}), None
+    return _normalize_track_state({**state, "tracks": tracks})
 
 
 def _remove_track(track_state, track_id):
@@ -2123,6 +2281,13 @@ def _close_active_midi_detail(track_state):
 
 def _clear_result_state():
     return {}
+
+
+def _next_render_revision(current_revision):
+    """Advance a client-visible signal used to rebuild dynamic workbenches."""
+
+    revision = int(current_revision or 0)
+    return revision + 1
 
 
 def update_mode_info(mode):
@@ -2350,6 +2515,14 @@ with gr.Blocks(
     ),
 ) as demo:
     track_state = gr.State({})
+    # Gradio 4.44 does not reliably retrigger a parent @gr.render when an
+    # event created inside that render only changes a hidden gr.State. Keep a
+    # hidden client component so each dynamic state mutation can explicitly
+    # request a rebuild.
+    render_revision = gr.Number(value=0, visible=False)
+    edited_preview_request = gr.Textbox(visible=False)
+    edited_preview_response = gr.Textbox(visible=False)
+    edited_preview_button = gr.Button(visible=False)
 
     with gr.Group(elem_classes="app-header"):
         gr.Markdown(f"# 🎵 {st('space.app.title')}\n{st('space.app.subtitle')}")
@@ -2411,8 +2584,8 @@ with gr.Blocks(
                 elem_classes=["muscriptor-instrument-selector"],
             )
             custom_bpm = gr.Number(
-                value=None,
-                minimum=4.0,
+                value=0.0,
+                minimum=0.0,
                 maximum=400.0,
                 step=0.1,
                 precision=1,
@@ -2434,6 +2607,7 @@ with gr.Blocks(
                     size="lg",
                     scale=1,
                 )
+                _stop_api_btn = gr.Button(visible=False)
 
             mode_radio.change(
                 fn=update_mode_controls,
@@ -2497,8 +2671,8 @@ with gr.Blocks(
                 elem_classes="log-box",
             )
 
-    @gr.render(inputs=[track_state, mode_radio])
-    def render_track_workbench(current_state, selected_mode):
+    @gr.render(inputs=[track_state, mode_radio, render_revision])
+    def render_track_workbench(current_state, selected_mode, _render_revision):
         if not current_state:
             return
         if current_state.get("kind") in {"midi_result", "muscriptor_result"}:
@@ -2512,16 +2686,33 @@ with gr.Blocks(
                         st,
                         SPACE_LANGUAGE,
                     ),
-                    key="muscriptor-result-workbench",
+                    # Gradio 4.44 preserves a keyed component's value when a
+                    # @gr.render tree is rebuilt.  Reusing one fixed key here
+                    # therefore kept the previous conversion's piano roll and
+                    # playback URLs after track_state changed.  The resolved
+                    # MIDI path is request-scoped and gives each real result a
+                    # distinct component identity while remaining stable for
+                    # rerenders of that same result.
+                    key=(
+                        "muscriptor-result-workbench::"
+                        f"{Path(str(current_state['midi_path'])).resolve()}"
+                    ),
                 )
                 another = gr.Button(
                     st("muscriptor_result.another"),
                     key="muscriptor-transcribe-another",
                 )
-                another.click(
+                another_event = another.click(
                     fn=_clear_result_state,
                     inputs=None,
                     outputs=[track_state],
+                    api_name=False,
+                    queue=False,
+                )
+                another_event.then(
+                    fn=_next_render_revision,
+                    inputs=[render_revision],
+                    outputs=[render_revision],
                     api_name=False,
                     queue=False,
                 )
@@ -2544,10 +2735,20 @@ with gr.Blocks(
                 type="filepath",
                 key="add-audio-tracks",
             )
-            add_audio.change(
+            add_audio_event = add_audio.change(
                 fn=_add_audio_tracks,
                 inputs=[add_audio, track_state],
-                outputs=[track_state, add_audio],
+                # Do not output ``None`` back to add_audio: that programmatic
+                # clear fires this same change handler a second time and can
+                # cancel the state-driven @gr.render update with a 500 error.
+                outputs=[track_state],
+                api_name=False,
+                queue=False,
+            )
+            add_audio_event.then(
+                fn=_next_render_revision,
+                inputs=[render_revision],
+                outputs=[render_revision],
                 api_name=False,
                 queue=False,
             )
@@ -2621,18 +2822,34 @@ with gr.Blocks(
                         gr.File(
                             value=track["midi_path"],
                             label=st("space.status.midi_file"),
-                            key=f"midi-file-{track['id']}",
+                            # A track may be converted repeatedly with
+                            # different backends. Gradio preserves the value
+                            # of a keyed File component across @gr.render
+                            # rebuilds, so the MIDI path must participate in
+                            # the identity or the download can point at the
+                            # previous backend's output.
+                            key=(
+                                f"midi-file-{track['id']}::"
+                                f"{Path(str(track['midi_path'])).resolve()}"
+                            ),
                         )
 
-                    remove_track.click(
+                    remove_event = remove_track.click(
                         fn=_remove_track,
                         inputs=[track_state, track_id_state],
                         outputs=[track_state],
                         api_name=False,
                         queue=False,
                     )
-                    midi_enabled.change(
-                        fn=_track_control_updates,
+                    remove_event.then(
+                        fn=_next_render_revision,
+                        inputs=[render_revision],
+                        outputs=[render_revision],
+                        api_name=False,
+                        queue=False,
+                    )
+                    midi_enabled.input(
+                        fn=None,
                         inputs=[midi_enabled, midi_route],
                         outputs=[
                             midi_route,
@@ -2640,11 +2857,12 @@ with gr.Blocks(
                             midi_status,
                             midi_instruments,
                         ],
+                        js=_track_control_client_js(),
                         api_name=False,
                         queue=False,
                     )
-                    midi_route.change(
-                        fn=_track_control_updates,
+                    midi_route.input(
+                        fn=None,
                         inputs=[midi_enabled, midi_route],
                         outputs=[
                             midi_route,
@@ -2652,10 +2870,11 @@ with gr.Blocks(
                             midi_status,
                             midi_instruments,
                         ],
+                        js=_track_control_client_js(),
                         api_name=False,
                         queue=False,
                     )
-                    start_midi.click(
+                    start_midi_event = start_midi.click(
                         fn=_convert_one_track,
                         inputs=[
                             track_state,
@@ -2670,6 +2889,13 @@ with gr.Blocks(
                         concurrency_limit=1,
                         concurrency_id=GPU_CONCURRENCY_ID,
                     )
+                    start_midi_event.then(
+                        fn=_next_render_revision,
+                        inputs=[render_revision],
+                        outputs=[render_revision],
+                        api_name=False,
+                        queue=False,
+                    )
 
             active_midi_result = state.get("active_midi_result")
             if active_midi_result:
@@ -2680,17 +2906,27 @@ with gr.Blocks(
                             st,
                             SPACE_LANGUAGE,
                         ),
-                        key="linked-midi-result-workbench",
+                        key=(
+                            "linked-midi-result-workbench::"
+                            f"{Path(str(active_midi_result['midi_path'])).resolve()}"
+                        ),
                     )
                     close_detail = gr.Button(
                         st("muscriptor_result.close_detail"),
                         size="sm",
                         key="close-linked-midi-detail",
                     )
-                    close_detail.click(
+                    close_detail_event = close_detail.click(
                         fn=_close_active_midi_detail,
                         inputs=[track_state],
                         outputs=[track_state],
+                        api_name=False,
+                        queue=False,
+                    )
+                    close_detail_event.then(
+                        fn=_next_render_revision,
+                        inputs=[render_revision],
+                        outputs=[render_revision],
                         api_name=False,
                         queue=False,
                     )
@@ -2712,11 +2948,20 @@ with gr.Blocks(
         concurrency_id=GPU_CONCURRENCY_ID,
     )
 
-    stop_btn.click(
+    _stop_api_btn.click(
         fn=request_stop_current_job,
         inputs=None,
         outputs=[status_output],
+        api_name="stop_current_job",
+        show_api=False,
+        queue=False,
+    )
+    stop_btn.click(
+        fn=None,
+        inputs=None,
+        outputs=[status_output],
         api_name=False,
+        js=_stop_current_job_client_js(),
         queue=False,
     )
 
@@ -2726,6 +2971,13 @@ with gr.Blocks(
         inputs=[],
         outputs=[log_output],
         api_name="read_logs",
+        queue=False,
+    )
+    edited_preview_button.click(
+        fn=render_edited_midi_preview,
+        inputs=[edited_preview_request],
+        outputs=[edited_preview_response],
+        api_name="render_edited_midi_preview",
         queue=False,
     )
 

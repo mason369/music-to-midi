@@ -104,7 +104,7 @@
       "piano_aria_amt_hint": "Best for solo piano. Outputs piano MIDI directly.",
       "piano_bytedance_pedal_desc": "🎹  ByteDance Pedal  —  Pedal-Aware Piano Transcription",
       "piano_bytedance_pedal_hint": "Best for solo piano with sustain pedal and preserves CC64 pedal data.",
-      "vocal_split_merge_midi": "Output 1 merged MIDI (vocal split mode)"
+      "vocal_split_merge_midi": "Legacy option (vocal split now delivers two WAV files first)"
     },
     "engine": {
       "active_label": "Multi-Instrument Backend",
@@ -117,14 +117,14 @@
       "yourmt3_tooltip": "Multi-instrument transcription backend with several model structures.",
       "yourmt3_midi_tooltip": "This is only the post-separation MIDI backend; it does not perform vocal or six-stem audio separation.",
       "yourmt3_general_hint": "Convert a full mix directly to GM multi-instrument MIDI; choose the model structure above.",
-      "yourmt3_six_stem_hint": "Six-stem separation is fixed to BS-RoFormer SW Fixed. The selected YourMT3+ checkpoint independently transcribes the real bass/drums/guitar/piano/vocals/other stems into their MIDI files.",
-      "vocal_split_yourmt3_midi_hint": "Vocal separation is fixed to Leap XE vocals + PolarFormer accompaniment. The selected YourMT3+ checkpoint only transcribes the two real stems.",
+      "yourmt3_six_stem_hint": "Six-stem separation is fixed to BS-RoFormer SW Fixed and first delivers six WAV files only. Choose a YourMT3+ checkpoint explicitly for each track in the result workbench.",
+      "vocal_split_yourmt3_midi_hint": "Vocal separation is fixed to Leap XE vocals + PolarFormer accompaniment and first delivers two WAV files only. Choose a YourMT3+ checkpoint explicitly for each track in the result workbench.",
       "miros": "MIROS (MusicFM)",
       "miros_midi": "MIROS (MIDI only)",
       "miros_tooltip": "Multi-instrument transcription backend based on a MusicFM multi-decoder.",
       "miros_general_hint": "Convert a full mix directly to GM multi-instrument MIDI.",
-      "miros_six_stem_hint": "Six-stem separation is fixed to BS-RoFormer SW Fixed. MIROS independently transcribes the real bass/drums/guitar/piano/vocals/other stems into their MIDI files.",
-      "vocal_split_miros_midi_hint": "Vocal separation is fixed to Leap XE vocals + PolarFormer accompaniment. MIROS only transcribes the two real stems.",
+      "miros_six_stem_hint": "Six-stem separation is fixed to BS-RoFormer SW Fixed and first delivers six WAV files only. Choose MIROS explicitly for each track in the result workbench.",
+      "vocal_split_miros_midi_hint": "Vocal separation is fixed to Leap XE vocals + PolarFormer accompaniment and first delivers two WAV files only. Choose MIROS explicitly for each track in the result workbench.",
       "muscriptor": "MuScriptor",
       "muscriptor_midi": "MuScriptor (MIDI only)",
       "muscriptor_tooltip": "Explicitly choose Large, Medium, or Small, with automatic detection or instrument-limited output.",
@@ -148,7 +148,7 @@
       "label": "Project BPM",
       "auto": "Auto-detect",
       "custom": "Custom",
-      "custom_tooltip": "Manually override the exported MIDI project BPM (4–400). Events are mapped to the detected-tempo musical tick grid, then those ticks are retained while the target tempo is written. Export and linked audition therefore change speed by project BPM / detected BPM; notes are not quantized, filtered, or reconstructed."
+      "custom_tooltip": "0 keeps automatic detection; manual overrides support 4–400 project BPM. Events are mapped to the detected-tempo musical tick grid, then those ticks are retained while the target tempo is written. Export and linked audition therefore change speed by project BPM / detected BPM; notes are not quantized, filtered, or reconstructed."
     },
     "tracks": {
       "title": "Processing Settings"
@@ -358,7 +358,7 @@
       "audio_hint": "Supports MP3, WAV, FLAC, OGG, M4A (automatically converted to WAV for processing)",
       "track_section": "Processing Settings",
       "mode_label": "Processing Mode",
-      "vocal_split_merge_midi": "Output 1 merged vocal+accompaniment MIDI (vocal split mode)",
+      "vocal_split_merge_midi": "Legacy option (vocal split now delivers two WAV files first)",
       "convert_button": "▶  Start Conversion",
       "device": "Current device",
       "zerogpu_device": "ZeroGPU (GPU allocated only while processing)",
@@ -473,8 +473,8 @@
     "loading_vocal_separator": "Preparing vocal/accompaniment separation: Leap XE first, then PolarFormer...",
     "separation_model_loading": "Loading the {model} ({role}) model: {model_file} ({engine})...",
     "separation_model_switching": "{from_model} ({from_role}) complete; saving WAV and switching to the {to_model} ({to_role}) model: {model_file}...",
-    "audio_chunk_running": "Running inference: {model} ({role}) audio chunk {current}/{total}; model {model_file}; {engine}; ~{chunk_seconds}s/chunk with ~{overlap_seconds}s adjacent overlap; not workflow stages or retries",
-    "audio_chunk_progress": "Audio chunk progress: {model} {role} {done}/{total} (~{chunk_seconds}s/chunk, ~{overlap_seconds}s adjacent overlap; not workflow stages or retries)",
+    "audio_chunk_running": "Running inference: {model} ({role}) audio chunk {current}/{total}; model {model_file}; {engine}; each chunk covers ~{chunk_seconds}s of audio with ~{overlap_seconds}s of adjacent audio overlap; these are not time estimates, workflow stages, or retries",
+    "audio_chunk_progress": "Audio chunk progress: {model} {role} {done}/{total} (each chunk covers ~{chunk_seconds}s of audio with ~{overlap_seconds}s of adjacent audio overlap; not time estimates, workflow stages, or retries)",
     "audio_chunk_role_vocals": "vocals",
     "audio_chunk_role_accompaniment": "accompaniment",
     "cpu_retry": "Detected an unsupported NVIDIA GPU architecture, retrying on CPU...",

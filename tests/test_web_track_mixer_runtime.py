@@ -171,21 +171,24 @@ def test_space_and_colab_share_the_single_mixer_runtime():
     space_source = Path("space/app.py").read_text(encoding="utf-8")
     notebook = json.loads(Path("colab_notebook.ipynb").read_text(encoding="utf-8"))
     colab_source = "\n".join(
-        "".join(cell["source"])
-        for cell in notebook["cells"]
-        if cell.get("cell_type") == "code"
+        "".join(cell["source"]) for cell in notebook["cells"] if cell.get("cell_type") == "code"
     )
 
     for source in (space_source, colab_source):
         assert "from src.gui.web.track_mixer_runtime import (" in source
         assert "build_track_mixer_html" in source
         assert "mixer_head()" in source
-        # Track audio is served through /file= which requires allowed_paths.
+        # Track audio is referenced only by custom HTML/Web Audio, so Gradio
+        # needs both launch scope and explicit static-file registration.
         assert "allowed_paths=" in source
+        assert "gr.set_static_paths(paths=[" in source
 
     # Both platforms localize mixer labels through the shared i18n catalog.
-    assert "track_mixer_strings" in space_source or "build_track_mixer_html(state[\"tracks\"], st)" in space_source
-    assert "build_track_mixer_html(normalized[\"tracks\"], COLAB_TRANSLATOR.t)" in colab_source
+    assert (
+        "track_mixer_strings" in space_source
+        or 'build_track_mixer_html(state["tracks"], st)' in space_source
+    )
+    assert 'build_track_mixer_html(normalized["tracks"], COLAB_TRANSLATOR.t)' in colab_source
 
     # Per-track removal exists on every platform now.
     assert "fn=_remove_track" in space_source

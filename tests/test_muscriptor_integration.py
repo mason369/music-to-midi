@@ -376,7 +376,7 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "prelude_forcing": True,
         "quality_mode": "official_v0.3.0",
         "window_seconds": 5.0,
-        "strict_eos": True,
+        "no_eos_is_ok": True,
         "package_version": "0.3.0",
         "source_commit": "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
     }
@@ -428,8 +428,16 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
         "batch_size": 1,
         "beam_size": 1,
         "prelude_forcing": True,
-        "no_eos_is_ok": False,
     }
+
+
+def test_pinned_muscriptor_eos_policy_matches_official_default():
+    import inspect
+
+    from muscriptor.transcription_model import TranscriptionModel
+
+    parameter = inspect.signature(TranscriptionModel.transcribe).parameters["no_eos_is_ok"]
+    assert parameter.default is True
 
 
 def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
@@ -2119,7 +2127,9 @@ def test_real_qmedia_players_can_seek_during_playback_without_deadlock(tmp_path:
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
+from time import monotonic
 from PyQt6.QtCore import QPoint, QTimer, Qt
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 from src.core.muscriptor_result_assets import MuscriptorRollNote
@@ -2139,6 +2149,32 @@ widget.roll.set_notes((note,), duration=2.0)
 widget.roll.set_editable(True)
 widget.resize(1000, 720)
 widget.show()
+failure = []
+deadline = monotonic() + 5.0
+
+def fail(message):
+    failure.append(message)
+    app.exit(2)
+
+def run_step(step):
+    try:
+        step()
+    except Exception as exc:
+        fail(f"{{type(exc).__name__}}: {{exc}}")
+
+def wait_until(predicate, continuation, description):
+    try:
+        ready = predicate()
+    except Exception as exc:
+        fail(f"{{type(exc).__name__}} while waiting for {{description}}: {{exc}}")
+        return
+    if ready:
+        QTimer.singleShot(0, lambda: run_step(continuation))
+        return
+    if monotonic() >= deadline:
+        fail(f"timed out waiting for {{description}}")
+        return
+    QTimer.singleShot(10, lambda: wait_until(predicate, continuation, description))
 
 def exercise():
     widget._toggle_playback()
@@ -2148,31 +2184,56 @@ def exercise():
     )
     QTest.mouseClick(widget.roll, Qt.MouseButton.LeftButton, pos=note_point)
     widget.speed_spin.setValue(1.1)
-    QTimer.singleShot(100, scrub)
+    wait_until(
+        lambda: widget._transport_seek_pending_ms is None
+        and all(
+            player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+            for player, _output in pairs
+        ),
+        scrub,
+        "initial serialized playback",
+    )
 
 def scrub():
     slider = widget.playback_slider
     target = QPoint(round(slider.width() * 0.6), slider.rect().center().y())
     QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=target)
-    QTimer.singleShot(500, verify)
+    wait_until(
+        lambda: widget._transport_seek_pending_ms is None,
+        verify,
+        "serialized playback seek",
+    )
 
 def verify():
     if not widget._playing:
-        raise RuntimeError("playback stopped after an in-flight slider click")
+        fail("playback stopped after an in-flight slider click")
+        return
     if widget.roll.selected_indices != (0,):
-        raise RuntimeError(f"note selection was lost: {{widget.roll.selected_indices}}")
+        fail(f"note selection was lost: {{widget.roll.selected_indices}}")
+        return
     if not 900 <= widget._position_ms <= 1800:
-        raise RuntimeError(f"seek did not commit: {{widget._position_ms}}")
+        fail(f"seek did not commit: {{widget._position_ms}}")
+        return
     positions = [player.position() for player, _output in pairs]
     if any(position < 850 or position > 1900 for position in positions):
-        raise RuntimeError(f"players did not seek together: {{positions}}")
+        fail(f"players did not seek together: {{positions}}")
+        return
     widget.shutdown()
     widget.close()
     app.quit()
 
-QTimer.singleShot(200, exercise)
-QTimer.singleShot(3000, lambda: (_ for _ in ()).throw(RuntimeError("scrub timed out")))
+ready_statuses = {{
+    QMediaPlayer.MediaStatus.LoadedMedia,
+    QMediaPlayer.MediaStatus.BufferedMedia,
+}}
+wait_until(
+    lambda: all(player.mediaStatus() in ready_statuses for player, _output in pairs),
+    exercise,
+    "all local media sources",
+)
 app.exec()
+if failure:
+    raise RuntimeError(failure[0])
 """
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
@@ -2229,7 +2290,7 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
             player.playbackRate() == pytest.approx(132.5 / 117.9)
             for player in widget._all_playback_players()
         )
-        assert widget._editor_grid_seconds() == pytest.approx(60.0 / 132.5 / 4.0)
+        assert widget._editor_grid_seconds() == pytest.approx(60.0 / 117.9 / 4.0)
 
         widget.set_detected_bpm(90.0)
 
@@ -2676,6 +2737,7 @@ def test_desktop_midi_editor_add_delete_undo_redo_and_reset(tmp_path: Path):
     )
     widget = MuscriptorResultWidget(str(audio), ["acoustic_piano"])
     try:
+        widget.set_bpm_context(120.0, 120.0)
         widget._begin_editor_session((original,), 1.0)
         widget.edit_toggle.setChecked(True)
         widget._add_editor_note(0.5, 64)
@@ -2698,6 +2760,25 @@ def test_desktop_midi_editor_add_delete_undo_redo_and_reset(tmp_path: Path):
         assert widget._edited_notes == (original,)
         assert widget.edit_reset_button.isEnabled() is False
         assert widget.edit_summary_label.text()
+        assert widget.edit_summary_label.wordWrap() is False
+        assert widget.edit_summary_label.minimumHeight() >= 32
+        assert all(
+            button.minimumHeight() >= 34
+            for button in (
+                widget.edit_toggle,
+                widget.edit_add_button,
+                widget.edit_delete_button,
+                widget.edit_undo_button,
+                widget.edit_redo_button,
+                widget.edit_reset_button,
+                widget.edit_select_all_button,
+                widget.edit_cut_button,
+                widget.edit_copy_button,
+                widget.edit_paste_button,
+                widget.edit_duplicate_button,
+                widget.edit_quantize_button,
+            )
+        )
         app.processEvents()
     finally:
         widget.shutdown()
@@ -2879,7 +2960,15 @@ def test_edited_midi_download_publishes_current_notes_and_exact_77_9_bpm(
         for message in track
         if message.type == "control_change"
     ] == [(64, 127), (64, 0)]
-    pretty_result = pretty_midi.PrettyMIDI(str(destination))
+    # MuScriptor exports intentionally repeat the canonical tempo on note
+    # tracks for MuseScore compatibility. pretty_midi warns about that
+    # non-standard type-1 extension, so assert the warning as part of the
+    # compatibility contract instead of leaking unclassified warning noise.
+    with pytest.warns(
+        RuntimeWarning,
+        match="Tempo, Key or Time signature change events found on non-zero tracks",
+    ):
+        pretty_result = pretty_midi.PrettyMIDI(str(destination))
     tempo_times, tempo_values = pretty_result.get_tempo_changes()
     assert tempo_times.tolist() == [0.0]
     assert tempo_values.tolist() == pytest.approx([77.9], abs=0.001)
@@ -3135,6 +3224,64 @@ def test_desktop_piano_roll_draws_beat_lines_downbeats_and_alternating_bars():
         assert roll._downbeat_times == pytest.approx((0.0, 1.0, 2.0, 3.0))
     finally:
         roll.close()
+
+
+def test_desktop_daw_grid_and_quantize_follow_reference_ticks_not_target_bpm(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    audio = _silent_wav(tmp_path / "reference-grid.wav", 4.0)
+    note = MuscriptorRollNote(
+        "acoustic_piano",
+        60,
+        90,
+        0.14,
+        0.64,
+        program=0,
+        is_drum=False,
+        track_index=0,
+        channel=0,
+    )
+    widget = MuscriptorResultWidget(str(audio), ["acoustic_piano"])
+    widget.resize(1200, 800)
+    widget.show()
+    try:
+        widget.set_bpm_context(120.0, 60.0, time_signature=(3, 4))
+        widget.roll.set_notes((note,), duration=4.0)
+        widget._begin_editor_session((note,), 4.0)
+        widget.edit_toggle.setChecked(True)
+        widget.roll.set_selected_index(0)
+        widget.edit_quantize_button.click()
+        app.processEvents()
+
+        assert widget._editor_grid_seconds() == pytest.approx(0.125)
+        assert widget._edited_notes[0].start == pytest.approx(0.125)
+        assert widget.roll._daw_reference_bpm == pytest.approx(120.0)
+        assert widget.roll._daw_time_signature == (3, 4)
+
+        widget.bpm_spin.setValue(90.0)
+        app.processEvents()
+        assert widget._editor_grid_seconds() == pytest.approx(0.125)
+        assert widget.roll._daw_reference_bpm == pytest.approx(120.0)
+
+        image = widget.roll.grab().toImage()
+        sixteenth_x = round(widget.roll.x_for_time_float(0.125))
+        beat_x = round(widget.roll.x_for_time_float(0.5))
+        bar_x = round(widget.roll.x_for_time_float(1.5))
+        plain_x = round(widget.roll.x_for_time_float(0.2))
+        y = 30
+
+        def colors_around(x: int) -> set[str]:
+            return {image.pixelColor(value, y).name() for value in range(x - 2, x + 3)}
+
+        plain_color = image.pixelColor(plain_x, y).name()
+        assert "#263d59" in colors_around(sixteenth_x)
+        assert "#36506f" in colors_around(beat_x)
+        assert "#78aee8" in colors_around(bar_x)
+        assert plain_color not in {"#263d59", "#36506f", "#78aee8"}
+    finally:
+        widget.shutdown()
+        widget.close()
 
 
 @pytest.mark.parametrize(
@@ -3705,20 +3852,26 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
         "duration": 1.0,
         "reference_bpm": 117.9,
         "target_bpm": 132.5,
+        "time_signature": (3, 4),
         "beat_times": [0.25, 0.75, 1.25],
         "downbeats": [0.25, 1.25],
         "repeat_tempo_per_note_track": True,
         "backend_label": "MIROS",
         "source_track_name": "guitar",
+        "preview_api": "./api/render_edited_midi_preview",
+        "preview_token": "opaque-preview-token",
     }
 
     markup = build_muscriptor_result_html(state, lambda key: key, "en_US")
 
     assert '"referenceBpm": 117.9' in markup
     assert '"targetBpm": 132.5' in markup
+    assert '"timeSignature": [3, 4]' in markup
     assert '"beatTimes": [0.25, 0.75, 1.25]' in markup
     assert '"downbeats": [0.25, 1.25]' in markup
     assert '"repeatTempoPerNoteTrack": true' in markup
+    assert '"previewApi": "./api/render_edited_midi_preview"' in markup
+    assert '"previewToken": "opaque-preview-token"' in markup
     assert '"program": 24' in markup
     assert '"track_index": 2' in markup
     assert '"channel": 3' in markup
@@ -3727,8 +3880,13 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert "this.undoStack" in MUSCRIPTOR_RESULT_JS
     assert "onPointerMove" in MUSCRIPTOR_RESULT_JS
     assert "downloadEditedMidi" in MUSCRIPTOR_RESULT_JS
+    assert "scheduleEditedPreview" in MUSCRIPTOR_RESULT_JS
+    assert "renderEditedPreview" in MUSCRIPTOR_RESULT_JS
     assert "Invalid Beat This grid in piano-roll manifest" in MUSCRIPTOR_RESULT_JS
     assert "repeatTempoPerNoteTrack" in MUSCRIPTOR_RESULT_JS
+    assert "return 60 / referenceBpm / 4" in MUSCRIPTOR_RESULT_JS
+    assert "subdivisionSeconds = quarterSeconds / 4" in MUSCRIPTOR_RESULT_JS
+    assert 'painter.fillText((downbeatIndex + 1) + ".1"' in MUSCRIPTOR_RESULT_JS
 
 
 def test_browser_midi_editor_builds_verified_smf_and_preserves_controller_events(
