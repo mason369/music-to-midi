@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -199,8 +200,12 @@ def test_requirement_failure_exits_before_application_start(
     assert raised.value.code == 2
     error_output = capsys.readouterr().err
     assert "源码运行时校验失败" in error_output
-    assert "install.bat" in error_output
-    assert "run.bat" in error_output
+    if os.name == "nt":
+        assert "install.bat" in error_output
+        assert "run.bat" in error_output
+    else:
+        assert "./install.sh" in error_output
+        assert "./run.sh" in error_output
 
 
 @pytest.mark.parametrize("relative_path", ("README.md", "docs/README.md", "docs/README_zh.md"))

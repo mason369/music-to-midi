@@ -1,7 +1,10 @@
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,6 +53,10 @@ def test_source_launchers_require_the_runtime_used_by_real_pipeline_inference():
     assert "beat_this, fastapi" in linux
 
 
+@pytest.mark.skipif(
+    shutil.which("powershell") is None,
+    reason="PowerShell helper integration requires Windows PowerShell",
+)
 def test_invoke_python_script_preserves_quotes_and_removes_temp_file(tmp_path):
     helper = REPO_ROOT / "scripts" / "powershell_helpers.ps1"
     working_dir = tmp_path / "working directory"
