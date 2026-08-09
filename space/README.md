@@ -56,6 +56,12 @@ tags:
 | `SIX_STEM_SPLIT`（仅分离） | ≤ 5/18 秒（约 0.277 秒） |
 | 任一钢琴专用直接转写 | 2.50 秒 |
 
+## MuScriptor gated 授权（部署前必做）
+
+MuScriptor [Small](https://huggingface.co/MuScriptor/muscriptor-small)、[Medium](https://huggingface.co/MuScriptor/muscriptor-medium)、[Large](https://huggingface.co/MuScriptor/muscriptor-large) 是三个独立的 gated 仓库，不能匿名全自动下载。Space 部署者必须用同一个 Hugging Face 账户在浏览器中逐项接受三个仓库的条款；仅登录 CLI、复制 Space 或同步源码都不能替代网页接受条款。
+
+获批后，在 Space 的 `Settings -> Variables and secrets` 中把具有三个仓库读取权限的个人 token 保存为私有 secret `HF_TOKEN`，不要保存为公开 variable，也不要写进仓库或日志。访客使用部署者已授权的运行实例时不会看到该 secret；复制或重新部署 Space 的用户必须使用自己的账户重新接受条款并配置自己的 `HF_TOKEN`。缺少任一授权时，对应 MuScriptor 路线会明确失败，不会改用其它模型。
+
 ## 本 Space 使用的模型、固定来源与许可
 
 Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出了这个 Space 实际读取的 Hub 仓库，便于平台显示来源关系。顶部 `license: mit` **只表示本 Space 自有应用代码使用 MIT**，不会把第三方源码、checkpoint、SoundFont 或数据集重新授权为 MIT。
@@ -125,7 +131,7 @@ MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所�
 ## 技术栈
 
 - **Space 运行时**：Python 3.12.12、Torch 2.8.0、torchaudio 2.8.0、torchvision 0.23.0、NumPy `>=2,<2.5`
-- **ZeroGPU / Web**：`spaces==0.51.0`、Gradio 4.44.1
+- **ZeroGPU / Web**：`spaces==0.51.1`、Gradio 4.44.1、Pydantic 2.10.6
 - **分离运行时**：`audio-separator==0.44.1`、`onnxruntime-gpu==1.23.2`
 - **转写引擎**：YourMT3+、MIROS、MuScriptor Large / Medium / Small、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal
 - **分离模型**：Leap XE vocals、PolarFormer accompaniment、BS-RoFormer SW Fixed

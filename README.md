@@ -6,7 +6,7 @@
 
 一个本地优先的 AI 音频转 MIDI / Audio to MIDI 转换器，面向编曲、扒谱、采样拆解、钢琴练习和自动音乐转写 (AMT) 实验。你可以把 `MP3`、`WAV`、`FLAC`、`OGG` 或 `M4A` 音频丢进来，在 PyQt6 桌面版、Gradio Web 版或 Google Colab 中生成可编辑的 MIDI 文件。
 
-当前版本同步七种处理模式：完整混音多乐器转写、人声/伴奏分离后分别转写、六声部分离后逐 stem 转写，以及 TransKun 默认 V2 / TransKun V2 Aug / Aria-AMT / ByteDance Pedal 四条钢琴专用转写流程。它不是只抓单音旋律的小工具，而是把多乐器 AI music transcription、stem separation、钢琴转 MIDI、BPM/tempo 元数据和 MIDI 合并放进同一条工作流里。
+当前版本同步七种处理模式：完整混音多乐器转写、人声/伴奏 WAV 分离、六声部 WAV 分离，以及 TransKun 默认 V2 / TransKun V2 Aug / Aria-AMT / ByteDance Pedal 四条钢琴专用转写流程。两个分离模式的主按钮只生成 WAV；分离完成后，用户可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。它不是只抓单音旋律的小工具，而是把多乐器 AI music transcription、stem separation、钢琴转 MIDI 和 BPM/tempo 元数据放进同一条工作流里。
 
 ## 统一界面演示
 
@@ -69,7 +69,7 @@
 | 位置 | 已同步内容 | 说明 |
 |------|------------|------|
 | `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance，并严格验证默认 TransKun 2.0.1 包及其内置 V2 资源 | 固定来源模型按已知大小/SHA256 或明确的源码/运行时身份校验；任一必需资源失败时立即停止。 |
-| `run.ps1` / `run.sh` | 启动前检查全部官方 YourMT3+ 模式、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源当作可运行状态。 |
+| `run.ps1` / `run.sh` | 启动前检查 Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源当作可运行状态。 |
 | `install.ps1` / `install.sh` | 安装 PyTorch 2.7、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | 完整七模式要求 NVIDIA 驱动兼容 CUDA 12.8，并使用精确 `cu128` wheel；`audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
 | `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 28 项第三方组件必须全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`，否则构建立即停止；目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
@@ -144,6 +144,8 @@ YourMT3/amt/src/config/config.py
 
 模型权重下载：
 
+以下源码维护命令假定已经激活仓库内 `venv`；未激活时，Windows 把 `python` / `hf` 分别替换为 `.\venv\Scripts\python.exe` / `.\venv\Scripts\hf.exe`，Linux/WSL2 替换为 `./venv/bin/python` / `./venv/bin/hf`。不要使用全局 Python。
+
 ```bash
 python download_sota_models.py
 ```
@@ -165,16 +167,16 @@ Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍�
 120 BPM。写出的 MIDI 包含真实 tempo、拍号、小节相位和可验证的前置偏移标记；tempo 归一化后还会严格复制到每个含音符轨，
 兼容 MuseScore 的 conductor-track 行为。桌面、Space 和 Colab 的 MuScriptor 钢琴卷帘使用同一 Beat This 网格显示拍线、强拍线和交替小节底色。
 该偏移标记在手动 BPM 变速时按相同比例变化，最终试听的原音也补入同等静音，因此 MIDI、钢琴卷帘、原音和下载文件使用同一时间轴，
-不量化、不过滤、不重跑模型。固定 gated 权重仓库
-[`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) 的
-revision `8809fdfbed2affa7ade94a7059e746e3880720e7`。权重约 5.47 GB，许可为
-CC BY-NC 4.0；必须先在 Hugging Face 接受仓库条款并登录：
+不量化、不过滤、不重跑模型。三档 gated 权重分别固定为
+[`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`、
+[`MuScriptor/muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium) revision `f32236969308476e01fd3aae67357de5feb05a2d` 和
+[`MuScriptor/muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) revision `8c127f603b807520fa465c838e9bfee8a91ada4e`。三者均为 CC BY-NC 4.0，并附额外合法使用条件。
+
+这三个仓库必须使用同一个 Hugging Face 账户在浏览器中**逐项接受条款**，然后再登录 CLI；`hf auth login` 本身不能替用户接受网页条款。源码安装、Colab 和自行部署 Space 都不能匿名全自动下载这些权重：
 
 ```bash
 hf auth login
-python download_muscriptor_model.py --size large
-python download_muscriptor_model.py --size medium
-python download_muscriptor_model.py --size small
+python download_muscriptor_model.py --size all
 ```
 
 三档都是显式选择，不会在某一档失败或显存不足时静默切换。Large 质量优先，Medium 是速度/质量折中，Small 参数量最低、速度最快；三档均严格使用官方 5 秒窗口、prelude forcing 和单次生成路径，不提供自动降档。桌面端需先下载所选 checkpoint，Space 与 Colab 会按当前选择准备对应固定 revision。
@@ -344,7 +346,7 @@ models/bytedance_piano           # 打包资源
 | Aria-AMT | 钢琴专精 | `PIANO_ARIA_AMT` | 公开 checkpoint；README 不写入未发布的同口径统一 F1 | 适合常规纯钢琴 A/B。 |
 | ByteDance Pedal | 钢琴专精 / 踏板感知 | `PIANO_BYTEDANCE_PEDAL` | MAESTRO note onset F1 / 踏板 onset F1 = 96.72% / 91.86% | 需要踏板 CC64 时优先选择；不会作为其他钢琴后端的静默替代。 |
 | Leap XE + PolarFormer | 人声/伴奏分离 | `VOCAL_SPLIT` 前置分离 | 两个公开模型使用不同目标/口径，不合成单一 benchmark | Leap XE 提取 vocals，PolarFormer 提取 accompaniment；后续 MIDI 质量还取决于转写后端。 |
-| BS-RoFormer SW Fixed | 六声部分离 | `SIX_STEM_SPLIT` 前置分离 | MVSEP 6-stem SDR 口径 | 分离后每个 stem 独立转写；分离指标不是端到端 MIDI F1。 |
+| BS-RoFormer SW Fixed | 六声部分离 | `SIX_STEM_SPLIT` 前置分离 | MVSEP 6-stem SDR 口径 | 主按钮只生成六条 WAV；用户随后可逐 stem 显式选择 MIDI 路线。分离指标不是端到端 MIDI F1。 |
 
 YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / ByteDance Pedal 属于钢琴专精后端，Leap XE / PolarFormer / BS-RoFormer SW Fixed 属于音源分离后端；三类模型的公开指标不能混成同一张排行榜。
 
@@ -419,7 +421,7 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / Byte
 | 项目 | 详情 |
 |------|------|
 | vocals 模型 | [BS-RoFormer Leap XE](https://huggingface.co/pcunwa/BS-Roformer-Leap)：`Xe/bs_leap_xe_voc.ckpt` + `Xe/leap_xe_config_voc.yaml` |
-| accompaniment 模型 | [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer)：`bs_polarformer.onnx` + `model_bs_polarformer_float16.yaml` |
+| accompaniment 模型 | [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer)：官方 `bs_polarformer_fp16.onnx` + `model_bs_polarformer_float16.yaml` |
 | 运行库 | Leap XE 使用 audio-separator 内的 BS-RoFormer 实现；PolarFormer 使用 ONNX Runtime |
 | 调用方式 | 两个模型各自对原音频推理；Leap XE 输出 vocals，PolarFormer 的 vocals 估计从混音中相减得到 accompaniment |
 | 模型准备 | `download_sota_models.py` 会准备并校验两组资源；也可分别运行 `download_vocal_model.py` 与 `download_accompaniment_model.py` |
@@ -559,8 +561,10 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，不能与上表的钢琴�
 |------|------|
 | Python | 3.11+；Windows 安装脚本支持并优先选择 3.11-3.12 |
 | PyTorch | 桌面/便携安装基线为 2.7.0，必须与 `torchaudio`、`torchvision` 版本匹配 |
+| Git | 源码安装必需；Windows 安装器找不到 Git 时会明确停止 |
 | FFmpeg | 必需；用于可靠处理 MP3/M4A/FLAC/OGG 等格式 |
-| GPU | 部分源码转写路线可在 CPU 上运行；完整七模式体验与完整便携发布包要求兼容的 GPU 运行时 |
+| GPU | 一键源码安装与完整七模式要求 NVIDIA GPU、兼容 CUDA 12.8 的驱动和可用的 `nvidia-smi`；不会自动降级到 CPU/AMD |
+| 磁盘 | 完整冷安装会同时保存 Python wheel、模型与下载缓存；实测工作集约 32.36 GB，建议开始前至少保留 40 GB 可用空间 |
 | 系统 | Windows 10/11、Linux、WSL2 |
 
 各平台使用各自经过固定的兼容运行时，不应把一个平台的 NumPy/Torch 版本强行覆盖到另一个平台：
@@ -568,21 +572,41 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，不能与上表的钢琴�
 | 平台 | Python / Torch | NumPy 与 GPU 运行时 | 发布边界 |
 |------|----------------|---------------------|----------|
 | Windows / NVIDIA 桌面与便携目标 | Python 3.11-3.12；Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4；CUDA 12.8 wheel | 源码与便携发布均按此契约校验；`release.yml` 同时执行第三方许可闭集门禁、模型身份校验和成品烟测 |
-| Linux / NVIDIA 源码运行 | Python 3.11+；Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4；NVIDIA 驱动兼容 CUDA 12.8；仅 `cu128` | `install.sh` / `run.sh` 对完整七模式执行精确运行时校验；`build.yml` 只做源码、测试和打包契约检查 |
+| Linux / NVIDIA 源码运行 | Python 3.11-3.12 x64；Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4；NVIDIA 驱动兼容 CUDA 12.8；仅 `cu128` | `install.sh` / `run.sh` 对完整七模式执行精确运行时校验；安装器要求 Debian/Ubuntu/WSL2 的 apt 软件源提供对应 Python venv/dev 包；`build.yml` 只做源码、测试和打包契约检查 |
 | Linux / AMD/ROCm | 不提供完整七模式兼容运行时 | PolarFormer 固定依赖 ONNX Runtime `CUDAExecutionProvider` | 当前不支持；安装脚本会明确停止，不静默改用 CPU |
 | Hugging Face Space | Python 3.12.12；Torch 2.8.0 / torchaudio 2.8.0 / torchvision 0.23.0 | NumPy `>=2,<2.5`；ZeroGPU | 使用 `space/requirements.txt`，不可套用桌面 NumPy 1.26 环境 |
 | Google Colab | Colab 当前预装 Python/Torch | 保留预装 Torch；只安装 pinned Web/runtime 依赖 | 避免替换 Torch 导致 CUDA 运行库冲突 |
 
-Windows 建议把项目放在纯英文且无空格的路径，例如：
+Windows 源码版应放在本机磁盘的纯英文、无空格目录，例如：
 
 ```text
 C:\MusicToMidi
 D:\Projects\music-to-midi
 ```
 
-含中文、空格或括号的路径可能导致 PyTorch DLL 加载失败。
+含中文、空格或括号的路径可能导致 PyTorch DLL 加载失败。映射盘和 UNC/SMB 网络路径尚未通过源码虚拟环境身份验收，可能让 `venv` 记录路径与启动路径不一致；请先复制到本机 NTFS 目录再运行。
 
 ## 快速开始
+
+### MuScriptor 授权（首次源码安装前必做）
+
+MuScriptor Small / Medium / Large 都是 Hugging Face gated 模型，匿名用户无法下载。请先登录同一个 Hugging Face 账户，并在浏览器中分别打开 [Small](https://huggingface.co/MuScriptor/muscriptor-small)、[Medium](https://huggingface.co/MuScriptor/muscriptor-medium)、[Large](https://huggingface.co/MuScriptor/muscriptor-large) 接受条款。账号获批后，再在项目隔离环境中登录：
+
+```powershell
+# Windows；尚无 venv 时只先创建环境并安装官方 HF CLI
+py -3.11 -m venv venv
+.\venv\Scripts\python.exe -m pip install "huggingface_hub>=0.20,<2" "hf_xet==1.5.2"
+.\venv\Scripts\hf.exe auth login
+```
+
+```bash
+# Linux / WSL2
+python3.11 -m venv venv
+./venv/bin/python -m pip install "huggingface_hub>=0.20,<2" "hf_xet==1.5.2"
+./venv/bin/hf auth login
+```
+
+登录需要具有三个 gated 仓库读取权限的个人 token。不要把 token 写进仓库、README、命令行参数或日志；无人值守环境使用受保护的 `HF_TOKEN` secret。总下载脚本会在下载其它大型模型前依次做三个轻量权限预检，任一仓库未接受条款或未登录都会立即停止，不会改用其它模型。完整便携 release 已随包携带通过身份校验的权重，启动时不再从 Hub 下载；这不改变 CC BY-NC 4.0 与附加条款的适用范围。
 
 ### Windows
 
@@ -598,7 +622,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 run.bat
 ```
 
-`run.ps1` 会检查虚拟环境、核心依赖、五种 YourMT3+ checkpoint、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 与 MIROS；资源缺失或身份校验失败时会调用 `install.ps1`。
+`run.ps1` 会检查虚拟环境、核心依赖、Beat This `final0`、五种 YourMT3+ checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.ps1`。
 
 ### Linux / WSL2
 
@@ -607,12 +631,20 @@ chmod +x run.sh
 ./run.sh
 ```
 
-`run.sh` 会检查虚拟环境、核心依赖、受控 YourMT3+ 源码与五种 checkpoint、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 与 MIROS；资源缺失或身份校验失败时会调用 `install.sh`。
+`run.sh` 会检查虚拟环境、核心依赖、Beat This `final0`、受控 YourMT3+ 源码与五种 checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.sh`。
 
 ### 源码直接运行
 
+源码版只允许使用仓库内隔离的 `venv`，并在导入 GUI 和模型依赖前严格校验解释器路径、`include-system-site-packages=false`、MuScriptor 包位置、版本和七个源码 SHA-256。不要使用全局 `python -m src.main`。
+
+```powershell
+# Windows
+.\venv\Scripts\python.exe -m src.main
+```
+
 ```bash
-python -m src.main
+# Linux / WSL2
+./venv/bin/python -m src.main
 ```
 
 ## 手动安装
@@ -624,7 +656,7 @@ Windows:
 ```powershell
 py -3.11 -m venv venv
 .\venv\Scripts\activate
-python -m pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip wheel "setuptools==80.10.2"
 ```
 
 Linux:
@@ -632,7 +664,7 @@ Linux:
 ```bash
 python3.11 -m venv venv
 source venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip wheel "setuptools==80.10.2"
 ```
 
 ### 2. 安装 PyTorch
@@ -655,8 +687,8 @@ AMD/ROCm 当前不能完成七模式：即使 PyTorch 提供 ROCm wheel，PolarF
 pip install -r requirements.txt
 python -m pip install --no-deps "audio-separator==0.44.1"
 python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip"
-python -m pip install --no-deps --force-reinstall "https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
-python -c "from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason=MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or 'MuScriptor v0.3.0 identity/API verified'); raise SystemExit(bool(reason))"
+python -m pip install --no-deps --force-reinstall "muscriptor @ https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
+python -m src.utils.source_runtime
 ```
 
 `requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 的旧 torchaudio 约束覆盖 CUDA 12.8 运行时，因此这两项必须按固定版本以 `--no-deps` 单独安装。MuScriptor 仍以 `--no-deps` 固定源码身份，但其 v0.3.0 非 Torch 依赖（包括 FastAPI 0.136.3、Starlette 1.5.0 与 SoundFile 0.14.0）已在项目依赖中显式满足；需要完整伴随依赖时优先运行 `install.ps1` / `install.sh`。
@@ -685,19 +717,30 @@ python download_miros_model.py
 
 ```text
 ~/.cache/music_ai_models/yourmt3_all
+~/.music-to-midi/models/beat_this
 ~/.music-to-midi/models/audio-separator
 ~/.cache/music_ai_models/transkun_v2_aug
 ~/.cache/music_ai_models/aria_amt
 ~/.cache/music_ai_models/bytedance_piano
+~/.cache/music_ai_models/fluidsynth/2.5.6
+${HF_HOME:-~/.cache/huggingface}/hub  # MuScriptor 三档与 MuseScore SoundFont
 external/ai4m-miros
 ```
+
+Windows 中的 `~` 是 `%USERPROFILE%`。源码虚拟环境固定为仓库内 `venv`，桌面默认输出为仓库内 `MidiOutput\<音频文件名>`，日志在 `%USERPROFILE%\.music-to-midi\logs`。默认 TransKun V2 资源位于 `venv` 中的 `transkun==2.0.1` 包内；便携版则只读取发布目录内的 `models`、`runtime` 与 `tools` 资源，不依赖上述源码缓存。
 
 默认 TransKun V2 的模型资源随 `transkun==2.0.1` 安装；若 `PIANO_TRANSKUN` 提示资源或身份不符，请执行 `python -m pip install --force-reinstall "transkun==2.0.1"`。`PIANO_TRANSKUN_V2_AUG` 使用独立缓存，必须运行 `python download_transkun_v2_aug_model.py`。
 
 ### 6. 启动
 
+```powershell
+# Windows
+.\venv\Scripts\python.exe -m src.main
+```
+
 ```bash
-python -m src.main
+# Linux / WSL2
+./venv/bin/python -m src.main
 ```
 
 ## Google Colab
@@ -712,8 +755,9 @@ colab_notebook.ipynb
 
 1. 打开笔记本。
 2. 选择 GPU 运行时。
-3. 依次运行单元格。
-4. 最后一个单元格会启动 Gradio，并输出公开访问链接。
+3. 若要使用 MuScriptor，先按上文逐项接受三个 gated 仓库条款，把 token 保存为 Colab 私有 secret `HF_TOKEN`，并在第 3 个代码单元勾选 `ENABLE_MUSCRIPTOR`；该单元会在启动前验证三档访问权限。
+4. 依次运行其余单元格。
+5. 最后一个单元格会启动 Gradio，并输出公开访问链接。
 
 Colab 版本会保留预装 PyTorch，避免重装 torch 导致 CUDA 运行库冲突。
 
@@ -734,7 +778,7 @@ python app.py
 
 Space 版随部署包携带项目已验证的 `YourMT3/amt/src` 兼容源码，与桌面版和 Colab 使用同一棵源码树；不会在运行时改用 Hugging Face Space 的可变源码。运行转换时会按所选模式检查/准备 YourMT3+ 官方 checkpoint 或 MIROS、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 或 ByteDance Pedal 资源；缺失或身份校验失败会显式暴露。
 
-ZeroGPU 入口只承诺短片段试用，不承诺完整长歌端到端完成。[Hugging Face ZeroGPU 文档](https://huggingface.co/docs/hub/main/en/spaces-zerogpu) 当前公开配额为匿名用户每日 2 分钟、登录免费账户每日 5 分钟 GPU。当前保守的最小请求经 `large` GPU 平台倍率折算后已高于匿名额度，因此转换必须先登录；Space 会按模式、后端和模型估算，再按固定的 `spaces==0.51.0` 平台倍率上界折算，超过登录免费账户 300 GPU 秒窗口的请求会在下载模型前明确拒绝。该估算只是准入上限，不代表用户一定仍有足够的当日配额或队列容量；长歌请改用 Colab、桌面版或专用 GPU。
+ZeroGPU 入口只承诺短片段试用，不承诺完整长歌端到端完成。[Hugging Face ZeroGPU 文档](https://huggingface.co/docs/hub/main/en/spaces-zerogpu) 当前公开配额为匿名用户每日 2 分钟、登录免费账户每日 5 分钟 GPU。当前保守的最小请求经 `large` GPU 平台倍率折算后已高于匿名额度，因此转换必须先登录；Space 会按模式、后端和模型估算，再按固定的 `spaces==0.51.1` 平台倍率上界折算，超过登录免费账户 300 GPU 秒窗口的请求会在下载模型前明确拒绝。该估算只是准入上限，不代表用户一定仍有足够的当日配额或队列容量；长歌请改用 Colab、桌面版或专用 GPU。
 
 当前公式下的最大输入时长是准入阈值，不是实测耗时承诺。默认 `YPTF.MoE+Multi (noPS)` 与 MIROS 的精确阈值如下；换用其它 YourMT3 checkpoint 时会按其独立系数重新计算：
 
@@ -840,6 +884,8 @@ MusicToMidi.spec             # PyInstaller 配置
 ```
 
 ## 开发命令
+
+以下命令同样在仓库内 `venv` 激活后执行。
 
 ```bash
 pytest
