@@ -22,6 +22,9 @@ from src.core.transkun_transcriber import (
 )
 from src.models.data_models import MuscriptorModel
 from src.utils.fluidsynth_runtime import download_fluidsynth_windows
+from src.utils.muscriptor_downloader import (
+    preflight_muscriptor_download_access,
+)
 from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 from src.utils.yourmt3_downloader import (
     OFFICIAL_YOURMT3_MODEL_KEYS,
@@ -98,6 +101,11 @@ def validate_default_transkun_runtime() -> dict[str, object]:
 
 def download_sota_models() -> dict[str, object]:
     """Prepare the full SOTA model set used by the app's public workflows."""
+    print("Preflighting all gated MuScriptor checkpoint permissions...")
+    preflight_muscriptor_download_access()
+    print("All gated MuScriptor checkpoint permissions are ready.")
+    print("")
+
     print("Preparing exact TransKun 2.0.1 package and built-in V2 resources...")
     transkun_runtime = validate_default_transkun_runtime()
     print(

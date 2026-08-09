@@ -64,6 +64,10 @@ class SotaModelDownloaderTests(unittest.TestCase):
         with (
             mock.patch.object(
                 download_sota_models,
+                "preflight_muscriptor_download_access",
+            ) as muscriptor_preflight_mock,
+            mock.patch.object(
+                download_sota_models,
                 "validate_default_transkun_runtime",
                 return_value=transkun_result,
             ) as transkun_mock,
@@ -130,6 +134,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         ):
             result = download_sota_models.download_sota_models()
 
+        muscriptor_preflight_mock.assert_called_once_with()
         transkun_mock.assert_called_once_with()
         yourmt3_mock.assert_called_once_with()
         miros_mock.assert_called_once_with()
@@ -236,6 +241,10 @@ class SotaModelDownloaderTests(unittest.TestCase):
         with (
             mock.patch.object(
                 download_sota_models,
+                "preflight_muscriptor_download_access",
+            ),
+            mock.patch.object(
+                download_sota_models,
                 "validate_default_transkun_runtime",
                 side_effect=failure,
             ),
@@ -248,6 +257,24 @@ class SotaModelDownloaderTests(unittest.TestCase):
                 download_sota_models.download_sota_models()
 
         yourmt3_mock.assert_not_called()
+
+    def test_download_sota_models_stops_before_other_assets_when_gated_access_fails(self):
+        failure = RuntimeError("MuScriptor gated access missing")
+        with (
+            mock.patch.object(
+                download_sota_models,
+                "preflight_muscriptor_download_access",
+                side_effect=failure,
+            ),
+            mock.patch.object(
+                download_sota_models,
+                "validate_default_transkun_runtime",
+            ) as transkun_mock,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "gated access missing"):
+                download_sota_models.download_sota_models()
+
+        transkun_mock.assert_not_called()
 
 
 if __name__ == "__main__":

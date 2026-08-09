@@ -9,17 +9,36 @@ $ErrorActionPreference = "Stop"
 # 设置控制台输出编码为 UTF-8，避免中文乱码
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
 
 $REPO_DIR = $PSScriptRoot
 $VENV_DIR = Join-Path $REPO_DIR "venv"
 $PIP      = Join-Path $VENV_DIR "Scripts\pip.exe"
 $PYTHON   = Join-Path $VENV_DIR "Scripts\python.exe"
+. (Join-Path $REPO_DIR "scripts\powershell_helpers.ps1")
 
 # --- 辅助输出函数 ---
 function Write-Info  { param($msg) Write-Host "[信息]  $msg" -ForegroundColor Cyan }
 function Write-Ok    { param($msg) Write-Host "[完成]  $msg" -ForegroundColor Green }
 function Write-Warn  { param($msg) Write-Host "[警告]  $msg" -ForegroundColor Yellow }
 function Write-Err   { param($msg) Write-Host "[错误] $msg" -ForegroundColor Red; exit 1 }
+
+function Test-PythonPackageInstalled {
+    param([Parameter(Mandatory = $true)][string]$PackageName)
+
+    if ($PackageName -notmatch '^[A-Za-z0-9_.-]+$') {
+        throw "非法 Python 包名: $PackageName"
+    }
+    $packagePresenceCheck = @"
+from importlib import metadata
+try:
+    metadata.version('$PackageName')
+except metadata.PackageNotFoundError:
+    raise SystemExit(1)
+"@
+    $exitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $packagePresenceCheck
+    return $exitCode -eq 0
+}
 
 # --- 通用下载函数（实时进度显示）---
 # 优先使用 curl.exe（内置于 Windows 10 1803+ / Server 2019+），自带实时进度条。
@@ -83,7 +102,7 @@ if ($nonAscii -or $hasSpaceOrParen) {
     $continue = Read-Host "  是否仍要继续安装？(y/N)"
     if ($continue -ne 'y' -and $continue -ne 'Y') {
         Write-Host "  已取消安装。请将项目移动到无特殊字符的路径后重试。" -ForegroundColor Yellow
-        exit 0
+        exit 1
     }
     Write-Warn "继续安装（路径问题可能导致运行失败）..."
 }
@@ -218,13 +237,20 @@ catch {
         $ffmpegExe = Join-Path $ffmpegBin "ffmpeg.exe"
 
         if (-not (Test-Path $ffmpegExe)) {
+            $stagingRoot = $null
             try {
-                $ffmpegReleaseTag = "autobuild-2026-07-19-13-12"
-                $ffmpegAssetName = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
-                $ffmpegExpectedSha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+                # BtbN retains the final build of each month for two years. Use
+                # that immutable monthly tag instead of an expiring daily build.
+                $ffmpegReleaseTag = "autobuild-2026-07-31-14-10"
+                $ffmpegAssetName = "ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"
+                $ffmpegExpectedSha256 = "c067a1ca58f4fc4449f4bab0890fbcd65cbb3e5f46e066cf9c768e06c0c1d4d9"
                 $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegReleaseTag/$ffmpegAssetName"
-                $zipPath = Join-Path $env:TEMP $ffmpegAssetName
-                $extractPath = Join-Path $env:TEMP "ffmpeg_extract"
+                $stagingRoot = Join-Path $env:TEMP (
+                    "music-to-midi-ffmpeg-{0}" -f [System.Guid]::NewGuid().ToString("N")
+                )
+                New-Item -ItemType Directory -Path $stagingRoot -ErrorAction Stop | Out-Null
+                $zipPath = Join-Path $stagingRoot $ffmpegAssetName
+                $extractPath = Join-Path $stagingRoot "extract"
 
                 # 使用 Invoke-Download 显示实时进度
                 Invoke-Download -Url $zipUrl -OutFile $zipPath -Description "正在下载固定版本 ffmpeg（约 151 MB）..."
@@ -234,23 +260,37 @@ catch {
                 }
 
                 Write-Info "  正在解压..."
-                if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
                 Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-                Remove-Item $zipPath -Force
 
                 # 找到解压后含 ffmpeg.exe 的 bin 目录（子文件夹名随版本变化）
                 $binFolder = Get-ChildItem $extractPath -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-                if ($binFolder) {
-                    $srcBin = $binFolder.DirectoryName
-                    if (-not (Test-Path $ffmpegBin)) { New-Item $ffmpegBin -ItemType Directory -Force | Out-Null }
-                    Copy-Item "$srcBin\*.exe" $ffmpegBin -Force
-                    Remove-Item $extractPath -Recurse -Force
-                    $installed = $true
-                    Write-Ok "  ffmpeg 已解压至 $ffmpegBin"
+                if (-not $binFolder) {
+                    throw "FFmpeg 压缩包中未找到 ffmpeg.exe"
                 }
+                $srcBin = $binFolder.DirectoryName
+                if (-not (Test-Path $ffmpegBin)) { New-Item $ffmpegBin -ItemType Directory -Force | Out-Null }
+                Copy-Item "$srcBin\*.exe" $ffmpegBin -Force
+                if (-not (Test-Path -LiteralPath $ffmpegExe)) {
+                    throw "FFmpeg 文件复制后仍缺少 $ffmpegExe"
+                }
+                $installed = $true
+                Write-Ok "  ffmpeg 已解压至 $ffmpegBin"
             }
             catch {
                 Write-Warn "  直接下载失败: $_"
+            }
+            finally {
+                if ($stagingRoot -and (Test-Path -LiteralPath $stagingRoot)) {
+                    $resolvedStagingRoot = [System.IO.Path]::GetFullPath($stagingRoot)
+                    $resolvedTempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+                    if (
+                        [System.IO.Path]::GetDirectoryName($resolvedStagingRoot) -ne $resolvedTempRoot -or
+                        -not [System.IO.Path]::GetFileName($resolvedStagingRoot).StartsWith("music-to-midi-ffmpeg-")
+                    ) {
+                        throw "拒绝清理未经验证的 FFmpeg 临时目录: $resolvedStagingRoot"
+                    }
+                    Remove-Item -LiteralPath $resolvedStagingRoot -Recurse -Force -ErrorAction Stop
+                }
             }
         } else {
             $installed = $true
@@ -281,14 +321,7 @@ catch {
         } else { throw "still not found" }
     }
     catch {
-        if ($installed) {
-            Write-Warn "ffmpeg 已安装，重启终端后完全生效"
-            $FFMPEG_OK = $true
-        } else {
-            Write-Warn "ffmpeg 自动安装失败，请手动安装："
-            Write-Warn "  Scoop: scoop install ffmpeg"
-            Write-Warn "  或从 https://www.gyan.dev/ffmpeg/builds/ 下载后加入 PATH"
-        }
+        Write-Err "ffmpeg 安装后仍无法在当前进程执行；请确认安装路径后重新运行。根因: $_"
     }
 }
 
@@ -315,16 +348,33 @@ foreach ($regPath in $vcRegPaths) {
 
 if (-not $vcRedistOk) {
     Write-Warn "未检测到 Visual C++ Redistributable 2022 x64（PyTorch 加载 fbgemm.dll 必需）"
+    $vcTempRoot = $null
     try {
         $vcUrl  = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-        $vcPath = Join-Path $env:TEMP "vc_redist.x64.exe"
+        $vcTempRoot = Join-Path $env:TEMP (
+            "music-to-midi-vcredist-{0}" -f [System.Guid]::NewGuid().ToString("N")
+        )
+        New-Item -ItemType Directory -Path $vcTempRoot -ErrorAction Stop | Out-Null
+        $vcPath = Join-Path $vcTempRoot "vc_redist.x64.exe"
 
         # 使用 Invoke-Download 显示实时进度
         Invoke-Download -Url $vcUrl -OutFile $vcPath -Description "正在下载 VC++ 2022 Redistributable（约 25 MB）..."
+        $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcPath
+        $vcSignerSubject = if ($vcSignature.SignerCertificate) {
+            $vcSignature.SignerCertificate.Subject
+        } else {
+            "<none>"
+        }
+        if (
+            $vcSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+            -not $vcSignature.SignerCertificate -or
+            $vcSignerSubject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)'
+        ) {
+            throw "VC++ Redistributable Authenticode 签名无效或签名者不是 Microsoft Corporation: status=$($vcSignature.Status), subject=$vcSignerSubject"
+        }
 
         Write-Info "  正在静默安装..."
         $proc = Start-Process -FilePath $vcPath -ArgumentList "/install /quiet /norestart" -Wait -PassThru
-        Remove-Item $vcPath -Force -ErrorAction SilentlyContinue
 
         # 退出码 0 = 成功，3010 = 成功但需重启
         if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
@@ -334,15 +384,25 @@ if (-not $vcRedistOk) {
             }
             $vcRedistOk = $true
         } else {
-            # 非零非 3010 可能是"已安装更高版本"（如 1638），视为成功继续
-            Write-Warn "  安装程序返回码: $($proc.ExitCode)（可能已有更高版本，继续执行）"
-            $vcRedistOk = $true
+            throw "VC++ Redistributable 安装程序返回非成功退出码: $($proc.ExitCode)"
         }
     }
     catch {
         Write-Warn "VC++ Redistributable 自动安装失败: $_"
-        Write-Warn "  请手动下载安装后重新运行本脚本："
-        Write-Warn "  https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        Write-Warn "后续 PyTorch CUDA DLL 导入和 GPU 张量实测将作为最终门禁；若运行时确实缺失，安装会明确停止。"
+    }
+    finally {
+        if ($vcTempRoot -and (Test-Path -LiteralPath $vcTempRoot)) {
+            $resolvedVcTempRoot = [System.IO.Path]::GetFullPath($vcTempRoot)
+            $resolvedTempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+            if (
+                [System.IO.Path]::GetDirectoryName($resolvedVcTempRoot) -ne $resolvedTempRoot -or
+                -not [System.IO.Path]::GetFileName($resolvedVcTempRoot).StartsWith("music-to-midi-vcredist-")
+            ) {
+                throw "拒绝清理未经验证的 VC++ 临时目录: $resolvedVcTempRoot"
+            }
+            Remove-Item -LiteralPath $resolvedVcTempRoot -Recurse -Force -ErrorAction Stop
+        }
     }
 }
 
@@ -363,6 +423,30 @@ if (-not (Test-Path $VENV_DIR) -or -not (Test-Path $PYTHON)) {
     Write-Ok "虚拟环境创建成功: $VENV_DIR"
 } else {
     Write-Ok "虚拟环境已存在: $VENV_DIR"
+}
+
+$venvPythonIdentityCheck = @"
+import struct
+import sys
+version = sys.version_info[:2]
+if not ((3, 11) <= version <= (3, 12)):
+    raise RuntimeError(f'unsupported venv Python: {version[0]}.{version[1]}')
+if struct.calcsize('P') * 8 != 64:
+    raise RuntimeError('the project venv must use 64-bit Python')
+print(f'Venv Python: {version[0]}.{version[1]} ({struct.calcsize("P") * 8}-bit)')
+"@
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $venvPythonIdentityCheck
+if ($pythonExitCode -ne 0) {
+    Write-Warn "现有 venv 的解释器损坏或不符合 Python 3.11-3.12/x64 契约，正在使用兼容解释器 --clear 重建可复现环境..."
+    if ($PYTHON_CMD.Count -eq 1) {
+        & $PYTHON_CMD[0] -m venv --clear "$VENV_DIR"
+    } else {
+        & $PYTHON_CMD[0] $PYTHON_CMD[1] -m venv --clear "$VENV_DIR"
+    }
+    if ($LASTEXITCODE -ne 0) { Write-Err "重建不兼容的虚拟环境失败" }
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $venvPythonIdentityCheck
+    if ($pythonExitCode -ne 0) { Write-Err "重建后的虚拟环境仍未通过 Python 3.11-3.12/x64 校验" }
+    Write-Ok "虚拟环境已按固定解释器重建: $VENV_DIR"
 }
 
 
@@ -432,9 +516,14 @@ function Repair-TorchOpenMPRuntime {
 }
 
 $torchCudaRuntimeCheck = @"
+import sys
 from importlib import metadata
 expected = {'torch': '2.7.0', 'torchaudio': '2.7.0', 'torchvision': '0.22.0'}
-actual = {name: metadata.version(name) for name in expected}
+try:
+    actual = {name: metadata.version(name) for name in expected}
+except metadata.PackageNotFoundError as exc:
+    print(f'Missing pinned PyTorch runtime package: {exc.name}', file=sys.stderr)
+    raise SystemExit(2)
 base = {name: version.split('+', 1)[0] for name, version in actual.items()}
 if base != expected:
     raise RuntimeError(f'PyTorch trio mismatch: expected={expected}, actual={actual}')
@@ -454,15 +543,15 @@ print('NVIDIA device:', torch.cuda.get_device_name(0))
 "@
 
 Repair-TorchOpenMPRuntime
-& "$PYTHON" -c $torchCudaRuntimeCheck
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
+if ($pythonExitCode -ne 0) {
     Write-Info "当前 PyTorch 三件套或 CUDA flavor 不符合固定运行时，正在强制安装 cu128..."
     & "$PIP" install "torch==2.7.0" "torchaudio==2.7.0" "torchvision==0.22.0" `
         --index-url "https://download.pytorch.org/whl/cu128" --force-reinstall
     if ($LASTEXITCODE -ne 0) { Write-Err "PyTorch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 cu128 安装失败" }
     Repair-TorchOpenMPRuntime
-    & "$PYTHON" -c $torchCudaRuntimeCheck
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
+    if ($pythonExitCode -ne 0) {
         Write-Err "PyTorch 三件套安装后仍未通过精确版本/CUDA 12.8/GPU 张量验证"
     }
 }
@@ -475,23 +564,41 @@ Write-Info "第 8 步/共 12 步  完整七模式固定使用 NVIDIA CUDA，不�
 Write-Info "第 9 步/共 12 步  安装项目 Python 依赖..."
 
 Set-Location $REPO_DIR
-$audioSeparatorInstalled = & "$PIP" show audio-separator 2>$null
-if ($LASTEXITCODE -eq 0) {
+if (Test-PythonPackageInstalled -PackageName "audio-separator") {
     Write-Info "检测到旧的 audio-separator，先卸载以避免 NumPy 解析冲突..."
     & "$PIP" uninstall audio-separator -y
     if ($LASTEXITCODE -ne 0) { Write-Err "卸载旧 audio-separator 失败" }
 }
 
-$tmpReq = Join-Path $env:TEMP "requirements-without-aria-amt.txt"
-Get-Content (Join-Path $REPO_DIR "requirements.txt") |
-    Where-Object { $_ -notmatch '^\s*aria-amt\s*@' } |
-    Set-Content -Encoding UTF8 $tmpReq
+$ortPackagesToRemove = @()
+foreach ($ortPackage in @("onnxruntime", "onnxruntime-gpu")) {
+    if (Test-PythonPackageInstalled -PackageName $ortPackage) {
+        $ortPackagesToRemove += $ortPackage
+    }
+}
+if ($ortPackagesToRemove.Count -gt 0) {
+    & "$PIP" uninstall @ortPackagesToRemove -y
+    if ($LASTEXITCODE -ne 0) { Write-Err "清理冲突的 ONNX Runtime 包失败" }
+}
 
-& "$PIP" uninstall onnxruntime onnxruntime-gpu -y
-if ($LASTEXITCODE -ne 0) { Write-Err "清理冲突的 ONNX Runtime 包失败" }
+$tmpReq = Join-Path $env:TEMP (
+    "music-to-midi-requirements-{0}.txt" -f [System.Guid]::NewGuid().ToString("N")
+)
+$requirementsExitCode = 1
+try {
+    Get-Content -Encoding UTF8 (Join-Path $REPO_DIR "requirements.txt") |
+        Where-Object { $_ -notmatch '^\s*aria-amt\s*@' } |
+        Set-Content -Encoding UTF8 $tmpReq
 
-& "$PIP" install -r $tmpReq
-if ($LASTEXITCODE -ne 0) { Write-Err "requirements.txt 安装失败" }
+    & "$PIP" install -r $tmpReq
+    $requirementsExitCode = $LASTEXITCODE
+}
+finally {
+    if (Test-Path -LiteralPath $tmpReq) {
+        Remove-Item -LiteralPath $tmpReq -Force -ErrorAction Stop
+    }
+}
+if ($requirementsExitCode -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
 # audio-separator 0.44.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.7 在 Windows
@@ -508,8 +615,7 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "pydub==0.25.1" `
     "requests>=2.32.5,<3" `
     "chardet>=5,<6" `
-    'onnxruntime-gpu==1.23.2; platform_system != "Darwin"' `
-    'onnxruntime==1.23.2; platform_system == "Darwin"' `
+    "onnxruntime-gpu==1.23.2" `
     "resampy==0.4.3" `
     "rotary-embedding-torch==0.6.5" `
     "samplerate==0.1.0" `
@@ -530,23 +636,36 @@ if torch.version.cuda != '12.8' or not torch.cuda.is_available():
 if 'CUDAExecutionProvider' not in providers:
     raise RuntimeError('Complete seven-mode runtime requires ONNX Runtime CUDAExecutionProvider')
 "@
-& "$PYTHON" -c $torchCudaRuntimeCheck
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
+if ($pythonExitCode -ne 0) {
     Write-Err "requirements.txt 安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
 }
-& "$PYTHON" -c $ortProviderCheck
-if ($LASTEXITCODE -ne 0) { Write-Err "ONNX Runtime CUDAExecutionProvider 严格校验失败" }
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $ortProviderCheck
+if ($pythonExitCode -ne 0) { Write-Err "ONNX Runtime CUDAExecutionProvider 严格校验失败" }
 
 & "$PIP" install "audio-separator==0.44.1" --no-deps
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
 Write-Ok "audio-separator 安装成功"
 
+Write-Info "下载其它大型模型前预检 MuScriptor Small/Medium/Large gated 访问权限..."
+& "$PYTHON" -c "from src.utils.muscriptor_downloader import preflight_muscriptor_download_access; preflight_muscriptor_download_access()"
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "MuScriptor gated 访问预检失败；请在浏览器逐项接受三个仓库条款，并用项目 venv 登录 Hugging Face 后重试。"
+}
+Write-Ok "MuScriptor Small/Medium/Large gated 访问权限预检通过"
+
 Write-Info "安装并严格校验官方 MuScriptor v0.3.0（不改写固定 PyTorch 运行时）..."
-$muscriptorRequirement = "https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
+$muscriptorRequirement = & "$PYTHON" -c "from src.utils.muscriptor_source_identity import MUSCRIPTOR_SOURCE_REQUIREMENT; print(MUSCRIPTOR_SOURCE_REQUIREMENT)"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($muscriptorRequirement)) {
+    Write-Err "无法从项目源码读取 MuScriptor 固定安装身份"
+}
+$muscriptorRequirement = ([string]$muscriptorRequirement).Trim()
 & "$PIP" install $muscriptorRequirement --no-deps --force-reinstall
 if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor v0.3.0 固定公共源码安装失败" }
+& "$PYTHON" -m src.utils.source_runtime
+if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor v0.3.0 官方源码身份校验失败" }
 & "$PYTHON" -c "from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason=MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or 'MuScriptor public runtime identity/API verified'); raise SystemExit(0 if reason == '' else 1)"
-if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor v0.3.0 官方源码或 API 校验失败" }
+if ($LASTEXITCODE -ne 0) { Write-Err "MuScriptor v0.3.0 官方运行时 API 校验失败" }
 
 Write-Info "准备 MuScriptor 结果工作台所需的 FluidSynth 2.5.6..."
 & "$PYTHON" (Join-Path $REPO_DIR "download_fluidsynth_runtime.py")
@@ -564,13 +683,13 @@ identity = validate_default_transkun_runtime()
 print('TransKun default runtime:', identity)
 "@
 
-& "$PYTHON" -c $transkunIdentityScript
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $transkunIdentityScript
+if ($pythonExitCode -ne 0) {
     Write-Info "TransKun 默认 V2 身份不完整，正在强制重装 transkun==2.0.1..."
     & "$PIP" install "transkun==2.0.1" --no-deps --force-reinstall
     if ($LASTEXITCODE -ne 0) { Write-Err "TransKun 2.0.1 强制重装失败" }
-    & "$PYTHON" -c $transkunIdentityScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $transkunIdentityScript
+    if ($pythonExitCode -ne 0) {
         Write-Err "TransKun 2.0.1 重装后包内 V2 资源仍未通过大小/SHA256 身份校验"
     }
 }
@@ -590,15 +709,15 @@ print('Aria-AMT model:', AriaAmtTranscriber().is_model_available())
 sys.exit(0 if reason == '' else 1)
 "@
 
-& "$PYTHON" -c $ariaCheckScript
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $ariaCheckScript
+if ($pythonExitCode -ne 0) {
     Write-Info "Aria-AMT 缺失或源码身份不匹配，正在强制安装固定 GitHub archive..."
     & "$PIP" install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps --force-reinstall
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Aria-AMT 安装失败，请确认 Python 3.11+ 且能访问 GitHub 仓库。"
     }
-    & "$PYTHON" -c $ariaCheckScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $ariaCheckScript
+    if ($pythonExitCode -ne 0) {
         Write-Err "Aria-AMT 安装后仍不可用"
     }
 }
@@ -622,8 +741,8 @@ print('ByteDance Piano model:', ByteDancePianoTranscriber().is_model_available()
 sys.exit(0 if ByteDancePianoTranscriber.is_available() else 1)
 "@
 
-& "$PYTHON" -c $byteDanceCheckScript
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $byteDanceCheckScript
+if ($pythonExitCode -ne 0) {
     Write-Err "ByteDance Piano 安装失败，请确认 piano-transcription-inference、torchlibrosa 与 matplotlib 已安装。"
 }
 
@@ -675,8 +794,8 @@ print('MIROS checkpoint:', checkpoint.exists())
 sys.exit(0 if repo.exists() and (repo / 'main.py').exists() and (repo / 'transcribe.py').exists() else 1)
 "@
 
-& "$PYTHON" -c $mirosPrepScript
-if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 源码目录不完整" }
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $mirosPrepScript
+if ($pythonExitCode -ne 0) { Write-Err "MIROS 源码目录不完整" }
 
 $mirosMain = Join-Path $mirosDir "main.py"
 if ((-not (Test-Path (Join-Path $mirosDir "model\musicfm\data\pretrained_msd.pt"))) -or
@@ -708,7 +827,7 @@ if ($LASTEXITCODE -ne 0) { Write-Err "MIROS 后端检查失败" }
 # --- 第 10 步/共 12 步：验证核心依赖 ---
 Write-Info "第 10 步/共 12 步  验证核心依赖..."
 
-foreach ($dep in @("PyQt6", "torch", "numpy", "librosa", "mido", "soundfile", "pytorch_lightning", "amt.run", "audio_separator.separator", "h5py", "mirdata")) {
+foreach ($dep in @("PyQt6", "torch", "numpy", "librosa", "mido", "soundfile", "pytorch_lightning", "beat_this", "fastapi", "amt.run", "audio_separator.separator", "h5py", "mirdata")) {
     Write-Info "  正在验证 $dep..."
     & "$PYTHON" -c "import importlib; m=importlib.import_module('$dep'); print(getattr(m, '__version__', 'unknown'))"
     if ($LASTEXITCODE -eq 0) {
@@ -735,8 +854,8 @@ manifest, file_count = validate_patched_yourmt3_source(source_dir)
 print('YourMT3+ patched source manifest:', manifest)
 print('YourMT3+ patched source files:', file_count)
 "@
-& "$PYTHON" -c $yourMt3SourceIdentityScript
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $yourMt3SourceIdentityScript
+if ($pythonExitCode -ne 0) {
     Write-Err "YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。"
 }
 Write-Ok "YourMT3+ 源码身份检查通过"

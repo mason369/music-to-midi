@@ -5,6 +5,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class OneClickScriptContractTests(unittest.TestCase):
+    def test_installers_preflight_gated_models_before_model_bundle(self):
+        for script_name in ("install.ps1", "install.sh"):
+            script = (REPO_ROOT / script_name).read_text(encoding="utf-8")
+
+            preflight = script.index("preflight_muscriptor_download_access")
+            aggregate_download = script.index("download_sota_models.py")
+            self.assertLess(preflight, aggregate_download)
+            self.assertIn("Small/Medium/Large gated", script)
+
     def test_windows_launcher_checks_aria_amt_package_and_model(self):
         script = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
 
@@ -68,7 +77,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_aria_amt_model.py", script)
         self.assertIn("Aria-AMT", script)
         self.assertIn("Python 3.11", script)
-        self.assertIn("requirements-without-aria-amt.txt", script)
+        self.assertIn("music-to-midi-requirements-{0}.txt", script)
         self.assertIn("audio-separator==0.44.1", script)
         self.assertIn(
             '"aria-amt @ https://github.com/EleutherAI/aria-amt/archive/'
@@ -77,6 +86,35 @@ class OneClickScriptContractTests(unittest.TestCase):
         )
         self.assertIn("AriaAmtTranscriber.get_unavailable_reason()", script)
         self.assertIn("--force-reinstall", script)
+
+    def test_windows_installer_rebuilds_incompatible_venv_and_never_reports_cancel_as_success(self):
+        script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("Python 3.11-3.12/x64", script)
+        self.assertIn("-m venv --clear", script)
+        self.assertIn("exit 1", script[script.index("是否仍要继续安装？"):])
+
+    def test_windows_installer_uses_verified_unique_native_runtime_downloads(self):
+        script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+
+        for expected in (
+            "music-to-midi-ffmpeg-{0}",
+            "music-to-midi-vcredist-{0}",
+            "Get-AuthenticodeSignature -LiteralPath $vcPath",
+            "Microsoft Corporation",
+            "非成功退出码",
+            "ffmpeg 安装后仍无法在当前进程执行",
+        ):
+            self.assertIn(expected, script)
+
+    def test_source_launchers_check_the_pinned_beat_this_asset_before_start(self):
+        for script_name in ("run.ps1", "run.sh"):
+            script = (REPO_ROOT / script_name).read_text(encoding="utf-8")
+
+            self.assertIn("validate_beat_this_checkpoint", script)
+            self.assertIn("Beat This final0", script)
+        self.assertNotIn('Join-Path $env:TEMP "ffmpeg_extract"', script)
+        self.assertNotIn('Join-Path $env:TEMP "vc_redist.x64.exe"', script)
 
     def test_windows_installer_downloads_bytedance_pedal_model(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
@@ -118,6 +156,29 @@ class OneClickScriptContractTests(unittest.TestCase):
             self.assertNotIn("https://download.pytorch.org/whl/cpu", script)
             self.assertNotIn("https://download.pytorch.org/whl/cu118", script)
             self.assertNotIn("intel_extension_for_pytorch", script)
+
+    def test_installers_do_not_emit_missing_ort_uninstall_warnings(self):
+        windows = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+        linux = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn("function Test-PythonPackageInstalled", windows)
+        self.assertIn('Test-PythonPackageInstalled -PackageName "audio-separator"', windows)
+        self.assertIn("$ortPackagesToRemove = @()", windows)
+        self.assertIn("metadata.PackageNotFoundError", windows)
+        self.assertIn("Test-PythonPackageInstalled -PackageName $ortPackage", windows)
+        self.assertNotIn('& "$PIP" show audio-separator', windows)
+        self.assertNotIn('& "$PIP" uninstall onnxruntime onnxruntime-gpu -y', windows)
+        self.assertIn("ORT_PACKAGES_TO_REMOVE=()", linux)
+        self.assertIn('if "$PIP" show "$ort_package"', linux)
+        self.assertNotIn('"$PIP" uninstall onnxruntime onnxruntime-gpu -y', linux)
+
+    def test_fresh_installers_report_missing_torch_without_a_traceback(self):
+        for script_name in ("install.ps1", "install.sh"):
+            script = (REPO_ROOT / script_name).read_text(encoding="utf-8")
+
+            self.assertIn("except metadata.PackageNotFoundError as exc:", script)
+            self.assertIn("Missing pinned PyTorch runtime package", script)
+            self.assertIn("raise SystemExit(2)", script)
 
     def test_launchers_recheck_exact_versions_cuda_tensor_and_ort_provider(self):
         for script_name in ("run.ps1", "run.sh"):
@@ -230,7 +291,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("download_aria_amt_model.py", script)
         self.assertIn("python3.11", script)
         self.assertIn("Aria-AMT", script)
-        self.assertIn("requirements-without-aria-amt.txt", script)
+        self.assertIn("music-to-midi-requirements-without-aria-amt.XXXXXX", script)
         self.assertIn("audio-separator==0.44.1", script)
         self.assertIn(
             '"aria-amt @ https://github.com/EleutherAI/aria-amt/archive/'
@@ -239,6 +300,29 @@ class OneClickScriptContractTests(unittest.TestCase):
         )
         self.assertIn("AriaAmtTranscriber.get_unavailable_reason()", script)
         self.assertIn("--force-reinstall", script)
+
+    def test_linux_installer_enforces_exact_python_and_unique_temp_requirements(self):
+        script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        for expected in (
+            "Python 3.11-3.12",
+            'struct.calcsize("P") * 8 != 64',
+            '"$PYTHON_BIN" -m venv --clear "$VENV_DIR"',
+            "mktemp",
+            "music-to-midi-requirements-without-aria-amt.XXXXXX",
+            "trap cleanup_requirements_file EXIT",
+            'error "当前安装器只支持使用 apt/dpkg',
+        ):
+            self.assertIn(expected, script)
+        self.assertNotIn('TMP_REQ="${TMPDIR:-/tmp}/requirements-without-aria-amt.txt"', script)
+
+    def test_linux_installer_preserves_unmanaged_user_fontconfig(self):
+        script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn('FONTCONFIG_FILE="${HOME}/.config/fontconfig/fonts.conf"', script)
+        self.assertIn('if [ -e "$FONTCONFIG_FILE" ] && ! grep -q', script)
+        self.assertIn("保留不覆盖", script)
+        self.assertIn("Music to MIDI managed font fallback", script)
 
     def test_linux_installer_downloads_bytedance_pedal_model(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
@@ -287,14 +371,14 @@ class OneClickScriptContractTests(unittest.TestCase):
     def test_project_requires_python_matches_aria_amt_requirement(self):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertIn('requires-python = ">=3.11"', pyproject)
+        self.assertIn('requires-python = ">=3.11,<3.13"', pyproject)
 
     def test_project_metadata_does_not_advertise_a_dependencyless_cli_or_os_independence(self):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         package_init = (REPO_ROOT / "src" / "__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('version = "1.4.0"', pyproject)
-        self.assertIn('__version__ = "1.4.0"', package_init)
+        self.assertIn('version = "1.5.0"', pyproject)
+        self.assertIn('__version__ = "1.5.0"', package_init)
         self.assertNotIn("Operating System :: OS Independent", pyproject)
         self.assertIn("Operating System :: Microsoft :: Windows", pyproject)
         self.assertIn("Operating System :: POSIX :: Linux", pyproject)
@@ -354,6 +438,9 @@ class OneClickScriptContractTests(unittest.TestCase):
 
         self.assertIn("piano-transcription-inference==0.0.6", requirements)
         self.assertIn("transkun==2.0.1", requirements)
+        self.assertIn("ncls==0.0.68", requirements)
+        self.assertIn("setuptools==80.10.2", requirements)
+        self.assertIn("hf_xet==1.5.2", requirements)
         self.assertIn("torchlibrosa>=0.1.0,<0.2", requirements)
         self.assertIn("matplotlib", requirements)
         self.assertIn("beat-this==1.1.0", requirements)
@@ -363,6 +450,13 @@ class OneClickScriptContractTests(unittest.TestCase):
         requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
 
         self.assertIn("transformers==4.48.3", requirements)
+
+    def test_yourmt3_download_avoids_removed_resume_download_argument(self):
+        downloader = (REPO_ROOT / "src/utils/yourmt3_downloader.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("resume_download=", downloader)
 
     def test_windows_installer_uses_same_runtime_dependency_pins(self):
         script = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
@@ -394,11 +488,34 @@ class OneClickScriptContractTests(unittest.TestCase):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
 
         install_command = '"$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall'
-        identity_check = "reason = MuscriptorTranscriber._runtime_unavailable_reason()"
+        identity_check = '"$PYTHON" -m src.utils.source_runtime'
         for command in (install_command, identity_check):
             self.assertIn(command, script)
         self.assertLess(script.index(install_command), script.index(identity_check))
+        self.assertIn("MUSCRIPTOR_SOURCE_REQUIREMENT", script)
+        self.assertIn("MuscriptorTranscriber._runtime_unavailable_reason()", script)
         self.assertNotIn("patch_muscriptor_runtime.py", script)
+
+    def test_source_launchers_gate_project_venv_and_use_exact_interpreter(self):
+        windows = (REPO_ROOT / "run.ps1").read_text(encoding="utf-8")
+        linux = (REPO_ROOT / "run.sh").read_text(encoding="utf-8")
+        main_source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('& "$VENV_PYTHON" -m src.utils.source_runtime', windows)
+        self.assertIn('"$VENV_PYTHON" -m src.utils.source_runtime', linux)
+        self.assertIn('exec "$VENV_PYTHON" -m src.main "$@"', linux)
+        self.assertNotIn("exec python -m src.main", linux)
+        self.assertLess(
+            main_source.index("require_source_runtime_identity()"),
+            main_source.index("from src import __version__"),
+        )
+
+    def test_installers_get_muscriptor_requirement_from_identity_module(self):
+        for script_name in ("install.ps1", "install.sh"):
+            script = (REPO_ROOT / script_name).read_text(encoding="utf-8")
+
+            self.assertIn("MUSCRIPTOR_SOURCE_REQUIREMENT", script)
+            self.assertIn("src.utils.source_runtime", script)
 
     def test_linux_installer_rejects_unsupported_rocm_full_stack_explicitly(self):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")

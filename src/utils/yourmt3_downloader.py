@@ -445,7 +445,6 @@ def download_model(
                             revision=YOURMT3_REVISION,
                             filename=actual_filename,
                             cache_dir=str(cache_dir / "hf_cache"),
-                            resume_download=True,
                             local_files_only=False,
                         )
                     )

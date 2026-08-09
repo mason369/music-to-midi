@@ -5,8 +5,13 @@
 
 #Requires -Version 5.1
 
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$env:PYTHONIOENCODING = "utf-8"
+
 $REPO_DIR    = $PSScriptRoot
 $VENV_PYTHON = Join-Path $REPO_DIR "venv\Scripts\python.exe"
+. (Join-Path $REPO_DIR "scripts\powershell_helpers.ps1")
 
 function Write-Info { param($msg) Write-Host "[信息]  $msg" -ForegroundColor Cyan }
 function Write-Ok   { param($msg) Write-Host "[完成]  $msg" -ForegroundColor Green }
@@ -21,10 +26,23 @@ if (-not (Test-Path $VENV_PYTHON)) {
     $NEED_INSTALL = $true
 }
 
+# 检查 1.5：源码解释器隔离与 MuScriptor 官方源码身份
+if (-not $NEED_INSTALL) {
+    Write-Info "检查源码解释器隔离与 MuScriptor 官方源码身份..."
+    Set-Location $REPO_DIR
+    & "$VENV_PYTHON" -m src.utils.source_runtime
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "源码运行时身份校验失败（上方已显示根因）"
+        $NEED_INSTALL = $true
+    } else {
+        Write-Ok "源码解释器与 MuScriptor 官方源码身份检查通过"
+    }
+}
+
 # 检查 2：核心 Python 包
 if (-not $NEED_INSTALL) {
-    Write-Info "检查核心 Python 包（PyQt6/librosa/mido）..."
-    & "$VENV_PYTHON" -c "import PyQt6, librosa, mido; print('核心依赖导入成功')"
+    Write-Info "检查核心 Python 包（PyQt6/librosa/mido/beat_this/fastapi）..."
+    & "$VENV_PYTHON" -c "import PyQt6, librosa, mido, beat_this, fastapi; print('核心依赖导入成功')"
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "核心 Python 包缺失（上方已显示完整错误输出）"
         $NEED_INSTALL = $true
@@ -62,8 +80,8 @@ print('PyTorch CUDA runtime:', torch.version.cuda)
 print('ONNX Runtime providers:', providers)
 print('NVIDIA device:', torch.cuda.get_device_name(0))
 "@
-    & "$VENV_PYTHON" -c $checkGpuRuntimeScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkGpuRuntimeScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "完整七模式的精确 PyTorch/CUDA/ONNX Runtime GPU 契约未通过"
         $NEED_INSTALL = $true
     } else {
@@ -84,8 +102,8 @@ manifest, file_count = validate_patched_yourmt3_source(source_dir)
 print('YourMT3+ patched source manifest:', manifest)
 print('YourMT3+ patched source files:', file_count)
 "@
-    & "$VENV_PYTHON" -c $checkYourMt3SourceScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkYourMt3SourceScript
+    if ($pythonExitCode -ne 0) {
         Write-Host "[错误] YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。" -ForegroundColor Red
         exit 1
     }
@@ -112,8 +130,8 @@ if missing:
     print('missing YourMT3+ official model modes:', ', '.join(missing))
 sys.exit(0 if not missing else 1)
 "@
-    & "$VENV_PYTHON" -c $checkScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 YourMT3+ 模型权重"
         $NEED_INSTALL = $true
     } else {
@@ -133,8 +151,8 @@ print('BS-RoFormer SW Fixed checkpoint:', model_path)
 print('BS-RoFormer SW Fixed config:', config_path)
 sys.exit(0)
 "@
-    & "$VENV_PYTHON" -c $checkMultiStemScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMultiStemScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 BS-RoFormer SW Fixed 六声部模型，或文件校验失败"
         Write-Warn "  请先运行: python download_multistem_model.py"
         $NEED_INSTALL = $true
@@ -160,8 +178,8 @@ print('PolarFormer accompaniment available:', is_accompaniment_model_available()
 print('Vocal split route available:', VocalSeparator.is_model_available())
 sys.exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_accompaniment_model_available() and VocalSeparator.is_model_available() else 1)
 "@
-    & "$VENV_PYTHON" -c $checkVocalScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkVocalScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "Leap XE 人声或 PolarFormer 伴奏模型缺失/校验失败"
         $NEED_INSTALL = $true
     } else {
@@ -179,8 +197,8 @@ from download_sota_models import validate_default_transkun_runtime
 identity = validate_default_transkun_runtime()
 print('TransKun default runtime:', identity)
 "@
-    & "$VENV_PYTHON" -c $checkDefaultTransKunScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkDefaultTransKunScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "TransKun 2.0.1 默认 V2 包或随包资源身份校验失败"
         Write-Warn "  安装程序将强制重装并再次校验 transkun==2.0.1"
         $NEED_INSTALL = $true
@@ -204,8 +222,8 @@ print('TransKun V2 Aug model directory:', model_dir)
 print('TransKun V2 Aug model available:', is_transkun_v2_aug_model_available())
 sys.exit(0 if is_transkun_v2_aug_model_available() else 1)
 "@
-    & "$VENV_PYTHON" -c $checkTransKunV2AugScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkTransKunV2AugScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "TransKun V2 Aug 模型缺失或校验失败"
         Write-Warn "  请先运行: python download_transkun_v2_aug_model.py"
         $NEED_INSTALL = $true
@@ -228,8 +246,8 @@ print('Aria-AMT package:', AriaAmtTranscriber.is_available())
 print('Aria-AMT model:', transcriber.is_model_available())
 sys.exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
 "@
-    & "$VENV_PYTHON" -c $checkAriaScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkAriaScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 Aria-AMT 包或模型权重"
         Write-Warn "  请先运行: python download_aria_amt_model.py"
         $NEED_INSTALL = $true
@@ -250,8 +268,8 @@ print('ByteDance Piano package:', ByteDancePianoTranscriber.is_available())
 print('ByteDance Piano model:', transcriber.is_model_available())
 sys.exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
 "@
-    & "$VENV_PYTHON" -c $checkByteDanceScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkByteDanceScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 ByteDance Piano 包或模型权重"
         Write-Warn "  请先运行: python download_bytedance_piano_model.py"
         $NEED_INSTALL = $true
@@ -273,8 +291,8 @@ print('MIROS package:', MirosTranscriber.is_available())
 print('MIROS model:', MirosTranscriber.is_model_available())
 sys.exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_available() else 1)
 "@
-    & "$VENV_PYTHON" -c $checkMirosScript
-    if ($LASTEXITCODE -ne 0) {
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMirosScript
+    if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 MIROS 源码、运行依赖或模型权重"
         Write-Warn "  请先运行: python download_miros_model.py"
         $NEED_INSTALL = $true
@@ -290,12 +308,15 @@ if (-not $NEED_INSTALL) {
 import sys
 sys.path.insert(0, r'$REPO_DIR')
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
+from src.core.beat_this_tracker import validate_beat_this_checkpoint
 from src.utils.fluidsynth_runtime import get_fluidsynth_executable
 from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
 from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 reason = MuscriptorTranscriber._runtime_unavailable_reason()
 if reason:
     raise RuntimeError(reason)
+beat_this = validate_beat_this_checkpoint()
+print('Beat This final0:', beat_this)
 # Launcher preflight is intentionally size-only; each actual model load performs
 # its full SHA-256 gate before inference, avoiding a duplicate 7.1 GB read here.
 for model_size in ("small", "medium", "large"):
@@ -310,9 +331,9 @@ fluidsynth = get_fluidsynth_executable()
 print('MuScriptor SoundFont:', soundfont)
 print('FluidSynth:', fluidsynth)
 "@
-    & "$VENV_PYTHON" -c $checkMuscriptorScript
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "MuScriptor Small/Medium/Large 或其真实 MIDI 播放资源缺失/身份校验失败"
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMuscriptorScript
+    if ($pythonExitCode -ne 0) {
+        Write-Warn "Beat This、MuScriptor Small/Medium/Large 或其真实 MIDI 播放资源缺失/身份校验失败"
         Write-Warn "  请接受 Hugging Face 模型条款后运行: python download_sota_models.py"
         $NEED_INSTALL = $true
     } else {

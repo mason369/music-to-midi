@@ -29,8 +29,18 @@ if [ ! -f "$VENV_PYTHON" ]; then
 fi
 
 if ! $NEED_INSTALL; then
+    info "Checking isolated source interpreter and official MuScriptor identity..."
+    if ! (cd "$REPO_DIR" && "$VENV_PYTHON" -m src.utils.source_runtime); then
+        warn "Source runtime identity check failed (root cause shown above)"
+        NEED_INSTALL=true
+    else
+        ok "Source interpreter and official MuScriptor identity verified"
+    fi
+fi
+
+if ! $NEED_INSTALL; then
     info "Checking core Python packages..."
-    if ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido; print('core imports OK')"; then
+    if ! "$VENV_PYTHON" -c "import PyQt6, librosa, mido, beat_this, fastapi; print('core imports OK')"; then
         warn "Core Python packages missing (full error shown above)"
         NEED_INSTALL=true
     fi
@@ -204,12 +214,15 @@ fi
 if ! $NEED_INSTALL && ! "$VENV_PYTHON" -c "
 import sys; sys.path.insert(0, '${REPO_DIR}')
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
+from src.core.beat_this_tracker import validate_beat_this_checkpoint
 from src.utils.fluidsynth_runtime import get_fluidsynth_executable
 from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
 from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 reason = MuscriptorTranscriber._runtime_unavailable_reason()
 if reason:
     raise RuntimeError(reason)
+beat_this = validate_beat_this_checkpoint()
+print('Beat This final0:', beat_this)
 # Each actual model load performs the full SHA-256 gate. Avoid reading the full
 # 7.1 GB checkpoint set twice by keeping launcher preflight to path/size checks.
 for model_size in ("small", "medium", "large"):
@@ -224,7 +237,7 @@ fluidsynth = get_fluidsynth_executable()
 print('MuScriptor SoundFont:', soundfont)
 print('FluidSynth:', fluidsynth)
 "; then
-    warn "MuScriptor Small/Medium/Large or their real SoundFont playback assets are missing/invalid"
+    warn "Beat This, MuScriptor Small/Medium/Large, or their real SoundFont playback assets are missing/invalid"
     warn "  Accept the Hugging Face model terms, then run: python download_sota_models.py"
     NEED_INSTALL=true
 fi
@@ -237,6 +250,5 @@ if $NEED_INSTALL; then
 fi
 
 ok "All dependencies are ready"
-source "${REPO_DIR}/venv/bin/activate"
 cd "$REPO_DIR"
-exec python -m src.main "$@"
+exec "$VENV_PYTHON" -m src.main "$@"

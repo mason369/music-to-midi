@@ -208,6 +208,9 @@ datas += copy_metadata('torchlibrosa')
 datas += copy_metadata('muscriptor')
 
 hiddenimports = [
+    # Conditional source-runtime gate import in src/main.py. PyInstaller cannot
+    # discover imports guarded by ``if __name__ == "__main__"`` reliably.
+    'src.utils.source_runtime',
     # PyQt6 相关
     'PyQt6.QtCore',
     'PyQt6.QtGui',

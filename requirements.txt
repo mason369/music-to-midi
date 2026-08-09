@@ -29,11 +29,20 @@ soxr>=0.3.7,<1
 
 # 模型下载
 huggingface_hub>=0.20.0,<2
+# Hugging Face repositories used by the model set are Xet-backed. Install the
+# official client explicitly so a fresh install does not fall back to legacy HTTP.
+hf_xet==1.5.2
 requests>=2.32.5,<3
 chardet>=5,<6
 
 # 钢琴专用转写
 transkun==2.0.1
+# ncls 0.0.70 has no Windows CPython wheels and otherwise requires local
+# C++ build tools. 0.0.68 is the newest release with official cp311 Windows
+# wheels and provides the FNCLS API used by TransKun 2.0.1.
+ncls==0.0.68
+# ncls 0.0.68 still imports pkg_resources; setuptools 82+ removed it.
+setuptools==80.10.2
 # aria-amt is installed separately with --no-deps after the pinned
 # PyTorch/torchaudio runtime is in place. Upstream currently declares
 # torchaudio<=2.5, which conflicts with the CUDA 12.8 runtime required
@@ -73,6 +82,8 @@ psutil>=5.9.0,<8
 # v0.3.0 的其余官方运行依赖，版本不得低于上游元数据要求。
 fastapi==0.136.3
 starlette==0.52.1
+pydantic==2.10.6
+pydantic-core==2.27.2
 httpx>=0.28.1,<1
 python-multipart>=0.0.29,<1
 uvicorn[standard]>=0.48.0,<1

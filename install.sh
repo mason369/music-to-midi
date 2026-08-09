@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Music to MIDI - Linux/WSL 自动安装脚本
-# 支持 Ubuntu 20.04+ / Debian 11+ / WSL2 (WSLg)
+# 支持提供 64 位 Python 3.11/3.12 的 Debian/Ubuntu/WSL2 (WSLg)
 # 用法: bash install.sh
 
 set -euo pipefail
@@ -33,6 +33,10 @@ else
     info "检测到原生 Linux 环境"
 fi
 
+if ! command -v apt-get &>/dev/null || ! command -v dpkg &>/dev/null; then
+    error "当前安装器只支持使用 apt/dpkg 的 Debian、Ubuntu 与 WSL2；检测不到 apt-get 或 dpkg。"
+fi
+
 # ───────────────────────── 检查 sudo ─────────────────────────
 if ! sudo -n true 2>/dev/null; then
     warn "需要 sudo 权限安装系统依赖，请输入密码..."
@@ -43,22 +47,58 @@ info "检查 Python 版本..."
 PYTHON_BIN=""
 for cmd in python3.12 python3.11 python3; do
     if command -v "$cmd" &>/dev/null; then
-        VER=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+        IDENTITY=$("$cmd" -c 'import struct, sys; print("{}.{} {}".format(sys.version_info.major, sys.version_info.minor, struct.calcsize("P") * 8))' 2>/dev/null || echo "0.0 0")
+        read -r VER BITS <<< "$IDENTITY"
         MAJOR="${VER%%.*}"; MINOR="${VER##*.}"
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 11 ]; then
+        if [[ "$MAJOR" =~ ^[0-9]+$ && "$MINOR" =~ ^[0-9]+$ ]] && \
+           [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 11 ] && [ "$MINOR" -le 12 ] && \
+           [ "$BITS" -eq 64 ]; then
             PYTHON_BIN="$cmd"
-            success "找到 Python $VER ($cmd)"
+            success "找到 64 位 Python $VER ($cmd)"
             break
+        elif [[ "$BITS" == "32" ]]; then
+            warn "忽略 32 位 Python $VER ($cmd)；完整 CUDA 运行时只支持 64 位 Python。"
+        elif [[ "$MAJOR" =~ ^[0-9]+$ && "$MINOR" =~ ^[0-9]+$ ]]; then
+            warn "忽略不兼容的 Python $VER ($cmd)；项目仅支持 Python 3.11-3.12。"
         fi
     fi
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-    warn "未找到 Python 3.11+，尝试安装..."
+    warn "未找到 64 位 Python 3.11-3.12，尝试从当前 apt 软件源安装..."
     info "更新包列表..."
     sudo apt-get update
-    sudo apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip
-    PYTHON_BIN="python3.11"
+    for candidate in python3.12 python3.11; do
+        if apt-cache show "$candidate" >/dev/null 2>&1 && \
+           apt-cache show "${candidate}-venv" >/dev/null 2>&1 && \
+           apt-cache show "${candidate}-dev" >/dev/null 2>&1; then
+            sudo apt-get install -y "$candidate" "${candidate}-venv" "${candidate}-dev" python3-pip
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+    if [ -z "$PYTHON_BIN" ]; then
+        error "当前 apt 软件源不提供 64 位 Python 3.11/3.12 及其 venv/dev 包；请先配置发行版官方软件源并安装兼容 Python，不能使用 3.10 或 3.13+ 继续。"
+    fi
+fi
+
+if ! "$PYTHON_BIN" -c '
+import struct, sys
+version = sys.version_info[:2]
+if not ((3, 11) <= version <= (3, 12)):
+    raise RuntimeError(f"unsupported Python: {version[0]}.{version[1]}")
+if struct.calcsize("P") * 8 != 64:
+    raise RuntimeError("the installer requires 64-bit Python")
+'; then
+    error "选中的解释器未通过 Python 3.11-3.12/x64 实测: $PYTHON_BIN"
+fi
+
+if [[ "$PYTHON_BIN" =~ ^python3\.(11|12)$ ]]; then
+    PYTHON_VENV_PACKAGE="${PYTHON_BIN}-venv"
+    PYTHON_DEV_PACKAGE="${PYTHON_BIN}-dev"
+else
+    PYTHON_VENV_PACKAGE="python3-venv"
+    PYTHON_DEV_PACKAGE="python3-dev"
 fi
 
 # ───────────────────────── 安装系统依赖 ─────────────────────────
@@ -76,10 +116,9 @@ SYSTEM_PKGS=(
     libsndfile1
     libportaudio2
     portaudio19-dev
-    # Python 开发
-    python3-dev
-    python3-venv
-    python3.11-venv
+    # Python 开发（必须与选中的解释器一致）
+    "$PYTHON_DEV_PACKAGE"
+    "$PYTHON_VENV_PACKAGE"
     # PyQt6 / X11 运行时库
     libxcb-xinerama0
     libxcb-cursor0
@@ -129,10 +168,15 @@ success "字体缓存已更新"
 # ───────────────────────── 配置 fontconfig（emoji回退）─────────────────────────
 info "配置字体回退（Emoji/图标支持）..."
 mkdir -p "${HOME}/.config/fontconfig"
-cat > "${HOME}/.config/fontconfig/fonts.conf" << 'FONTCONF_EOF'
+FONTCONFIG_FILE="${HOME}/.config/fontconfig/fonts.conf"
+if [ -e "$FONTCONFIG_FILE" ] && ! grep -q "Music to MIDI managed font fallback" "$FONTCONFIG_FILE"; then
+    warn "检测到用户已有 fontconfig 配置，保留不覆盖: $FONTCONFIG_FILE"
+else
+cat > "$FONTCONFIG_FILE" << 'FONTCONF_EOF'
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
 <fontconfig>
+  <!-- Music to MIDI managed font fallback -->
   <!-- 优先使用 Noto CJK 渲染中文，Noto Color Emoji 渲染图标 -->
   <alias>
     <family>sans-serif</family>
@@ -162,8 +206,10 @@ cat > "${HOME}/.config/fontconfig/fonts.conf" << 'FONTCONF_EOF'
   </alias>
 </fontconfig>
 FONTCONF_EOF
+    success "项目字体回退配置已写入: $FONTCONFIG_FILE"
+fi
 fc-cache -f 2>/dev/null || true
-success "字体配置完成"
+success "字体缓存刷新完成"
 
 # ───────────────────────── WSL 显示检查 ─────────────────────────
 if $IS_WSL; then
@@ -192,7 +238,21 @@ if [ ! -d "$VENV_DIR" ]; then
     "$PYTHON_BIN" -m venv "$VENV_DIR"
     success "虚拟环境已创建: $VENV_DIR"
 else
-    success "虚拟环境已存在: $VENV_DIR"
+    VENV_PYTHON="${VENV_DIR}/bin/python"
+    if [ ! -x "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -c '
+import struct, sys
+version = sys.version_info[:2]
+if not (version >= (3, 11) and version <= (3, 12)):
+    raise RuntimeError(f"unsupported venv Python: {version[0]}.{version[1]}")
+if struct.calcsize("P") * 8 != 64:
+    raise RuntimeError("the project venv must use 64-bit Python")
+'; then
+        warn "现有 venv 的解释器损坏或不符合 Python 3.11-3.12/x64 契约，正在使用 $PYTHON_BIN --clear 重建可复现环境..."
+        "$PYTHON_BIN" -m venv --clear "$VENV_DIR"
+        success "虚拟环境已按固定解释器重建: $VENV_DIR"
+    else
+        success "虚拟环境已存在且解释器版本/位数正确: $VENV_DIR"
+    fi
 fi
 
 PIP="${VENV_DIR}/bin/pip"
@@ -227,9 +287,14 @@ success "NVIDIA 驱动检查通过（报告 CUDA $CUDA_VER）"
 
 validate_torch_cuda_runtime() {
     "$PYTHON" -c '
+import sys
 from importlib import metadata
 expected = {"torch": "2.7.0", "torchaudio": "2.7.0", "torchvision": "0.22.0"}
-actual = {name: metadata.version(name) for name in expected}
+try:
+    actual = {name: metadata.version(name) for name in expected}
+except metadata.PackageNotFoundError as exc:
+    print(f"Missing pinned PyTorch runtime package: {exc.name}", file=sys.stderr)
+    raise SystemExit(2)
 base = {name: version.split("+", 1)[0] for name, version in actual.items()}
 if base != expected:
     raise RuntimeError(f"PyTorch trio mismatch: expected={expected}, actual={actual}")
@@ -270,10 +335,26 @@ if "$PIP" show audio-separator >/dev/null 2>&1; then
     "$PIP" uninstall audio-separator -y
 fi
 
-TMP_REQ="${TMPDIR:-/tmp}/requirements-without-aria-amt.txt"
+TMP_REQ=$(mktemp "${TMPDIR:-/tmp}/music-to-midi-requirements-without-aria-amt.XXXXXX")
+cleanup_requirements_file() {
+    if [ -n "${TMP_REQ:-}" ] && [ -f "$TMP_REQ" ]; then
+        rm -f -- "$TMP_REQ"
+    fi
+}
+trap cleanup_requirements_file EXIT
 grep -vE '^[[:space:]]*aria-amt[[:space:]]*@' requirements.txt > "$TMP_REQ"
-"$PIP" uninstall onnxruntime onnxruntime-gpu -y
+ORT_PACKAGES_TO_REMOVE=()
+for ort_package in onnxruntime onnxruntime-gpu; do
+    if "$PIP" show "$ort_package" >/dev/null 2>&1; then
+        ORT_PACKAGES_TO_REMOVE+=("$ort_package")
+    fi
+done
+if [ ${#ORT_PACKAGES_TO_REMOVE[@]} -gt 0 ]; then
+    "$PIP" uninstall -y "${ORT_PACKAGES_TO_REMOVE[@]}"
+fi
 "$PIP" install -r "$TMP_REQ"
+cleanup_requirements_file
+trap - EXIT
 if ! validate_torch_cuda_runtime; then
     error "requirements.txt 安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
 fi
@@ -316,17 +397,20 @@ PY
 "$PIP" install "audio-separator==0.44.1" --no-deps
 success "audio-separator 安装完成"
 
-info "安装并严格校验官方 MuScriptor v0.3.0（不改写固定 PyTorch 运行时）..."
-MUSCRIPTOR_REQUIREMENT="https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
-"$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
-"$PYTHON" - <<'PY'
-from src.core.muscriptor_transcriber import MuscriptorTranscriber
+info "下载其它大型模型前预检 MuScriptor Small/Medium/Large gated 访问权限..."
+if ! (cd "$REPO_DIR" && "$PYTHON" -c 'from src.utils.muscriptor_downloader import preflight_muscriptor_download_access; preflight_muscriptor_download_access()'); then
+    error "MuScriptor gated 访问预检失败；请在浏览器逐项接受三个仓库条款，并用项目 venv 登录 Hugging Face 后重试。"
+fi
+success "MuScriptor Small/Medium/Large gated 访问权限预检通过"
 
-reason = MuscriptorTranscriber._runtime_unavailable_reason()
-if reason:
-    raise RuntimeError(reason)
-print("MuScriptor public runtime identity/API verified")
-PY
+info "安装并严格校验官方 MuScriptor v0.3.0（不改写固定 PyTorch 运行时）..."
+MUSCRIPTOR_REQUIREMENT="$(cd "$REPO_DIR" && "$PYTHON" -c 'from src.utils.muscriptor_source_identity import MUSCRIPTOR_SOURCE_REQUIREMENT; print(MUSCRIPTOR_SOURCE_REQUIREMENT)')"
+if [ -z "$MUSCRIPTOR_REQUIREMENT" ]; then
+    error "无法从项目源码读取 MuScriptor 固定安装身份"
+fi
+"$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
+(cd "$REPO_DIR" && "$PYTHON" -m src.utils.source_runtime)
+(cd "$REPO_DIR" && "$PYTHON" -c 'from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason = MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or "MuScriptor public runtime identity/API verified"); raise SystemExit(0 if reason == "" else 1)')
 success "MuScriptor v0.3.0 官方源码与硬乐器约束 API 校验通过"
 
 validate_default_transkun_runtime() {
@@ -415,6 +499,8 @@ declare -A DEP_CHECKS=(
     ["mido"]="mido"
     ["soundfile"]="soundfile"
     ["pytorch_lightning"]="pytorch_lightning"
+    ["beat-this"]="beat_this"
+    ["fastapi"]="fastapi"
     ["audio_separator"]="audio_separator.separator"
 )
 
@@ -509,7 +595,7 @@ echo -e "${BOLD}${GREEN}══════════════════�
 echo ""
 echo -e "  ${BOLD}运行方式：${NC}"
 echo -e "  ${GREEN}./run.sh${NC}                    # 推荐：直接运行"
-echo -e "  ${GREEN}source venv/bin/activate && python -m src.main${NC}"
+echo -e "  ${GREEN}./venv/bin/python -m src.main${NC}"
 echo ""
 echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"

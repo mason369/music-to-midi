@@ -198,6 +198,89 @@ def get_cached_muscriptor_paths(
     return weights, config
 
 
+def preflight_muscriptor_download_access(*, printer=print) -> None:
+    """Fail early when a required gated checkpoint cannot be downloaded.
+
+    A fully cached, size-validated checkpoint needs no network request.  Every
+    missing checkpoint is checked with a metadata-only request against its
+    pinned ``config.json`` so a fresh aggregate install does not download the
+    other model families before discovering that the Hugging Face account has
+    not accepted one of the three MuScriptor gates.
+    """
+
+    try:
+        from huggingface_hub import get_hf_file_metadata, hf_hub_url
+        from huggingface_hub.errors import (
+            GatedRepoError,
+            HfHubHTTPError,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "缺少 huggingface_hub，无法预检 MuScriptor gated 模型访问权限；"
+            "请先安装 requirements.txt。"
+        ) from exc
+
+    inaccessible: list[MuscriptorArtifact] = []
+    for artifact in MUSCRIPTOR_ARTIFACTS.values():
+        try:
+            cached_weights, _ = get_cached_muscriptor_paths(
+                artifact.model_size,
+                validate_hashes=False,
+            )
+        except RuntimeError:
+            cached_weights = None
+
+        if cached_weights is not None:
+            printer(f"{artifact.display_name} 已有完整本地缓存，无需联网授权预检。")
+            continue
+
+        try:
+            metadata = get_hf_file_metadata(
+                hf_hub_url(
+                    repo_id=artifact.repo_id,
+                    filename=MUSCRIPTOR_CONFIG_FILENAME,
+                    revision=artifact.revision,
+                )
+            )
+        except GatedRepoError:
+            inaccessible.append(artifact)
+            continue
+        except HfHubHTTPError as exc:
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            if status in {401, 403}:
+                inaccessible.append(artifact)
+                continue
+            raise RuntimeError(
+                f"MuScriptor gated 访问预检网络请求失败（{artifact.repo_id}）：{exc}"
+            ) from exc
+
+        if metadata.commit_hash != artifact.revision:
+            raise RuntimeError(
+                f"{artifact.display_name} gated 访问预检返回了错误 revision："
+                f"expected {artifact.revision}, got {metadata.commit_hash}"
+            )
+        if metadata.size != artifact.config_bytes:
+            raise RuntimeError(
+                f"{artifact.display_name} gated 访问预检返回了错误 config.json 大小："
+                f"expected {artifact.config_bytes}, got {metadata.size}"
+            )
+        printer(f"{artifact.display_name} gated 访问权限已验证。")
+
+    if inaccessible:
+        missing_repos = "\n".join(
+            f"   - https://huggingface.co/{artifact.repo_id}" for artifact in inaccessible
+        )
+        raise RuntimeError(
+            "MuScriptor Small / Medium / Large 是 gated 模型，无法匿名全自动下载。\n"
+            "必须使用同一个 Hugging Face 账户在浏览器中逐项接受三个仓库的条款；"
+            "命令行登录不能代替网页接受条款。\n"
+            f"当前账户无权访问：\n{missing_repos}\n"
+            "接受条款后运行项目虚拟环境中的 `hf auth login`，或设置具有读取权限的 "
+            "HF_TOKEN，再重新运行安装脚本。"
+        )
+
+
 def download_muscriptor_model(
     model_size: str | MuscriptorModel = MuscriptorModel.LARGE.value,
     *,

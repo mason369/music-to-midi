@@ -15,6 +15,13 @@ from contextlib import contextmanager
 from importlib.machinery import ModuleSpec
 from pathlib import Path
 
+if __name__ == "__main__":
+    # Source runs must be stopped before importing GUI/runtime dependencies when
+    # a global or foreign Python environment would leak incompatible packages.
+    from src.utils.source_runtime import require_source_runtime_identity
+
+    require_source_runtime_identity()
+
 from src import __version__
 from src.utils.midi_output import validate_midi_output
 from src.utils.runtime_paths import (
@@ -52,7 +59,6 @@ logging.getLogger().setLevel(logging.ERROR)  # 根 logger
 
 from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment
-
 
 _BUNDLED_VC_RUNTIME_HANDLES: list[object] = []
 
