@@ -156,6 +156,11 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("copy_metadata('audio-separator')", spec)
         self.assertIn("collect_all('audio_separator')", spec)
 
+    def test_pyinstaller_spec_includes_conditional_source_runtime_gate(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("'src.utils.source_runtime'", spec)
+
     def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(
         self,
     ):
@@ -191,10 +196,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         ):
             self.assertGreaterEqual(workflow.count(mode), 2)
         self.assertIn(
-            "YourMT3+、MIROS 或 MuScriptor Small / Medium / Large",
+            "五种 YourMT3+ checkpoint、MIROS 或 MuScriptor Small / Medium / Large",
             workflow,
         )
-        self.assertIn("都会各自调用所选后端", workflow)
+        self.assertIn("分离阶段不调用 MIDI 后端", workflow)
+        self.assertIn("逐轨显式选择 13 条 MIDI 路线之一", workflow)
+        self.assertNotIn("都会各自调用所选后端", workflow)
+        self.assertNotIn("每个 stem 独立转写并合并 MIDI", workflow)
         self.assertIn("YourMT3+ (5 checkpoints)", workflow)
         self.assertIn("MIROS (source + pretrained + fine-tuned)", workflow)
         self.assertIn(
@@ -433,6 +441,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("更新 Release 说明", workflow)
         self.assertIn("gh release edit", workflow)
         self.assertIn("--notes-file release-notes.md", workflow)
+        self.assertIn("## 音乐转MIDI转换器 ${TAG}", workflow)
+        self.assertIn("## Music to MIDI Converter ${TAG}", workflow)
+        self.assertIn("不能匿名全自动下载", workflow)
+        self.assertIn("anonymous fully automatic download is not available", workflow)
         self.assertLess(
             workflow.index("更新 Release 说明"),
             workflow.index("上传资源到 Release"),
@@ -489,6 +501,18 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("--check-only", script)
         self.assertIn("audio-separator source", script)
         self.assertIn("audio-separator bundle", script)
+
+    def test_build_portable_replaces_asset_directories_instead_of_merging_stale_files(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Refusing to replace $Label because source and destination are identical",
+            script,
+        )
+        self.assertIn(
+            "Remove-Item -LiteralPath $destinationPath -Recurse -Force -ErrorAction Stop",
+            script,
+        )
 
     def test_release_workflow_validates_six_stem_assets_after_sota_download(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -547,9 +571,9 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_windows_ffmpeg_download_is_immutable_and_hash_verified(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         installer = (REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
-        release_tag = "autobuild-2026-07-19-13-12"
-        asset_name = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
-        sha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+        release_tag = "autobuild-2026-07-31-14-10"
+        asset_name = "ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"
+        sha256 = "c067a1ca58f4fc4449f4bab0890fbcd65cbb3e5f46e066cf9c768e06c0c1d4d9"
 
         for source in (workflow, installer):
             self.assertIn(release_tag, source)
@@ -592,8 +616,13 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("torch.version.cuda", script)
         self.assertIn("CPU-only PyTorch runtime", script)
-        self.assertIn("(2, 7, 0)", script)
-        self.assertIn("(12, 8)", script)
+        self.assertIn('"torch": "2.7.0"', script)
+        self.assertIn('"torchaudio": "2.7.0"', script)
+        self.assertIn('"torchvision": "0.22.0"', script)
+        self.assertIn('cuda_version != "12.8"', script)
+        self.assertIn('installed_version.split("+", 1)[0]', script)
+        self.assertNotIn("torch_tuple <", script)
+        self.assertNotIn("cuda_tuple <", script)
         self.assertIn("https://download.pytorch.org/whl/cu128", script)
 
     def test_build_portable_script_uses_ascii_only(self):

@@ -146,9 +146,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $releaseTag = "autobuild-2026-07-19-13-12"
-          $assetName = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
-          $expectedSha256 = "92802b595aee992126fe4e97abce6097b838154daae031b1442568003e5353c9"
+          # Pin a final monthly build: BtbN retains monthly builds for two years,
+          # while ordinary daily autobuilds are removed after about fourteen days.
+          $releaseTag = "autobuild-2026-07-31-14-10"
+          $assetName = "ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"
+          $expectedSha256 = "c067a1ca58f4fc4449f4bab0890fbcd65cbb3e5f46e066cf9c768e06c0c1d4d9"
           $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$releaseTag/$assetName"
           $archivePath = Join-Path $env:RUNNER_TEMP $assetName
           $extractRoot = Join-Path $env:GITHUB_WORKSPACE ".tmp\ffmpeg-windows"
@@ -738,16 +740,16 @@ jobs:
 
           处理模式（完整 7 种）：
             1. SMART：完整混音多乐器转写
-            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，分离结果分别转写
-            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，每个 stem 独立转写并合并 MIDI
+            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，只先输出两条 WAV
+            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，只先输出六条 WAV
             4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
             5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
             6. PIANO_ARIA_AMT：Aria-AMT
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor Small / Medium / Large。
-            VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
+            SMART 可显式选择五种 YourMT3+ checkpoint、MIROS 或 MuScriptor Small / Medium / Large。
+            VOCAL_SPLIT / SIX_STEM_SPLIT 分离阶段不调用 MIDI 后端；完成后可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。
 
           内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
             MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
@@ -789,16 +791,16 @@ jobs:
 
           处理模式（完整 7 种）：
             1. SMART：完整混音多乐器转写
-            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，分离结果分别转写
-            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，每个 stem 独立转写并合并 MIDI
+            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，只先输出两条 WAV
+            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，只先输出六条 WAV
             4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
             5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
             6. PIANO_ARIA_AMT：Aria-AMT
             7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
 
           后端选择：
-            SMART / VOCAL_SPLIT / SIX_STEM_SPLIT 都可显式选择 YourMT3+、MIROS 或 MuScriptor Small / Medium / Large。
-            VOCAL_SPLIT 的人声/伴奏和 SIX_STEM_SPLIT 的六个 stem 都会各自调用所选后端，不是只对原混音转写一次。
+            SMART 可显式选择五种 YourMT3+ checkpoint、MIROS 或 MuScriptor Small / Medium / Large。
+            VOCAL_SPLIT / SIX_STEM_SPLIT 分离阶段不调用 MIDI 后端；完成后可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。
 
           内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
             MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
@@ -952,7 +954,7 @@ jobs:
           - 下载副本先通过源 tempo map 恢复事件绝对秒，再映射到检测 BPM 的音乐 tick；目标 BPM 阶段保持该 tick 网格和全部消息值/顺序，只替换第 0 轨、第 0 tick 的唯一 tempo 与检测拍号。不吸附节奏网格，也不改变力度、音色、弯音、SysEx 或 CC64 踏板。
           - 修复全部七种模式中后端固定 120 BPM 占位 tempo 的问题，并保留音符、力度、控制器、弯音与 CC64 踏板消息。
           - 自动检测继续使用多引擎共识和拍间隔中位数倍频校正；变速 tempo map 仍为显式可选功能，低置信检测不会伪造速度变化。
-          - Mido、PrettyMIDI、FluidSynth、真实 3 分 27 秒 MuScriptor 结果和 Qt 播放链路均已回归。MuseScore 3/4 会对未量化的人类演奏型 MIDI 重新跟拍并可能覆盖乐谱页显示 BPM；这是其 MIDI 导入器行为，v1.4 不会用破坏音符时间的方式伪装适配。
+          - Mido、PrettyMIDI、FluidSynth、真实 3 分 27 秒 MuScriptor 结果和 Qt 播放链路均已回归。MuseScore 3/4 会对未量化的人类演奏型 MIDI 重新跟拍并可能覆盖乐谱页显示 BPM；这是其 MIDI 导入器行为，本版本不会用破坏音符时间的方式伪装适配。
 
           #### MIDI 编辑、试听与导出一致性
           - 结果页新增完整钢琴卷帘编辑器：框选和 Ctrl/Shift 多选、添加/删除、拖动、改时值/力度/乐器、剪切复制粘贴、撤销重做、还原，以及用户主动触发的量化操作。
@@ -960,8 +962,8 @@ jobs:
           - 导出的编辑 MIDI 会重新构建已编辑音符，同时严格透传源文件中未被编辑器接管的 tempo 之外事件；写后会重新解析并校验 BPM、事件和音符，不把保存成功当成验证成功。
           - 视图缩放与工程速度彻底分离；缩放只改变钢琴卷帘显示宽度。“播放速度”显示工程 BPM ÷ 检测 BPM 的真实倍率，修改 BPM 会同步更新倍率，修改倍率也会反算并写回工程 BPM、试听和导出 MIDI。
 
-          ![v1.4 BPM 与 MIDI 编辑工作台](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/resources/screenshots/05-v1.4-bpm-editor.png)
-          *v1.4 工程 BPM、真实联动速度、钢琴卷帘编辑与下载工作台*
+          ![工程 BPM 与 MIDI 编辑工作台](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/resources/screenshots/05-v1.4-bpm-editor.png)
+          *工程 BPM、真实联动速度、钢琴卷帘编辑与下载工作台*
 
           #### 音轨工作台、播放与稳定性
           - 转写工作台新增可拖动、可点击跳转的播放进度条：拖动实时预览位置，松手或点击即跳转播放；播放中跳转只在释放时提交一次，避免 Windows FFmpeg 媒体后端因高频 seek 卡死。
@@ -970,6 +972,8 @@ jobs:
           - 播放时选择、拖动或批量编辑音符不再在 GUI 线程同步生成音频；编辑预览通过低优先级工作线程生成，并用 generation token 丢弃过期结果，避免旧任务覆盖新编辑。
           - 关闭结果页或再次转换时会停止计时器、取消待处理预览、等待 QThread 完整退出，再释放 Qt Multimedia 对象，修复退出/重置期间的卡死与闪退窗口。
           - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
+          - 人声/伴奏和六声部分离主按钮只生成 WAV，不再暗中自动转写或合并 MIDI；桌面版、Space 与 Colab 的逐轨工作台都提供同一套 13 条显式路线。
+          - Space 与 Colab 编辑音符后会通过受信任的结果 token 重新生成唯一试听资产；旧试听和旧下载在刷新完成前明确禁用，失败不会回退到编辑前缓存。
           - 播放头连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时退出自动跟随。
 
           #### MuScriptor Small / Medium / Large：v0.3.0 节拍对齐与长音频高质量推理
@@ -978,7 +982,7 @@ jobs:
           *保留上一版更新日志中的 MuScriptor Large 与 YourMT3+ 公开评测对比图*
 
           - 固定源码升级到未修改的上游官方 \`v0.3.0\` commit \`d73147e75e5b9b0c0a79ebe154587db4fd603e0c\`，并对七个运行时源码文件执行 SHA-256 身份校验；项目唯一的 Beat This 网格驱动官方 onset 相位校正、卷帘拍线/强拍/小节底色与 MuseScore 音符轨 tempo，不运行第二套检测。
-          - 三档模型均严格使用官方 5 秒窗口、prelude forcing 与单次生成路径，不叠加未合并分支，不提供静默降档，也不会更换或量化 Small/Medium/Large 权重。
+          - 三档模型均严格使用官方 5 秒窗口、prelude forcing、单次生成路径和默认 \`no_eos_is_ok=True\`，不叠加未合并分支，不私设严格 EOS，不提供静默降档，也不会更换或量化 Small/Medium/Large 权重。
           - 完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换，均支持 MuScriptor Small / Medium / Large；便携包同时内置并严格校验三套官方权重与配置。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI。Small/Medium 为显存或速度受限设备提供更实用的选择，Large 保留最高容量。
@@ -986,7 +990,9 @@ jobs:
 
           #### 平台、文档与发布
           - 桌面版、Hugging Face Space 和 Colab 同步七种处理模式、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
+          - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
+          - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；首次使用者必须先在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
           - Windows/Linux GPU 便携包内置并校验完整模型资产、SoundFont、FluidSynth 与 FFmpeg；依赖或模型身份不匹配时显式失败，不静默切换后端或 CPU。
 
           ### 便携版下载
@@ -1020,9 +1026,42 @@ jobs:
 
           ### 系统要求
           - **Windows**：Windows 10/11 (x64)
-          - **Linux**：Ubuntu 20.04+ / Debian 11+ (x64)
+          - **Linux**：提供 Python 3.11/3.12 x64 的 Debian / Ubuntu / WSL2
           - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡
           - **内存**：建议 8GB+
+
+          ---
+
+          ## Music to MIDI Converter ${TAG}
+
+          ### Highlights
+
+          #### Source BPM, target BPM, and real playback speed
+          - Source BPM and project BPM are now independent. Audio and MIDI playback use the real \`project BPM / detected BPM\` ratio, and BPM and speed controls remain synchronized in both directions.
+          - Downloaded MIDI files preserve the musical tick grid while replacing placeholder tempo metadata with the current project BPM. Notes, velocities, program changes, pitch bends, SysEx, controllers, and CC64 pedal events are preserved.
+          - All seven processing modes now replace fixed 120 BPM backend placeholders consistently. Optional tempo-map generation remains explicit and requires high-confidence detection.
+
+          #### MIDI editing, preview, and track workflow
+          - The result workspace now includes a full piano-roll editor with selection, add/delete, move, duration/velocity/instrument editing, clipboard operations, undo/redo, reset, and explicit quantization.
+          - Edited previews are regenerated in a background worker and verified before they become playable or downloadable. Stale previews are disabled instead of silently falling back to pre-edit audio.
+          - The desktop app, Space, and Colab share the same seven modes, 13 explicit per-track transcription routes, split-first WAV workflow, and synchronized transport behavior.
+          - Qt media teardown and asynchronous preview lifecycle handling were hardened to prevent reset/close races and stale worker results.
+
+          #### Models, installation, and runtime identity
+          - MuScriptor Small, Medium, and Large use the identity-checked official v0.3.0 runtime and original model generation path, with Beat This providing the shared beat grid.
+          - Source installers verify the active project virtual environment, exact runtime assets, CUDA providers, and required model identities before inference. Missing or mismatched dependencies fail visibly; no backend or CPU fallback is introduced.
+          - MuScriptor repositories are gated. First-time source users must accept the license on all three Hugging Face model pages and authenticate with \`hf auth login\` or a private \`HF_TOKEN\`; anonymous fully automatic download is not available.
+          - PolarFormer now exclusively uses the official \`bs_polarformer_fp16.onnx\` asset. Retired FP32 files and selection paths are rejected.
+
+          #### Portable downloads
+          | File | Platform | Inference | Notes |
+          |------|----------|-----------|-------|
+          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | Recommended for compatible NVIDIA GPUs |
+          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | Debian, Ubuntu, or WSL2 |
+
+          Download every volume with the same prefix before extraction. Portable packages include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. No Python or separate CUDA Toolkit installation is required, but a compatible NVIDIA driver and GPU are mandatory.
+
+          The combined portable work is distributed under GPL-3.0 with component-specific notices. Aria-AMT remains CC BY-NC-SA 4.0; MuScriptor checkpoints remain CC BY-NC 4.0 plus their model-page conditions. See \`THIRD_PARTY_NOTICES.md\`, \`THIRD_PARTY_SBOM.txt\`, and \`FFMPEG_BUILD_AUDIT.txt\` inside the package for exact evidence and attribution.
           NOTES
           gh release edit "${TAG}" \
             --repo ${{ github.repository }} \

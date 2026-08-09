@@ -13,6 +13,7 @@ on:
       - 'space/**'
       - 'YourMT3/amt/src/**'
       - 'download_sota_models.py'
+      - 'download_beat_this_model.py'
       - 'download_multistem_model.py'
       - 'download_vocal_model.py'
       - 'download_accompaniment_model.py'
@@ -57,6 +58,7 @@ jobs:
           cp space/requirements.txt "$WORK/"
           cp space/README.md       "$WORK/"
           cp download_sota_models.py "$WORK/"
+          cp download_beat_this_model.py "$WORK/"
           cp download_multistem_model.py "$WORK/"
           cp download_vocal_model.py "$WORK/"
           cp download_accompaniment_model.py "$WORK/"

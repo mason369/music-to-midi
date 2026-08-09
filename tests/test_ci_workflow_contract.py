@@ -133,6 +133,7 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         for script_name in (
             "download_sota_models.py",
+            "download_beat_this_model.py",
             "download_multistem_model.py",
             "download_vocal_model.py",
             "download_vocal_harmony_model.py",

@@ -12,6 +12,7 @@ $env:PYTHONIOENCODING = "utf-8"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+. (Join-Path $Root "scripts\powershell_helpers.ps1")
 
 function Resolve-Python {
     param([string]$Requested)
@@ -150,9 +151,17 @@ function Copy-Tree {
         return $false
     }
 
-    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
-    Write-Host "[ok] Collected $Label -> $Destination"
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $destinationPath = [IO.Path]::GetFullPath($Destination)
+    if ($sourcePath -eq $destinationPath) {
+        throw "Refusing to replace $Label because source and destination are identical: $sourcePath"
+    }
+    if (Test-Path -LiteralPath $destinationPath) {
+        Remove-Item -LiteralPath $destinationPath -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
+    Copy-Item -Path (Join-Path $sourcePath "*") -Destination $destinationPath -Recurse -Force
+    Write-Host "[ok] Collected $Label -> $destinationPath"
     return $true
 }
 
@@ -242,11 +251,14 @@ function Assert-CudaEnabledTorchRuntime {
 
     $checkScript = @'
 import sys
+from importlib import metadata
 
 try:
     import torch
+    import torchaudio
+    import torchvision
 except Exception as exc:
-    print(f"Failed to import torch: {exc}", file=sys.stderr)
+    print(f"Failed to import the pinned PyTorch runtime trio: {exc}", file=sys.stderr)
     sys.exit(2)
 
 cuda_version = torch.version.cuda
@@ -255,26 +267,31 @@ if not cuda_version:
     print(f"CPU-only PyTorch runtime detected: torch={torch_version}", file=sys.stderr)
     sys.exit(3)
 
-def parse_version(value):
-    parts = []
-    for part in str(value).split("+", 1)[0].split("."):
-        digits = "".join(ch for ch in part if ch.isdigit())
-        if digits:
-            parts.append(int(digits))
-    return tuple(parts)
-
-torch_tuple = parse_version(torch_version)
-cuda_tuple = parse_version(cuda_version)
-if torch_tuple < (2, 7, 0) or cuda_tuple < (12, 8):
+expected_versions = {
+    "torch": "2.7.0",
+    "torchaudio": "2.7.0",
+    "torchvision": "0.22.0",
+}
+installed_versions = {
+    package_name: metadata.version(package_name)
+    for package_name in expected_versions
+}
+version_mismatches = {
+    package_name: installed_version
+    for package_name, installed_version in installed_versions.items()
+    if installed_version.split("+", 1)[0] != expected_versions[package_name]
+}
+if version_mismatches or cuda_version != "12.8":
     print(
         "Unsupported PyTorch/CUDA runtime for GPU portable build: "
-        f"torch={torch_version}, cuda={cuda_version}. "
-        "Use torch 2.7.0+ built with CUDA 12.8+ for RTX 50-series (sm_120).",
+        f"packages={installed_versions}, cuda={cuda_version}. "
+        "Use exactly torch 2.7.0, torchaudio 2.7.0, and torchvision 0.22.0 "
+        "built with CUDA 12.8.",
         file=sys.stderr,
     )
     sys.exit(4)
 
-print(f"CUDA-enabled PyTorch runtime detected: torch={torch_version}, cuda={cuda_version}")
+print(f"Pinned CUDA PyTorch runtime detected: packages={installed_versions}, cuda={cuda_version}")
 '@
 
     $output = $checkScript | & $PythonPath - 2>&1
@@ -283,7 +300,7 @@ print(f"CUDA-enabled PyTorch runtime detected: torch={torch_version}, cuda={cuda
         $output | ForEach-Object { Write-Host $_ }
     }
     if ($exitCode -ne 0) {
-        throw "GPU portable build requires PyTorch 2.7.0+ with CUDA 12.8+. Install torch/torchaudio/torchvision from https://download.pytorch.org/whl/cu128. CPU-only or older CUDA runtimes are not allowed."
+        throw "GPU portable build requires exactly torch 2.7.0, torchaudio 2.7.0, and torchvision 0.22.0 built with CUDA 12.8. Install the pinned trio from https://download.pytorch.org/whl/cu128. CPU-only, mismatched, or differently versioned runtimes are not allowed."
     }
 }
 
@@ -446,8 +463,8 @@ if reason:
     raise RuntimeError(reason)
 print(f'TransKun V2 Aug assets verified: {model_dir}')
 "@
-& $Python -c $transkunV2AugCheck
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $Python -Script $transkunV2AugCheck
+if ($pythonExitCode -ne 0) {
     throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
@@ -483,8 +500,8 @@ for model_size, model_dir in model_dirs.items():
 validate_file_identity(assets_dir / MUSCRIPTOR_SF2_FILENAME, expected_size=MUSCRIPTOR_SF2_EXACT_BYTES, expected_sha256=MUSCRIPTOR_SF2_SHA256, label='staged MuScriptor SoundFont')
 print('MuScriptor Small/Medium/Large portable assets verified')
 "@
-& $Python -c $muscriptorPortableCheck
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $Python -Script $muscriptorPortableCheck
+if ($pythonExitCode -ne 0) {
     throw "MuScriptor portable assets failed exact identity validation."
 }
 & (Join-Path $FluidSynthBundle "bin\fluidsynth.exe") --version
@@ -634,8 +651,8 @@ validate_beat_this_checkpoint(
 )
 print('Packaged Beat This final0 asset verified')
 "@
-& $Python -c $muscriptorDistCheck
-if ($LASTEXITCODE -ne 0) {
+$pythonExitCode = Invoke-PythonScript -PythonExecutable $Python -Script $muscriptorDistCheck
+if ($pythonExitCode -ne 0) {
     throw "Packaged MuScriptor Small/Medium/Large assets failed exact identity validation."
 }
 
