@@ -114,7 +114,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: 安装系统依赖 (Linux)
         if: runner.os == 'Linux'

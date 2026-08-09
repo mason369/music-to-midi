@@ -238,6 +238,7 @@ class PortableReleaseContractTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("python-version: '3.11'", workflow)
+        self.assertNotIn("cache: 'pip'", workflow)
 
     def test_release_workflow_uses_portable_build_script_on_windows(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
