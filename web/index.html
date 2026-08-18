@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN" data-app-state="loading">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#16213e" />
+    <meta name="description" content="Music to MIDI browser application" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect rx=%2212%22 width=%2264%22 height=%2264%22 fill=%22%2316213e%22/><path d=%22M38 13v29a10 10 0 1 1-5-8.66V19l17-4v21a10 10 0 1 1-5-8.66V11z%22 fill=%22%234a9eff%22/></svg>" />
+    <title>Music to MIDI</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#workspace" data-i18n-aria-label="brand.home_aria">
+        <span class="brand-mark" aria-hidden="true">♫</span>
+        <span class="brand-copy">
+          <strong>Music to MIDI</strong>
+        </span>
+      </a>
+
+      <div class="topbar-actions">
+        <button class="language-button" id="languageButton" type="button" data-i18n-aria-label="language.switch_aria">EN</button>
+        <button class="connection-chip is-pending" id="connectionButton" type="button">
+          <i class="connection-light"></i>
+          <span id="connectionLabel"></span>
+        </button>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <main id="workspace">
+        <section class="workspace-header">
+          <div class="app-icon" aria-hidden="true">♫</div>
+          <div class="workspace-title">
+            <h1 data-i18n="workspace.title"></h1>
+            <p data-i18n="workspace.copy"></p>
+          </div>
+        </section>
+
+        <section class="workflow-guide" id="workflowGuide" data-i18n-aria-label="guide.aria">
+          <div class="guide-summary" aria-live="polite" aria-atomic="true">
+            <span class="guide-icon" aria-hidden="true">i</span>
+            <span class="guide-label" data-i18n="guide.current"></span>
+            <h2 id="guideTitle"></h2>
+            <p id="guideDescription"></p>
+          </div>
+          <button class="guide-action" id="guideAction" type="button">
+            <strong id="guideActionLabel"></strong>
+          </button>
+        </section>
+
+        <section class="upload-panel guidance-target" id="dropZone" aria-labelledby="uploadTitle" tabindex="0" data-i18n-aria-label="upload.dropzone_aria">
+          <input id="audioInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.wma" hidden />
+          <div class="upload-mark" aria-hidden="true">♫</div>
+          <div class="upload-copy">
+            <h2 id="uploadTitle" data-i18n="upload.title"></h2>
+            <p id="uploadHint" data-i18n="upload.hint"></p>
+          </div>
+          <button class="browse-button" id="browseButton" type="button">
+            <span aria-hidden="true">＋</span><b data-i18n="upload.browse"></b>
+          </button>
+          <div class="file-inspector" id="fileInspector" hidden>
+            <div class="file-icon">WAV</div>
+            <div><strong id="fileName"></strong><small id="fileMeta"></small></div>
+            <button class="icon-button" id="clearFile" type="button" data-i18n-aria-label="upload.remove_aria">×</button>
+          </div>
+        </section>
+
+        <section class="configuration-panel instrument-panel guidance-target" id="configurationPanel">
+          <header class="panel-heading">
+            <div>
+              <h2 data-i18n="config.title"></h2>
+              <p data-i18n="config.hint"></p>
+            </div>
+          </header>
+
+          <div class="configuration-grid">
+            <label class="field mode-field">
+              <span data-i18n="rail.title">Processing mode</span>
+              <select id="modeSelect"></select>
+              <small data-i18n="rail.hint"></small>
+              <nav class="mode-list" id="modeList" data-i18n-aria-label="rail.navigation_aria" hidden></nav>
+            </label>
+            <label class="field" id="backendField">
+              <span data-i18n="config.backend"></span>
+              <select id="backendSelect"></select>
+              <small data-i18n="config.backend_help"></small>
+            </label>
+            <label class="field" id="yourmt3Field">
+              <span data-i18n="config.yourmt3"></span>
+              <select id="yourmt3Select"></select>
+              <small data-i18n="config.yourmt3_help"></small>
+            </label>
+            <label class="field" id="muscriptorField" hidden>
+              <span>MuScriptor</span>
+              <select id="muscriptorSelect"></select>
+              <small data-i18n="config.muscriptor_help"></small>
+            </label>
+            <label class="field" id="trackModeField">
+              <span data-i18n="config.track_layout"></span>
+              <select id="trackModeSelect"></select>
+              <small data-i18n="config.track_layout_help"></small>
+            </label>
+            <label class="field">
+              <span data-i18n="config.project_bpm"></span>
+              <span class="inline-control">
+                <input id="customBpmEnabled" type="checkbox" />
+                <input id="customBpm" type="number" value="120" step="0.1" disabled />
+              </span>
+              <small data-i18n="config.bpm_help"></small>
+            </label>
+            <div class="field device-field">
+              <span data-i18n="config.compute"></span>
+              <strong id="computeDevice">CUDA / GPU 0</strong>
+              <small data-i18n="config.compute_help"></small>
+            </div>
+          </div>
+
+          <div class="route-note"><span>i</span><p id="routeDescription"></p></div>
+        </section>
+
+        <section class="action-deck guidance-target" id="actionDeck">
+          <div class="action-state">
+            <span data-i18n="action.state"></span>
+            <strong id="readyText" data-i18n="action.select_audio"></strong>
+          </div>
+          <button class="stop-button" id="stopButton" type="button" disabled>
+            <span aria-hidden="true">■</span><b data-i18n="action.stop"></b>
+          </button>
+          <button class="start-button" id="startButton" type="button" disabled>
+            <span aria-hidden="true">▶</span><b id="startButtonLabel" data-i18n="action.start_conversion"></b>
+          </button>
+        </section>
+
+        <section class="runtime-bar">
+          <div class="runtime-copy">
+            <span class="status-dot" id="backendDot"></span>
+            <strong id="deviceName"></strong>
+            <small id="runtimeVersion">—</small>
+          </div>
+          <button id="openApiSettings" type="button" data-i18n="backend.change_address"></button>
+        </section>
+
+        <details class="queue-card">
+          <summary class="queue-heading">
+            <span data-i18n="jobs.recent"></span>
+            <button class="icon-button" id="refreshJobs" type="button" data-i18n-aria-label="jobs.refresh_aria">↻</button>
+          </summary>
+          <div class="recent-jobs" id="recentJobs">
+            <p class="empty-copy" data-i18n="jobs.empty"></p>
+          </div>
+        </details>
+
+        <section class="progress-panel instrument-panel guidance-target" id="progressPanel" hidden>
+          <header class="panel-heading progress-heading">
+            <div>
+              <h2 id="progressMessage" data-i18n="progress.waiting"></h2>
+              <p id="progressDetail"></p>
+            </div>
+            <strong id="progressPercent">0%</strong>
+          </header>
+          <div class="progress-track"><i id="progressBar"></i></div>
+          <div class="stage-row" id="stageRow"></div>
+          <div class="job-identity"><span>JOB</span><code id="jobId">—</code></div>
+        </section>
+
+        <section class="result-panel instrument-panel guidance-target" id="resultPanel" hidden>
+          <header class="panel-heading">
+            <div>
+              <h2 data-i18n="result.title"></h2>
+              <p id="resultLead"></p>
+            </div>
+            <button class="secondary-button" id="retryJob" type="button" hidden data-i18n="action.retry_job"></button>
+          </header>
+          <div class="result-metrics" id="resultMetrics"></div>
+          <div class="artifact-list" id="artifactList"></div>
+        </section>
+
+        <section class="mixer-panel instrument-panel" id="mixerPanel" hidden>
+          <header class="panel-heading mixer-heading">
+            <div>
+              <h2 data-i18n="mixer.title"></h2>
+            </div>
+            <div class="transport">
+              <button id="playAll" type="button" data-i18n-title="mixer.play_all">▶</button>
+              <button id="pauseAll" type="button" data-i18n-title="mixer.pause_all">Ⅱ</button>
+              <button id="restartAll" type="button" data-i18n-title="mixer.restart_all">↤</button>
+              <time id="transportTime">00:00.000 / 00:00.000</time>
+            </div>
+          </header>
+          <div class="mixer-tools">
+            <label><span data-i18n="mixer.zoom"></span><input id="zoomSlider" type="range" min="1" max="16" step="1" value="1" /><b id="zoomValue">1×</b></label>
+            <button id="fitTracks" type="button" data-i18n="mixer.fit"></button>
+            <button id="alignTracks" type="button" data-i18n="mixer.align"></button>
+            <button id="addTrack" type="button"><span>＋</span><b data-i18n="mixer.add_track"></b></button>
+            <input id="addTrackInput" type="file" accept="audio/*" multiple hidden />
+          </div>
+          <div class="track-stack" id="trackStack"></div>
+          <footer class="mixer-footer">
+            <span data-i18n="mixer.manual_note"></span>
+            <button id="openOutputFolder" type="button" disabled data-i18n="mixer.downloads"></button>
+          </footer>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="api-dialog" id="apiDialog">
+      <form method="dialog">
+        <header>
+          <div><h2 data-i18n="dialog.title"></h2></div>
+          <button class="icon-button" value="cancel" data-i18n-aria-label="dialog.close_aria">×</button>
+        </header>
+        <p data-i18n="dialog.hint"></p>
+        <label>
+          <span>Base URL</span>
+          <input id="apiBaseInput" type="url" required data-i18n-placeholder="dialog.url_placeholder" />
+        </label>
+        <footer class="dialog-actions">
+          <button value="cancel" data-i18n="dialog.cancel"></button>
+          <button class="primary" id="saveApiBase" value="default" data-i18n="dialog.connect"></button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="fatal-error" id="fatalError" hidden role="alert"></div>
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+    <noscript>This application requires JavaScript.</noscript>
+  </body>
+</html>

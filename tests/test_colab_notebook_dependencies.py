@@ -138,9 +138,10 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn('"onnx-weekly==1.21.0.dev20260223"', source_text)
         self.assertIn('"onnxruntime-gpu==1.23.2"', source_text)
         self.assertIn('"audio-separator==0.44.1"', source_text)
-        self.assertIn('"gradio==4.44.1"', source_text)
+        self.assertIn('"gradio==6.17.3"', source_text)
         self.assertIn('"fastapi==0.136.3"', source_text)
-        self.assertIn('"starlette==0.52.1"', source_text)
+        self.assertIn('"starlette==1.6.0"', source_text)
+        self.assertIn('"uvicorn[standard]>=0.48,<1"', source_text)
         self.assertIn('"pydantic==2.10.6"', source_text)
         self.assertIn('"pydantic-core==2.27.2"', source_text)
         self.assertIn('"huggingface_hub==0.36.0"', source_text)
@@ -375,15 +376,33 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn("display_track_name", source_text)
         self.assertIn("mixer_head", source_text)
         self.assertIn(
-            "head=LOG_POLL_JS + mixer_head() + muscriptor_result_head()",
+            "head=mixer_head() + muscriptor_result_head())",
             source_text,
         )
+        self.assertNotIn("LOG_POLL_JS", source_text)
+        self.assertNotIn("fetch('./api/read_logs'", source_text)
+        self.assertIn("log_refresh_timer = gr.Timer(2.0)", source_text)
+        self.assertIn("log_refresh_timer.tick(", source_text)
+        clear_logs_source = _node_source(
+            source_text, _find_function(source_text, "clear_logs")
+        )
+        self.assertNotIn("except Exception", clear_logs_source)
+        self.assertIn("COLAB_THEME = gr.themes.Base(", source_text)
+        self.assertIn("configure_uvicorn_websocket_protocol()", source_text)
         self.assertIn("build_muscriptor_result_html", source_text)
         self.assertIn("mixer_html = gr.HTML(", source_text)
         self.assertIn("COLAB_TRANSLATOR = Translator(COLAB_LANGUAGE)", source_text)
+        self.assertNotIn("api_name=False", source_text)
+        self.assertNotIn("show_api=False", source_text)
+        self.assertIn('api_visibility="private"', source_text)
+        self.assertIn('api_visibility="undocumented"', source_text)
+        blocks_arguments = source_text.split("with gr.Blocks(", 1)[1].split(") as demo:", 1)[0]
+        self.assertNotIn("theme=", blocks_arguments)
+        self.assertNotIn("head=", blocks_arguments)
         self.assertIn(
             'demo.launch(share=True, server_name="0.0.0.0", server_port=7860, '
-            "allowed_paths=[str(COLAB_OUTPUT_ROOT)])",
+            "allowed_paths=[str(COLAB_OUTPUT_ROOT)], theme=COLAB_THEME, "
+            "head=mixer_head() + muscriptor_result_head())",
             source_text,
         )
         self.assertIn("def _make_track_remove_handler(track_index):", source_text)

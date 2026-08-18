@@ -7,12 +7,12 @@ import sys
 import tempfile
 import time
 import types
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
 import gradio as gradio
 import pytest
-from starlette.testclient import TestClient
 
 
 def _function_source(path: str, name: str) -> str:
@@ -36,19 +36,32 @@ def _colab_code() -> str:
 
 
 def test_pinned_gradio_fastapi_starlette_stack_serves_the_homepage():
+    from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
+
+    assert configure_uvicorn_websocket_protocol() == "websockets-sansio"
     with gradio.Blocks() as demo:
         gradio.Markdown("runtime-health")
 
-    app = gradio.routes.App.create_app(demo)
-    with TestClient(app) as client:
-        response = client.get("/")
+    try:
+        _, local_url, _ = demo.launch(
+            server_name="127.0.0.1",
+            prevent_thread_lock=True,
+            quiet=True,
+            theme=gradio.themes.Base(),
+        )
+        with urllib.request.urlopen(local_url, timeout=10) as response:
+            body = response.read().decode("utf-8")
+            status = response.status
+    finally:
+        demo.close()
 
-    assert response.status_code == 200
-    assert "gradio" in response.text.lower()
+    assert status == 200
+    assert "gradio" in body.lower()
 
 
 def test_space_request_outputs_have_failure_and_success_cleanup_contracts():
     source = Path("space/app.py").read_text(encoding="utf-8")
+    clear_logs_source = _function_source("space/app.py", "clear_logs")
     convert_source = _function_source("space/app.py", "_convert_impl")
     prepare_source = _function_source("space/app.py", "_prepare_request_models")
     ensure_vocal_source = _function_source("space/app.py", "ensure_vocal_split_weights")
@@ -88,6 +101,7 @@ def test_space_request_outputs_have_failure_and_success_cleanup_contracts():
     assert "delete_cache=(3600, SPACE_OUTPUT_RETENTION_SECONDS)" in source
     assert "shutil.rmtree(candidate)" in source
     assert "ignore_errors=True" not in source
+    assert "except Exception" not in clear_logs_source
 
 
 def test_space_disables_gradio_auto_wrap_and_detects_the_actual_zerogpu_runtime():
@@ -112,24 +126,102 @@ def test_space_disables_gradio_auto_wrap_and_detects_the_actual_zerogpu_runtime(
 
 def test_space_registered_handler_requests_logged_in_zerogpu_headers_without_wrapping_cpu_work():
     source = Path("space/app.py").read_text(encoding="utf-8")
-    marker = 'setattr(convert_audio_to_midi, "zerogpu", None)'
-    registration = "convert_btn.click("
-
-    assert marker in source
-    assert source.index(marker) < source.index(registration)
+    assert 'setattr(convert_audio_to_midi, "zerogpu", None)' not in source
+    assert 'setattr(_convert_one_track, "zerogpu", None)' not in source
+    assert '@spaces.GPU(duration=_estimate_zerogpu_duration, size="large")' in source
+    assert '@spaces.GPU(duration=_estimate_manual_zerogpu_duration, size="large")' in source
+    assert "api_name=False" not in source
+    assert "show_api=False" not in source
+    assert 'api_visibility="private"' in source
+    assert 'api_visibility="undocumented"' in source
+    blocks_arguments = source.split("with gr.Blocks(", 1)[1].split(") as demo:", 1)[0]
+    assert "theme=" not in blocks_arguments
+    assert "css=" not in blocks_arguments
+    assert "head=" not in blocks_arguments
+    assert "theme=SPACE_THEME" in source
+    assert "css=CUSTOM_CSS" in source
+    assert "LOG_POLL_HEAD" not in source
+    assert "fetch('./api/read_logs'" not in source
+    assert "log_refresh_timer = gr.Timer(2.0)" in source
+    assert "log_refresh_timer.tick(" in source
+    assert "head=mixer_head() + muscriptor_result_head()" in source
+    web_api_launcher = Path("src/web_api/__main__.py").read_text(encoding="utf-8")
+    assert "websocket_protocol = configure_uvicorn_websocket_protocol()" in web_api_launcher
+    assert "ws=websocket_protocol" in web_api_launcher
 
     def cpu_prepare_then_gpu(value):
         return value
 
-    setattr(cpu_prepare_then_gpu, "zerogpu", None)
     with gradio.Blocks() as demo:
         input_box = gradio.Textbox()
         output_box = gradio.Textbox()
         gradio.Button().click(cpu_prepare_then_gpu, input_box, output_box)
 
     dependency = demo.get_config_file()["dependencies"][0]
-    assert dependency["zerogpu"] is True
+    assert "zerogpu" not in dependency
+    assert not hasattr(cpu_prepare_then_gpu, "zerogpu")
     assert demo.fns[0].fn is cpu_prepare_then_gpu
+
+    # spaces 0.51.1 no longer needs a Gradio dependency-level ``zerogpu``
+    # flag. Its GPU wrapper reads the active Gradio request context at the
+    # nested call boundary, preserving the logged-in request while CPU-side
+    # admission and model preparation remain outside the GPU allocation.
+    import spaces
+    from spaces.zero import client as zero_client
+
+    wrapper_source = (Path(spaces.__file__).parent / "zero" / "wrappers.py").read_text(
+        encoding="utf-8"
+    )
+    assert "request_var = gradio_request_var()" in wrapper_source
+    assert "request = request_var.get(None)" in wrapper_source
+    assert "client.schedule(task_id=task_id, request=request" in wrapper_source
+
+    scheduled = {}
+    request = object()
+
+    def capture_headers(actual_request):
+        scheduled["request"] = actual_request
+        return {"x-ip-token": "test-token"}
+
+    class FakeApiClient:
+        def schedule(self, **kwargs):
+            scheduled.update(kwargs)
+            return (
+                zero_client.ScheduleResponse(
+                    idle=True,
+                    nvidiaIndex=0,
+                    nvidiaUUID="test-gpu",
+                    allowToken="test-token",
+                ),
+                types.SimpleNamespace(auth="regular"),
+            )
+
+    with (
+        mock.patch.object(
+            zero_client,
+            "_get_headers",
+            side_effect=capture_headers,
+        ),
+        mock.patch.object(
+            zero_client,
+            "_get_token_and_payload",
+            return_value=("test-token", {}),
+        ),
+        mock.patch.object(zero_client, "get_duration_seconds", return_value=1),
+        mock.patch.object(
+            zero_client.utils,
+            "self_cgroup_device_path",
+            return_value="/test/cgroup",
+        ),
+        mock.patch.object(zero_client, "api_client", return_value=FakeApiClient()),
+    ):
+        result = zero_client.schedule(task_id=7, request=request, gpu_size="large")
+
+    assert result.allowToken == "test-token"
+    assert scheduled["request"] is request
+    assert scheduled["token"] == "test-token"
+    assert scheduled["token_version"] == 2
+    assert scheduled["gpu_size"] == "large"
 
 
 def test_space_output_helpers_delete_failed_and_expired_request_directories():
@@ -269,6 +361,11 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
 def test_zerogpu_admission_and_model_preparation_happen_before_gpu_entry():
     public_source = _function_source("space/app.py", "convert_audio_to_midi")
     events = []
+
+    def stream_gpu_job(function, args, mode, progress):
+        del mode
+        yield function(*args, progress=progress)
+
     namespace = {
         "ZERO_GPU": True,
         "MODE_IDS": ("smart",),
@@ -277,18 +374,21 @@ def test_zerogpu_admission_and_model_preparation_happen_before_gpu_entry():
         "_estimate_zerogpu_duration": lambda *args, **kwargs: events.append("admit"),
         "_prepare_request_models": lambda *args, **kwargs: events.append("prepare"),
         "_convert_audio_to_midi_on_gpu": lambda *args, **kwargs: (events.append("gpu") or "result"),
+        "_stream_gpu_job": stream_gpu_job,
     }
     exec(public_source, namespace)
 
-    result = namespace["convert_audio_to_midi"](
-        "clip.wav",
-        "smart",
-        "yourmt3",
-        "yptf_moe_multi_nops",
-        progress=None,
+    result = list(
+        namespace["convert_audio_to_midi"](
+            "clip.wav",
+            "smart",
+            "yourmt3",
+            "yptf_moe_multi_nops",
+            progress=None,
+        )
     )
 
-    assert result == "result"
+    assert result == ["result"]
     assert events == ["admit", "prepare", "gpu"]
 
     def reject(*args, **kwargs):
@@ -298,12 +398,14 @@ def test_zerogpu_admission_and_model_preparation_happen_before_gpu_entry():
     namespace["_estimate_zerogpu_duration"] = reject
     events.clear()
     with pytest.raises(RuntimeError, match="over budget"):
-        namespace["convert_audio_to_midi"](
-            "too-long.wav",
-            "smart",
-            "yourmt3",
-            "yptf_moe_multi_nops",
-            progress=None,
+        list(
+            namespace["convert_audio_to_midi"](
+                "too-long.wav",
+                "smart",
+                "yourmt3",
+                "yptf_moe_multi_nops",
+                progress=None,
+            )
         )
     assert events == ["reject"]
 

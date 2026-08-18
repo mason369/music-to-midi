@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -253,11 +254,8 @@ for _name in ("music-to-midi-web", "src.core", "src.utils"):
 
 
 def clear_logs():
-    try:
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-    except Exception:
-        pass
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
+        f.write("")
 
 
 def read_logs():
@@ -340,6 +338,7 @@ from src.gui.web.muscriptor_result_runtime import (
     muscriptor_result_head,
 )
 from src.gui.web.form_values import normalize_optional_project_bpm
+from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
 from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
     build_track_mixer_html,
@@ -452,6 +451,162 @@ STAGE_LABEL_KEYS = {
     ProcessingStage.SYNTHESIS: "synthesis",
     ProcessingStage.COMPLETE: "complete",
 }
+
+# Stage checklists mirror the desktop ProgressWidget: split modes stop after
+# separation, every other mode runs preprocess -> transcribe -> synthesize.
+_SPLIT_STAGE_KEYS = ("preprocessing", "separation")
+_DEFAULT_STAGE_KEYS = ("preprocessing", "transcription", "synthesis")
+
+
+def _stage_keys_for_mode(mode: str) -> tuple[str, ...]:
+    if mode in SPLIT_MODE_IDS:
+        return _SPLIT_STAGE_KEYS
+    return _DEFAULT_STAGE_KEYS
+
+
+class _ProgressRelay:
+    """Thread-safe progress sink carried across the GPU worker boundary.
+
+    The real job runs on a worker thread while the Gradio request handler
+    streams updates, so the injected ``gr.Progress`` reporter cannot be used
+    downstream directly. The relay speaks the same ``(value, desc=...)``
+    protocol plus the structured stage key the on-page checklist needs.
+    """
+
+    def __init__(self, events: "queue.Queue"):
+        self._events = events
+
+    def __call__(self, value, desc="", stage_key=None):
+        self._events.put(("progress", float(value or 0.0), str(desc or ""), stage_key))
+
+
+def _ensure_progress_relay(progress):
+    """Adapt any progress callable to the relay protocol, never dropping it."""
+    if isinstance(progress, _ProgressRelay):
+        return progress
+    if progress is None:
+        return _ProgressRelay(queue.Queue())
+
+    def _adapted(value, desc="", stage_key=None):
+        del stage_key  # gr.Progress and log-only callbacks have no stage slot.
+        progress(value, desc=desc)
+
+    return _adapted
+
+
+def _progress_panel_html(
+    mode: str,
+    stage_key: str | None,
+    fraction: float,
+    message: str,
+    *,
+    finished: bool = False,
+    failed: bool = False,
+) -> str:
+    stage_keys = _stage_keys_for_mode(mode)
+    if stage_key in stage_keys:
+        current_index = stage_keys.index(stage_key)
+    elif finished or failed:
+        current_index = len(stage_keys)
+    else:
+        current_index = 0
+    percent = max(0, min(100, round(fraction * 100)))
+    if finished:
+        percent = 100
+    bar_class = "progress-fill"
+    if finished:
+        bar_class += " finished"
+    elif failed:
+        bar_class += " failed"
+    items = []
+    for index, key in enumerate(stage_keys):
+        label = st(f"main.progress.stages.{key}")
+        if failed and index == current_index:
+            css, icon = "failed", "✕"
+        elif finished or index < current_index:
+            css, icon = "done", "✓"
+        elif index == current_index and (message or fraction > 0):
+            css, icon = "current", "●"
+        else:
+            css, icon = "pending", "○"
+        items.append(f'<span class="stage-item {css}"><i>{icon}</i>{label}</span>')
+    shown_message = message or "--"
+    return (
+        '<div class="progress-current">'
+        f"{st('main.progress.current')}: {shown_message}"
+        f'<span class="progress-percent">{percent}%</span>'
+        "</div>"
+        f'<div class="progress-track"><div class="{bar_class}" style="width:{percent}%"></div></div>'
+        f'<div class="progress-stages">{"".join(items)}</div>'
+    )
+
+
+def _stream_gpu_job(gpu_fn, args, mode: str, progress):
+    """Run *gpu_fn* on a worker thread and stream live panel/status updates.
+
+    Gradio only repaints the page when the request handler yields, and the
+    desktop-style persistent progress panel needs real-time stage updates, so
+    the blocking GPU call runs on a daemon thread and relays progress events
+    through a queue back to this generator.
+    """
+    events: "queue.Queue" = queue.Queue()
+    relay = _ProgressRelay(events)
+
+    def _worker():
+        try:
+            events.put(("result", gpu_fn(*args, progress=relay)))
+        except BaseException as exc:
+            events.put(("error", exc))
+
+    worker = threading.Thread(target=_worker, daemon=True, name="space-gpu-job")
+    worker.start()
+
+    last_stage_key = None
+    last_message = ""
+    yield (
+        gr.update(),
+        f"{st('main.progress.current')}: --",
+        gr.update(),
+        _progress_panel_html(mode, None, 0.0, ""),
+    )
+    while True:
+        try:
+            item = events.get(timeout=0.5)
+        except queue.Empty:
+            if not worker.is_alive():
+                raise RuntimeError("Conversion worker stopped without reporting a result")
+            continue
+        kind = item[0]
+        if kind == "progress":
+            _, fraction, message, stage_key = item
+            if stage_key:
+                last_stage_key = stage_key
+            last_message = message
+            progress(fraction, desc=message)
+            yield (
+                gr.update(),
+                f"{st('main.progress.current')}: {message}",
+                gr.update(),
+                _progress_panel_html(mode, last_stage_key, fraction, message),
+            )
+        elif kind == "result":
+            output_files, status_text, result_state = item[1]
+            yield (
+                output_files,
+                status_text,
+                result_state,
+                _progress_panel_html(mode, last_stage_key, 1.0, last_message, finished=True),
+            )
+            return
+        else:
+            exc = item[1]
+            yield (
+                gr.update(),
+                f"{st('status.error')}: {exc}",
+                gr.update(),
+                _progress_panel_html(mode, last_stage_key, 0.0, last_message, failed=True),
+            )
+            raise exc
 
 _TRACK_ORDER = (
     "bass",
@@ -1323,6 +1478,7 @@ def _prepare_request_models(
     yourmt3_model,
     muscriptor_model=MuscriptorModel.LARGE.value,
     muscriptor_instruments=None,
+    custom_bpm=None,
 ) -> None:
     """Strictly prepare only the assets selected for the current job."""
 
@@ -1332,6 +1488,7 @@ def _prepare_request_models(
         yourmt3_model,
         muscriptor_model,
         muscriptor_instruments,
+        custom_bpm,
     )
     ensure_beat_this_weights()
     if config.processing_mode == ProcessingMode.PIANO_ARIA_AMT.value:
@@ -1437,6 +1594,7 @@ def _convert_impl(
     from src.core.pipeline import MusicToMidiPipeline
     from src.utils.gpu_utils import clear_gpu_memory
 
+    progress = _ensure_progress_relay(progress)
     if audio_path is None:
         raise gr.Error(st("space.error.upload_required"))
     if mode in SPLIT_MODE_IDS:
@@ -1465,7 +1623,11 @@ def _convert_impl(
     def on_progress(p):
         stage_key = STAGE_LABEL_KEYS.get(p.stage)
         stage_name = st(f"main.progress.stages.{stage_key}") if stage_key else str(p.stage)
-        progress(p.overall_progress, desc=f"[{stage_name}] {p.message}")
+        progress(
+            p.overall_progress,
+            desc=f"[{stage_name}] {p.message}",
+            stage_key=stage_key,
+        )
 
     try:
         result = pipeline.process(
@@ -1557,6 +1719,7 @@ def _separate_impl(
     """Separate two or six WAV tracks and return a request-owned workbench state."""
     from src.utils.gpu_utils import clear_gpu_memory
 
+    progress = _ensure_progress_relay(progress)
     if audio_path is None:
         raise gr.Error(st("space.error.upload_required"))
     if mode not in SPLIT_MODE_IDS:
@@ -1582,7 +1745,11 @@ def _separate_impl(
     def on_progress(p):
         stage_key = STAGE_LABEL_KEYS.get(p.stage)
         stage_name = st(f"main.progress.stages.{stage_key}") if stage_key else str(p.stage)
-        progress(p.overall_progress, desc=f"[{stage_name}] {p.message}")
+        progress(
+            p.overall_progress,
+            desc=f"[{stage_name}] {p.message}",
+            stage_key=stage_key,
+        )
 
     try:
         separation = AudioSeparationService(
@@ -1846,21 +2013,24 @@ def convert_audio_to_midi(
         yourmt3_model,
         muscriptor_model,
         muscriptor_instruments,
-    )
-    return _convert_audio_to_midi_on_gpu(
-        audio_path,
-        mode,
-        transcription_backend,
-        yourmt3_model,
-        muscriptor_model,
-        muscriptor_instruments,
         custom_bpm,
-        progress=progress,
     )
-
-
-if ZERO_GPU:
-    setattr(convert_audio_to_midi, "zerogpu", None)
+    # The GPU call blocks for minutes; stream its real progress to the
+    # on-page panel instead of returning only at the end.
+    yield from _stream_gpu_job(
+        _convert_audio_to_midi_on_gpu,
+        (
+            audio_path,
+            mode,
+            transcription_backend,
+            yourmt3_model,
+            muscriptor_model,
+            muscriptor_instruments,
+            custom_bpm,
+        ),
+        mode,
+        progress,
+    )
 
 
 def _manual_route_config(route: str, muscriptor_instruments=None, custom_bpm=None) -> Config:
@@ -1917,6 +2087,7 @@ def _convert_manual_midi_impl(
     from src.core.pipeline import MusicToMidiPipeline
     from src.utils.gpu_utils import clear_gpu_memory
 
+    progress = _ensure_progress_relay(progress)
     request_root = _require_active_request_dir(request_dir)
     audio_file = _require_owned_request_file(
         request_root,
@@ -1932,7 +2103,11 @@ def _convert_manual_midi_impl(
     def on_progress(p):
         stage_key = STAGE_LABEL_KEYS.get(p.stage)
         stage_name = st(f"main.progress.stages.{stage_key}") if stage_key else str(p.stage)
-        progress(p.overall_progress, desc=f"[{stage_name}] {p.message}")
+        progress(
+            p.overall_progress,
+            desc=f"[{stage_name}] {p.message}",
+            stage_key=stage_key,
+        )
 
     pipeline = MusicToMidiPipeline(config)
     _register_active_job(pipeline)
@@ -2113,15 +2288,11 @@ def _convert_one_track(
     )
 
 
-if ZERO_GPU:
-    setattr(_convert_one_track, "zerogpu", None)
-
-
 def _track_control_client_js() -> str:
     """Return a client-only controller for dynamic per-track form controls.
 
-    Gradio 4.44 can dispatch component input/change events while an
-    ``@gr.render`` tree is being replaced. A Python callback from the retired
+    Gradio can dispatch component input/change events while an ``@gr.render``
+    tree is being replaced. A Python callback from the retired
     tree then targets a function id that no longer exists and produces an HTTP
     500. These updates do not need the server: model loading remains exclusively
     behind the explicit conversion button, while interactivity and copy are
@@ -2321,13 +2492,16 @@ def update_mode_controls(mode, transcription_backend):
     shows_muscriptor_instruments = (
         uses_global_backend and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
     )
+    target_bpm_update = gr.update()
     return (
         update_mode_info(mode),
         gr.update(visible=uses_global_backend),
         gr.update(visible=shows_yourmt3_model),
         gr.update(visible=shows_muscriptor_instruments),
         gr.update(visible=shows_muscriptor_instruments),
+        target_bpm_update,
         gr.update(value=_main_action_label(mode)),
+        _progress_panel_html(mode, None, 0.0, ""),
     )
 
 
@@ -2456,69 +2630,134 @@ CUSTOM_CSS = """
     padding-top: 12px;
     margin-top: 16px;
 }
+.settings-panel {
+    background: #1f2940 !important;
+    border: 1px solid #3a4a6a !important;
+    border-radius: 8px !important;
+    padding: 12px 16px !important;
+}
+.action-row {
+    justify-content: center !important;
+    margin: 16px 0 4px 0 !important;
+}
+.progress-panel {
+    background: #1f2940;
+    border: 1px solid #3a4a6a;
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+.progress-current {
+    color: #b0b8c8;
+    font-size: 12px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+}
+.progress-percent {
+    color: #e0e0e0;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+}
+.progress-track {
+    background: #16213e;
+    border: 1px solid #3a4a6a;
+    border-radius: 6px;
+    height: 18px;
+    overflow: hidden;
+}
+.progress-fill {
+    background: #4a9eff;
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.3s ease;
+}
+.progress-fill.finished {
+    background: #7ee2a8;
+}
+.progress-fill.failed {
+    background: #e05050;
+}
+.progress-stages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 8px;
+}
+.stage-item {
+    color: #8892a0;
+    font-size: 12px;
+}
+.stage-item i {
+    font-style: normal;
+    margin-right: 5px;
+}
+.stage-item.done {
+    color: #7ee2a8;
+}
+.stage-item.current {
+    color: #4a9eff;
+    font-weight: bold;
+}
+.stage-item.failed {
+    color: #e05050;
+}
 """
-
-LOG_POLL_HEAD = """<script>
-(function() {
-    var pollCount = 0;
-    var _pollTimer = setInterval(function() {
-        pollCount++;
-        var ta = document.querySelector('.log-box textarea');
-        if (!ta) return;
-        var setter = Object.getOwnPropertyDescriptor(
-            HTMLTextAreaElement.prototype, 'value'
-        ).set;
-        fetch('./api/read_logs', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({data: []})
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(json) {
-            var logText = (json.data && json.data[0]) ? json.data[0] : '';
-            setter.call(ta, logText || '[poll #' + pollCount + '] waiting for logs...');
-            ta.dispatchEvent(new Event('input', {bubbles: true}));
-            ta.scrollTop = ta.scrollHeight;
-        })
-        .catch(function(err) {
-            setter.call(ta, '[poll error] ' + err.message);
-            ta.dispatchEvent(new Event('input', {bubbles: true}));
-        });
-    }, 2000);
-})();
-</script>"""
 
 DEVICE_LABEL = st("space.ui.zerogpu_device") if ZERO_GPU else get_device_label()
 ZERO_GPU_NOTE = st("space.ui.zerogpu_note") if ZERO_GPU else ""
+# The Space ships a fixed dark design. gr.themes.Base defaults its light
+# palette to dark text, so every color must be pinned for both the light and
+# dark variants; otherwise visitors with a light OS color scheme get dark
+# text on dark backgrounds.
+SPACE_THEME = gr.themes.Base(
+    primary_hue=gr.themes.colors.blue,
+    neutral_hue=gr.themes.colors.slate,
+    font=["system-ui", "Noto Sans SC", "sans-serif"],
+).set(
+    body_background_fill="#1a1a2e",
+    body_background_fill_dark="#1a1a2e",
+    body_text_color="#e0e0e0",
+    body_text_color_dark="#e0e0e0",
+    body_text_color_subdued="#8892a0",
+    body_text_color_subdued_dark="#8892a0",
+    block_background_fill="#1f2940",
+    block_background_fill_dark="#1f2940",
+    block_border_color="#3a4a6a",
+    block_border_color_dark="#3a4a6a",
+    block_label_text_color="#b0b8c8",
+    block_label_text_color_dark="#b0b8c8",
+    block_title_text_color="#e0e0e0",
+    block_title_text_color_dark="#e0e0e0",
+    input_background_fill="#16213e",
+    input_background_fill_dark="#16213e",
+    input_border_color="#3a4a6a",
+    input_border_color_dark="#3a4a6a",
+    button_primary_background_fill="#4a9eff",
+    button_primary_background_fill_dark="#4a9eff",
+    button_primary_text_color="white",
+    button_primary_text_color_dark="white",
+    button_secondary_background_fill="#2a3f5f",
+    button_secondary_background_fill_dark="#2a3f5f",
+    button_secondary_text_color="#e0e0e0",
+    button_secondary_text_color_dark="#e0e0e0",
+    error_text_color="#f87171",
+    error_text_color_dark="#f87171",
+    link_text_color="#7ab8ff",
+    link_text_color_dark="#7ab8ff",
+    link_text_color_hover="#a8d0ff",
+    link_text_color_hover_dark="#a8d0ff",
+)
 
 with gr.Blocks(
     title=st("space.app.title"),
-    css=CUSTOM_CSS,
-    head=LOG_POLL_HEAD + mixer_head() + muscriptor_result_head(),
     delete_cache=(3600, SPACE_OUTPUT_RETENTION_SECONDS),
-    theme=gr.themes.Base(
-        primary_hue=gr.themes.colors.blue,
-        neutral_hue=gr.themes.colors.slate,
-        font=["system-ui", "Noto Sans SC", "sans-serif"],
-    ).set(
-        body_background_fill="#1a1a2e",
-        block_background_fill="#1f2940",
-        block_border_color="#3a4a6a",
-        block_label_text_color="#b0b8c8",
-        block_title_text_color="#e0e0e0",
-        input_background_fill="#16213e",
-        input_border_color="#3a4a6a",
-        button_primary_background_fill="#4a9eff",
-        button_primary_text_color="white",
-        button_secondary_background_fill="#2a3f5f",
-        button_secondary_text_color="#e0e0e0",
-    ),
 ) as demo:
     track_state = gr.State({})
-    # Gradio 4.44 does not reliably retrigger a parent @gr.render when an
-    # event created inside that render only changes a hidden gr.State. Keep a
-    # hidden client component so each dynamic state mutation can explicitly
-    # request a rebuild.
+    # Events created inside @gr.render only mutate hidden state. Keep an
+    # explicit revision input so every completed mutation deterministically
+    # requests exactly one workbench rebuild.
     render_revision = gr.Number(value=0, visible=False)
     edited_preview_request = gr.Textbox(visible=False)
     edited_preview_response = gr.Textbox(visible=False)
@@ -2527,149 +2766,157 @@ with gr.Blocks(
     with gr.Group(elem_classes="app-header"):
         gr.Markdown(f"# 🎵 {st('space.app.title')}\n{st('space.app.subtitle')}")
 
-    with gr.Row(equal_height=False):
-        with gr.Column(scale=5):
-            gr.Markdown(
-                f"**{st('space.ui.audio_section')}**",
-                elem_classes="section-title",
-            )
-            audio_input = gr.Audio(
-                label=st("space.ui.audio_input"),
-                type="filepath",
-                sources=["upload"],
-                editable=False,
-                elem_classes="upload-zone",
-            )
-            gr.Markdown(f"<small style='color:#6a7a8a'>{st('space.ui.audio_hint')}</small>")
+    gr.Markdown(
+        f"**{st('space.ui.audio_section')}**",
+        elem_classes="section-title",
+    )
+    audio_input = gr.Audio(
+        label=st("space.ui.audio_input"),
+        type="filepath",
+        sources=["upload"],
+        editable=False,
+        elem_classes="upload-zone",
+    )
+    gr.Markdown(f"<small style='color:#6a7a8a'>{st('space.ui.audio_hint')}</small>")
 
-            gr.Markdown(
-                f"**{st('space.ui.track_section')}**",
-                elem_classes="section-title",
-            )
-            mode_radio = gr.Radio(
-                choices=MODE_CHOICES,
-                value=ProcessingMode.SMART.value,
-                label=st("space.ui.mode_label"),
-            )
-            mode_info = gr.Markdown(
-                update_mode_info(ProcessingMode.SMART.value),
-                elem_classes="mode-info",
-            )
-            transcription_backend = gr.Radio(
-                choices=BACKEND_CHOICES,
-                value=MultiInstrumentModel.YOURMT3.value,
-                label=st("main.engine.active_label"),
-                visible=True,
-            )
-            yourmt3_model = gr.Dropdown(
-                choices=YOURMT3_MODEL_CHOICES,
-                value=YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
-                label=st("main.engine.yourmt3_model_label"),
-                visible=True,
-            )
-            muscriptor_model = gr.Dropdown(
-                choices=MUSCRIPTOR_MODEL_CHOICES,
-                value=MuscriptorModel.LARGE.value,
-                label=st("main.engine.muscriptor_model_label"),
-                visible=False,
-            )
-            muscriptor_instruments = gr.Dropdown(
-                choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
-                value=[],
-                multiselect=True,
-                filterable=True,
-                label=st("main.engine.muscriptor_instruments_title"),
-                info=st("main.engine.muscriptor_instruments_desc"),
-                visible=False,
-                elem_classes=["muscriptor-instrument-selector"],
-            )
-            custom_bpm = gr.Number(
-                value=0.0,
-                minimum=0.0,
-                maximum=400.0,
-                step=0.1,
-                precision=1,
-                label=st("main.tempo.label"),
-                info=st("main.tempo.custom_tooltip"),
-            )
+    gr.Markdown(
+        f"**{st('space.ui.track_section')}**",
+        elem_classes="section-title",
+    )
+    with gr.Group(elem_classes="settings-panel"):
+        mode_radio = gr.Radio(
+            choices=MODE_CHOICES,
+            value=ProcessingMode.SMART.value,
+            label=st("space.ui.mode_label"),
+        )
+        mode_info = gr.Markdown(
+            update_mode_info(ProcessingMode.SMART.value),
+            elem_classes="mode-info",
+        )
+        transcription_backend = gr.Radio(
+            choices=BACKEND_CHOICES,
+            value=MultiInstrumentModel.YOURMT3.value,
+            label=st("main.engine.active_label"),
+            visible=True,
+        )
+        yourmt3_model = gr.Dropdown(
+            choices=YOURMT3_MODEL_CHOICES,
+            value=YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+            label=st("main.engine.yourmt3_model_label"),
+            visible=True,
+        )
+        muscriptor_model = gr.Dropdown(
+            choices=MUSCRIPTOR_MODEL_CHOICES,
+            value=MuscriptorModel.LARGE.value,
+            label=st("main.engine.muscriptor_model_label"),
+            visible=False,
+        )
+        muscriptor_instruments = gr.Dropdown(
+            choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
+            value=[],
+            multiselect=True,
+            filterable=True,
+            label=st("main.engine.muscriptor_instruments_title"),
+            info=st("main.engine.muscriptor_instruments_desc"),
+            visible=False,
+            elem_classes=["muscriptor-instrument-selector"],
+        )
+        custom_bpm = gr.Number(
+            value=0.0,
+            minimum=0.0,
+            maximum=400.0,
+            step=0.1,
+            precision=1,
+            label=st("main.tempo.label"),
+            info=st("main.tempo.custom_tooltip"),
+        )
+        gr.Markdown(
+            f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
+            elem_classes="device-badge",
+        )
 
-            with gr.Row():
-                convert_btn = gr.Button(
-                    _main_action_label(ProcessingMode.SMART.value),
-                    variant="primary",
-                    elem_classes="convert-btn",
-                    size="lg",
-                    scale=4,
-                )
-                stop_btn = gr.Button(
-                    "■  " + st("toolbar.stop"),
-                    variant="stop",
-                    size="lg",
-                    scale=1,
-                )
-                _stop_api_btn = gr.Button(visible=False)
+    with gr.Row(elem_classes="action-row"):
+        convert_btn = gr.Button(
+            _main_action_label(ProcessingMode.SMART.value),
+            variant="primary",
+            elem_classes="convert-btn",
+            size="lg",
+            scale=4,
+        )
+        stop_btn = gr.Button(
+            "■  " + st("toolbar.stop"),
+            variant="stop",
+            size="lg",
+            scale=1,
+        )
+        _stop_api_btn = gr.Button(visible=False)
 
-            mode_radio.change(
-                fn=update_mode_controls,
-                inputs=[mode_radio, transcription_backend],
-                outputs=[
-                    mode_info,
-                    transcription_backend,
-                    yourmt3_model,
-                    muscriptor_model,
-                    muscriptor_instruments,
-                    convert_btn,
-                ],
-                api_name=False,
-                queue=False,
-            )
-            transcription_backend.change(
-                fn=update_backend_controls,
-                inputs=[mode_radio, transcription_backend],
-                outputs=[yourmt3_model, muscriptor_model, muscriptor_instruments],
-                api_name=False,
-                queue=False,
-            )
+    gr.Markdown(
+        f"**{st('main.progress.title')}**",
+        elem_classes="section-title",
+    )
+    progress_html = gr.HTML(
+        value=_progress_panel_html(ProcessingMode.SMART.value, None, 0.0, ""),
+        elem_classes="progress-panel",
+    )
 
-            gr.Markdown(
-                f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
-                elem_classes="device-badge",
-            )
+    mode_radio.change(
+        fn=update_mode_controls,
+        inputs=[mode_radio, transcription_backend],
+        outputs=[
+            mode_info,
+            transcription_backend,
+            yourmt3_model,
+            muscriptor_model,
+            muscriptor_instruments,
+            custom_bpm,
+            convert_btn,
+            progress_html,
+        ],
+        api_visibility="private",
+        queue=False,
+    )
+    transcription_backend.change(
+        fn=update_backend_controls,
+        inputs=[mode_radio, transcription_backend],
+        outputs=[yourmt3_model, muscriptor_model, muscriptor_instruments],
+        api_visibility="private",
+        queue=False,
+    )
 
-        with gr.Column(scale=5):
-            gr.Markdown(
-                f"**{st('space.ui.result_section')}**",
-                elem_classes="section-title",
-            )
-            status_output = gr.Textbox(
-                label=st("space.ui.status_label"),
-                interactive=False,
-                lines=7,
-                placeholder=st("space.ui.status_placeholder"),
-                elem_classes="result-box",
-            )
+    gr.Markdown(
+        f"**{st('space.ui.result_section')}**",
+        elem_classes="section-title",
+    )
+    status_output = gr.Textbox(
+        label=st("space.ui.status_label"),
+        interactive=False,
+        lines=7,
+        placeholder=st("space.ui.status_placeholder"),
+        elem_classes="result-box",
+    )
 
-            gr.Markdown(
-                f"**{st('space.ui.download_section')}**",
-                elem_classes="section-title",
-            )
-            file_output = gr.File(
-                label=st("space.ui.download_label"),
-                file_count="multiple",
-            )
+    gr.Markdown(
+        f"**{st('space.ui.download_section')}**",
+        elem_classes="section-title",
+    )
+    file_output = gr.File(
+        label=st("space.ui.download_label"),
+        file_count="multiple",
+    )
 
-            gr.Markdown(
-                f"**{st('space.ui.logs_section')}**",
-                elem_classes="section-title",
-            )
-            log_output = gr.Textbox(
-                label=st("space.ui.logs_label"),
-                interactive=False,
-                lines=12,
-                max_lines=20,
-                placeholder=st("space.ui.logs_placeholder"),
-                elem_classes="log-box",
-            )
+    gr.Markdown(
+        f"**{st('space.ui.logs_section')}**",
+        elem_classes="section-title",
+    )
+    log_output = gr.Textbox(
+        label=st("space.ui.logs_label"),
+        interactive=False,
+        lines=12,
+        max_lines=20,
+        placeholder=st("space.ui.logs_placeholder"),
+        elem_classes="log-box",
+    )
 
     @gr.render(inputs=[track_state, mode_radio, render_revision])
     def render_track_workbench(current_state, selected_mode, _render_revision):
@@ -2686,13 +2933,10 @@ with gr.Blocks(
                         st,
                         SPACE_LANGUAGE,
                     ),
-                    # Gradio 4.44 preserves a keyed component's value when a
-                    # @gr.render tree is rebuilt.  Reusing one fixed key here
-                    # therefore kept the previous conversion's piano roll and
-                    # playback URLs after track_state changed.  The resolved
-                    # MIDI path is request-scoped and gives each real result a
-                    # distinct component identity while remaining stable for
-                    # rerenders of that same result.
+                    # A keyed component preserves its value when an @gr.render
+                    # tree is rebuilt. The resolved request-owned MIDI path
+                    # gives each real result a distinct identity while staying
+                    # stable for rerenders of that same result.
                     key=(
                         "muscriptor-result-workbench::"
                         f"{Path(str(current_state['midi_path'])).resolve()}"
@@ -2706,14 +2950,14 @@ with gr.Blocks(
                     fn=_clear_result_state,
                     inputs=None,
                     outputs=[track_state],
-                    api_name=False,
+                    api_visibility="private",
                     queue=False,
                 )
                 another_event.then(
                     fn=_next_render_revision,
                     inputs=[render_revision],
                     outputs=[render_revision],
-                    api_name=False,
+                    api_visibility="private",
                     queue=False,
                 )
             return
@@ -2742,14 +2986,14 @@ with gr.Blocks(
                 # clear fires this same change handler a second time and can
                 # cancel the state-driven @gr.render update with a 500 error.
                 outputs=[track_state],
-                api_name=False,
+                api_visibility="private",
                 queue=False,
             )
             add_audio_event.then(
                 fn=_next_render_revision,
                 inputs=[render_revision],
                 outputs=[render_revision],
-                api_name=False,
+                api_visibility="private",
                 queue=False,
             )
 
@@ -2838,14 +3082,14 @@ with gr.Blocks(
                         fn=_remove_track,
                         inputs=[track_state, track_id_state],
                         outputs=[track_state],
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
                     remove_event.then(
                         fn=_next_render_revision,
                         inputs=[render_revision],
                         outputs=[render_revision],
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
                     midi_enabled.input(
@@ -2858,7 +3102,7 @@ with gr.Blocks(
                             midi_instruments,
                         ],
                         js=_track_control_client_js(),
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
                     midi_route.input(
@@ -2871,7 +3115,7 @@ with gr.Blocks(
                             midi_instruments,
                         ],
                         js=_track_control_client_js(),
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
                     start_midi_event = start_midi.click(
@@ -2885,7 +3129,7 @@ with gr.Blocks(
                             custom_bpm,
                         ],
                         outputs=[track_state],
-                        api_name=False,
+                        api_visibility="private",
                         concurrency_limit=1,
                         concurrency_id=GPU_CONCURRENCY_ID,
                     )
@@ -2893,7 +3137,7 @@ with gr.Blocks(
                         fn=_next_render_revision,
                         inputs=[render_revision],
                         outputs=[render_revision],
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
 
@@ -2920,14 +3164,14 @@ with gr.Blocks(
                         fn=_close_active_midi_detail,
                         inputs=[track_state],
                         outputs=[track_state],
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
                     close_detail_event.then(
                         fn=_next_render_revision,
                         inputs=[render_revision],
                         outputs=[render_revision],
-                        api_name=False,
+                        api_visibility="private",
                         queue=False,
                     )
 
@@ -2942,7 +3186,7 @@ with gr.Blocks(
             muscriptor_instruments,
             custom_bpm,
         ],
-        outputs=[file_output, status_output, track_state],
+        outputs=[file_output, status_output, track_state, progress_html],
         api_name="convert",
         concurrency_limit=1,
         concurrency_id=GPU_CONCURRENCY_ID,
@@ -2953,24 +3197,24 @@ with gr.Blocks(
         inputs=None,
         outputs=[status_output],
         api_name="stop_current_job",
-        show_api=False,
+        api_visibility="undocumented",
         queue=False,
     )
     stop_btn.click(
         fn=None,
         inputs=None,
         outputs=[status_output],
-        api_name=False,
+        api_visibility="private",
         js=_stop_current_job_client_js(),
         queue=False,
     )
 
-    _log_poll_btn = gr.Button(visible=False)
-    _log_poll_btn.click(
+    log_refresh_timer = gr.Timer(2.0)
+    log_refresh_timer.tick(
         fn=read_logs,
         inputs=[],
         outputs=[log_output],
-        api_name="read_logs",
+        api_visibility="private",
         queue=False,
     )
     edited_preview_button.click(
@@ -2991,4 +3235,11 @@ with gr.Blocks(
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", allowed_paths=[str(SPACE_OUTPUT_INSTANCE)])
+    configure_uvicorn_websocket_protocol()
+    demo.launch(
+        server_name="0.0.0.0",
+        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],
+        theme=SPACE_THEME,
+        css=CUSTOM_CSS,
+        head=mixer_head() + muscriptor_result_head(),
+    )

@@ -6,9 +6,9 @@ from __future__ import annotations
 def normalize_optional_project_bpm(value: object) -> float | None:
     """Map the Web UI's explicit ``0 = automatic`` sentinel to ``None``.
 
-    Gradio 4.44 renders an empty ``gr.Number`` as zero in the browser. The
-    component therefore permits exactly that sentinel while ``Config`` keeps
-    validating every non-zero override against the real 4--400 BPM range.
+    The Web controls use zero as the explicit automatic-detection sentinel.
+    ``Config`` still validates every non-zero override against the real
+    4--400 BPM range.
     """
 
     if value is None or value == "":

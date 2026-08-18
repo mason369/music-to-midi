@@ -30,7 +30,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pip install gradio==4.44.1 fastapi==0.136.3 starlette==0.52.1 soundfile==0.14.0",
+            "pip install gradio==6.17.3 fastapi==0.136.3 starlette==1.6.0 soundfile==0.14.0",
             workflow,
         )
 

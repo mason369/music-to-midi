@@ -97,14 +97,16 @@ def track_mixer_strings(translate: Callable[[str], str]) -> dict[str, str]:
 
 
 def track_file_url(path: str | Path) -> str:
-    """Return the Gradio ``/file=`` URL for one absolute audio path.
+    """Return the Gradio ``/gradio_api/file=`` URL for one absolute audio path.
 
-    The matching output root must be listed in ``demo.launch(allowed_paths=...)``
-    or Gradio refuses to serve the file. Forward slashes are enforced so the
-    URL form is identical on every build platform.
+    Gradio 6 serves uploaded and generated files only under ``/gradio_api``;
+    the legacy ``/file=`` route answers 404. The matching output root must be
+    listed in ``demo.launch(allowed_paths=...)`` or Gradio refuses to serve
+    the file. Forward slashes are enforced so the URL form is identical on
+    every build platform.
     """
     posix_path = str(path).replace("\\", "/")
-    return "/file=" + quote(posix_path, safe="/")
+    return "/gradio_api/file=" + quote(posix_path, safe="/")
 
 
 def build_track_mixer_manifest(

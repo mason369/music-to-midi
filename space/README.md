@@ -4,7 +4,7 @@ emoji: 🎵
 colorFrom: blue
 colorTo: purple
 sdk: gradio
-sdk_version: "4.44.1"
+sdk_version: "6.17.3"
 python_version: "3.12.12"
 app_file: app.py
 pinned: false
@@ -37,9 +37,9 @@ tags:
 
 # Music to MIDI - AI Audio to MIDI
 
-将 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A` 音频转换为可编辑 MIDI。Space、桌面版与 Colab 使用相同的七个模式：`SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL`。
+将 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A` 音频转换为可编辑 MIDI 或分离后的 WAV 音轨。Space、桌面版与 Colab 使用相同的七个模式：`SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL`。
 
-五个直接转写模式保持一次点击直接生成 MIDI；两个分离模式只先生成 WAV，并在真实波形音轨面板中让用户逐轨决定是否转 MIDI。选择复选框或模型不会开始推理，必须点击该音轨自己的“开始转换”。
+五个直接转写模式一次点击生成 MIDI；两个分离模式只先生成 WAV，并在真实波形音轨面板中让用户逐轨决定是否转 MIDI。选择复选框或模型不会开始推理，必须点击该音轨自己的“开始转换”。
 
 > **ZeroGPU 使用边界**：此部署只承诺短片段试用，不承诺完整长歌端到端完成。[Hugging Face ZeroGPU 文档](https://huggingface.co/docs/hub/main/en/spaces-zerogpu) 当前公开配额为匿名用户每日 2 分钟、登录免费账户每日 5 分钟 GPU。当前保守的最小请求经 `large` GPU 平台倍率折算后已高于匿名额度，因此转换必须先登录。应用会在下载模型前严格估算；超过登录免费账户 300 GPU 秒窗口的任务会明确拒绝，不会静默切换 CPU。长歌请使用 Colab、桌面版或专用 GPU。估算通过也不代表用户仍有足够当日配额或队列容量。
 
@@ -131,7 +131,7 @@ MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所�
 ## 技术栈
 
 - **Space 运行时**：Python 3.12.12、Torch 2.8.0、torchaudio 2.8.0、torchvision 0.23.0、NumPy `>=2,<2.5`
-- **ZeroGPU / Web**：`spaces==0.51.1`、Gradio 4.44.1、Pydantic 2.10.6
+- **ZeroGPU / Web**：`spaces==0.51.1`、Gradio 6.17.3、Pydantic 2.10.6
 - **分离运行时**：`audio-separator==0.44.1`、`onnxruntime-gpu==1.23.2`
 - **转写引擎**：YourMT3+、MIROS、MuScriptor Large / Medium / Small、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal
 - **分离模型**：Leap XE vocals、PolarFormer accompaniment、BS-RoFormer SW Fixed
@@ -139,7 +139,7 @@ MuScriptor Small / Medium / Large 现在都是独立可见选择；不会在所�
 
 Space 的 Torch 2.8 / NumPy 2 环境是独立部署契约，不能用桌面版 Torch 2.7 / NumPy 1.26 依赖覆盖。PolarFormer 依赖 ONNX Runtime `CUDAExecutionProvider`，因此 AMD/ROCm 当前不支持完整七模式，也不会静默切换到 CPU 假装成功。
 
-Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 28 项闭集清单为 24 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；发布仍会逐次 fail-closed 校验，任何项目未满足就停止。Space 运行时按所选路线下载公开制品时，也必须遵守各上游许可与平台条款；MuScriptor Small / Medium / Large 都要求用户先在 Hugging Face 分别接受模型条款。
+Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 37 项闭集清单为 32 项 `VERIFIED`、5 项附维护者具名责任记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；发布仍会逐次 fail-closed 校验，任何项目未满足就停止。Space 运行时按所选路线下载公开制品时，也必须遵守各上游许可与平台条款；MuScriptor Small / Medium / Large 都要求用户先在 Hugging Face 分别接受模型条款。
 
 ## 链接
 

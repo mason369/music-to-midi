@@ -1,5 +1,7 @@
 import os
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -206,6 +208,26 @@ def test_requirement_failure_exits_before_application_start(
     else:
         assert "./install.sh" in error_output
         assert "./run.sh" in error_output
+
+
+def test_web_api_launcher_gates_source_runtime_before_argument_parsing() -> None:
+    from src.web_api import __main__ as web_api_main
+
+    with (
+        patch.object(
+            web_api_main,
+            "require_source_runtime_identity",
+            side_effect=SystemExit(2),
+        ) as runtime_gate,
+        patch.object(web_api_main, "create_app") as create_app,
+        patch.object(sys, "argv", ["python", "--invalid-argument"]),
+        pytest.raises(SystemExit) as raised,
+    ):
+        web_api_main.main()
+
+    assert raised.value.code == 2
+    runtime_gate.assert_called_once_with()
+    create_app.assert_not_called()
 
 
 @pytest.mark.parametrize("relative_path", ("README.md", "docs/README.md", "docs/README_zh.md"))

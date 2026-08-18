@@ -22,8 +22,9 @@ def test_space_ui_uses_shared_i18n_labels():
     assert "_normalize_json_schema_bool_nodes" in source_text
     assert "Component.api_info = _patched_component_api_info" in source_text
     assert 'if __name__ == "__main__":' in source_text
+    assert "configure_uvicorn_websocket_protocol()" in source_text
     assert (
-        "    demo.launch(" 'server_name="0.0.0.0", allowed_paths=[str(SPACE_OUTPUT_INSTANCE)]' ")"
+        '        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],'
     ) in source_text
 
 
@@ -97,9 +98,10 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     assert "a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" in source_text
     assert "aria-amt" not in requirements_text
     assert "audio-separator==0.44.1" in requirements_text
-    assert "gradio==4.44.1" in requirements_text
+    assert "gradio==6.17.3" in requirements_text
     assert "fastapi==0.136.3" in requirements_text
-    assert "starlette==0.52.1" in requirements_text
+    assert "starlette==1.6.0" in requirements_text
+    assert "uvicorn[standard]>=0.48.0,<1" in requirements_text
     assert "pydantic==2.10.6" in requirements_text
     assert "pydantic-core==2.27.2" in requirements_text
     assert "piano-transcription-inference==0.0.6" in requirements_text
@@ -338,7 +340,7 @@ def test_space_track_workbench_uses_shared_browser_mixer_and_ten_shared_routes()
     # The workbench renders real waveforms through the shared browser mixer
     # runtime instead of per-track Gradio audio players.
     assert 'build_track_mixer_html(state["tracks"], st)' in source_text
-    assert "head=LOG_POLL_HEAD + mixer_head() + muscriptor_result_head()" in source_text
+    assert "head=mixer_head() + muscriptor_result_head()" in source_text
     assert "from src.gui.web.track_mixer_runtime import (" in source_text
     assert "waveform_options=gr.WaveformOptions(" not in source_text
     assert "key=f\"waveform-{track['id']}\"" not in source_text
@@ -449,7 +451,7 @@ def test_space_all_gpu_jobs_share_one_serial_concurrency_queue():
     assert source_text.count("concurrency_id=GPU_CONCURRENCY_ID") == 2
     assert "@spaces.GPU(duration=_estimate_zerogpu_duration" in source_text
     assert "@spaces.GPU(duration=_estimate_manual_zerogpu_duration" in source_text
-    assert 'setattr(_convert_one_track, "zerogpu", None)' in source_text
+    assert 'setattr(_convert_one_track, "zerogpu", None)' not in source_text
     assert "concurrency_limit=1" in source_text
 
 

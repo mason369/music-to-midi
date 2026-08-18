@@ -8,6 +8,16 @@
 
 当前版本同步七种处理模式：完整混音多乐器转写、人声/伴奏 WAV 分离、六声部 WAV 分离，以及 TransKun 默认 V2 / TransKun V2 Aug / Aria-AMT / ByteDance Pedal 四条钢琴专用转写流程。两个分离模式的主按钮只生成 WAV；分离完成后，用户可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。它不是只抓单音旋律的小工具，而是把多乐器 AI music transcription、stem separation、钢琴转 MIDI 和 BPM/tempo 元数据放进同一条工作流里。
 
+## 独立 Web API 与浏览器前端
+
+独立 Web API 与浏览器前端调用同一个 `MusicToMidiPipeline`，暴露与桌面版一致的七种模式。源码运行时可直接启动：
+
+```powershell
+.\venv\Scripts\python.exe -m src.web_api --host 127.0.0.1 --port 8765
+```
+
+浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取真实终态，并从响应中的 `download_url` 下载 MIDI 或分轨 WAV。失败会返回明确错误，不会用简化算法或静默回退伪装成功。
+
 ## 统一界面演示
 
 桌面版、Gradio Web 版和 Google Colab 采用同一套七模式工作流与操作语义。以下演示按“主界面 → 分离完成 → 逐轨处理 → MuScriptor 渐进式预览”的顺序展示核心流程。
@@ -53,8 +63,9 @@
 | 入口 | 处理模式 | 后端选择 | 适合场景 |
 |------|----------|----------|----------|
 | PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` | SMART 可选 YourMT3+ / MIROS / MuScriptor 三档；分离结果逐轨选择 13 条路线；钢琴模式使用各自固定后端 | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
+| 独立 Web API | 同桌面七种模式 | multipart 作业、终态轮询和制品下载；推理仍由同一 `MusicToMidiPipeline` 执行 | 自建 Web 前端、局域网服务或系统集成 |
 | Gradio Space | 同桌面七种模式 | 同步提供 MuScriptor 搜索式乐器多选、硬约束和官方式结果工作台 | 浏览器中快速试用或部署 |
-| Google Colab | 同桌面七种模式 | 与 Space 同样传递 MuScriptor 乐器约束并显示真实结果音频工作台 | 临时使用 Colab GPU |
+| Google Colab | 同桌面七种模式 | 与 Space 同样提供 MuScriptor 乐器约束和真实结果工作台 | 临时使用 Colab GPU |
 
 ## 入口与依赖同步状态
 
@@ -73,7 +84,7 @@
 | `install.ps1` / `install.sh` | 安装 PyTorch 2.7、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | 完整七模式要求 NVIDIA 驱动兼容 CUDA 12.8，并使用精确 `cu128` wheel；`audio-separator` 使用 `--no-deps`，避免其 NumPy 2 解析要求破坏当前 PyTorch/桌面栈。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
 | `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 28 项第三方组件必须全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`，否则构建立即停止；目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
-| `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台同步提供 YourMT3+、MIROS、MuScriptor Large / Medium / Small；逐轨菜单共含 13 条路线。 |
+| `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台的完整路线均与桌面版同步。 |
 
 ## 处理模式
 
@@ -679,7 +690,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 AMD/ROCm 当前不能完成七模式：即使 PyTorch 提供 ROCm wheel，PolarFormer 仍固定依赖 ONNX Runtime `CUDAExecutionProvider`。安装脚本会明确停止，不会静默改用 CPU；完整七模式目前只验收 NVIDIA CUDA。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 28 项第三方组件：24 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 37 项第三方组件：32 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -793,7 +804,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-> 发布门禁状态：当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 28 项闭集清单为 24 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
+> 发布门禁状态：当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 37 项闭集清单为 32 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
 
 Windows 目录式便携包：
 

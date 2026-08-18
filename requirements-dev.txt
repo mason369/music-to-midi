@@ -5,6 +5,8 @@
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-qt>=4.2.0
+# Starlette 1.x TestClient is built on httpx2; plain httpx is deprecated.
+httpx2>=2.0.0,<3
 
 # Linting and formatting
 black>=23.0.0

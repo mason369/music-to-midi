@@ -6,11 +6,21 @@
 
 Music to MIDI is a local-first AI audio-to-MIDI converter for music producers, transcription hobbyists, piano learners, sampling workflows, and automatic music transcription (AMT) experiments. Drop in an `MP3`, `WAV`, `FLAC`, `OGG`, or `M4A` file, then generate editable MIDI from the PyQt6 desktop app, the Gradio Web interface, or the Google Colab notebook.
 
-The current product surface syncs seven processing modes: full-mix multi-instrument transcription, vocal/accompaniment WAV separation, six-stem WAV separation, and four dedicated piano routes through TransKun default V2, TransKun V2 Aug, Aria-AMT, or ByteDance Pedal. Both separation buttons deliver WAV files only; after separation, each track can explicitly use one of 13 MIDI routes in the same result workbench. The project is more than a one-note melody extractor: it brings multi-instrument AI music transcription, stem separation, piano-to-MIDI conversion, and BPM/tempo metadata into one workflow.
+The current product surface syncs seven processing modes: full-mix transcription, two separation workflows, and four dedicated piano routes.
 
-Every one of the seven modes and every per-track conversion uses Beat This `final0` as its only beat/downbeat detector. Competing marks are cleaned, missed musical positions are counted, and global BPM is fitted by least squares; meter is inferred independently and remains unknown rather than inventing 4/4. Constant recordings receive one tempo event, expressive recordings automatically receive a beat-level tempo map. A manual 4–400 BPM value remains an explicit project-tempo override. This is not quantization or note cleanup: event payloads and musical tick positions are preserved.
+Every one of the seven modes and every per-track conversion uses Beat This `final0` as its only beat/downbeat detector. Competing marks are cleaned, missed musical positions are counted, and global BPM is fitted by least squares; downbeats determine meter independently, and meter remains unknown rather than inventing 4/4 when the resulting grid is not reliable. Constant recordings receive one tempo event, expressive recordings automatically receive a beat-level tempo map. A manual 4–400 BPM value remains an explicit project-tempo override. This is not quantization or note cleanup: event payloads and musical tick positions are preserved.
 
 The Standard MIDI tempo, meter, and every non-tempo event are verified after publication. DAWs must enable tempo-map import. MuseScore 3/4 may classify an unquantized performance MIDI as human performance, run its own beat tracker, and replace the tempo shown on the notation page. That displayed value is produced by MuseScore's MIDI importer; the project does not quantize or move model notes merely to force a notation application to display the file tempo.
+
+## Standalone Web API And Browser Frontend
+
+The standalone Web API and browser frontend call the same `MusicToMidiPipeline` and expose the same seven modes as the desktop application. Start the pinned source runtime with:
+
+```powershell
+.\venv\Scripts\python.exe -m src.web_api --host 127.0.0.1 --port 8765
+```
+
+The browser submits multipart jobs, polls `GET /api/v1/jobs/<job-id>` for the real terminal state, and downloads MIDI or separated WAV artifacts through the returned `download_url` values. Failures remain explicit; no reduced-quality algorithm or silent fallback is used.
 
 ## Unified Interface Gallery
 
@@ -54,8 +64,9 @@ Use it when you want to turn a vocal line, piano recording, full mix, or separat
 | Interface | Modes | Backend Selection | Best For |
 |-----------|-------|-------------------|----------|
 | PyQt6 desktop | `SMART`, `VOCAL_SPLIT`, `SIX_STEM_SPLIT`, `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, `PIANO_BYTEDANCE_PEDAL` | `SMART` selects YourMT3+ / MIROS / MuScriptor; separated WAV tracks expose 13 routes; piano modes use their dedicated backend | Local GPU use, persistent output folders, and dedicated piano transcription |
+| Standalone Web API | Same seven modes as desktop | Multipart jobs, terminal-state polling, and artifact downloads; inference still runs through the same `MusicToMidiPipeline` | Custom Web clients, LAN service, or system integration |
 | Gradio Space | Same seven modes as desktop | MuScriptor instrument search/multi-select, hard decoding constraint, and real MIDI workbench are synchronized | Browser-based use or hosted demos |
-| Google Colab | Same seven modes as desktop | Same MuScriptor constraint and linked WAV/MIDI result workbench as Space | Temporary Colab GPU sessions |
+| Google Colab | Same seven modes as desktop | Same transcription and separation semantics as Space | Temporary Colab GPU sessions |
 
 ## Entry And Dependency Sync Status
 
@@ -625,7 +636,7 @@ Failed Space requests delete their request directory immediately. Successful out
 
 Windows directory-style portable build:
 
-> Current release status: the portable gate requires all 28 components to be either `VERIFIED` or explicitly `OWNER_ACCEPTED`. It currently records 24 verified and four owner-accepted components in `THIRD_PARTY_NOTICES.md`. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
+> Current release status: the portable gate requires all 36 components to be either `VERIFIED` or explicitly `OWNER_ACCEPTED`. It currently records 31 verified and five owner-accepted components in `THIRD_PARTY_NOTICES.md`. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_portable.ps1

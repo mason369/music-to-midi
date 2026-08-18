@@ -6,6 +6,16 @@
 
 一个基于 AI 的音频转 MIDI 工具，提供 PyQt6 桌面版、Gradio Web 版和 Google Colab 运行入口。当前版本同步七种处理模式：完整混音多乐器转写、人声/伴奏 WAV 分离、六声部 WAV 分离，以及 TransKun 默认 V2 / TransKun V2 Aug / Aria-AMT / ByteDance Pedal 四条钢琴专用转写流程。两个分离模式只先交付 WAV，用户随后在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。
 
+## 独立 Web API 与浏览器前端
+
+独立 Web API 与浏览器前端调用同一个 `MusicToMidiPipeline`，暴露与桌面版一致的七种模式。源码运行时可直接启动：
+
+```powershell
+.\venv\Scripts\python.exe -m src.web_api --host 127.0.0.1 --port 8765
+```
+
+浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取真实终态，并从响应中的 `download_url` 下载 MIDI 或分轨 WAV。失败会返回明确错误，不会用简化算法或静默回退伪装成功。
+
 ## 统一界面演示
 
 桌面版、Gradio Web 版和 Google Colab 采用同一套七模式工作流与操作语义。以下演示按“主界面 → 分离完成 → 逐轨处理 → MuScriptor 渐进式预览”的顺序展示核心流程。
@@ -43,6 +53,7 @@
 | 入口 | 处理模式 | 后端选择 | 适合场景 |
 |------|----------|----------|----------|
 | PyQt6 桌面版 | `SMART`、`VOCAL_SPLIT`、`SIX_STEM_SPLIT`、`PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT`、`PIANO_BYTEDANCE_PEDAL` | SMART 可选 YourMT3+ / MIROS / MuScriptor；分离结果逐轨选择 13 条路线；钢琴模式使用各自固定后端 | 本地长期使用、GPU 推理、批量输出文件、钢琴专用转写 |
+| 独立 Web API | 同桌面七种模式 | multipart 作业、终态轮询和制品下载；推理仍由同一 `MusicToMidiPipeline` 执行 | 自建 Web 前端、局域网服务或系统集成 |
 | Gradio Space | 同桌面七种模式 | 同步提供 MuScriptor 乐器硬约束与 13 条逐轨路线 | 浏览器中快速试用或部署 |
 | Google Colab | 同桌面七种模式 | 与 Space 同步 MuScriptor 约束和逐轨结果工作台 | 临时使用 Colab GPU |
 

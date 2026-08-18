@@ -129,7 +129,7 @@ def test_build_track_mixer_html_embeds_a_parseable_manifest(tmp_path):
     # Missing colors fall back to the shared palette's first color.
     assert manifest["tracks"][1]["color"] == mixer.TRACK_COLORS[0]
     for entry in manifest["tracks"]:
-        assert entry["url"].startswith("/file=")
+        assert entry["url"].startswith("/gradio_api/file=")
         assert entry["fileName"] == "song_vocals.wav"
 
 
@@ -152,10 +152,10 @@ def test_display_track_name_matches_the_desktop_mapping():
 
 def test_track_file_url_quotes_paths_like_gradio_file_routes():
     assert mixer.track_file_url("/tmp/request-abc/song_vocals.wav") == (
-        "/file=/tmp/request-abc/song_vocals.wav"
+        "/gradio_api/file=/tmp/request-abc/song_vocals.wav"
     )
     quoted = mixer.track_file_url("/tmp/request abc/音 轨.wav")
-    assert quoted.startswith("/file=/tmp/")
+    assert quoted.startswith("/gradio_api/file=/tmp/")
     assert " " not in quoted
     assert "音" not in quoted  # non-ASCII must be percent-encoded
 
