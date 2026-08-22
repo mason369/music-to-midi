@@ -151,6 +151,93 @@ jobs:
           pactl set-default-sink music_to_midi_ci
           pactl info
 
+      - name: 安装并验证虚拟音频输出 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+          $ProgressPreference = 'SilentlyContinue'
+
+          # The exact Pack43 archive and publisher identity are pinned to the
+          # same inputs exercised by current windows-2025 audio CI in cubeb and vox.
+          $driverUrl = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip'
+          $expectedZipHash = '66FD0A4D9F4896FF41632B7E3D53892C085C4561F53E8AE8D0F0BC10EEDD1CDD'
+          $expectedThumbprint = '00859AAC6A54B8C1B3C139DE67846E64E7B82DB2'
+          $workDir = Join-Path $env:RUNNER_TEMP "vbcable-$([Guid]::NewGuid().ToString('N'))"
+          $archivePath = Join-Path $workDir 'VBCABLE_Driver_Pack43.zip'
+          $extractDir = Join-Path $workDir 'driver'
+          New-Item -ItemType Directory -Path $workDir, $extractDir | Out-Null
+
+          Invoke-WebRequest -Uri $driverUrl -OutFile $archivePath -TimeoutSec 120
+          $actualZipHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($actualZipHash -ne $expectedZipHash) {
+            throw "VB-CABLE 压缩包 SHA-256 不匹配：预期 $expectedZipHash，实际 $actualZipHash"
+          }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir
+
+          $catalogPath = Join-Path $extractDir 'vbaudio_cable64_win7.cat'
+          $signature = Get-AuthenticodeSignature -LiteralPath $catalogPath
+          if ($signature.Status -ne 'Valid') {
+            throw "VB-CABLE 驱动目录签名无效：$($signature.Status)"
+          }
+          $certificate = $signature.SignerCertificate
+          if ($null -eq $certificate -or $certificate.Thumbprint -ne $expectedThumbprint) {
+            $actualThumbprint = if ($null -eq $certificate) { '<missing>' } else { $certificate.Thumbprint }
+            throw "VB-CABLE 发布者证书不匹配：预期 $expectedThumbprint，实际 $actualThumbprint"
+          }
+
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            'TrustedPublisher',
+            'LocalMachine'
+          )
+          $store.Open('ReadWrite')
+          try {
+            $store.Add($certificate)
+          } finally {
+            $store.Close()
+          }
+
+          foreach ($serviceName in @('AudioEndpointBuilder', 'Audiosrv')) {
+            Set-Service -Name $serviceName -StartupType Automatic
+            $service = Get-Service -Name $serviceName
+            if ($service.Status -ne 'Running') {
+              Start-Service -Name $serviceName
+            }
+          }
+
+          $setupPath = Join-Path $extractDir 'VBCABLE_Setup_x64.exe'
+          if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+            throw "VB-CABLE 安装程序不存在：$setupPath"
+          }
+          $setupArguments = @{
+            FilePath = $setupPath
+            ArgumentList = @('-i', '-h')
+            PassThru = $true
+            NoNewWindow = $true
+          }
+          $setup = Start-Process @setupArguments
+          if (-not $setup.WaitForExit(120000)) {
+            Stop-Process -Id $setup.Id -Force
+            throw 'VB-CABLE 安装程序在 120 秒内未结束'
+          }
+          if ($setup.ExitCode -ne 0) {
+            throw "VB-CABLE 安装失败，退出码：$($setup.ExitCode)"
+          }
+
+          Start-Sleep -Seconds 10
+          $renderEndpoints = @(
+            Get-PnpDevice -Class AudioEndpoint -PresentOnly |
+              Where-Object {
+                $_.FriendlyName -like '*CABLE Input*' -and $_.Status -eq 'OK'
+              }
+          )
+          if ($renderEndpoints.Count -eq 0) {
+            throw 'VB-CABLE 播放端点 CABLE Input 未出现或状态不是 OK'
+          }
+          $renderEndpoints | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId
+
       - name: 安装 FFmpeg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -270,6 +357,31 @@ jobs:
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
           pip install pyinstaller pytest pytest-timeout
+
+      - name: 校验 Qt 默认音频输出 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          @'
+          from PyQt6.QtCore import QCoreApplication
+          from PyQt6.QtMultimedia import QMediaDevices
+
+          app = QCoreApplication([])
+          outputs = QMediaDevices.audioOutputs()
+          default_output = QMediaDevices.defaultAudioOutput()
+          descriptions = [device.description() for device in outputs]
+          if default_output.isNull():
+              raise SystemExit('Qt 没有检测到默认音频输出设备')
+          if not any('CABLE Input' in description for description in descriptions):
+              raise SystemExit(f'Qt 没有检测到 VB-CABLE 播放端点：{descriptions}')
+          print(f'Qt 默认音频输出：{default_output.description()}')
+          print(f'Qt 可用音频输出：{descriptions}')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) {
+            throw "Qt 音频输出探针失败，退出码：$LASTEXITCODE"
+          }
 
       - name: 运行便携发布回归测试
         run: |

@@ -143,6 +143,33 @@ class CiWorkflowContractTests(unittest.TestCase):
             release_workflow.index("运行便携发布回归测试"),
         )
 
+    def test_windows_release_ci_provides_a_verified_qt_audio_output(self):
+        workflow = (WORKFLOWS_DIR / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip",
+            workflow,
+        )
+        self.assertIn(
+            "66FD0A4D9F4896FF41632B7E3D53892C085C4561F53E8AE8D0F0BC10EEDD1CDD",
+            workflow,
+        )
+        self.assertIn("00859AAC6A54B8C1B3C139DE67846E64E7B82DB2", workflow)
+        self.assertIn("Get-AuthenticodeSignature", workflow)
+        self.assertIn("Get-PnpDevice -Class AudioEndpoint -PresentOnly", workflow)
+        self.assertIn("*CABLE Input*", workflow)
+        self.assertIn("QMediaDevices.audioOutputs()", workflow)
+        self.assertIn("QMediaDevices.defaultAudioOutput()", workflow)
+        self.assertNotIn("choco install vb-cable", workflow.lower())
+        self.assertLess(
+            workflow.index("安装并验证虚拟音频输出 (Windows)"),
+            workflow.index("校验 Qt 默认音频输出 (Windows)"),
+        )
+        self.assertLess(
+            workflow.index("校验 Qt 默认音频输出 (Windows)"),
+            workflow.index("运行便携发布回归测试"),
+        )
+
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 
