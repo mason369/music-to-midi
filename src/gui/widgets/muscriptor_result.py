@@ -3634,6 +3634,22 @@ class MuscriptorResultWidget(QFrame):
             self._position_ms,
             int(round(self._playback_engine.position_seconds * 1000.0)),
         )
+        if self._preview_duration > 0:
+            preview_terminal_ms = int(round(self._preview_duration * 1000.0))
+            if self._position_ms >= preview_terminal_ms:
+                # Preview generations have an explicit playable frontier. Stop
+                # the synchronized sink at that frontier before replacing its
+                # buses; backend state notifications may trail buffered audio.
+                self._playback_engine.seek(self._preview_duration)
+                self._finish_playback_at(preview_terminal_ms)
+                self.playback_status_label.setText(
+                    t(
+                        "muscriptor_result.preview_complete",
+                        time=_format_clock(self._preview_duration),
+                    )
+                )
+                self._apply_deferred_after_playback_stop()
+                return
         if not self._playback_engine.is_playing:
             self._finish_playback_at(self.playback_slider.maximum())
             self._apply_deferred_after_playback_stop()
