@@ -377,8 +377,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         package_init = (REPO_ROOT / "src" / "__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('version = "1.6.1"', pyproject)
-        self.assertIn('__version__ = "1.6.1"', package_init)
+        self.assertIn('version = "1.6.0"', pyproject)
+        self.assertIn('__version__ = "1.6.0"', package_init)
         self.assertNotIn("Operating System :: OS Independent", pyproject)
         self.assertIn("Operating System :: Microsoft :: Windows", pyproject)
         self.assertIn("Operating System :: POSIX :: Linux", pyproject)

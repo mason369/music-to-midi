@@ -32,7 +32,7 @@ x-backend-gpu: &backend-gpu
 
 services:
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.1}
+    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.0}
     build: *backend-build
     init: true
     restart: unless-stopped
@@ -76,7 +76,7 @@ services:
 
   model-init:
     profiles: ["tools"]
-    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.1}
+    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.0}
     build: *backend-build
     command: ["model-init"]
     init: true
@@ -99,7 +99,7 @@ services:
     deploy: *backend-gpu
 
   gateway:
-    image: ${GATEWAY_IMAGE:-ghcr.io/mason369/music-to-midi-gateway:v1.6.1}
+    image: ${GATEWAY_IMAGE:-ghcr.io/mason369/music-to-midi-gateway:v1.6.0}
     build:
       context: .
       dockerfile: docker/gateway.Dockerfile
