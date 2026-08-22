@@ -18,7 +18,9 @@ COPY docker/Caddyfile /etc/caddy/Caddyfile
 COPY docker/Caddyfile.selfhost /etc/caddy/Caddyfile.selfhost
 COPY docker/gateway-entrypoint.sh /usr/local/bin/music-to-midi-gateway
 
-RUN caddy fmt --overwrite /etc/caddy/Caddyfile \
+RUN setcap -r /usr/bin/caddy \
+    && test -z "$(getcap /usr/bin/caddy)" \
+    && caddy fmt --overwrite /etc/caddy/Caddyfile \
     && caddy fmt --overwrite /etc/caddy/Caddyfile.selfhost \
     && PUBLIC_ADDRESS=container-build.example \
        PUBLIC_ORIGIN=https://container-build.example \

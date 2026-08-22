@@ -239,6 +239,8 @@ def test_selfhost_gateway_is_http_only_same_origin_and_not_publicly_bound():
     entrypoint = _read("docker/gateway-entrypoint.sh")
 
     assert "COPY docker/Caddyfile.selfhost /etc/caddy/Caddyfile.selfhost" in dockerfile
+    assert "setcap -r /usr/bin/caddy" in dockerfile
+    assert 'test -z "$(getcap /usr/bin/caddy)"' in dockerfile
     assert "auto_https off" in caddyfile
     assert ":8080" in caddyfile
     assert '"frontend_url":"http://{http.request.hostport}"' in caddyfile
