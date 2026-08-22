@@ -262,6 +262,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn('"${WINDOWS_SHARED_NAME}-Portable.wim.001"', workflow)
         self.assertIn("HARDLINK_PROBE_REL", workflow)
         self.assertIn("os.path.samefile", workflow)
+        self.assertEqual(
+            workflow.count(
+                'HARDLINK_PROBE_REL="_internal/models/audio-separator/BS-Rofo-SW-Fixed.yaml"'
+            ),
+            3,
+        )
+        self.assertNotIn("download_checks.json", workflow)
         self.assertIn('"${WINDOWS_FRONTEND_NAME}-Portable.zip"', workflow)
         self.assertNotIn('for WINDOWS_NAME in "${WINDOWS_NAMES[@]}"', workflow)
 

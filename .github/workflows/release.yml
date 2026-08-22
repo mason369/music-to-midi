@@ -697,7 +697,7 @@ jobs:
           test -d "$BACKEND_ROOT/_internal"
           test -d "$FRONTEND_ROOT/_internal"
 
-          HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+          HARDLINK_PROBE_REL="_internal/models/audio-separator/BS-Rofo-SW-Fixed.yaml"
           python - \
             "$APP_ROOT/$HARDLINK_PROBE_REL" \
             "$BACKEND_ROOT/$HARDLINK_PROBE_REL" <<'PY'
@@ -1280,7 +1280,7 @@ jobs:
             # App 与 WebBackend 仍是可以单独复制的完整目录；同机完整包通过
             # WIM hard-link metadata 只保存一次相同模型/运行时文件。普通 7z
             # 格式不支持保存 hard links，不能用 solid compression 冒充复用。
-            HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+            HARDLINK_PROBE_REL="_internal/models/audio-separator/BS-Rofo-SW-Fixed.yaml"
             APP_PROBE="dist/${WINDOWS_APP_NAME}/${HARDLINK_PROBE_REL}"
             BACKEND_PROBE="dist/${WINDOWS_BACKEND_NAME}/${HARDLINK_PROBE_REL}"
             python - "$APP_PROBE" "$BACKEND_PROBE" <<'PY'
@@ -1358,7 +1358,7 @@ jobs:
               echo "${LINUX_ROLE_NAME} 未压缩目录大小: $(( DIR_SIZE / 1048576 )) MB"
             done
 
-            HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+            HARDLINK_PROBE_REL="_internal/models/audio-separator/BS-Rofo-SW-Fixed.yaml"
             python - \
               "dist/${LINUX_APP_NAME}/${HARDLINK_PROBE_REL}" \
               "dist/${LINUX_BACKEND_NAME}/${HARDLINK_PROBE_REL}" <<'PY'
