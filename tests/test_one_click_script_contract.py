@@ -423,7 +423,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertIn("mido>=1.3.0,<2", requirements)
         self.assertIn("soundfile>=0.14.0,<1", requirements)
         self.assertIn("fastapi==0.136.3", requirements)
-        self.assertIn("starlette==0.52.1", requirements)
+        self.assertIn("starlette==1.6.0", requirements)
         self.assertIn("httpx>=0.28.1,<1", requirements)
         self.assertIn("python-multipart>=0.0.29,<1", requirements)
         self.assertIn("uvicorn[standard]>=0.48.0,<1", requirements)

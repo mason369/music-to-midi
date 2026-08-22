@@ -81,7 +81,7 @@ psutil>=5.9.0,<8
 # 单独安装，避免其依赖解析器改写固定的 Torch 运行时；这里显式满足
 # v0.3.0 的其余官方运行依赖，版本不得低于上游元数据要求。
 fastapi==0.136.3
-starlette==0.52.1
+starlette==1.6.0
 pydantic==2.10.6
 pydantic-core==2.27.2
 httpx>=0.28.1,<1
