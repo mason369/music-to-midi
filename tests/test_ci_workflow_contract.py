@@ -167,9 +167,10 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("VBAudioVACWDM", workflow)
         self.assertIn("Get-AuthenticodeSignature", workflow)
         self.assertIn("Get-PnpDevice -Class AudioEndpoint -PresentOnly", workflow)
-        self.assertIn("*CABLE Input*", workflow)
+        self.assertIn("Speakers (VB-Audio Virtual Cable)", workflow)
         self.assertIn("QMediaDevices.audioOutputs()", workflow)
         self.assertIn("QMediaDevices.defaultAudioOutput()", workflow)
+        self.assertIn("'VB-Audio Virtual Cable' not in default_output.description()", workflow)
         self.assertNotIn("choco install vb-cable", workflow.lower())
         self.assertNotIn("VBCABLE_Setup_x64.exe", workflow)
         self.assertLess(

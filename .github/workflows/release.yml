@@ -229,10 +229,10 @@ jobs:
           $audioEndpoints = @(Get-PnpDevice -Class AudioEndpoint -PresentOnly)
           $audioEndpoints | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId
           $renderEndpoints = @($audioEndpoints | Where-Object {
-              $_.FriendlyName -like '*CABLE Input*' -and $_.Status -eq 'OK'
+              $_.FriendlyName -eq 'Speakers (VB-Audio Virtual Cable)' -and $_.Status -eq 'OK'
             })
           if ($renderEndpoints.Count -eq 0) {
-            throw 'VB-CABLE 播放端点 CABLE Input 未出现或状态不是 OK'
+            throw 'VB-CABLE 播放端点 Speakers (VB-Audio Virtual Cable) 未出现或状态不是 OK'
           }
 
       - name: 安装 FFmpeg (Windows)
@@ -371,8 +371,10 @@ jobs:
           descriptions = [device.description() for device in outputs]
           if default_output.isNull():
               raise SystemExit('Qt 没有检测到默认音频输出设备')
-          if not any('CABLE Input' in description for description in descriptions):
+          if not any('VB-Audio Virtual Cable' in description for description in descriptions):
               raise SystemExit(f'Qt 没有检测到 VB-CABLE 播放端点：{descriptions}')
+          if 'VB-Audio Virtual Cable' not in default_output.description():
+              raise SystemExit(f'Qt 默认输出不是 VB-CABLE：{default_output.description()}')
           print(f'Qt 默认音频输出：{default_output.description()}')
           print(f'Qt 可用音频输出：{descriptions}')
           '@ | python -
