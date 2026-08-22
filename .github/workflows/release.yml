@@ -501,10 +501,14 @@ jobs:
         if: runner.os == 'Windows'
         run: pwsh -ExecutionPolicy Bypass -File .\build_web_executables.ps1
 
-      - name: 使用 PyInstaller 构建 (Linux)
+      - name: 构建桌面、独立后端与独立 Web 前端 (Linux)
         if: runner.os == 'Linux'
         run: |
           pyinstaller MusicToMidi.spec
+          pyinstaller --noconfirm \
+            --workpath build/pyinstaller-web-frontend \
+            --distpath dist \
+            MusicToMidiFrontend.spec
           python - <<'PY'
           from pathlib import Path
 
@@ -533,6 +537,60 @@ jobs:
           print("Packaged MuScriptor Small/Medium/Large assets verified")
           PY
           cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt dist/MusicToMidi/
+
+          COMBINED_ROOT="$(pwd)/dist/MusicToMidi"
+          APP_ROOT="$(pwd)/dist/MusicToMidi-App"
+          BACKEND_ROOT="$(pwd)/dist/MusicToMidi-WebBackend"
+          FRONTEND_SOURCE="$(pwd)/dist/MusicToMidiFrontend"
+          FRONTEND_ROOT="$(pwd)/dist/MusicToMidi-WebFrontend"
+          rm -rf "$APP_ROOT" "$BACKEND_ROOT" "$FRONTEND_ROOT"
+          test -d "$COMBINED_ROOT"
+          test -d "$FRONTEND_SOURCE"
+
+          # Publish three independently movable Linux roles without duplicating
+          # the large model/runtime tree on the runner. GNU cp preserves
+          # symlinks and hard-links every regular file; GNU tar later preserves
+          # those hard links in the unified archive.
+          cp -al "$COMBINED_ROOT" "$APP_ROOT"
+          cp -al "$COMBINED_ROOT" "$BACKEND_ROOT"
+          touch "$APP_ROOT/.incomplete" "$BACKEND_ROOT/.incomplete"
+          rm -f "$APP_ROOT/MusicToMidiBackend"
+          rm -f "$BACKEND_ROOT/MusicToMidi"
+          mv "$FRONTEND_SOURCE" "$FRONTEND_ROOT"
+
+          test -x "$APP_ROOT/MusicToMidi"
+          test ! -e "$APP_ROOT/MusicToMidiBackend"
+          test -x "$BACKEND_ROOT/MusicToMidiBackend"
+          test ! -e "$BACKEND_ROOT/MusicToMidi"
+          test -x "$FRONTEND_ROOT/MusicToMidiFrontend"
+          test -d "$APP_ROOT/_internal"
+          test -d "$BACKEND_ROOT/_internal"
+          test -d "$FRONTEND_ROOT/_internal"
+
+          HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+          python - \
+            "$APP_ROOT/$HARDLINK_PROBE_REL" \
+            "$BACKEND_ROOT/$HARDLINK_PROBE_REL" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          app_path, backend_path = map(Path, sys.argv[1:])
+          for path in (app_path, backend_path):
+              if not path.is_file() or path.stat().st_size <= 0:
+                  raise SystemExit(f"shared Linux portable probe is missing or empty: {path}")
+          if not os.path.samefile(app_path, backend_path):
+              raise SystemExit(
+                  "Linux App and WebBackend shared asset is not a hard link: "
+                  f"{app_path} != {backend_path}"
+              )
+          print(f"Linux input hard-link probe verified: {app_path} == {backend_path}")
+          PY
+
+          rm -f "$APP_ROOT/.incomplete" "$BACKEND_ROOT/.incomplete"
+          test ! -e "$APP_ROOT/.incomplete"
+          test ! -e "$BACKEND_ROOT/.incomplete"
+          rm -rf "$COMBINED_ROOT"
 
       - name: 烟测便携产物 (Windows)
         if: runner.os == 'Windows'
@@ -693,10 +751,19 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 20
         run: |
-          SMOKE_DIR="$(pwd)/dist/MusicToMidi"
-          SMOKE_EXE="$SMOKE_DIR/MusicToMidi"
+          APP_SMOKE_DIR="$(pwd)/dist/MusicToMidi-App"
+          BACKEND_SMOKE_DIR="$(pwd)/dist/MusicToMidi-WebBackend"
+          FRONTEND_SMOKE_DIR="$(pwd)/dist/MusicToMidi-WebFrontend"
+          SMOKE_EXE="$APP_SMOKE_DIR/MusicToMidi"
+          BACKEND_EXE="$BACKEND_SMOKE_DIR/MusicToMidiBackend"
+          FRONTEND_EXE="$FRONTEND_SMOKE_DIR/MusicToMidiFrontend"
+          RUNTIME_ROOTS=(
+            "$APP_SMOKE_DIR/runtime"
+            "$BACKEND_SMOKE_DIR/runtime"
+            "$FRONTEND_SMOKE_DIR/runtime"
+          )
           export QT_QPA_PLATFORM=offscreen
-          chmod +x "$SMOKE_EXE"
+          chmod +x "$SMOKE_EXE" "$BACKEND_EXE" "$FRONTEND_EXE"
           SELF_TEST_TIMEOUT_SECONDS=900
           SELF_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-self-test-output.log"
           MIROS_WORKER_TIMEOUT_SECONDS=120
@@ -706,13 +773,17 @@ jobs:
               echo "=== Portable self-test output: $SELF_TEST_OUTPUT ===" >&2
               tail -n 200 "$SELF_TEST_OUTPUT" >&2 || true
             fi
-            local log_dir="$SMOKE_DIR/runtime/logs"
-            if [ -d "$log_dir" ]; then
-              echo "=== Portable runtime logs: $log_dir ===" >&2
-              find "$log_dir" -maxdepth 1 -type f -print -exec tail -n 200 {} \; >&2 || true
-            else
-              echo "No portable runtime log directory found: $log_dir" >&2
-            fi
+            local runtime_root
+            local log_dir
+            for runtime_root in "${RUNTIME_ROOTS[@]}"; do
+              log_dir="$runtime_root/logs"
+              if [ -d "$log_dir" ]; then
+                echo "=== Portable runtime logs: $log_dir ===" >&2
+                find "$log_dir" -maxdepth 1 -type f -print -exec tail -n 200 {} \; >&2 || true
+              else
+                echo "No portable runtime log directory found: $log_dir" >&2
+              fi
+            done
           }
           dump_miros_worker_logs() {
             if [ -f "$MIROS_WORKER_OUTPUT" ]; then
@@ -739,7 +810,7 @@ jobs:
             dump_linux_portable_logs
             exit "$SELF_TEST_EXIT"
           fi
-          if ! grep -R "便携包自检通过" "$SMOKE_DIR/runtime/logs" >/dev/null 2>&1; then
+          if ! grep -R "便携包自检通过" "$APP_SMOKE_DIR/runtime/logs" >/dev/null 2>&1; then
             echo "Portable self-test did not write the success marker to runtime logs" >&2
             dump_linux_portable_logs
             exit 1
@@ -747,7 +818,7 @@ jobs:
           STATUS_JSON="${RUNNER_TEMP:-/tmp}/miros-worker-missing-input-smoke.json"
           PROBE_MIDI="${RUNNER_TEMP:-/tmp}/miros-worker-missing-input-smoke.mid"
           rm -f "$STATUS_JSON" "$PROBE_MIDI"
-          pushd "$SMOKE_DIR/_internal/external/ai4m-miros"
+          pushd "$APP_SMOKE_DIR/_internal/external/ai4m-miros"
           set +e
           timeout --signal=TERM --kill-after=30s "${MIROS_WORKER_TIMEOUT_SECONDS}s" "$SMOKE_EXE" \
             --miros-worker \
@@ -777,7 +848,153 @@ jobs:
             dump_miros_worker_logs
             exit 1
           fi
-          rm -rf "$SMOKE_DIR/runtime"
+          BACKEND_CONFIG="${RUNNER_TEMP:-/tmp}/music-to-midi-backend-smoke.json"
+          FRONTEND_CONFIG="${RUNNER_TEMP:-/tmp}/music-to-midi-frontend-smoke.json"
+          WEB_JOB_DIR="${RUNNER_TEMP:-/tmp}/music-to-midi-web-jobs"
+          BACKEND_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-backend-smoke.log"
+          FRONTEND_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-frontend-smoke.log"
+          rm -rf "$WEB_JOB_DIR"
+          rm -f "$BACKEND_CONFIG" "$FRONTEND_CONFIG" "$BACKEND_OUTPUT" "$FRONTEND_OUTPUT"
+          cat > "$BACKEND_CONFIG" <<'JSON'
+          {
+            "host": "127.0.0.1",
+            "port": 18765,
+            "data_dir": "/tmp/music-to-midi-web-jobs",
+            "allowed_origins": ["http://127.0.0.1:15173"],
+            "log_level": "info",
+            "retention_days": 1,
+            "retention_max_jobs": 10
+          }
+          JSON
+          python - "$BACKEND_CONFIG" "$WEB_JOB_DIR" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          config_path = Path(sys.argv[1])
+          payload = json.loads(config_path.read_text(encoding="utf-8"))
+          payload["data_dir"] = str(Path(sys.argv[2]).resolve())
+          config_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+          PY
+          cat > "$FRONTEND_CONFIG" <<'JSON'
+          {
+            "host": "127.0.0.1",
+            "port": 15173,
+            "public_host": "127.0.0.1",
+            "backend_url": "http://127.0.0.1:18765",
+            "open_app_window": false,
+            "edge_path": ""
+          }
+          JSON
+
+          backend_pid=""
+          frontend_pid=""
+          cleanup_linux_web_smoke() {
+            local label
+            local pid
+            local status
+            local label_pid
+            for label_pid in "frontend:$frontend_pid" "backend:$backend_pid"; do
+              label="${label_pid%%:*}"
+              pid="${label_pid#*:}"
+              if [ -z "$pid" ]; then
+                continue
+              fi
+              if kill -0 "$pid" 2>/dev/null; then
+                echo "Stopping packaged Linux ${label} smoke process: ${pid}"
+                kill "$pid"
+              fi
+              if wait "$pid" 2>/dev/null; then
+                echo "Packaged Linux ${label} smoke process exited cleanly"
+              else
+                status=$?
+                echo "Packaged Linux ${label} smoke process exit status after cleanup: ${status}"
+              fi
+            done
+          }
+          trap cleanup_linux_web_smoke EXIT
+          "$BACKEND_EXE" --config "$BACKEND_CONFIG" >"$BACKEND_OUTPUT" 2>&1 &
+          backend_pid=$!
+          "$FRONTEND_EXE" --config "$FRONTEND_CONFIG" --no-window >"$FRONTEND_OUTPUT" 2>&1 &
+          frontend_pid=$!
+
+          if ! BACKEND_PID="$backend_pid" FRONTEND_PID="$frontend_pid" python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          processes = {
+              "backend": int(os.environ["BACKEND_PID"]),
+              "frontend": int(os.environ["FRONTEND_PID"]),
+          }
+
+          def require_processes_alive() -> None:
+              for label, pid in processes.items():
+                  try:
+                      os.kill(pid, 0)
+                  except ProcessLookupError as exc:
+                      raise SystemExit(
+                          f"Packaged Linux {label} exited during web smoke (pid={pid})"
+                      ) from exc
+
+          health = None
+          runtime_config = None
+          frontend_headers = None
+          last_error = None
+          for _attempt in range(60):
+              require_processes_alive()
+              try:
+                  with urllib.request.urlopen(
+                      "http://127.0.0.1:18765/api/v1/health", timeout=2
+                  ) as response:
+                      health = json.load(response)
+                  with urllib.request.urlopen(
+                      "http://127.0.0.1:15173/runtime-config.json", timeout=2
+                  ) as response:
+                      runtime_config = json.load(response)
+                  with urllib.request.urlopen(
+                      "http://127.0.0.1:15173/", timeout=2
+                  ) as response:
+                      response.read(1)
+                      frontend_headers = response.headers
+                  break
+              except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+                  last_error = exc
+                  time.sleep(1)
+          else:
+              raise SystemExit(
+                  "Packaged Linux web services did not become healthy within 60 seconds: "
+                  f"{last_error}"
+              )
+
+          if health.get("status") != "ok" or health.get("api_version") != "2.0":
+              raise SystemExit(f"Incompatible Linux backend health contract: {health}")
+          if (
+              runtime_config.get("expected_api_version") != "2.0"
+              or runtime_config.get("backend_url") != "http://127.0.0.1:18765"
+          ):
+              raise SystemExit(
+                  f"Incompatible Linux frontend runtime contract: {runtime_config}"
+              )
+          csp = frontend_headers.get("Content-Security-Policy", "")
+          if "connect-src 'self' http://127.0.0.1:18765" not in csp:
+              raise SystemExit(f"Linux frontend CSP does not authorize backend: {csp}")
+          print("Packaged Linux App, WebBackend, and WebFrontend smoke passed")
+          PY
+          then
+            echo "=== Packaged Linux backend output ===" >&2
+            tail -n 200 "$BACKEND_OUTPUT" >&2 || true
+            echo "=== Packaged Linux frontend output ===" >&2
+            tail -n 200 "$FRONTEND_OUTPUT" >&2 || true
+            dump_linux_portable_logs
+            exit 1
+          fi
+
+          cleanup_linux_web_smoke
+          trap - EXIT
+          rm -rf "${RUNTIME_ROOTS[@]}" "$WEB_JOB_DIR"
 
       - name: 创建便携包 (Windows)
         if: runner.os == 'Windows'
@@ -828,28 +1045,35 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-App"
-          # Linux 当前只发布桌面 App。
-          mv dist/MusicToMidi "dist/${NAME}"
-          cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${NAME}/"
+          SHARED_NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          APP_NAME="${SHARED_NAME}-App"
+          BACKEND_NAME="${SHARED_NAME}-WebBackend"
+          FRONTEND_NAME="MusicToMidi-${{ matrix.platform }}-WebFrontend"
+          mv dist/MusicToMidi-App "dist/${APP_NAME}"
+          mv dist/MusicToMidi-WebBackend "dist/${BACKEND_NAME}"
+          mv dist/MusicToMidi-WebFrontend "dist/${FRONTEND_NAME}"
 
-          VARIANT_NOTE="GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
-          需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版"
+          for name in "$APP_NAME" "$BACKEND_NAME"; do
+            cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${name}/"
+          done
+          cp LICENSE THIRD_PARTY_NOTICES.md "dist/${FRONTEND_NAME}/"
+          chmod +x \
+            "dist/${APP_NAME}/MusicToMidi" \
+            "dist/${BACKEND_NAME}/MusicToMidiBackend" \
+            "dist/${FRONTEND_NAME}/MusicToMidiFrontend"
 
-          if [ "${{ matrix.platform }}" = "Windows" ]; then
-            EXE="MusicToMidi.exe"
-          else
-            EXE="MusicToMidi"
-            chmod +x "dist/${NAME}/${EXE}"
-          fi
+          test ! -e "dist/${APP_NAME}/MusicToMidiBackend"
+          test ! -e "dist/${BACKEND_NAME}/MusicToMidi"
+          test -x "dist/${FRONTEND_NAME}/MusicToMidiFrontend"
 
-          cat > "dist/${NAME}/使用说明.txt" << HEREDOC
-          音乐转MIDI转换器 ${{ matrix.platform }} 便携版（${{ matrix.variant }}）
+          cat > "dist/${APP_NAME}/使用说明.txt" <<'HEREDOC'
+          音乐转 MIDI 转换器 Linux 桌面 App（CUDA 12.8）
 
           使用方法：
-            运行 ${EXE} 即可启动（AI 模型已内置，无需额外下载）
+            运行 ./MusicToMidi 即可启动。完整模型、FluidSynth 和 FFmpeg 已内置，无需安装 Python 或 CUDA Toolkit。
 
-          ${VARIANT_NOTE}
+          本目录是可独立复制的完整桌面 App；WebBackend 与 WebFrontend 位于统一 Linux GPU 包的同级独立目录。
+          需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡和驱动；不兼容时会显式报错，不生成 CPU 版。
 
           支持格式：MP3, WAV, FLAC, OGG, M4A 等
           输出格式：多轨道 MIDI（128 种 GM 乐器）
@@ -874,10 +1098,25 @@ jobs:
           无需安装 Python，解压即用
           HEREDOC
 
+          cat > "dist/${BACKEND_NAME}/使用说明.txt" <<'HEREDOC'
+          音乐转 MIDI 转换器 Linux Web 后端（CUDA 12.8）
+
+          ./MusicToMidiBackend 是独立处理服务入口。首次运行会在可写运行目录生成配置；局域网使用时，请把 host、端口和 allowed_origins 设置为真实地址。
+          本目录内置完整模型、CUDA 运行时、FluidSynth 与 FFmpeg，可以脱离桌面 App 目录单独复制和运行。
+          Web 服务不内置认证、授权或 TLS，只适用于受信任局域网；公网部署请使用同版本 Docker 自托管发行。
+          HEREDOC
+
+          cat > "dist/${FRONTEND_NAME}/使用说明.txt" <<'HEREDOC'
+          音乐转 MIDI 转换器 Linux Web 前端
+
+          Web 启动顺序为：GPU 电脑上的 WebBackend 在前，./MusicToMidiFrontend 在后。
+          首次运行会生成前端配置；局域网使用时把 backend_url 改为后端电脑的实际地址。
+          本目录不含模型、CUDA 或 Python，可单独复制到同一受信任局域网内的 Linux 电脑。
+          HEREDOC
+
       - name: 压缩便携包
         shell: bash
         run: |
-          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-App"
           SEVENZ_LOW_MEM_ARGS=(-t7z -mx=5 -md=64m -mmt=on)
           echo "压缩前磁盘空间:"
           df -h .
@@ -971,9 +1210,85 @@ jobs:
             cd dist && 7z a -tzip "../${WINDOWS_FRONTEND_NAME}-Portable.zip" "${WINDOWS_FRONTEND_NAME}" && cd ..
             7z t "${WINDOWS_FRONTEND_NAME}-Portable.zip"
           else
-            # Linux GPU 包较大，直接流式写入分卷，避免先生成一个完整 tar.gz
-            # 再 split 造成额外磁盘峰值。
-            tar -czf - -C dist "${NAME}" | split -b 1900M - "${NAME}-Portable.tar.gz.part"
+            LINUX_SHARED_NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+            LINUX_APP_NAME="${LINUX_SHARED_NAME}-App"
+            LINUX_BACKEND_NAME="${LINUX_SHARED_NAME}-WebBackend"
+            LINUX_FRONTEND_NAME="MusicToMidi-${{ matrix.platform }}-WebFrontend"
+            LINUX_ROLE_NAMES=(
+              "${LINUX_APP_NAME}"
+              "${LINUX_BACKEND_NAME}"
+              "${LINUX_FRONTEND_NAME}"
+            )
+            for LINUX_ROLE_NAME in "${LINUX_ROLE_NAMES[@]}"; do
+              test -d "dist/${LINUX_ROLE_NAME}" || {
+                echo "::error::Linux portable role directory is missing: dist/${LINUX_ROLE_NAME}"
+                exit 1
+              }
+              DIR_SIZE=$(du -sb "dist/${LINUX_ROLE_NAME}" | cut -f1)
+              echo "${LINUX_ROLE_NAME} 未压缩目录大小: $(( DIR_SIZE / 1048576 )) MB"
+            done
+
+            HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+            python - \
+              "dist/${LINUX_APP_NAME}/${HARDLINK_PROBE_REL}" \
+              "dist/${LINUX_BACKEND_NAME}/${HARDLINK_PROBE_REL}" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          app_path, backend_path = map(Path, sys.argv[1:])
+          for path in (app_path, backend_path):
+              if not path.is_file() or path.stat().st_size <= 0:
+                  raise SystemExit(f"shared Linux portable probe is missing or empty: {path}")
+          if not os.path.samefile(app_path, backend_path):
+              raise SystemExit(
+                  "Linux App and WebBackend shared asset is not a hard link: "
+                  f"{app_path} != {backend_path}"
+              )
+          print(f"Linux input hard-link probe verified: {app_path} == {backend_path}")
+          PY
+
+            # Stream the three independently movable roles into one split archive.
+            # GNU tar records the App/WebBackend hard links instead of storing the
+            # model/runtime tree twice.
+            tar -czf - -C dist "${LINUX_ROLE_NAMES[@]}" \
+              | split -b 1900M - "${LINUX_SHARED_NAME}-Portable.tar.gz.part"
+            test -s "${LINUX_SHARED_NAME}-Portable.tar.gz.partaa"
+
+            LINUX_ARCHIVE_PROBE_ROOT="${RUNNER_TEMP:-$PWD/.tmp}/music-to-midi-linux-archive-probe"
+            rm -rf "$LINUX_ARCHIVE_PROBE_ROOT"
+            mkdir -p "$LINUX_ARCHIVE_PROBE_ROOT"
+            cat "${LINUX_SHARED_NAME}-Portable.tar.gz.part"* \
+              | tar -xzf - -C "$LINUX_ARCHIVE_PROBE_ROOT" \
+                "${LINUX_APP_NAME}/${HARDLINK_PROBE_REL}" \
+                "${LINUX_BACKEND_NAME}/${HARDLINK_PROBE_REL}" \
+                "${LINUX_FRONTEND_NAME}/MusicToMidiFrontend"
+            python - \
+              "$LINUX_ARCHIVE_PROBE_ROOT/${LINUX_APP_NAME}/${HARDLINK_PROBE_REL}" \
+              "$LINUX_ARCHIVE_PROBE_ROOT/${LINUX_BACKEND_NAME}/${HARDLINK_PROBE_REL}" \
+              "$LINUX_ARCHIVE_PROBE_ROOT/${LINUX_FRONTEND_NAME}/MusicToMidiFrontend" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          app_path, backend_path, frontend_path = map(Path, sys.argv[1:])
+          if not app_path.is_file() or not backend_path.is_file():
+              raise SystemExit("Linux archive probe did not extract both shared role files")
+          if not os.path.samefile(app_path, backend_path):
+              raise SystemExit(
+                  "Linux archive extraction did not restore the App/WebBackend hard link: "
+                  f"{app_path} != {backend_path}"
+              )
+          if not frontend_path.is_file() or frontend_path.stat().st_size <= 0:
+              raise SystemExit("Linux archive probe did not extract a valid WebFrontend executable")
+          print("Linux unified archive restored App, WebBackend, and WebFrontend contracts")
+          PY
+            rm -rf "$LINUX_ARCHIVE_PROBE_ROOT"
+
+            # Also publish the inference-free frontend as a small standalone copy.
+            tar -czf "${LINUX_FRONTEND_NAME}-Portable.tar.gz" \
+              -C dist "${LINUX_FRONTEND_NAME}"
+            tar -tzf "${LINUX_FRONTEND_NAME}-Portable.tar.gz" >/dev/null
           fi
 
       - name: 上传构建产物
@@ -1109,7 +1424,8 @@ jobs:
 
           #### 平台、文档与发布
           - 桌面版与独立 Web 前端同步全部处理和逐轨工作台能力；Hugging Face Space 和 Colab 同步七种处理模式、三种速度方案、默认官方处理链路、可选分段边界连续性修复链路、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
-          - Windows 完整包保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的 EXE 和可单独复制的运行环境，同机解压到 NTFS 时相同模型/运行时文件通过 WIM 硬链接只占一份物理空间。另发不含模型的轻量 WebFrontend ZIP，供同一局域网的其他电脑单独使用。发布烟测会从三个独立目录真实启动并核对 API 2.0、运行时配置和 CSP。Web 两端不内置认证、授权或 TLS，适用范围为受信任局域网。
+          - Windows 与 Linux GPU 完整包都保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的入口和可单独复制的完整运行环境。Windows 在 NTFS 上通过 WIM 硬链接复用相同模型/运行时文件，Linux 通过 tar hard-link metadata 复用；两端另发不含模型的轻量 WebFrontend 包。
+          - Windows 与 Linux 发布烟测都会从三个独立目录真实启动，核对 API 2.0、运行时配置和 CSP；Linux 还会从最终分卷归档抽取三个角色并验证 App/WebBackend 硬链接确实被还原。Web 两端不内置认证、授权或 TLS，只适用于受信任局域网。
           - Issue #9 同步提供完整 Docker 自托管发行：无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型由使用者显式选择并一次性初始化，常驻推理容器离线运行；默认只绑定本机，无需域名、ACME 邮箱或 SSH 凭据。
           - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
@@ -1122,7 +1438,8 @@ jobs:
           |------|------|----------|------|
           | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | 桌面 App + Web 推理后端 / CUDA 12.8 | 完整包；解压后仍是 App、WebBackend、WebFrontend 三个独立目录，NTFS 上复用相同模型/运行时文件 |
           | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web 前端 | 可单独复制到局域网其他电脑，不含模型、CUDA 或 Python |
-          | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | 桌面 App / CUDA 12.8 | Debian、Ubuntu 或 WSL2 |
+          | \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` | Linux | 桌面 App + Web 推理后端 / CUDA 12.8 | 完整包；解压后是 App、WebBackend、WebFrontend 三个独立目录，并保留相同模型/运行时文件的硬链接 |
+          | \`MusicToMidi-Linux-WebFrontend-Portable.tar.gz\` | Linux | Web 前端 | 可单独复制到局域网其他 Linux 电脑，不含模型、CUDA 或 Python |
           | \`MusicToMidi-Docker-${TAG}.zip\` / \`.tar.gz\` | Linux 容器 / NVIDIA CUDA 12.8 | Web + API 自托管 | digest 固定 Compose、管理脚本和校验清单；模型按所选路线另行初始化 |
 
           ### 使用方法
@@ -1131,7 +1448,9 @@ jobs:
           3. 三个目录可以分别复制到其他电脑；复制 App 或 WebBackend 目录时，Windows 会把其中的硬链接内容复制成完整独立文件，不依赖原目录
           4. 桌面 App：从 App 目录运行 \`MusicToMidi.exe\`；Web：先在 GPU 电脑从 WebBackend 目录运行 \`MusicToMidiBackend.exe\`，再在任意受信任局域网电脑运行 \`MusicToMidiFrontend.exe\`
           5. 局域网 Web 按配置文件填写实际前后端地址与 CORS 来源；完整 WIM 也支持只选择 App 或 WebBackend 目录解压，7-Zip 会为该目录还原所需完整文件
-          6. Docker：校验同版本 \`MusicToMidi-Docker-SHA256SUMS-${TAG}.txt\` 后解压发行包，按需修改 \`.env\` 的模型配置，再运行 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本；完整说明见包内 \`README.md\`
+          6. Linux：下载 \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` 的全部分卷，按文件名顺序合并后用 \`tar -xzf\` 解压；会得到 App、WebBackend、WebFrontend 三个同级独立目录
+          7. Linux 只部署局域网前端时，可单独下载 \`MusicToMidi-Linux-WebFrontend-Portable.tar.gz\`；启动顺序同样是 GPU 主机的 WebBackend 在前、WebFrontend 在后
+          8. Docker：校验同版本 \`MusicToMidi-Docker-SHA256SUMS-${TAG}.txt\` 后解压发行包，按需修改 \`.env\` 的模型配置，再运行 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本；完整说明见包内 \`README.md\`
 
           ### 说明
           - 无需安装 Python，解压即用
@@ -1187,12 +1506,15 @@ jobs:
           |------|----------|-----------|-------|
           | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | Desktop App + Web inference backend / CUDA 12.8 | Complete package; extracts to separate App, WebBackend, and WebFrontend directories while reusing identical model/runtime files through NTFS hard links |
           | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web frontend | Standalone folder for another trusted LAN computer; no models, CUDA, or Python included |
-          | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | Desktop App / CUDA 12.8 | Debian, Ubuntu, or WSL2 |
+          | \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` | Linux | Desktop App + Web inference backend / CUDA 12.8 | Complete package with separate App, WebBackend, and WebFrontend directories; shared model/runtime files remain hard-linked after extraction |
+          | \`MusicToMidi-Linux-WebFrontend-Portable.tar.gz\` | Linux | Web frontend | Standalone folder for another trusted LAN Linux computer; no models, CUDA, or Python included |
           | \`MusicToMidi-Docker-${TAG}.zip\` / \`.tar.gz\` | Linux containers / NVIDIA CUDA 12.8 | Self-hosted Web + API | Digest-pinned Compose, management scripts, manifests, SBOM, and checksums; selected models are initialized separately |
 
           The Windows package consists of every \`MusicToMidi-Windows-GPU-Portable.wim.*\` volume, with \`.wim.001\` as the 7-Zip entry point. Extracting to NTFS restores the shared hard links, so App and WebBackend remain visibly separate and independently copyable without storing duplicate model/runtime files on the GPU host. Extracting only one of those directories materializes every file required by that role. Portable GPU roles include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. Python and a separate CUDA Toolkit are not required; a compatible NVIDIA driver and GPU are part of the runtime requirements.
 
           Windows publishes one hard-link-preserving WIM for the three separate role directories plus a standalone lightweight WebFrontend ZIP for remote LAN clients. On a LAN client, the complete WebFrontend directory connects to \`MusicToMidiBackend.exe\` on the GPU host through the configured LAN addresses and CORS origin; the backend starts before \`MusicToMidiFrontend.exe\`. This deployment does not include authentication, authorization, or TLS, so its intended environment is a trusted LAN rather than the Internet.
+
+          Linux publishes the same three independently movable roles in one split \`tar.gz\` plus a standalone lightweight WebFrontend archive. GNU tar preserves the App/WebBackend hard links so the shared model/runtime tree is stored once; the release job extracts role probes from the final split archive and verifies the restored hard-link identity before upload. The packaged Linux backend and frontend are also started together and checked for API 2.0, runtime configuration, and CSP parity.
 
           The Docker asset is a complete self-host distribution rather than a lone image: its Compose file is pinned to the anonymously verified backend and gateway digests, models are selected and initialized explicitly into persistent volumes, and the long-running inference service is offline. It binds to loopback by default and includes Linux/Windows setup, verification, update, and rollback commands in its bundled README.
 

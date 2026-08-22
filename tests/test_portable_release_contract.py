@@ -238,8 +238,16 @@ class PortableReleaseContractTests(unittest.TestCase):
 
         self.assertIn("rm -rf build", workflow)
         self.assertIn('"$HOME/.cache/music_ai_models"', workflow)
-        self.assertIn('tar -czf - -C dist "${NAME}" | split -b 1900M -', workflow)
-        self.assertNotIn('tar -czf "${NAME}-Portable.tar.gz" -C dist "${NAME}"', workflow)
+        self.assertIn('tar -czf - -C dist "${LINUX_ROLE_NAMES[@]}"', workflow)
+        self.assertIn(
+            '| split -b 1900M - "${LINUX_SHARED_NAME}-Portable.tar.gz.part"',
+            workflow,
+        )
+        self.assertIn(
+            'tar -czf "${LINUX_FRONTEND_NAME}-Portable.tar.gz"',
+            workflow,
+        )
+        self.assertNotIn("Linux 当前只发布桌面 App", workflow)
 
     def test_release_workflow_uses_low_memory_7z_and_tests_archives(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -273,8 +281,8 @@ class PortableReleaseContractTests(unittest.TestCase):
         )
         self.assertIn('Join-Path $Root "build_portable.ps1"', web_build)
         self.assertIn('Join-Path $ResolvedDistRoot "MusicToMidi-WebFrontend"', web_build)
-        self.assertIn('Join-Path $ResolvedDistRoot $AppName', web_build)
-        self.assertIn('Join-Path $ResolvedDistRoot $BackendName', web_build)
+        self.assertIn("Join-Path $ResolvedDistRoot $AppName", web_build)
+        self.assertIn("Join-Path $ResolvedDistRoot $BackendName", web_build)
 
     def test_release_workflow_stages_linux_bundle_assets_before_pyinstaller(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -362,11 +370,27 @@ class PortableReleaseContractTests(unittest.TestCase):
             "Copy-Item -LiteralPath '.\\dist\\MusicToMidi-App' -Destination",
             workflow,
         )
-        self.assertIn('SMOKE_DIR="$(pwd)/dist/MusicToMidi"', workflow)
-        self.assertIn('SMOKE_EXE="$SMOKE_DIR/MusicToMidi"', workflow)
+        self.assertIn('APP_SMOKE_DIR="$(pwd)/dist/MusicToMidi-App"', workflow)
+        self.assertIn(
+            'BACKEND_SMOKE_DIR="$(pwd)/dist/MusicToMidi-WebBackend"',
+            workflow,
+        )
+        self.assertIn(
+            'FRONTEND_SMOKE_DIR="$(pwd)/dist/MusicToMidi-WebFrontend"',
+            workflow,
+        )
+        self.assertIn('SMOKE_EXE="$APP_SMOKE_DIR/MusicToMidi"', workflow)
+        self.assertIn('BACKEND_EXE="$BACKEND_SMOKE_DIR/MusicToMidiBackend"', workflow)
+        self.assertIn('FRONTEND_EXE="$FRONTEND_SMOKE_DIR/MusicToMidiFrontend"', workflow)
         self.assertIn("QT_QPA_PLATFORM=offscreen", workflow)
         self.assertNotIn('cp -a ./dist/MusicToMidi/. "$SMOKE_DIR/"', workflow)
-        self.assertIn('rm -rf "$SMOKE_DIR/runtime"', workflow)
+        self.assertIn('rm -rf "${RUNTIME_ROOTS[@]}" "$WEB_JOB_DIR"', workflow)
+        self.assertIn(
+            "Packaged Linux App, WebBackend, and WebFrontend smoke passed",
+            workflow,
+        )
+        self.assertIn('"http://127.0.0.1:18765/api/v1/health"', workflow)
+        self.assertIn('"http://127.0.0.1:15173/runtime-config.json"', workflow)
         self.assertIn("MUSIC_TO_MIDI_BUNDLE_MIROS_DIR", workflow)
 
     def test_release_workflow_self_test_has_timeout_and_log_diagnostics(self):
@@ -426,7 +450,9 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_workflow_windows_smoke_test_checks_runtime_log(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("Start-Process -FilePath (Join-Path $appSmokeDir 'MusicToMidi.exe')", workflow)
+        self.assertIn(
+            "Start-Process -FilePath (Join-Path $appSmokeDir 'MusicToMidi.exe')", workflow
+        )
         self.assertIn("$logs = Join-Path $appSmokeDir 'runtime\\logs'", workflow)
         self.assertIn("Get-ChildItem -LiteralPath $logs -File", workflow)
         self.assertIn("便携包自检通过", workflow)
@@ -522,7 +548,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("MusicToMidi-Windows-WebFrontend-Portable.zip", workflow)
         self.assertNotIn("MusicToMidi-Windows-GPU-App-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Windows-GPU-WebBackend-Portable.*", workflow)
-        self.assertIn("MusicToMidi-Linux-GPU-App-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Linux-GPU-Portable.tar.gz.part*", workflow)
+        self.assertIn("MusicToMidi-Linux-WebFrontend-Portable.tar.gz", workflow)
+        self.assertNotIn("MusicToMidi-Linux-GPU-App-Portable.*", workflow)
+        self.assertIn("Linux unified archive restored App, WebBackend, and WebFrontend", workflow)
         self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
         self.assertIn("从 \\`.wim.001\\` 解压到 NTFS", workflow)
@@ -563,9 +592,7 @@ class PortableReleaseContractTests(unittest.TestCase):
 
     def test_build_portable_supports_disjoint_roots_and_same_volume_hardlinks(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
-        xpu_wrapper = (REPO_ROOT / "build_portable_xpu.ps1").read_text(
-            encoding="utf-8"
-        )
+        xpu_wrapper = (REPO_ROOT / "build_portable_xpu.ps1").read_text(encoding="utf-8")
 
         for expected in (
             '[string]$BuildRoot = ""',

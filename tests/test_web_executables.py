@@ -170,6 +170,12 @@ def test_web_specs_produce_three_separate_portable_roles():
     assert ".\\build_web_executables.ps1" in release_workflow
     assert "MusicToMidi-WebFrontend" in release_workflow
     assert "expected_api_version -ne '2.0'" in release_workflow
+    assert "构建桌面、独立后端与独立 Web 前端 (Linux)" in release_workflow
+    assert "MusicToMidiFrontend.spec" in release_workflow
+    assert 'cp -al "$COMBINED_ROOT" "$APP_ROOT"' in release_workflow
+    assert 'cp -al "$COMBINED_ROOT" "$BACKEND_ROOT"' in release_workflow
+    assert 'test -x "$FRONTEND_ROOT/MusicToMidiFrontend"' in release_workflow
+    assert "Packaged Linux App, WebBackend, and WebFrontend smoke passed" in release_workflow
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows hard-link packaging helper")
