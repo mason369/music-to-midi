@@ -153,12 +153,20 @@ def _frontend_command(
 
 
 def _start_process(command: list[str]) -> subprocess.Popen[bytes]:
+    environment = os.environ.copy()
     options: dict[str, object] = {
         "cwd": Path(get_project_root()),
-        "env": os.environ.copy(),
+        "env": environment,
     }
     if os.name == "nt":
         options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        base_executable = str(getattr(sys, "_base_executable", "")).strip()
+        if base_executable and Path(base_executable).resolve() != Path(sys.executable).resolve():
+            # The Windows venv launcher creates a second process. Start the base
+            # executable directly so Popen owns the process that handles signals,
+            # while CPython still initializes the requested virtual environment.
+            environment["__PYVENV_LAUNCHER__"] = sys.executable
+            options["executable"] = base_executable
     else:
         options["start_new_session"] = True
     return subprocess.Popen(command, **options)

@@ -57,6 +57,7 @@ coverage.xml
 # Environments
 .env
 .env.production
+.env.selfhost
 .venv
 env/
 venv/

@@ -416,6 +416,26 @@ def _run_miros_worker(argv=None) -> int:
 def main():
     """主入口函数"""
     multiprocessing.freeze_support()
+    from src.model_profile_runtime_probe import (
+        MODEL_PROFILE_RUNTIME_PROBE_SWITCH,
+        run_model_profile_runtime_probe,
+    )
+
+    if MODEL_PROFILE_RUNTIME_PROBE_SWITCH in sys.argv:
+        probe_index = sys.argv.index(MODEL_PROFILE_RUNTIME_PROBE_SWITCH)
+        probe_arguments = sys.argv[probe_index + 1 :]
+        if len(probe_arguments) != 1:
+            print(
+                f"{MODEL_PROFILE_RUNTIME_PROBE_SWITCH} requires exactly one profile ID",
+                file=sys.stderr,
+            )
+            exit_code = 2
+        else:
+            exit_code = run_model_profile_runtime_probe(probe_arguments[0])
+        if getattr(sys, "frozen", False):
+            os._exit(exit_code)
+            return
+        sys.exit(exit_code)
     if "--web-inference-worker" in sys.argv:
         worker_index = sys.argv.index("--web-inference-worker")
         from src.web_api.inference_process import run_inference_worker

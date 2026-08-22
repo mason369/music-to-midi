@@ -358,7 +358,7 @@ def combined_survival_and_stop(max_k: int = 5, tau: float = 0.3, alpha: float = 
 
 
 def deterministic_random_ux_sampler(prob_stop_at_k, bsz) -> np.ndarray:
-    """
+    r"""
     Deterministic random sampler for sampling U\X for cross-stem augmentation.
 
     Args:
@@ -491,7 +491,7 @@ def cross_stem_augment_processor(
         precomputed_prob_stop_at_k: Optional[np.array] = None,
         mix_audio: bool = True,
         create_subunit_note_events: bool = False) -> None:
-    """
+    r"""
     Cross-stem augmentation
 
     Args:   

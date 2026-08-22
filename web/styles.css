@@ -263,6 +263,14 @@ main { width: 100%; margin: 0 auto; padding: 12px 14px 42px; }
 .field select:hover, .field input[type="number"]:hover { border-color: var(--blue); }
 .field small { grid-column: 2; color: var(--dim); font-size: 11px; }
 .field strong { font-size: 12px; }
+.quantize-toggle-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  justify-self: start;
+  accent-color: var(--blue);
+}
+#quantizeGridField.is-disabled { opacity: .62; }
 .mode-list { display: none; }
 .inline-control { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 7px; }
 .inline-control input[type="checkbox"] { width: 16px; height: 16px; margin: 7px; accent-color: var(--blue); }

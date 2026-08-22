@@ -168,20 +168,20 @@ np.savetxt('tokens.ntxt', tokens)
 def t_ntxt():
     t = np.loadtxt('tokens.ntxt').astype(np.int32)
 
-%timeit t_npz() # 139 us
-%timeit t_mmap() # 3.12 ms 
-%timeit t_npy() # 87.8 us
-%timeit t_txt() # 109 152 us
-%timeit t_csv() # 145 190 us
-%timeit t_json() # 72.8 119 us
-%timeit t_ntxt() # 878 us
+# IPython: %timeit t_npz() # 139 us
+# IPython: %timeit t_mmap() # 3.12 ms
+# IPython: %timeit t_npy() # 87.8 us
+# IPython: %timeit t_txt() # 109 152 us
+# IPython: %timeit t_csv() # 145 190 us
+# IPython: %timeit t_json() # 72.8 119 us
+# IPython: %timeit t_ntxt() # 878 us
 
-%timeit t_npy2400() # 212 ms; 2400 files in a folder
-%timeit t_npz2400() # 296 ms; uncompreesed 1000 arrays in a single file
+# IPython: %timeit t_npy2400() # 212 ms; 2400 files in a folder
+# IPython: %timeit t_npz2400() # 296 ms; uncompreesed 1000 arrays in a single file
 
-%timeit t_npy2400_take200() # 17.4 ms; 25 Mb
-%timeit t_npz2400_take200() # 28.8 ms; 3.72 ms for 10 arrays; 25 Mb
-%timeit t_npy2400single() # 4 ms; frozen dictionary containing 2400 arrays; 6.4 Mb; int16
-%timeit t_mmap2400single() # dictionary is not supported 
-%timeit t_json2400single() # 175 ms; 17 Mb
-# 2400 files from 100ms hop for 4 minutes   
+# IPython: %timeit t_npy2400_take200() # 17.4 ms; 25 Mb
+# IPython: %timeit t_npz2400_take200() # 28.8 ms; 3.72 ms for 10 arrays; 25 Mb
+# IPython: %timeit t_npy2400single() # 4 ms; frozen dictionary containing 2400 arrays; 6.4 Mb; int16
+# IPython: %timeit t_mmap2400single() # dictionary is not supported
+# IPython: %timeit t_json2400single() # 175 ms; 17 Mb
+# 2400 files from 100ms hop for 4 minutes

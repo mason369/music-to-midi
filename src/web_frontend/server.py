@@ -169,16 +169,39 @@ class FrontendServer:
                 ],
                 close_fds=True,
             )
-            return int(process.wait())
+            while True:
+                try:
+                    return int(process.wait(timeout=0.25))
+                except subprocess.TimeoutExpired:
+                    # Returning to the interpreter lets the Windows SIGBREAK
+                    # handler interrupt the Edge wait and run cleanup.
+                    continue
         finally:
             try:
                 if process is not None and process.poll() is None:
-                    process.terminate()
-                    try:
+                    if os.name == "nt":
+                        result = subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            errors="replace",
+                            check=False,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                        if result.returncode != 0 and process.poll() is None:
+                            detail = (result.stdout or "").strip()
+                            raise RuntimeError(
+                                f"无法关闭 Edge 应用进程树（PID {process.pid}）：{detail}"
+                            )
                         process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
+                    else:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
             finally:
                 self.close()
 

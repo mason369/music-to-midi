@@ -1110,6 +1110,7 @@ jobs:
           #### 平台、文档与发布
           - 桌面版与独立 Web 前端同步全部处理和逐轨工作台能力；Hugging Face Space 和 Colab 同步七种处理模式、三种速度方案、默认官方处理链路、可选分段边界连续性修复链路、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
           - Windows 完整包保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的 EXE 和可单独复制的运行环境，同机解压到 NTFS 时相同模型/运行时文件通过 WIM 硬链接只占一份物理空间。另发不含模型的轻量 WebFrontend ZIP，供同一局域网的其他电脑单独使用。发布烟测会从三个独立目录真实启动并核对 API 2.0、运行时配置和 CSP。Web 两端不内置认证、授权或 TLS，适用范围为受信任局域网。
+          - Issue #9 同步提供完整 Docker 自托管发行：无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型由使用者显式选择并一次性初始化，常驻推理容器离线运行；默认只绑定本机，无需域名、ACME 邮箱或 SSH 凭据。
           - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
           - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；使用条件是同一账户已在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
@@ -1122,6 +1123,7 @@ jobs:
           | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | 桌面 App + Web 推理后端 / CUDA 12.8 | 完整包；解压后仍是 App、WebBackend、WebFrontend 三个独立目录，NTFS 上复用相同模型/运行时文件 |
           | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web 前端 | 可单独复制到局域网其他电脑，不含模型、CUDA 或 Python |
           | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | 桌面 App / CUDA 12.8 | Debian、Ubuntu 或 WSL2 |
+          | \`MusicToMidi-Docker-${TAG}.zip\` / \`.tar.gz\` | Linux 容器 / NVIDIA CUDA 12.8 | Web + API 自托管 | digest 固定 Compose、管理脚本和校验清单；模型按所选路线另行初始化 |
 
           ### 使用方法
           1. Windows App 或 WebBackend：下载 \`MusicToMidi-Windows-GPU-Portable.wim.*\` 的全部分卷，用 7-Zip 从 \`.wim.001\` 解压到 NTFS；会得到 App、WebBackend、WebFrontend 三个同级独立目录
@@ -1129,6 +1131,7 @@ jobs:
           3. 三个目录可以分别复制到其他电脑；复制 App 或 WebBackend 目录时，Windows 会把其中的硬链接内容复制成完整独立文件，不依赖原目录
           4. 桌面 App：从 App 目录运行 \`MusicToMidi.exe\`；Web：先在 GPU 电脑从 WebBackend 目录运行 \`MusicToMidiBackend.exe\`，再在任意受信任局域网电脑运行 \`MusicToMidiFrontend.exe\`
           5. 局域网 Web 按配置文件填写实际前后端地址与 CORS 来源；完整 WIM 也支持只选择 App 或 WebBackend 目录解压，7-Zip 会为该目录还原所需完整文件
+          6. Docker：校验同版本 \`MusicToMidi-Docker-SHA256SUMS-${TAG}.txt\` 后解压发行包，按需修改 \`.env\` 的模型配置，再运行 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本；完整说明见包内 \`README.md\`
 
           ### 说明
           - 无需安装 Python，解压即用
@@ -1185,10 +1188,13 @@ jobs:
           | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | Desktop App + Web inference backend / CUDA 12.8 | Complete package; extracts to separate App, WebBackend, and WebFrontend directories while reusing identical model/runtime files through NTFS hard links |
           | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web frontend | Standalone folder for another trusted LAN computer; no models, CUDA, or Python included |
           | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | Desktop App / CUDA 12.8 | Debian, Ubuntu, or WSL2 |
+          | \`MusicToMidi-Docker-${TAG}.zip\` / \`.tar.gz\` | Linux containers / NVIDIA CUDA 12.8 | Self-hosted Web + API | Digest-pinned Compose, management scripts, manifests, SBOM, and checksums; selected models are initialized separately |
 
           The Windows package consists of every \`MusicToMidi-Windows-GPU-Portable.wim.*\` volume, with \`.wim.001\` as the 7-Zip entry point. Extracting to NTFS restores the shared hard links, so App and WebBackend remain visibly separate and independently copyable without storing duplicate model/runtime files on the GPU host. Extracting only one of those directories materializes every file required by that role. Portable GPU roles include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. Python and a separate CUDA Toolkit are not required; a compatible NVIDIA driver and GPU are part of the runtime requirements.
 
           Windows publishes one hard-link-preserving WIM for the three separate role directories plus a standalone lightweight WebFrontend ZIP for remote LAN clients. On a LAN client, the complete WebFrontend directory connects to \`MusicToMidiBackend.exe\` on the GPU host through the configured LAN addresses and CORS origin; the backend starts before \`MusicToMidiFrontend.exe\`. This deployment does not include authentication, authorization, or TLS, so its intended environment is a trusted LAN rather than the Internet.
+
+          The Docker asset is a complete self-host distribution rather than a lone image: its Compose file is pinned to the anonymously verified backend and gateway digests, models are selected and initialized explicitly into persistent volumes, and the long-running inference service is offline. It binds to loopback by default and includes Linux/Windows setup, verification, update, and rollback commands in its bundled README.
 
           The combined portable work is distributed under GPL-3.0 with component-specific notices. Aria-AMT remains CC BY-NC-SA 4.0; MuScriptor checkpoints remain CC BY-NC 4.0 plus their model-page conditions. See \`THIRD_PARTY_NOTICES.md\`, \`THIRD_PARTY_SBOM.txt\`, and \`FFMPEG_BUILD_AUDIT.txt\` inside the package for exact evidence and attribution.
           NOTES

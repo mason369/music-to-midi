@@ -117,6 +117,16 @@
               <input id="customBpm" type="number" value="120" step="0.1" />
               <small data-i18n="config.bpm_help"></small>
             </label>
+            <label class="field quantize-toggle-field">
+              <span data-i18n="config.quantize_notes"></span>
+              <input id="quantizeNotes" type="checkbox" />
+              <small data-i18n="config.quantize_notes_help"></small>
+            </label>
+            <label class="field" id="quantizeGridField">
+              <span data-i18n="config.quantize_grid"></span>
+              <select id="quantizeGridSelect" disabled></select>
+              <small data-i18n="config.quantize_grid_help"></small>
+            </label>
             <div class="field device-field">
               <span data-i18n="config.compute"></span>
               <strong id="computeDevice">CUDA / GPU 0</strong>

@@ -94,7 +94,47 @@ case "$command_name" in
             --retention-max-bytes "$RETENTION_MAX_BYTES" \
             "$@"
         ;;
+    server-selfhost)
+        require_env SELF_HOST_PORT
+        require_env MUSIC_TO_MIDI_ENABLED_PROFILES
+        require_positive_integer SELF_HOST_PORT
+        require_positive_integer MAX_UPLOAD_BYTES
+        require_nonnegative_integer MAX_QUEUED_JOBS
+        require_nonnegative_integer MIN_FREE_BYTES
+        require_nonnegative_integer RETENTION_DAYS
+        require_nonnegative_integer RETENTION_MAX_JOBS
+        require_nonnegative_integer RETENTION_MAX_BYTES
+        (( SELF_HOST_PORT <= 65535 )) \
+            || fail "SELF_HOST_PORT must be between 1 and 65535"
+        [[ "${MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT:-0}" == "0" ]] \
+            || fail "server-selfhost requires MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT=0"
+        [[ "${MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES:-}" == "1" ]] \
+            || fail "MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES must be 1"
+        [[ "${HF_HUB_OFFLINE:-}" == "1" ]] \
+            || fail "server-selfhost requires HF_HUB_OFFLINE=1"
+        [[ "${TRANSFORMERS_OFFLINE:-}" == "1" ]] \
+            || fail "server-selfhost requires TRANSFORMERS_OFFLINE=1"
+        verify_source_runtime
+        python -m src.model_profiles verify \
+            --profiles "$MUSIC_TO_MIDI_ENABLED_PROFILES" \
+            --require-ready
+        exec python -m src.web_api \
+            --config /tmp/music-to-midi-backend.json \
+            --host 0.0.0.0 \
+            --port 8765 \
+            --data-dir /data/jobs \
+            --cors-origin "http://127.0.0.1:$SELF_HOST_PORT" \
+            --cors-origin "http://localhost:$SELF_HOST_PORT" \
+            --log-level "${LOG_LEVEL:-info}" \
+            --max-upload-bytes "$MAX_UPLOAD_BYTES" \
+            --max-queued-jobs "$MAX_QUEUED_JOBS" \
+            --min-free-bytes "$MIN_FREE_BYTES" \
+            --retention-days "$RETENTION_DAYS" \
+            --retention-max-jobs "$RETENTION_MAX_JOBS" \
+            --retention-max-bytes "$RETENTION_MAX_BYTES" \
+            "$@"
+        ;;
     *)
-        fail "unsupported command '$command_name'; expected server, model-init or verify-models"
+        fail "unsupported command '$command_name'; expected server, server-selfhost, model-init or verify-models"
         ;;
 esac

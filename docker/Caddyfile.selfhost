@@ -1,0 +1,42 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	log {
+		output stdout
+		format json
+	}
+
+	encode zstd gzip
+
+	request_body {
+		max_size {$MAX_REQUEST_BODY_SIZE}
+	}
+
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; script-src 'self'; style-src 'self'"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	handle /runtime-config.json {
+		header Content-Type "application/json; charset=utf-8"
+		header Cache-Control "no-store"
+		respond `{"managed":true,"frontend_url":"http://{http.request.hostport}","backend_url":"http://{http.request.hostport}","expected_api_version":"2.0"}` 200
+	}
+
+	@api path /api/* /docs* /openapi.json
+	handle @api {
+		reverse_proxy backend:8765
+	}
+
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}

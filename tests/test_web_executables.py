@@ -280,6 +280,36 @@ def test_frozen_xpu_backend_executable_dispatches_before_gui_or_torch_preload(mo
     preload.assert_not_called()
 
 
+def test_frozen_backend_dispatches_native_profile_probe_before_web_server(monkeypatch):
+    import src.main as main_module
+    import src.model_profile_runtime_probe as probe_module
+    import src.web_api.__main__ as backend_main
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "MusicToMidiBackend.exe",
+            probe_module.MODEL_PROFILE_RUNTIME_PROBE_SWITCH,
+            "vocal_split",
+        ],
+    )
+    monkeypatch.setattr(sys, "executable", "C:/portable/MusicToMidiBackend.exe")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with (
+        patch.object(probe_module, "run_model_profile_runtime_probe", return_value=0) as probe,
+        patch.object(backend_main, "main", return_value=0) as run_backend,
+        patch.object(main_module.os, "_exit") as hard_exit,
+        patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as preload,
+    ):
+        main_module.main()
+
+    probe.assert_called_once_with("vocal_split")
+    hard_exit.assert_called_once_with(0)
+    run_backend.assert_not_called()
+    preload.assert_not_called()
+
+
 def test_web_api_runtime_preserves_backend_logging_and_dependency_warnings():
     environment = os.environ.copy()
     log_environment_names = (

@@ -6,6 +6,12 @@ import html
 import json
 from collections.abc import Callable, Mapping
 
+from src.core.midi_quantization import (
+    DEFAULT_MIDI_QUANTIZE_GRID,
+    DEFAULT_MIDI_QUANTIZE_SCOPE,
+    MIDI_QUANTIZE_GRIDS,
+    MIDI_QUANTIZE_SCOPES,
+)
 from src.gui.web.track_mixer_runtime import track_file_url
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -69,6 +75,10 @@ def build_muscriptor_result_html(
         "beatTimes": [float(value) for value in state.get("beat_times", [])],
         "downbeats": [float(value) for value in state.get("downbeats", [])],
         "repeatTempoPerNoteTrack": bool(state.get("repeat_tempo_per_note_track", False)),
+        "quantizeGrids": list(MIDI_QUANTIZE_GRIDS),
+        "defaultQuantizeGrid": DEFAULT_MIDI_QUANTIZE_GRID,
+        "quantizeScopes": list(MIDI_QUANTIZE_SCOPES),
+        "defaultQuantizeScope": DEFAULT_MIDI_QUANTIZE_SCOPE,
         "backendLabel": str(state.get("backend_label", "")),
         "sourceTrackName": str(state.get("source_track_name", "")),
         "previewApi": str(state.get("preview_api", "")),
@@ -112,6 +122,12 @@ def build_muscriptor_result_html(
                 "editor_paste",
                 "editor_duplicate",
                 "editor_quantize",
+                "editor_quantize_scope",
+                "editor_quantize_scope_all_tracks",
+                "editor_quantize_scope_selected_notes",
+                "editor_quantize_scope_tooltip",
+                "editor_quantize_grid",
+                "editor_quantize_grid_tooltip",
                 "editor_resize_hint",
                 "editor_instrument",
                 "editor_velocity",
@@ -166,6 +182,8 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-editor { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; padding:8px 12px; border:1px solid #365f8d; border-radius:7px; background:#132139; }
 .msr-editor label { display:flex; align-items:center; gap:5px; color:#9fb3d9; }
 .msr-editor select, .msr-editor input[type="number"] { color:#e0e0e0; background:#16213e; border:1px solid #3a4a6a; border-radius:4px; padding:5px 7px; }
+.msr-editor .msr-quantize-grid select { min-width:74px; }
+.msr-editor .msr-quantize-scope select { min-width:112px; }
 .msr-editor .msr-zoom-input { width:68px; }
 .msr-edit-summary { color:#8da4c9; font-family:monospace; }
 .msr-edit-notice { flex-basis:100%; color:#d8b56a; display:none; }
@@ -839,6 +857,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.clipboard = [];
     this.originalNotes = [];
     this.targetBpm = 0;
+    this.quantizeGrid = "";
     this.activeInstrument = "";
     this.rollHeight = 390;
     this.previewRevision = 0;
@@ -865,6 +884,25 @@ MUSCRIPTOR_RESULT_JS = r"""
       });
       this.m.beatTimes = (this.m.beatTimes || []).map(Number);
       this.m.downbeats = (this.m.downbeats || []).map(Number);
+      this.m.quantizeGrids = (this.m.quantizeGrids || []).map(String);
+      this.m.defaultQuantizeGrid = String(this.m.defaultQuantizeGrid || "");
+      this.m.quantizeScopes = (this.m.quantizeScopes || []).map(String);
+      this.m.defaultQuantizeScope = String(this.m.defaultQuantizeScope || "");
+      if (!this.m.quantizeGrids.length
+          || this.m.quantizeGrids.indexOf(this.m.defaultQuantizeGrid) < 0
+          || this.m.quantizeGrids.some(function (grid) {
+            return !/^1\/(4|8|16|32|64)$/.test(grid);
+          })) {
+        throw new Error("Invalid MIDI quantization-grid contract");
+      }
+      this.quantizeGrid = this.m.defaultQuantizeGrid;
+      if (this.m.quantizeScopes.length !== 2
+          || this.m.quantizeScopes.indexOf("all_tracks") < 0
+          || this.m.quantizeScopes.indexOf("selected_notes") < 0
+          || this.m.defaultQuantizeScope !== "all_tracks") {
+        throw new Error("Invalid MIDI quantization-scope contract");
+      }
+      this.quantizeScope = this.m.defaultQuantizeScope;
       this.m.timeSignature = (this.m.timeSignature || [4, 4]).map(Number);
       if (this.m.timeSignature.length !== 2
           || !Number.isInteger(this.m.timeSignature[0])
@@ -1301,6 +1339,57 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.quantizeButton.onclick = function () { self.quantizeSelected(); };
     editor.appendChild(this.quantizeButton);
 
+    var quantizeScopeLabel = el(
+      "label",
+      "msr-quantize-scope",
+      strings.editor_quantize_scope
+    );
+    quantizeScopeLabel.title = strings.editor_quantize_scope_tooltip;
+    this.quantizeScopeSelect = el("select");
+    this.m.quantizeScopes.forEach(function (scope) {
+      var label = scope === "all_tracks"
+        ? strings.editor_quantize_scope_all_tracks
+        : strings.editor_quantize_scope_selected_notes;
+      var option = el("option", "", label);
+      option.value = scope;
+      self.quantizeScopeSelect.appendChild(option);
+    });
+    this.quantizeScopeSelect.value = this.quantizeScope;
+    this.quantizeScopeSelect.title = strings.editor_quantize_scope_tooltip;
+    this.quantizeScopeSelect.onchange = function () {
+      if (self.m.quantizeScopes.indexOf(this.value) < 0) {
+        throw new Error("Unsupported MIDI quantization scope: " + this.value);
+      }
+      self.quantizeScope = this.value;
+      self.syncEditor();
+    };
+    quantizeScopeLabel.appendChild(this.quantizeScopeSelect);
+    editor.appendChild(quantizeScopeLabel);
+
+    var quantizeGridLabel = el(
+      "label",
+      "msr-quantize-grid",
+      strings.editor_quantize_grid
+    );
+    quantizeGridLabel.title = strings.editor_quantize_grid_tooltip;
+    this.quantizeGridSelect = el("select");
+    this.m.quantizeGrids.forEach(function (grid) {
+      var option = el("option", "", grid);
+      option.value = grid;
+      self.quantizeGridSelect.appendChild(option);
+    });
+    this.quantizeGridSelect.value = this.quantizeGrid;
+    this.quantizeGridSelect.title = strings.editor_quantize_grid_tooltip;
+    this.quantizeGridSelect.onchange = function () {
+      if (self.m.quantizeGrids.indexOf(this.value) < 0) {
+        throw new Error("Unsupported MIDI quantization grid: " + this.value);
+      }
+      self.quantizeGrid = this.value;
+      self.drawStatic();
+    };
+    quantizeGridLabel.appendChild(this.quantizeGridSelect);
+    editor.appendChild(quantizeGridLabel);
+
     var instrumentLabel = el("label", "", strings.editor_instrument);
     this.instrumentSelect = el("select");
     this.m.instruments.filter(function (instrument) { return instrument.detected; }).forEach(function (instrument) {
@@ -1387,7 +1476,11 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (!Number.isFinite(referenceBpm) || referenceBpm <= 0) {
       throw new Error("Cannot derive MIDI editor grid from reference BPM " + referenceBpm);
     }
-    return 60 / referenceBpm / 4;
+    var match = /^1\/(4|8|16|32|64)$/.exec(this.quantizeGrid);
+    if (!match || this.m.quantizeGrids.indexOf(this.quantizeGrid) < 0) {
+      throw new Error("Unsupported MIDI quantization grid: " + this.quantizeGrid);
+    }
+    return 60 / referenceBpm * 4 / Number(match[1]);
   };
   ResultSession.prototype.snapTime = function (value) {
     var grid = this.gridSeconds();
@@ -1623,7 +1716,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     var referenceBpm = Number(this.m.referenceBpm);
     var numerator = this.m.timeSignature[0], denominator = this.m.timeSignature[1];
     var quarterSeconds = 60 / referenceBpm;
-    var subdivisionSeconds = quarterSeconds / 4;
+    var subdivisionSeconds = this.gridSeconds();
     var beatSeconds = quarterSeconds * 4 / denominator;
     var barSeconds = beatSeconds * numerator;
     var firstBar = Math.max(0, Math.floor(start / barSeconds));
@@ -2073,12 +2166,25 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.commitEdit(before);
   };
   ResultSession.prototype.quantizeSelected = function () {
-    if (!this.editing || !this.selectedIndices.size) return;
+    if (!this.editing) return;
+    var indices = this.quantizeScope === "all_tracks"
+      ? this.m.notes.map(function (_note, index) { return index; })
+      : Array.from(this.selectedIndices);
+    if (!indices.length) return;
     var before = cloneNotes(this.m.notes), grid = this.gridSeconds();
-    this.selectedIndices.forEach(function (index) {
+    indices.forEach(function (index) {
       var note = this.m.notes[index], duration = note.end - note.start;
-      var start = clamp(Math.round(note.start / grid) * grid, 0, this.m.duration - duration);
-      this.m.notes[index] = Object.assign({}, note, { start: start, end: start + duration });
+      var quantizedDuration = Math.max(grid, Math.round(duration / grid) * grid);
+      quantizedDuration = Math.min(this.m.duration, quantizedDuration);
+      var start = clamp(
+        Math.round(note.start / grid) * grid,
+        0,
+        this.m.duration - quantizedDuration
+      );
+      this.m.notes[index] = Object.assign({}, note, {
+        start: start,
+        end: start + quantizedDuration
+      });
     }, this);
     this.commitEdit(before);
   };
@@ -2216,7 +2322,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.copyButton.disabled = !this.editing || !selected;
     this.pasteButton.disabled = !this.editing || !this.clipboard.length;
     this.duplicateButton.disabled = !this.editing || !selected;
-    this.quantizeButton.disabled = !this.editing || !selected;
+    var quantizeTargetAvailable = this.quantizeScope === "all_tracks"
+      ? this.m.notes.length > 0
+      : selected;
+    this.quantizeButton.disabled = !this.editing || !quantizeTargetAvailable;
+    this.quantizeScopeSelect.disabled = !this.editing;
+    this.quantizeGridSelect.disabled = !this.editing;
     this.instrumentSelect.disabled = !this.editing;
     this.velocityInput.disabled = !this.editing || !selected;
     this.editSummary.textContent = this.m.strings.editor_summary

@@ -59,8 +59,15 @@ from src.core.muscriptor_result_assets import (
     prepare_midi_preview_assets,
     read_midi_roll_notes,
 )
+from src.core.midi_quantization import (
+    DEFAULT_MIDI_QUANTIZE_GRID,
+    DEFAULT_MIDI_QUANTIZE_SCOPE,
+    MIDI_QUANTIZE_GRIDS,
+    MIDI_QUANTIZE_SCOPES,
+)
 from src.i18n.translator import get_translator, t
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
+from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
 from src.models.data_models import MAX_MIDI_BPM, MIN_MIDI_BPM, ProcessingResult
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -96,6 +103,8 @@ _ROLL_ZOOM_STEP = 1.15
 _ROLL_WHEEL_STEP_PX = 96
 _ROLL_TILE_WIDTH = 512
 _ROLL_TILE_CACHE_LIMIT = 8
+_EDITOR_QUANTIZE_GRIDS = tuple((grid, int(grid.split("/", 1)[1])) for grid in MIDI_QUANTIZE_GRIDS)
+_DEFAULT_EDITOR_QUANTIZE_GRID = DEFAULT_MIDI_QUANTIZE_GRID
 
 logger = logging.getLogger(__name__)
 
@@ -567,14 +576,18 @@ class _PianoRollCanvas(QWidget):
         grid = float(seconds)
         if not math.isfinite(grid) or grid <= 0:
             raise ValueError(f"Piano-roll grid must be finite and positive: {seconds}")
+        if math.isclose(self._grid_seconds, grid, rel_tol=0.0, abs_tol=1e-12):
+            return
         self._grid_seconds = grid
+        self._tile_cache.clear()
+        self.update()
 
     def set_daw_grid(
         self,
         reference_bpm: float,
         time_signature: tuple[int, int] = (4, 4),
     ) -> None:
-        """Display the same bar/beat/1/16 grid represented by exported MIDI ticks."""
+        """Display the bar, beat, and selected snap grid represented by MIDI ticks."""
 
         bpm = float(reference_bpm)
         if not math.isfinite(bpm) or not MIN_MIDI_BPM <= bpm <= MAX_MIDI_BPM:
@@ -842,7 +855,7 @@ class _PianoRollCanvas(QWidget):
             )
             numerator, denominator = self._daw_time_signature
             quarter_seconds = 60.0 / self._daw_reference_bpm
-            subdivision_seconds = quarter_seconds / 4.0
+            subdivision_seconds = self._grid_seconds
             beat_seconds = quarter_seconds * 4.0 / float(denominator)
             bar_seconds = beat_seconds * float(numerator)
 
@@ -1918,6 +1931,43 @@ class MuscriptorResultWidget(QFrame):
         self.edit_quantize_button.setEnabled(False)
         self.edit_quantize_button.clicked.connect(self._quantize_selected_editor_notes)
         secondary_commands.addWidget(self.edit_quantize_button)
+        secondary_commands.addSpacing(8)
+        self.edit_quantize_scope_label = QLabel()
+        secondary_commands.addWidget(self.edit_quantize_scope_label)
+        self.edit_quantize_scope_combo = NoWheelComboBox()
+        for scope in MIDI_QUANTIZE_SCOPES:
+            self.edit_quantize_scope_combo.addItem("", scope)
+        default_scope_index = self.edit_quantize_scope_combo.findData(DEFAULT_MIDI_QUANTIZE_SCOPE)
+        if default_scope_index < 0:
+            raise RuntimeError(
+                "Default MIDI editor quantization scope is unavailable: "
+                f"{DEFAULT_MIDI_QUANTIZE_SCOPE}"
+            )
+        self.edit_quantize_scope_combo.setCurrentIndex(default_scope_index)
+        self.edit_quantize_scope_combo.setMinimumWidth(112)
+        self.edit_quantize_scope_combo.setEnabled(False)
+        self.edit_quantize_scope_combo.currentIndexChanged.connect(
+            self._on_editor_quantize_scope_changed
+        )
+        secondary_commands.addWidget(self.edit_quantize_scope_combo)
+        self.edit_quantize_grid_label = QLabel()
+        secondary_commands.addWidget(self.edit_quantize_grid_label)
+        self.edit_quantize_grid_combo = NoWheelComboBox()
+        for label, denominator in _EDITOR_QUANTIZE_GRIDS:
+            self.edit_quantize_grid_combo.addItem(label, denominator)
+        default_grid_index = self.edit_quantize_grid_combo.findText(_DEFAULT_EDITOR_QUANTIZE_GRID)
+        if default_grid_index < 0:
+            raise RuntimeError(
+                f"Default MIDI editor quantization grid is unavailable: "
+                f"{_DEFAULT_EDITOR_QUANTIZE_GRID}"
+            )
+        self.edit_quantize_grid_combo.setCurrentIndex(default_grid_index)
+        self.edit_quantize_grid_combo.setMinimumWidth(96)
+        self.edit_quantize_grid_combo.setEnabled(False)
+        self.edit_quantize_grid_combo.currentIndexChanged.connect(
+            self._on_editor_quantize_grid_changed
+        )
+        secondary_commands.addWidget(self.edit_quantize_grid_combo)
         secondary_commands.addStretch()
         for command_button in (
             self.edit_toggle,
@@ -2634,6 +2684,27 @@ class MuscriptorResultWidget(QFrame):
         if enabled:
             self.roll.setFocus(Qt.FocusReason.OtherFocusReason)
 
+    def _on_editor_quantize_grid_changed(self, _index: int) -> None:
+        """Update snap and drawing resolution without changing any notes."""
+
+        if self._detected_bpm is None:
+            return
+        self.roll.set_grid_seconds(self._editor_grid_seconds())
+
+    def _on_editor_quantize_scope_changed(self, _index: int) -> None:
+        """Update command availability without modifying any notes."""
+
+        self._sync_editor_controls()
+
+    def _editor_quantize_scope(self) -> str:
+        scope = self.edit_quantize_scope_combo.currentData()
+        if not isinstance(scope, str) or scope not in MIDI_QUANTIZE_SCOPES:
+            raise RuntimeError(
+                "Invalid MIDI editor quantization scope: "
+                f"{self.edit_quantize_scope_combo.currentText()!r}"
+            )
+        return scope
+
     def _sync_editor_controls(self) -> None:
         editable = self.edit_toggle.isEnabled() and self.edit_toggle.isChecked()
         selected = bool(self.roll.selected_indices)
@@ -2648,7 +2719,14 @@ class MuscriptorResultWidget(QFrame):
         self.edit_copy_button.setEnabled(editable and selected)
         self.edit_paste_button.setEnabled(editable and bool(self._edit_clipboard))
         self.edit_duplicate_button.setEnabled(editable and selected)
-        self.edit_quantize_button.setEnabled(editable and selected)
+        quantize_target_available = (
+            bool(self._edited_notes) if self._editor_quantize_scope() == "all_tracks" else selected
+        )
+        self.edit_quantize_button.setEnabled(editable and quantize_target_available)
+        self.edit_quantize_scope_label.setEnabled(editable)
+        self.edit_quantize_scope_combo.setEnabled(editable)
+        self.edit_quantize_grid_label.setEnabled(editable)
+        self.edit_quantize_grid_combo.setEnabled(editable)
         self.edit_instrument_combo.setEnabled(editable and self.edit_instrument_combo.count() > 0)
         self.edit_velocity_spin.setEnabled(editable and selected)
         self.edit_summary_label.setText(
@@ -3044,7 +3122,12 @@ class MuscriptorResultWidget(QFrame):
         )
 
     def _quantize_selected_editor_notes(self) -> None:
-        indices = self.roll.selected_indices
+        selected_indices = self.roll.selected_indices
+        indices = (
+            tuple(range(len(self._edited_notes)))
+            if self._editor_quantize_scope() == "all_tracks"
+            else selected_indices
+        )
         if not self.edit_toggle.isChecked() or not indices:
             return
         grid = self._editor_grid_seconds()
@@ -3052,13 +3135,19 @@ class MuscriptorResultWidget(QFrame):
         for index in indices:
             note = updated[index]
             duration = note.end - note.start
+            quantized_duration = max(grid, round(duration / grid) * grid)
+            quantized_duration = min(self._edit_duration, quantized_duration)
             start = round(note.start / grid) * grid
-            start = max(0.0, min(self._edit_duration - duration, start))
-            updated[index] = replace(note, start=start, end=start + duration)
+            start = max(0.0, min(self._edit_duration - quantized_duration, start))
+            updated[index] = replace(
+                note,
+                start=start,
+                end=start + quantized_duration,
+            )
         self._apply_editor_snapshot(
             updated,
             selected_index=self.roll.selected_index,
-            selected_indices=indices,
+            selected_indices=selected_indices,
             record=True,
         )
 
@@ -3137,13 +3226,27 @@ class MuscriptorResultWidget(QFrame):
             raise ValueError(f"Unsupported piano-roll command: {command}")
         self._transform_selected_editor_notes(name, int(amount_text))
 
+    def _editor_grid_denominator(self) -> int:
+        denominator = self.edit_quantize_grid_combo.currentData()
+        valid_denominators = {value for _label, value in _EDITOR_QUANTIZE_GRIDS}
+        if (
+            isinstance(denominator, bool)
+            or not isinstance(denominator, int)
+            or denominator not in valid_denominators
+        ):
+            raise RuntimeError(
+                f"Invalid MIDI editor quantization grid: "
+                f"{self.edit_quantize_grid_combo.currentText()!r}"
+            )
+        return denominator
+
     def _editor_grid_seconds(self) -> float:
         if self._detected_bpm is None:
             raise RuntimeError("Cannot derive MIDI editor grid without a reference BPM")
         bpm = float(self._detected_bpm)
         if not math.isfinite(bpm) or bpm <= 0:
             raise RuntimeError(f"Cannot derive MIDI editor grid from BPM {bpm!r}")
-        return 60.0 / bpm / 4.0
+        return 60.0 / bpm * 4.0 / self._editor_grid_denominator()
 
     def _undo_editor_notes(self) -> None:
         if not self._edit_undo:
@@ -3923,6 +4026,19 @@ class MuscriptorResultWidget(QFrame):
         self.edit_paste_button.setText(t("muscriptor_result.editor_paste"))
         self.edit_duplicate_button.setText(t("muscriptor_result.editor_duplicate"))
         self.edit_quantize_button.setText(t("muscriptor_result.editor_quantize"))
+        self.edit_quantize_scope_label.setText(t("muscriptor_result.editor_quantize_scope"))
+        for index, scope in enumerate(MIDI_QUANTIZE_SCOPES):
+            self.edit_quantize_scope_combo.setItemText(
+                index,
+                t(f"muscriptor_result.editor_quantize_scope_{scope}"),
+            )
+        quantize_scope_tooltip = t("muscriptor_result.editor_quantize_scope_tooltip")
+        self.edit_quantize_scope_label.setToolTip(quantize_scope_tooltip)
+        self.edit_quantize_scope_combo.setToolTip(quantize_scope_tooltip)
+        self.edit_quantize_grid_label.setText(t("muscriptor_result.editor_quantize_grid"))
+        quantize_grid_tooltip = t("muscriptor_result.editor_quantize_grid_tooltip")
+        self.edit_quantize_grid_label.setToolTip(quantize_grid_tooltip)
+        self.edit_quantize_grid_combo.setToolTip(quantize_grid_tooltip)
         self.edit_instrument_label.setText(t("muscriptor_result.editor_instrument"))
         self.edit_velocity_label.setText(t("muscriptor_result.editor_velocity"))
         self.roll_zoom_label.setText(t("muscriptor_result.editor_view_zoom"))

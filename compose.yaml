@@ -11,16 +11,9 @@ x-backend-environment: &backend-environment
   TMPDIR: /data/tmp
   MUSIC_TO_MIDI_ACCELERATOR: cuda
   MUSIC_TO_MIDI_MIROS_DIR: /models/miros
-  MUSIC_TO_MIDI_ENABLED_PROFILES: ${MUSIC_TO_MIDI_ENABLED_PROFILES:?Set explicit model profiles in .env.production}
+  MUSIC_TO_MIDI_ENABLED_PROFILES: ${MUSIC_TO_MIDI_ENABLED_PROFILES:?Set explicit model profiles in .env}
   MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES: "1"
   NVIDIA_DRIVER_CAPABILITIES: compute,utility
-
-x-backend-build: &backend-build
-  context: .
-  dockerfile: docker/backend.Dockerfile
-  args:
-    VCS_REF: ${VCS_REF:-local}
-    BUILD_VERSION: ${BUILD_VERSION:-local}
 
 x-backend-gpu: &backend-gpu
   resources:
@@ -32,8 +25,8 @@ x-backend-gpu: &backend-gpu
 
 services:
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.0}
-    build: *backend-build
+    image: ghcr.io/mason369/music-to-midi-backend:v1.6.0
+    command: ["server-selfhost"]
     init: true
     restart: unless-stopped
     read_only: true
@@ -46,10 +39,8 @@ services:
     shm_size: ${SHM_SIZE:-2gb}
     environment:
       <<: *backend-environment
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set the exact HTTPS public origin in .env.production}
-      MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT: "1"
-      MUSIC_TO_MIDI_EDGE_AUTH: basic
-      MUSIC_TO_MIDI_TLS_TERMINATED_AT_EDGE: "1"
+      SELF_HOST_PORT: ${MUSIC_TO_MIDI_PORT:-7860}
+      MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT: "0"
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -76,8 +67,7 @@ services:
 
   model-init:
     profiles: ["tools"]
-    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:v1.6.0}
-    build: *backend-build
+    image: ghcr.io/mason369/music-to-midi-backend:v1.6.0
     command: ["model-init"]
     init: true
     read_only: true
@@ -99,13 +89,7 @@ services:
     deploy: *backend-gpu
 
   gateway:
-    image: ${GATEWAY_IMAGE:-ghcr.io/mason369/music-to-midi-gateway:v1.6.0}
-    build:
-      context: .
-      dockerfile: docker/gateway.Dockerfile
-      args:
-        VCS_REF: ${VCS_REF:-local}
-        BUILD_VERSION: ${BUILD_VERSION:-local}
+    image: ghcr.io/mason369/music-to-midi-gateway:v1.6.0
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -115,17 +99,11 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     environment:
-      MUSIC_TO_MIDI_GATEWAY_MODE: public
-      PUBLIC_ADDRESS: ${PUBLIC_ADDRESS:?Set the public DNS hostname in .env.production}
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set the exact HTTPS public origin in .env.production}
-      ACME_EMAIL: ${ACME_EMAIL:?Set the ACME contact email in .env.production}
-      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?Set the Basic Auth username in .env.production}
-      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?Generate the Argon2id password hash with the setup script}
+      MUSIC_TO_MIDI_GATEWAY_MODE: selfhost
+      SELF_HOST_PORT: ${MUSIC_TO_MIDI_PORT:-7860}
       MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-4GiB}
     ports:
-      - "80:8080"
-      - "443:8443"
-      - "443:8443/udp"
+      - "127.0.0.1:${MUSIC_TO_MIDI_PORT:-7860}:8080"
     volumes:
       - caddy_data:/data
       - caddy_config:/config
@@ -136,6 +114,18 @@ services:
       backend:
         condition: service_healthy
         restart: true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--output-document=/dev/null",
+          "http://127.0.0.1:8080/runtime-config.json",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 networks:
   edge: {}

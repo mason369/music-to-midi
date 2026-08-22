@@ -359,6 +359,56 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
     assert "fn=close_midi_detail" in colab
 
 
+def test_quantization_grid_contract_covers_every_supported_delivery_surface():
+    from src.core.midi_quantization import (
+        DEFAULT_MIDI_QUANTIZE_GRID,
+        DEFAULT_MIDI_QUANTIZE_SCOPE,
+        MIDI_QUANTIZE_GRIDS,
+        MIDI_QUANTIZE_SCOPES,
+    )
+
+    desktop_editor = Path("src/gui/widgets/muscriptor_result.py").read_text(encoding="utf-8")
+    shared_browser_editor = Path("src/gui/web/muscriptor_result_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    space = _space_source()
+    colab = _colab_source()
+    web_html = Path("web/index.html").read_text(encoding="utf-8")
+    web_js = Path("web/app.js").read_text(encoding="utf-8")
+    schemas = Path("src/web_api/schemas.py").read_text(encoding="utf-8")
+    backend_dockerfile = Path("docker/backend.Dockerfile").read_text(encoding="utf-8")
+    gateway_dockerfile = Path("docker/gateway.Dockerfile").read_text(encoding="utf-8")
+    instructions = Path("AGENTS.md").read_text(encoding="utf-8")
+
+    assert MIDI_QUANTIZE_GRIDS == ("1/4", "1/8", "1/16", "1/32", "1/64")
+    assert DEFAULT_MIDI_QUANTIZE_GRID == "1/32"
+    assert MIDI_QUANTIZE_SCOPES == ("all_tracks", "selected_notes")
+    assert DEFAULT_MIDI_QUANTIZE_SCOPE == "all_tracks"
+    assert "MIDI_QUANTIZE_GRIDS" in desktop_editor
+    assert "edit_quantize_grid_combo" in desktop_editor
+    assert "edit_quantize_scope_combo" in desktop_editor
+    assert "DEFAULT_MIDI_QUANTIZE_SCOPE" in desktop_editor
+    assert "MIDI_QUANTIZE_GRIDS" in shared_browser_editor
+    assert '"quantizeGrids"' in shared_browser_editor
+    assert '"defaultQuantizeScope"' in shared_browser_editor
+    assert 'this.quantizeScope === "all_tracks"' in shared_browser_editor
+    for source in (space, colab):
+        assert "build_muscriptor_result_html(" in source
+        assert "muscriptor_result_head" in source
+
+    assert 'id="quantizeNotes"' in web_html
+    assert 'id="quantizeGridSelect"' in web_html
+    assert "quantize_notes:" in web_js
+    assert "quantize_grid:" in web_js
+    assert 'quantization.default_scope !== "all_tracks"' in web_js
+    assert "quantize_notes: bool = False" in schemas
+    assert 'quantize_grid: MidiQuantizeGrid = "1/32"' in schemas
+    assert "COPY src ./src" in backend_dockerfile
+    assert "COPY web /srv/web" in gateway_dockerfile
+    assert "桌面版、Space、Colab、独立 Web/API、Docker 以及便携包/可执行入口" in instructions
+    assert "结果编辑器的范围默认“全部轨道”" in instructions
+
+
 def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context():
     for source in (_space_source(), _colab_source()):
         for field in (
@@ -518,9 +568,10 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         assert state["downbeats"] == raw_state["downbeats"]
         assert state["time_signature"] == raw_state["time_signature"]
         assert state["repeat_tempo_per_note_track"] is True
-        assert Path(state["playback_audio_path"]).resolve() == Path(
-            raw_state["playback_audio_path"]
-        ).resolve()
+        assert (
+            Path(state["playback_audio_path"]).resolve()
+            == Path(raw_state["playback_audio_path"]).resolve()
+        )
         assert state["preview_api"] == "./api/render_edited_midi_preview"
         assert state["preview_token"] == "preview-token"
 

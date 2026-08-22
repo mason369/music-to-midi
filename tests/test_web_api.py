@@ -22,6 +22,7 @@ from src.models.data_models import (
 from src.web_api.app import create_app
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.jobs import JobManager
+from src.web_api.schemas import InferenceOptions, ManualMidiOptions
 
 
 @pytest.fixture(autouse=True)
@@ -125,6 +126,8 @@ def inference_options(mode: str = "smart") -> dict:
         "midi_track_mode": "multi_track",
         "tempo_mode": "fixed_auto",
         "custom_bpm": None,
+        "quantize_notes": False,
+        "quantize_grid": "1/32",
         "use_gpu": True,
         "gpu_device": 0,
         "language": "zh_CN",
@@ -183,6 +186,13 @@ def test_capabilities_publish_all_current_modes_and_manual_routes(tmp_path):
                 "fixed_auto",
                 "fixed_manual",
             ]
+            assert payload["midi_quantization"] == {
+                "grids": ["1/4", "1/8", "1/16", "1/32", "1/64"],
+                "default_grid": "1/32",
+                "default_enabled": False,
+                "scopes": ["all_tracks"],
+                "default_scope": "all_tracks",
+            }
             assert payload["runtime"]["gpu_queue_concurrency"] == 1
 
             # Labels must come from the same shared catalog the desktop,
@@ -350,6 +360,90 @@ def test_separation_track_requires_explicit_manual_midi_child_job(tmp_path):
             ]
     finally:
         manager.close()
+
+
+def test_web_request_schemas_default_to_explicitly_disabled_quantization():
+    primary = InferenceOptions()
+    manual = ManualMidiOptions(route="miros")
+
+    assert primary.quantize_notes is False
+    assert primary.quantize_grid == "1/32"
+    assert manual.quantize_notes is False
+    assert manual.quantize_grid == "1/32"
+    for model, kwargs in (
+        (InferenceOptions, {"quantize_grid": "1/128"}),
+        (ManualMidiOptions, {"route": "miros", "quantize_grid": "1/128"}),
+    ):
+        with pytest.raises(ValueError, match="quantize_grid"):
+            model(**kwargs)
+
+
+def test_http_engine_applies_requested_grid_once_after_midi_generation(tmp_path: Path):
+    path = tmp_path / "http-quantize.mid"
+    midi = mido.MidiFile(ticks_per_beat=480)
+    track = mido.MidiTrack()
+    track.append(mido.Message("note_on", note=60, velocity=90, time=31))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=33))
+    midi.tracks.append(track)
+    second_track = mido.MidiTrack()
+    second_track.append(mido.Message("note_on", note=67, velocity=81, time=49))
+    second_track.append(mido.Message("note_off", note=67, velocity=0, time=30))
+    midi.tracks.append(second_track)
+    midi.save(path)
+
+    report = InferenceEngine._apply_requested_quantization(
+        path,
+        {"quantize_notes": True, "quantize_grid": "1/64"},
+    )
+
+    assert report == {
+        "enabled": True,
+        "grid": "1/64",
+        "grid_ticks": 30,
+        "paired_note_count": 2,
+    }
+    quantized = mido.MidiFile(path)
+    note_ticks_by_track = []
+    for track in quantized.tracks:
+        absolute = 0
+        note_ticks = []
+        for message in track:
+            absolute += int(message.time)
+            if message.type in {"note_on", "note_off"}:
+                note_ticks.append(absolute)
+        note_ticks_by_track.append(note_ticks)
+    assert note_ticks_by_track == [[30, 60], [60, 90]]
+
+    before = path.read_bytes()
+    assert (
+        InferenceEngine._apply_requested_quantization(
+            path,
+            {"quantize_notes": False, "quantize_grid": "1/4"},
+        )
+        is None
+    )
+    assert path.read_bytes() == before
+
+
+def test_http_engine_disables_legacy_quantizer_to_prevent_double_quantization():
+    primary = InferenceEngine._primary_config(inference_options())
+    manual = InferenceEngine._manual_config(
+        {
+            "route": "miros",
+            "muscriptor_instruments": [],
+            "muscriptor_processing_chain": "official",
+            "tempo_mode": "fixed_auto",
+            "custom_bpm": None,
+            "quantize_notes": True,
+            "quantize_grid": "1/32",
+            "use_gpu": True,
+            "gpu_device": 0,
+            "language": "zh_CN",
+        }
+    )
+
+    assert primary.quantize_notes is False
+    assert manual.quantize_notes is False
 
 
 def test_manual_midi_child_uses_the_parent_original_mix_as_tempo_source(tmp_path):

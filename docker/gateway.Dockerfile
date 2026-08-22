@@ -15,9 +15,11 @@ LABEL org.opencontainers.image.title="Music to MIDI gateway" \
 
 COPY web /srv/web
 COPY docker/Caddyfile /etc/caddy/Caddyfile
+COPY docker/Caddyfile.selfhost /etc/caddy/Caddyfile.selfhost
 COPY docker/gateway-entrypoint.sh /usr/local/bin/music-to-midi-gateway
 
 RUN caddy fmt --overwrite /etc/caddy/Caddyfile \
+    && caddy fmt --overwrite /etc/caddy/Caddyfile.selfhost \
     && PUBLIC_ADDRESS=container-build.example \
        PUBLIC_ORIGIN=https://container-build.example \
        ACME_EMAIL=container-build@example.com \
@@ -25,6 +27,9 @@ RUN caddy fmt --overwrite /etc/caddy/Caddyfile \
        BASIC_AUTH_HASH='$argon2id$v=19$m=47104,t=1,p=1$zJPvVe48N64JUa9MFlVhiw$b5Tznu0PxnA4TciY6qYe2BFPxncF1ePQaeNukHhH1cU' \
        MAX_REQUEST_BODY_SIZE=1MiB \
        caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+    && SELF_HOST_PORT=7860 \
+       MAX_REQUEST_BODY_SIZE=1MiB \
+       caddy validate --config /etc/caddy/Caddyfile.selfhost --adapter caddyfile \
     && addgroup -S -g 10001 caddyapp \
     && adduser -S -D -H -u 10001 -G caddyapp caddyapp \
     && chown -R 10001:10001 /srv/web \

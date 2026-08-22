@@ -37,9 +37,9 @@
 
 浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取终态，并从响应中的 `download_url` 下载 MIDI 或分轨 WAV。失败响应包含处理错误，且不提供下载文件。
 
-公网 Docker 部署使用独立的同源生产栈：Caddy 只暴露 `80/443`，负责自动 HTTPS、Argon2id Basic Auth 和静态前端；推理 API 只在容器内部网络监听。镜像不打包外置 checkpoint，运维者通过一次显式 `model-init` 命令只准备所选模型。完整前置条件、模型配置、持久化、备份和验收命令见 [Docker 生产部署](docs/docker-deployment.md)。
+Issue #9 对应的是完整 Docker 自托管发行，不是代建公网网站，也不只是一个 `docker pull`。每个正式版本会同时发布无外置模型的后端/网关镜像、digest 固定的 Compose、环境模板、Windows/Linux 管理脚本、镜像清单与 SHA-256。默认只监听 `127.0.0.1:7860`，无需域名、ACME 邮箱、登录密码或 SSH 密码；用户在 `.env` 选择模型后执行一次显式 `model-init`，常驻推理容器离线运行。完整下载、模型配置、持久化、升级/回滚和验收见 [Docker 自托管发行](docs/docker-deployment.md)。
 
-上面的源码/EXE 双端口方案仍只面向受信任局域网，本身不内置认证、授权或 TLS；不要把其 `5173` 或 `8765` 直接映射到互联网。Docker 公网栈当前是“经认证的单一所有者”边界，不提供多租户、账号系统或逐任务授权。
+上面的源码/EXE 双端口方案仍只面向受信任局域网，本身不内置认证、授权或 TLS；不要把其 `5173` 或 `8765` 直接映射到互联网。确实需要公网时，仓库另保留自动 HTTPS + Argon2id Basic Auth 的高级 Compose；它仍是“经认证的单一所有者”边界，不提供多租户、账号系统或逐任务授权。
 
 ## 统一界面演示
 
@@ -73,7 +73,8 @@
 | 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 PolarFormer 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
 | 钢琴转写 | `PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 和 `PIANO_BYTEDANCE_PEDAL` 分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。 |
 | MuScriptor 乐器约束 | 空选时由模型检测乐器；非空选择会传入官方 `instruments` 与 `prelude_forcing` 接口，生成阶段屏蔽未选 token，并校验事件流和最终 MIDI。越界结果不会发布。 |
-| 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。模型事件映射到音乐网格，但不做量化。 |
+| 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。默认不量化模型事件；只有用户显式执行量化时才吸附到所选网格。 |
+| 音符量化 | 默认关闭。桌面、Space、Colab 的结果编辑器提供 `1/4`、`1/8`、`1/16`、`1/32`、`1/64` 网格，范围默认“全部轨道”并可切换为“所选音符”；切换范围或网格不会改音符，点击“量化”才同时吸附目标音符的起点和时值。独立 Web/API（含 Docker）固定量化输出 MIDI 的全部轨道，勾选后在 MIDI 写出后严格执行一次，并校验 tempo、拍号、控制器等非音符事件的绝对 tick 未变。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |
 | 试听与 DAW | MuScriptor 工作台以 MIDI 合成轨为主时钟，同步 MIDI、原音和乐器分轨，并校正超过 80 ms 的漂移。DAW 导入时需启用 tempo map；MuseScore 3/4 可能重新跟拍未量化演奏并改写乐谱页显示 BPM，但不会改变文件中已经校验的 tempo。 |
 | 输入与入口 | 支持 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A`；非 WAV 通过 FFmpeg 转为 44.1 kHz PCM WAV。桌面版、Space 与 Colab 提供相同的七种处理模式。 |
@@ -219,7 +220,7 @@ python download_fluidsynth_runtime.py
 ```
 
 界面和官方公开演示保持同一功能语义：可搜索的标签多选与清除、空选自动检测、
-实时转写进度/音符、以 MIDI 为主时钟的可拖动播放进度条、钢琴卷帘、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
+实时转写进度/音符、以 MIDI 为主时钟的可拖动播放进度条、钢琴卷帘、默认全部轨道的量化范围与五档显式量化网格、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
 逐乐器静音/独奏，以及 MIDI、合成 WAV、原音左声道/MIDI 右声道立体声下载。
 这些控制连接真实后端资产：逐乐器播放来自最终 MIDI 经官方 MuseScore General
 SoundFont 与 FluidSynth 合成，不是无效按钮或 UI 模拟。

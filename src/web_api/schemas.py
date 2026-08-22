@@ -19,6 +19,8 @@ from src.models.data_models import (
     YourMT3Model,
 )
 
+MidiQuantizeGrid = Literal["1/4", "1/8", "1/16", "1/32", "1/64"]
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -47,6 +49,8 @@ class InferenceOptions(BaseModel):
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value
     tempo_mode: str = TempoMode.FIXED_AUTO.value
     custom_bpm: float | None = None
+    quantize_notes: bool = False
+    quantize_grid: MidiQuantizeGrid = "1/32"
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
     language: Literal["zh_CN", "en_US"] = "zh_CN"
@@ -145,6 +149,8 @@ class ManualMidiOptions(BaseModel):
     muscriptor_processing_chain: str = MuscriptorProcessingChain.OFFICIAL.value
     tempo_mode: str = TempoMode.FIXED_AUTO.value
     custom_bpm: float | None = None
+    quantize_notes: bool = False
+    quantize_grid: MidiQuantizeGrid = "1/32"
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
     language: Literal["zh_CN", "en_US"] = "zh_CN"

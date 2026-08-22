@@ -7,7 +7,7 @@ from pathlib import Path
 
 _IGNORED_NAMES = {"__pycache__", ".pytest_cache", ".coverage", ".DS_Store"}
 _TEXT_SUFFIXES = {"", ".ini", ".md", ".py", ".sh", ".txt"}
-PATCHED_YOURMT3_MANIFEST_SHA256 = "94232c1f4a5f8f3a0f19bb5b466d638f80d9d2dba4628deb8d0c2ce2c5157b34"
+PATCHED_YOURMT3_MANIFEST_SHA256 = "05440b00738f2ebceee3067a12ee1b3ee87bbb976165149050f1f803c2059209"
 PATCHED_YOURMT3_MANIFEST_FILE_COUNT = 106
 
 

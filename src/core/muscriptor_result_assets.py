@@ -23,7 +23,7 @@ from src.utils.fluidsynth_runtime import (
     get_fluidsynth_executable,
     get_fluidsynth_subprocess_env,
 )
-from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+from src.utils.muscriptor_soundfont_downloader import validate_muscriptor_soundfont
 
 _PROGRAM_TO_INSTRUMENT = {
     program: instrument for instrument, program in MUSCRIPTOR_REPRESENTATIVE_PROGRAMS.items()
@@ -401,7 +401,7 @@ def prepare_midi_preview_assets(
 
     checkpoint()
     executable = get_fluidsynth_executable()
-    soundfont = download_muscriptor_soundfont(printer=lambda _message: None)
+    soundfont = validate_muscriptor_soundfont()
     raw_instrument_wavs: dict[str, Path] = {}
     for instrument, instrument_notes in grouped.items():
         checkpoint()
@@ -939,7 +939,8 @@ def prepare_midi_playback_assets(
     report(0.02, "Validating FluidSynth")
     executable = get_fluidsynth_executable()
     report(0.05, "Preparing the official MuseScore General SoundFont")
-    soundfont = download_muscriptor_soundfont(printer=lambda message: report(0.07, message))
+    soundfont = validate_muscriptor_soundfont()
+    report(0.07, f"SoundFont identity verified: {soundfont}")
     last_note_end = max(note.end for note in notes)
     transport_boundary = max(source_frames / _SAMPLE_RATE, last_note_end)
 

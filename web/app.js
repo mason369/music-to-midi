@@ -567,6 +567,24 @@ function populateControls() {
   tempoMode.innerHTML = "";
   caps.tempo_modes.forEach((item) => option(tempoMode, item.id, state.language === "zh_CN" ? item.label_zh : item.label_en));
   tempoMode.value = [...tempoMode.options].some((item) => item.value === selectedTempoMode) ? selectedTempoMode : "fixed_auto";
+  const quantization = caps.midi_quantization;
+  if (!quantization
+      || !Array.isArray(quantization.grids)
+      || quantization.grids.length === 0
+      || !quantization.grids.includes(quantization.default_grid)
+      || !Array.isArray(quantization.scopes)
+      || quantization.scopes.length !== 1
+      || quantization.scopes[0] !== "all_tracks"
+      || quantization.default_scope !== "all_tracks") {
+    throw new Error("Backend capabilities contain an invalid MIDI quantization contract");
+  }
+  const quantizeGrid = $("#quantizeGridSelect");
+  const selectedQuantizeGrid = quantizeGrid.value || quantization.default_grid;
+  quantizeGrid.innerHTML = "";
+  quantization.grids.forEach((grid) => option(quantizeGrid, grid, grid));
+  quantizeGrid.value = quantization.grids.includes(selectedQuantizeGrid)
+    ? selectedQuantizeGrid
+    : quantization.default_grid;
   const limits = caps.limits;
   $("#customBpm").min = limits.custom_bpm_min;
   $("#customBpm").max = limits.custom_bpm_max;
@@ -636,6 +654,9 @@ function updateConditionalControls() {
   const manualTempo = $("#tempoModeSelect").value === "fixed_manual";
   $("#manualBpmField").hidden = !manualTempo;
   $("#customBpm").disabled = !manualTempo;
+  const quantizeEnabled = $("#quantizeNotes").checked;
+  $("#quantizeGridSelect").disabled = !quantizeEnabled;
+  $("#quantizeGridField").classList.toggle("is-disabled", !quantizeEnabled);
   $("#routeDescription").textContent = t(`route.${state.selectedMode}`);
 }
 function updateStartLabel() {
@@ -717,6 +738,8 @@ function buildInferenceOptions() {
     midi_track_mode: $("#trackModeSelect").value || "multi_track",
     tempo_mode: tempoMode,
     custom_bpm: bpm,
+    quantize_notes: $("#quantizeNotes").checked,
+    quantize_grid: $("#quantizeGridSelect").value,
     use_gpu: true,
     gpu_device: 0,
     language: state.language,
@@ -1045,7 +1068,7 @@ async function convertTrackToMidi(track, button) {
   }
   if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
   const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
-  const options = { route: track.route, muscriptor_instruments: [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, use_gpu: true, gpu_device: 0, language: state.language };
+  const options = { route: track.route, muscriptor_instruments: [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, quantize_notes: $("#quantizeNotes").checked, quantize_grid: $("#quantizeGridSelect").value, use_gpu: true, gpu_device: 0, language: state.language };
   button.disabled = true; updateTrackStatus(track, "track.submitting", {}, "is-working");
   try {
     let job;
@@ -1212,6 +1235,8 @@ function bindEvents() {
   $("#backendSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
   $("#tempoModeSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
   $("#customBpm").addEventListener("input", updateWorkflowGuide);
+  $("#quantizeNotes").addEventListener("change", updateConditionalControls);
+  $("#quantizeGridSelect").addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
   $("#startButton").addEventListener("click", startPrimaryJob); $("#stopButton").addEventListener("click", stopCurrentJob);
   $("#guideAction").addEventListener("click", performGuideAction);
   $$('[data-guide-target]').forEach((button) => button.addEventListener("click", () => scrollToWorkflowTarget(button.dataset.guideTarget)));

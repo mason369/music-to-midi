@@ -1,3 +1,4 @@
+import ast
 import json
 import subprocess
 import sys
@@ -33,6 +34,39 @@ def test_desktop_space_and_colab_use_the_same_patched_yourmt3_source_tree():
     manifest_sha256, file_count = validate_patched_yourmt3_source("YourMT3/amt/src")
     assert manifest_sha256 == PATCHED_YOURMT3_MANIFEST_SHA256
     assert file_count == PATCHED_YOURMT3_MANIFEST_FILE_COUNT
+
+
+def test_controlled_yourmt3_python_tree_is_syntax_valid_and_unfinished_generator_fails_explicitly():
+    source_root = Path("YourMT3/amt/src")
+    parsed_files: dict[Path, ast.Module] = {}
+    for path in sorted(source_root.rglob("*.py")):
+        parsed_files[path] = ast.parse(
+            path.read_text(encoding="utf-8-sig"),
+            filename=str(path),
+        )
+
+    generator_path = source_root / "utils" / "preprocess" / "preprocess_rnsynth.py"
+    generator = next(
+        node
+        for node in parsed_files[generator_path].body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "random_nsynth_generator"
+    )
+    executable_body = [
+        node
+        for node in generator.body
+        if not (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+    ]
+    assert len(executable_body) == 1
+    assert isinstance(executable_body[0], ast.Raise)
+    error = executable_body[0].exc
+    assert isinstance(error, ast.Call)
+    assert isinstance(error.func, ast.Name)
+    assert error.func.id == "NotImplementedError"
 
 
 def test_space_imports_from_the_repository_parent_layout_when_started_in_space_dir():

@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
+from src.model_profile_runtime_probe import MODEL_PROFILE_RUNTIME_PROBE_SWITCH
 
 ENABLED_PROFILES_ENV = "MUSIC_TO_MIDI_ENABLED_PROFILES"
 REQUIRE_ENABLED_PROFILES_ENV = "MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES"
@@ -133,43 +134,50 @@ def _selection_from_environment() -> tuple[str, bool, tuple[str, ...], str | Non
 
 
 def _beat_this_unavailable_reason() -> str | None:
-    from download_beat_this_model import is_beat_this_model_available
+    from src.core.beat_this_tracker import validate_beat_this_checkpoint
 
-    if is_beat_this_model_available():
+    try:
+        validate_beat_this_checkpoint()
+    except (OSError, RuntimeError):
+        return "Beat This final0 checkpoint is missing or failed its identity check"
+    else:
         return None
-    return "Beat This final0 checkpoint is missing or failed its identity check"
+
+
+def _midi_playback_unavailable_reason() -> str | None:
+    from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+    from src.utils.muscriptor_soundfont_downloader import validate_muscriptor_soundfont
+
+    errors: list[str] = []
+    try:
+        get_fluidsynth_executable()
+    except (OSError, RuntimeError) as exc:
+        errors.append(f"FluidSynth runtime failed validation: {exc}")
+    try:
+        validate_muscriptor_soundfont()
+    except (OSError, RuntimeError) as exc:
+        errors.append(f"MuseScore General SoundFont failed validation: {exc}")
+    return "; ".join(errors) or None
 
 
 @lru_cache(maxsize=2)
 def _audio_separator_runtime_unavailable_reason(profile_id: str) -> str | None:
-    if profile_id == "vocal_split":
-        probe = """
-import json
-from src.utils.runtime_paths import activate_audio_separator_runtime
-activate_audio_separator_runtime()
-import librosa
-import onnxruntime as ort
-import soundfile
-import torch
-import yaml
-from audio_separator.separator.uvr_lib_v5.roformer.bs_roformer import BSRoformer
-providers = ort.get_available_providers()
-if 'CUDAExecutionProvider' not in providers:
-    raise RuntimeError(f'PolarFormer requires CUDAExecutionProvider; available providers={providers}')
-print(json.dumps({'providers': providers}))
-"""
-    elif profile_id == "six_stem_split":
-        probe = """
-from src.utils.audio_separator_compat import get_separator_cls
-get_separator_cls()
-print('audio-separator runtime ready')
-"""
-    else:
+    if profile_id not in SEPARATION_PROFILE_IDS:
         raise ValueError(f"unsupported audio-separator profile: {profile_id}")
+
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, MODEL_PROFILE_RUNTIME_PROBE_SWITCH, profile_id]
+    else:
+        probe = (
+            "import sys\n"
+            "from src.model_profile_runtime_probe import run_model_profile_runtime_probe\n"
+            "raise SystemExit(run_model_profile_runtime_probe(sys.argv[1]))\n"
+        )
+        command = [sys.executable, "-c", probe, profile_id]
 
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", probe],
+            command,
             cwd=str(Path(__file__).resolve().parents[1]),
             env=os.environ.copy(),
             stdout=subprocess.PIPE,
@@ -193,9 +201,15 @@ print('audio-separator runtime ready')
     return None
 
 
-def _profile_unavailable_reason(profile_id: str, beat_reason: str | None) -> str | None:
+def _profile_unavailable_reason(
+    profile_id: str,
+    beat_reason: str | None,
+    playback_reason: str | None = None,
+) -> str | None:
     if profile_id in DIRECT_MIDI_PROFILE_IDS and beat_reason:
         return beat_reason
+    if profile_id in DIRECT_MIDI_PROFILE_IDS and playback_reason:
+        return playback_reason
 
     if profile_id.startswith("yourmt3:"):
         from src.core.yourmt3_transcriber import YourMT3Transcriber
@@ -307,9 +321,16 @@ def _inspect_model_profiles_cached(
             readiness_error=configuration_error,
         )
 
-    beat_reason = _beat_this_unavailable_reason() if any(
-        profile_id in DIRECT_MIDI_PROFILE_IDS for profile_id in selected
-    ) else None
+    beat_reason = (
+        _beat_this_unavailable_reason()
+        if any(profile_id in DIRECT_MIDI_PROFILE_IDS for profile_id in selected)
+        else None
+    )
+    playback_reason = (
+        _midi_playback_unavailable_reason()
+        if any(profile_id in DIRECT_MIDI_PROFILE_IDS for profile_id in selected)
+        else None
+    )
     statuses: list[ModelProfileStatus] = []
     for profile_id in ALL_PROFILE_IDS:
         if profile_id not in selected:
@@ -323,7 +344,7 @@ def _inspect_model_profiles_cached(
             )
             continue
         try:
-            reason = _profile_unavailable_reason(profile_id, beat_reason)
+            reason = _profile_unavailable_reason(profile_id, beat_reason, playback_reason)
         except Exception as exc:
             reason = f"model-profile readiness check failed: {exc}"
         statuses.append(
@@ -480,17 +501,19 @@ def prepare_profiles(
 
     if any(profile_id in DIRECT_MIDI_PROFILE_IDS for profile_id in selected):
         from download_beat_this_model import download_beat_this_model
+        from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+        from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
 
         printer(f"ready beat_this: {download_beat_this_model(printer=printer)}")
+        printer("ready musescore_soundfont: " f"{download_muscriptor_soundfont(printer=printer)}")
+        printer(f"ready fluidsynth: {get_fluidsynth_executable()}")
     for profile_id in ALL_PROFILE_IDS:
         if profile_id in selected:
             _prepare_one(profile_id, printer)
 
     os.environ[ENABLED_PROFILES_ENV] = ",".join(selected)
     snapshot = inspect_model_profiles(refresh=True)
-    unavailable = [
-        item for item in snapshot.profiles if item.enabled and not item.available
-    ]
+    unavailable = [item for item in snapshot.profiles if item.enabled and not item.available]
     if unavailable:
         details = "; ".join(
             f"{item.id}: {item.unavailable_reason or 'unknown failure'}" for item in unavailable
@@ -504,7 +527,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Prepare or verify explicit Music to MIDI model profiles"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    prepare = subparsers.add_parser("prepare", help="download and strictly verify selected profiles")
+    prepare = subparsers.add_parser(
+        "prepare", help="download and strictly verify selected profiles"
+    )
     prepare.add_argument(
         "--profiles",
         required=True,

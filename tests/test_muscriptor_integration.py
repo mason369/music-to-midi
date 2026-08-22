@@ -766,8 +766,8 @@ def test_preview_assets_render_real_per_instrument_sources(tmp_path: Path, monke
     )
     monkeypatch.setattr(
         muscriptor_result_assets,
-        "download_muscriptor_soundfont",
-        lambda printer: soundfont,
+        "validate_muscriptor_soundfont",
+        lambda: soundfont,
     )
 
     def fake_synthesize(_executable, _soundfont, midi_path, output_path, cancel_check=None):
@@ -866,8 +866,8 @@ def test_preview_assets_round_up_non_frame_aligned_note_boundary(
     )
     monkeypatch.setattr(
         muscriptor_result_assets,
-        "download_muscriptor_soundfont",
-        lambda printer: soundfont,
+        "validate_muscriptor_soundfont",
+        lambda: soundfont,
     )
 
     def fake_synthesize(_executable, _soundfont, _midi_path, output_path, cancel_check=None):
@@ -1599,8 +1599,8 @@ def test_final_playback_transport_covers_notes_beyond_source_audio(
     )
     monkeypatch.setattr(
         muscriptor_result_assets,
-        "download_muscriptor_soundfont",
-        lambda printer: soundfont,
+        "validate_muscriptor_soundfont",
+        lambda: soundfont,
     )
 
     def fake_synthesize(_executable, _soundfont, _midi_path, output_path, cancel_check=None):
@@ -1677,7 +1677,7 @@ def test_empty_edited_midi_builds_exact_silence_without_invoking_fluidsynth(
     )
     monkeypatch.setattr(
         muscriptor_result_assets,
-        "download_muscriptor_soundfont",
+        "validate_muscriptor_soundfont",
         lambda **_kwargs: pytest.fail(
             "The SoundFont must not be loaded for an intentionally empty edit"
         ),
@@ -2229,7 +2229,7 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
         assert widget.bpm_spin.value() == pytest.approx(132.5)
         assert widget.speed_spin.value() == pytest.approx(132.5 / 117.9, abs=0.001)
         assert widget._playback_engine._source.playback_rate == pytest.approx(132.5 / 117.9)
-        assert widget._editor_grid_seconds() == pytest.approx(60.0 / 117.9 / 4.0)
+        assert widget._editor_grid_seconds() == pytest.approx(60.0 / 117.9 * 4.0 / 32.0)
 
         widget.set_detected_bpm(90.0)
 
@@ -2967,7 +2967,7 @@ def test_desktop_midi_editor_uses_daw_multi_select_clipboard_and_nudge_shortcuts
         assert len(widget._edit_clipboard) == 2
 
         QTest.keyClick(widget.roll, Qt.Key.Key_Right)
-        assert [note.start for note in widget._edited_notes] == pytest.approx([0.255, 1.255])
+        assert [note.start for note in widget._edited_notes] == pytest.approx([0.1925, 1.1925])
         QTest.keyClick(
             widget.roll,
             Qt.Key.Key_Up,
@@ -2980,7 +2980,7 @@ def test_desktop_midi_editor_uses_daw_multi_select_clipboard_and_nudge_shortcuts
             Qt.Key.Key_Q,
             Qt.KeyboardModifier.AltModifier,
         )
-        assert [note.start for note in widget._edited_notes] == pytest.approx([0.25, 1.25])
+        assert [note.start for note in widget._edited_notes] == pytest.approx([0.1875, 1.1875])
 
         QTest.keyClick(
             widget.roll,
@@ -3174,7 +3174,7 @@ def test_desktop_daw_grid_and_quantize_follow_reference_ticks_not_target_bpm(
         60,
         90,
         0.14,
-        0.64,
+        0.61,
         program=0,
         is_drum=False,
         track_index=0,
@@ -3189,21 +3189,33 @@ def test_desktop_daw_grid_and_quantize_follow_reference_ticks_not_target_bpm(
         widget._begin_editor_session((note,), 4.0)
         widget.edit_toggle.setChecked(True)
         widget.roll.set_selected_index(0)
+        assert [
+            widget.edit_quantize_grid_combo.itemText(index)
+            for index in range(widget.edit_quantize_grid_combo.count())
+        ] == ["1/4", "1/8", "1/16", "1/32", "1/64"]
+        assert widget.edit_quantize_grid_combo.currentText() == "1/32"
+        assert widget._editor_grid_seconds() == pytest.approx(0.0625)
         widget.edit_quantize_button.click()
         app.processEvents()
 
-        assert widget._editor_grid_seconds() == pytest.approx(0.125)
         assert widget._edited_notes[0].start == pytest.approx(0.125)
+        assert widget._edited_notes[0].end == pytest.approx(0.625)
         assert widget.roll._daw_reference_bpm == pytest.approx(120.0)
         assert widget.roll._daw_time_signature == (3, 4)
 
+        quantized_note = widget._edited_notes[0]
+        widget.edit_quantize_grid_combo.setCurrentText("1/8")
+        app.processEvents()
+        assert widget._editor_grid_seconds() == pytest.approx(0.25)
+        assert widget._edited_notes[0] == quantized_note
+
         widget.bpm_spin.setValue(90.0)
         app.processEvents()
-        assert widget._editor_grid_seconds() == pytest.approx(0.125)
+        assert widget._editor_grid_seconds() == pytest.approx(0.25)
         assert widget.roll._daw_reference_bpm == pytest.approx(120.0)
 
         image = widget.roll.grab().toImage()
-        sixteenth_x = round(widget.roll.x_for_time_float(0.125))
+        selected_grid_x = round(widget.roll.x_for_time_float(0.25))
         beat_x = round(widget.roll.x_for_time_float(0.5))
         bar_x = round(widget.roll.x_for_time_float(1.5))
         plain_x = round(widget.roll.x_for_time_float(0.2))
@@ -3213,10 +3225,86 @@ def test_desktop_daw_grid_and_quantize_follow_reference_ticks_not_target_bpm(
             return {image.pixelColor(value, y).name() for value in range(x - 2, x + 3)}
 
         plain_color = image.pixelColor(plain_x, y).name()
-        assert "#263d59" in colors_around(sixteenth_x)
+        assert "#263d59" in colors_around(selected_grid_x)
         assert "#36506f" in colors_around(beat_x)
         assert "#78aee8" in colors_around(bar_x)
         assert plain_color not in {"#263d59", "#36506f", "#78aee8"}
+    finally:
+        widget.shutdown()
+
+
+def test_desktop_quantize_scope_defaults_to_all_tracks_and_selected_is_explicit(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    audio = _silent_wav(tmp_path / "quantize-scope.wav", 4.0)
+    notes = (
+        MuscriptorRollNote(
+            "acoustic_piano",
+            60,
+            90,
+            0.14,
+            0.61,
+            program=0,
+            is_drum=False,
+            track_index=0,
+            channel=0,
+        ),
+        MuscriptorRollNote(
+            "electric_guitar_clean",
+            64,
+            80,
+            0.19,
+            0.62,
+            program=27,
+            is_drum=False,
+            track_index=3,
+            channel=2,
+        ),
+    )
+    widget = MuscriptorResultWidget(
+        str(audio),
+        ["acoustic_piano", "electric_guitar_clean"],
+    )
+    try:
+        widget.set_bpm_context(120.0, 120.0)
+        widget.roll.set_notes(notes, duration=4.0)
+        widget._begin_editor_session(notes, 4.0)
+        widget.edit_toggle.setChecked(True)
+        widget.roll.set_selected_indices((), primary=None)
+        app.processEvents()
+
+        assert [
+            widget.edit_quantize_scope_combo.itemData(index)
+            for index in range(widget.edit_quantize_scope_combo.count())
+        ] == ["all_tracks", "selected_notes"]
+        assert widget.edit_quantize_scope_combo.currentData() == "all_tracks"
+        assert widget.edit_quantize_button.isEnabled()
+
+        widget.edit_quantize_button.click()
+        app.processEvents()
+        assert widget._edited_notes[0].start == pytest.approx(0.125)
+        assert widget._edited_notes[0].end == pytest.approx(0.625)
+        assert widget._edited_notes[1].start == pytest.approx(0.1875)
+        assert widget._edited_notes[1].end == pytest.approx(0.625)
+
+        widget.edit_undo_button.click()
+        app.processEvents()
+        assert widget._edited_notes == notes
+        widget.edit_quantize_scope_combo.setCurrentIndex(
+            widget.edit_quantize_scope_combo.findData("selected_notes")
+        )
+        app.processEvents()
+        assert not widget.edit_quantize_button.isEnabled()
+        widget.roll.set_selected_index(0)
+        app.processEvents()
+        assert widget.edit_quantize_button.isEnabled()
+
+        widget.edit_quantize_button.click()
+        app.processEvents()
+        assert widget._edited_notes[0].start == pytest.approx(0.125)
+        assert widget._edited_notes[0].end == pytest.approx(0.625)
+        assert widget._edited_notes[1] == notes[1]
     finally:
         widget.shutdown()
         widget.close()
@@ -3737,6 +3825,8 @@ def test_browser_midi_editor_exposes_daw_commands_and_upward_resize_handle():
     assert "ResultSession.prototype.copySelected" in MUSCRIPTOR_RESULT_JS
     assert "ResultSession.prototype.pasteNotes" in MUSCRIPTOR_RESULT_JS
     assert "ResultSession.prototype.quantizeSelected" in MUSCRIPTOR_RESULT_JS
+    assert 'this.quantizeScope === "all_tracks"' in MUSCRIPTOR_RESULT_JS
+    assert "this.quantizeScopeSelect" in MUSCRIPTOR_RESULT_JS
     assert "ResultSession.prototype.transformSelected" in MUSCRIPTOR_RESULT_JS
     assert "ResultSession.prototype.setZoomRatio" in MUSCRIPTOR_RESULT_JS
     assert "ResultSession.prototype.setZoomPps" in MUSCRIPTOR_RESULT_JS
@@ -3814,6 +3904,10 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert '"beatTimes": [0.25, 0.75, 1.25]' in markup
     assert '"downbeats": [0.25, 1.25]' in markup
     assert '"repeatTempoPerNoteTrack": true' in markup
+    assert '"quantizeGrids": ["1/4", "1/8", "1/16", "1/32", "1/64"]' in markup
+    assert '"defaultQuantizeGrid": "1/32"' in markup
+    assert '"quantizeScopes": ["all_tracks", "selected_notes"]' in markup
+    assert '"defaultQuantizeScope": "all_tracks"' in markup
     assert '"previewApi": "./api/render_edited_midi_preview"' in markup
     assert '"previewToken": "opaque-preview-token"' in markup
     assert '"originalUrl": "/gradio_api/file=C%3A/tmp/original-live.wav"' in markup
@@ -3829,8 +3923,10 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert "renderEditedPreview" in MUSCRIPTOR_RESULT_JS
     assert "Invalid Beat This grid in piano-roll manifest" in MUSCRIPTOR_RESULT_JS
     assert "repeatTempoPerNoteTrack" in MUSCRIPTOR_RESULT_JS
-    assert "return 60 / referenceBpm / 4" in MUSCRIPTOR_RESULT_JS
-    assert "subdivisionSeconds = quarterSeconds / 4" in MUSCRIPTOR_RESULT_JS
+    assert "return 60 / referenceBpm * 4 / Number(match[1])" in MUSCRIPTOR_RESULT_JS
+    assert "subdivisionSeconds = this.gridSeconds()" in MUSCRIPTOR_RESULT_JS
+    assert "this.quantizeGridSelect" in MUSCRIPTOR_RESULT_JS
+    assert "quantizedDuration = Math.max(grid" in MUSCRIPTOR_RESULT_JS
     assert 'painter.fillText((downbeatIndex + 1) + ".1"' in MUSCRIPTOR_RESULT_JS
 
 

@@ -243,50 +243,10 @@ def random_nsynth_generator(data_home: os.PathLike,
             }
         }
     """
-    # Directory and file paths
-    base_dir = os.path.join(data_home, dataset_name + '_yourmt3_16k')
-    output_index_dir = os.path.join(data_home, 'yourmt3_indexes')
-    os.makedirs(output_index_dir, exist_ok=True)
-
-    # Setup logger
-    log_file = os.path.join(base_dir, 'sound_genetation_log.txt')
-    logger = setup_logger(log_file)
-
-    # Load annotation json file as dictionary
-    split = 'validation'
-    metadata_file = os.path.join(base_dir, split, 'examples.json')
-
-    # Create a sound_info dictionary
-    sound_info_by_channel_group, num_channel_groups = create_sound_info(
-        base_dir, logger, split, metadata_file)
-
-    # Gnenerate random note sequences
-    max_frames_per_file = int(generation_minutes_per_file * 60 * 16000)
-    sound_gens = [
-        random_key_cycle(sound_info_by_channel_group[key])
-        for key in sorted(sound_info_by_channel_group.keys())
-    ]
-
-    # 5-minute audio generation
-    notes = []
-    y = np.zeros((num_channel_groups, max_frames_per_file), dtype=np.float32) # (C, L)
-    bass_channel = 0  # loop for a cycle of bass channel generation
-    cur_frame = 0
-    # is_last_element_bass = False
-    #while cur_frame < max_frames_per_file and is_last_element_bass == False:
-
-        # x: source audio, y: target audio for each channel
-        x_info, is_last_element = next(sound_gens[ch])
-        if ch == bass_channel:
-            is_last_element = is_last_element_bass
-        
-        # info about this channel
-        onset_in_frame = cur_frame
-        offset_in_frame = cur_frame + int(x_info['dur_sec'] * 16000)
-
-        x = load_audio_file(x_info['audio_file'], fs=16000)
-        x = x[:int(x_info['dur_sec'] * 16000)]
-        y[ch, :] = 0
+    raise NotImplementedError(
+        "The upstream YourMT3 random NSynth generator is unfinished and "
+        "is not part of the Music to MIDI inference runtime."
+    )
 
 
 

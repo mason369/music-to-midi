@@ -11,6 +11,7 @@ from typing import Callable
 import mido
 
 from src.core.manual_midi import build_manual_midi_config
+from src.core.midi_quantization import quantize_midi_notes
 from src.models.data_models import (
     Config,
     MuscriptorProcessingChain,
@@ -73,6 +74,9 @@ class InferenceEngine:
         config.midi_track_mode = str(options["midi_track_mode"])
         config.tempo_mode = str(options.get("tempo_mode") or TempoMode.FIXED_AUTO.value)
         config.custom_bpm = options.get("custom_bpm")
+        # HTTP quantization is an explicit post-write stage below. Keep the
+        # legacy NoteEvent generator disabled so no route can quantize twice.
+        config.quantize_notes = False
         config.use_gpu = bool(options["use_gpu"])
         config.gpu_device = int(options["gpu_device"])
         config.vocal_split_merge_midi = False
@@ -88,6 +92,7 @@ class InferenceEngine:
             gpu_device=int(options["gpu_device"]),
             tempo_mode=str(options.get("tempo_mode") or TempoMode.FIXED_AUTO.value),
             custom_bpm=options.get("custom_bpm"),
+            quantize_notes=False,
             muscriptor_processing_chain=str(
                 options.get("muscriptor_processing_chain")
                 or MuscriptorProcessingChain.OFFICIAL.value
@@ -205,6 +210,22 @@ class InferenceEngine:
             tempo_source_path=tempo_source_path,
         )
 
+    @staticmethod
+    def _apply_requested_quantization(midi_path: Path, options: dict) -> dict | None:
+        if not bool(options.get("quantize_notes", False)):
+            return None
+        report = quantize_midi_notes(
+            midi_path,
+            str(options.get("quantize_grid", "1/32")),
+            label="HTTP MIDI note quantization",
+        )
+        return {
+            "enabled": True,
+            "grid": report.grid,
+            "grid_ticks": report.grid_ticks,
+            "paired_note_count": report.paired_note_count,
+        }
+
     def _run_direct(
         self,
         *,
@@ -304,8 +325,12 @@ class InferenceEngine:
         if not isinstance(result, ProcessingResult):
             raise TypeError(f"pipeline returned unsupported result type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "MIDI output")
+        quantization = self._apply_requested_quantization(midi_path, options)
+        payload = self._processing_payload(result, config, midi_path)
+        if quantization is not None:
+            payload["quantization"] = quantization
         return ExecutionResult(
-            self._processing_payload(result, config, midi_path),
+            payload,
             (ArtifactSpec("midi", "midi", midi_path),),
         )
 
@@ -334,8 +359,11 @@ class InferenceEngine:
         if not isinstance(result, ProcessingResult):
             raise TypeError(f"manual MIDI route returned unsupported type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "manual MIDI output")
+        quantization = self._apply_requested_quantization(midi_path, options)
         payload = self._processing_payload(result, config, midi_path)
         payload.update({"route": options["route"], "source_track_id": track_id})
+        if quantization is not None:
+            payload["quantization"] = quantization
         return ExecutionResult(
             payload,
             (ArtifactSpec("midi", "midi", midi_path, track_id=track_id),),

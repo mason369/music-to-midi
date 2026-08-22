@@ -17,6 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from src.core.manual_midi import MANUAL_MIDI_ROUTES
+from src.core.midi_quantization import (
+    DEFAULT_MIDI_QUANTIZE_GRID,
+    DEFAULT_MIDI_QUANTIZE_SCOPE,
+    MIDI_QUANTIZE_GRIDS,
+)
 from src.i18n.translator import Translator
 from src.model_profiles import (
     MUSCRIPTOR_PROFILE_IDS,
@@ -316,9 +321,7 @@ def _capabilities(
                 "id": model.value,
                 "label": YOURMT3_MODELS[model.value]["ui_label"],
                 "available": profile_statuses[f"yourmt3:{model.value}"].available,
-                "unavailable_reason": profile_statuses[
-                    f"yourmt3:{model.value}"
-                ].unavailable_reason,
+                "unavailable_reason": profile_statuses[f"yourmt3:{model.value}"].unavailable_reason,
             }
             for model in YourMT3Model
             if model is not YourMT3Model.LEGACY_MC13
@@ -353,6 +356,13 @@ def _capabilities(
             )
         ],
         "midi_track_modes": [mode.value for mode in MidiTrackMode],
+        "midi_quantization": {
+            "grids": list(MIDI_QUANTIZE_GRIDS),
+            "default_grid": DEFAULT_MIDI_QUANTIZE_GRID,
+            "default_enabled": False,
+            "scopes": [DEFAULT_MIDI_QUANTIZE_SCOPE],
+            "default_scope": DEFAULT_MIDI_QUANTIZE_SCOPE,
+        },
         "tempo_modes": [
             {
                 "id": mode.value,

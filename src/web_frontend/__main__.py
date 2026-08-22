@@ -70,7 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             server.close()
         return 0
-    return server.run_app_window()
+    try:
+        return server.run_app_window()
+    except KeyboardInterrupt:
+        return 0
 
 
 def _show_fatal_error(message: str) -> None:

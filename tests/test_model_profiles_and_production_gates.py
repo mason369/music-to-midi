@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import time
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from src.model_profiles import (
     inspect_model_profiles,
     parse_profile_ids,
 )
+from src.model_profile_runtime_probe import MODEL_PROFILE_RUNTIME_PROBE_SWITCH
 from src.web_api.app import create_app
 from src.web_api.jobs import JobManager, QueueCapacityError
 from src.web_api.schemas import JobStatus
@@ -92,8 +94,13 @@ def test_explicit_selection_does_not_probe_or_advertise_unselected_profiles(monk
     probed: list[str] = []
 
     monkeypatch.setattr(profile_module, "_beat_this_unavailable_reason", lambda: None)
+    monkeypatch.setattr(profile_module, "_midi_playback_unavailable_reason", lambda: None)
 
-    def inspect_one(profile_id: str, _beat_reason: str | None):
+    def inspect_one(
+        profile_id: str,
+        _beat_reason: str | None,
+        _playback_reason: str | None,
+    ):
         probed.append(profile_id)
         return None
 
@@ -105,6 +112,119 @@ def test_explicit_selection_does_not_probe_or_advertise_unselected_profiles(monk
     assert snapshot.status("miros").available is True
     assert snapshot.status("piano_aria_amt").available is False
     assert "not enabled" in str(snapshot.status("piano_aria_amt").unavailable_reason)
+
+
+def test_direct_midi_profile_requires_offline_playback_assets(monkeypatch):
+    monkeypatch.setenv(profile_module.ENABLED_PROFILES_ENV, "piano_transkun")
+    monkeypatch.setenv(profile_module.REQUIRE_ENABLED_PROFILES_ENV, "1")
+    monkeypatch.setattr(profile_module, "_beat_this_unavailable_reason", lambda: None)
+    monkeypatch.setattr(
+        profile_module,
+        "_midi_playback_unavailable_reason",
+        lambda: "MuseScore General SoundFont failed validation: deliberately absent",
+    )
+
+    snapshot = inspect_model_profiles(refresh=True)
+
+    assert snapshot.ready is False
+    assert "SoundFont" in str(snapshot.status("piano_transkun").unavailable_reason)
+
+
+def test_separation_only_profile_does_not_probe_playback_assets(monkeypatch):
+    monkeypatch.setenv(profile_module.ENABLED_PROFILES_ENV, "vocal_split")
+    monkeypatch.setenv(profile_module.REQUIRE_ENABLED_PROFILES_ENV, "1")
+    monkeypatch.setattr(
+        profile_module,
+        "_midi_playback_unavailable_reason",
+        lambda: pytest.fail("WAV-only separation must not require MIDI playback assets"),
+    )
+    monkeypatch.setattr(profile_module, "_profile_unavailable_reason", lambda *_args: None)
+
+    snapshot = inspect_model_profiles(refresh=True)
+
+    assert snapshot.ready is True
+
+
+def test_direct_midi_preparation_includes_every_shared_playback_asset(tmp_path, monkeypatch):
+    prepared: list[str] = []
+    beat = tmp_path / "final0.ckpt"
+    soundfont = tmp_path / "MuseScore_General.sf2"
+    fluidsynth = tmp_path / "fluidsynth"
+    monkeypatch.setattr(
+        "download_beat_this_model.download_beat_this_model",
+        lambda *, printer: beat,
+    )
+    monkeypatch.setattr(
+        "src.utils.muscriptor_soundfont_downloader.download_muscriptor_soundfont",
+        lambda *, printer: soundfont,
+    )
+    monkeypatch.setattr(
+        "src.utils.fluidsynth_runtime.get_fluidsynth_executable",
+        lambda: fluidsynth,
+    )
+    monkeypatch.setattr(
+        profile_module,
+        "_prepare_one",
+        lambda profile_id, _printer: prepared.append(profile_id),
+    )
+    monkeypatch.setattr(
+        profile_module, "inspect_model_profiles", lambda **_kwargs: all_available_snapshot()
+    )
+
+    messages: list[str] = []
+    snapshot = profile_module.prepare_profiles(["piano_transkun"], printer=messages.append)
+
+    assert snapshot.ready is True
+    assert prepared == ["piano_transkun"]
+    assert any(str(beat) in message for message in messages)
+    assert any(str(soundfont) in message for message in messages)
+    assert any(str(fluidsynth) in message for message in messages)
+
+
+def test_beat_this_readiness_validates_the_runtime_resolved_checkpoint(monkeypatch):
+    validated: list[object] = []
+
+    def validate(path=None):
+        validated.append(path)
+
+    monkeypatch.setattr("src.core.beat_this_tracker.validate_beat_this_checkpoint", validate)
+    assert profile_module._beat_this_unavailable_reason() is None
+    assert validated == [None]
+
+    def fail(_path=None):
+        raise RuntimeError("identity mismatch")
+
+    monkeypatch.setattr("src.core.beat_this_tracker.validate_beat_this_checkpoint", fail)
+    assert "missing or failed" in str(profile_module._beat_this_unavailable_reason())
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_audio_separator_readiness_uses_a_real_isolated_runtime_entrypoint(monkeypatch, frozen):
+    calls: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="runtime ready")
+
+    monkeypatch.setattr(profile_module.subprocess, "run", run)
+    if frozen:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+    else:
+        monkeypatch.delattr(sys, "frozen", raising=False)
+    profile_module._audio_separator_runtime_unavailable_reason.cache_clear()
+
+    assert profile_module._audio_separator_runtime_unavailable_reason("vocal_split") is None
+    assert len(calls) == 1
+    if frozen:
+        assert calls[0] == [
+            sys.executable,
+            MODEL_PROFILE_RUNTIME_PROBE_SWITCH,
+            "vocal_split",
+        ]
+    else:
+        assert calls[0][0:2] == [sys.executable, "-c"]
+        assert "run_model_profile_runtime_probe" in calls[0][2]
+        assert calls[0][3] == "vocal_split"
 
 
 def test_api_rejects_an_unavailable_profile_before_creating_job_files(tmp_path, monkeypatch):
@@ -200,9 +320,7 @@ def test_public_deployment_rejects_cpu_or_unexposed_gpu_before_upload(
         manager.close()
 
 
-def test_public_deployment_rejects_jobs_when_edge_security_is_not_ready(
-    tmp_path, monkeypatch
-):
+def test_public_deployment_rejects_jobs_when_edge_security_is_not_ready(tmp_path, monkeypatch):
     monkeypatch.setenv("MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT", "1")
     monkeypatch.delenv("MUSIC_TO_MIDI_EDGE_AUTH", raising=False)
     monkeypatch.delenv("MUSIC_TO_MIDI_TLS_TERMINATED_AT_EDGE", raising=False)

@@ -42,7 +42,20 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_docker_deployment_contract.py
+          tests/test_docker_production_contract.py
           tests/test_third_party_notice_packaging.py
+
+      - name: 校验 Compose 与跨平台管理脚本
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.selfhost.example -f compose.yaml config --quiet
+          docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
+          bash -n docker/backend-entrypoint.sh docker/gateway-entrypoint.sh scripts/docker_selfhost.sh
+          shellcheck docker/backend-entrypoint.sh docker/gateway-entrypoint.sh scripts/docker_selfhost.sh
+          # shellcheck disable=SC2016 -- PowerShell must receive $null literally.
+          pwsh -NoLogo -NoProfile -Command \
+            '[void][System.Management.Automation.Language.Parser]::ParseFile("scripts/docker_selfhost.ps1",[ref]$null,[ref]$null)'
 
   publish:
     name: 构建并发布 ${{ matrix.component }}
@@ -113,6 +126,28 @@ jobs:
             docker run --rm --entrypoint caddy \
               music-to-midi-gateway:ci version
             test "$(docker image inspect music-to-midi-gateway:ci --format '{{.Config.User}}')" = "10001:10001"
+            docker run -d --name music-to-midi-gateway-smoke \
+              --read-only --cap-drop ALL --security-opt no-new-privileges \
+              -p 127.0.0.1:18080:8080 \
+              -e MUSIC_TO_MIDI_GATEWAY_MODE=selfhost \
+              -e SELF_HOST_PORT=18080 \
+              -e MAX_REQUEST_BODY_SIZE=1MiB \
+              music-to-midi-gateway:ci
+            trap 'docker rm -f music-to-midi-gateway-smoke >/dev/null 2>&1 || true' EXIT
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent http://127.0.0.1:18080/runtime-config.json \
+                > /tmp/runtime-config.json; then
+                break
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                docker logs music-to-midi-gateway-smoke
+                exit 1
+              fi
+              sleep 1
+            done
+            grep -F '"backend_url":"http://127.0.0.1:18080"' /tmp/runtime-config.json
+            grep -F '"frontend_url":"http://127.0.0.1:18080"' /tmp/runtime-config.json
+            grep -F '"expected_api_version":"2.0"' /tmp/runtime-config.json
           fi
 
       - name: 推送带 SBOM 与 provenance 的镜像
@@ -138,3 +173,241 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.component }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  distribution:
+    name: 验收公开镜像并发布自托管发行包
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: 检出版本源码
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: 匿名拉取并核对实际发布镜像
+        id: images
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          REPOSITORY=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          BACKEND="ghcr.io/${REPOSITORY}-backend:${TAG}"
+          GATEWAY="ghcr.io/${REPOSITORY}-gateway:${TAG}"
+
+          pull_public_image() {
+            local image="$1"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if docker pull --platform linux/amd64 "$image"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 5 ]; then
+                sleep $(( attempt * 10 ))
+              fi
+            done
+            echo "Public anonymous pull failed permanently: $image" >&2
+            return 1
+          }
+
+          pull_public_image "$BACKEND"
+          pull_public_image "$GATEWAY"
+          BACKEND_REPO_DIGEST=$(docker image inspect "$BACKEND" --format '{{index .RepoDigests 0}}')
+          GATEWAY_REPO_DIGEST=$(docker image inspect "$GATEWAY" --format '{{index .RepoDigests 0}}')
+          BACKEND_DIGEST=${BACKEND_REPO_DIGEST##*@}
+          GATEWAY_DIGEST=${GATEWAY_REPO_DIGEST##*@}
+          [[ "$BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$GATEWAY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "backend_ref=ghcr.io/${REPOSITORY}-backend@${BACKEND_DIGEST}"
+            echo "gateway_ref=ghcr.io/${REPOSITORY}-gateway@${GATEWAY_DIGEST}"
+            echo "backend_digest=${BACKEND_DIGEST}"
+            echo "gateway_digest=${GATEWAY_DIGEST}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 已发布镜像离线内容与网关运行验收
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          BACKEND_REF: ${{ steps.images.outputs.backend_ref }}
+          GATEWAY_REF: ${{ steps.images.outputs.gateway_ref }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint python "$BACKEND_REF" \
+            -m src.model_profiles list > /tmp/published-profiles.txt
+          test "$(wc -l < /tmp/published-profiles.txt)" -eq 15
+          docker run --rm --network none -e TAG -i --entrypoint python "$BACKEND_REF" - <<'PY'
+          from src.core.midi_quantization import quantize_midi_notes
+          from src.utils.muscriptor_soundfont_downloader import validate_muscriptor_soundfont
+          from src import __version__
+          import os
+
+          assert callable(quantize_midi_notes)
+          assert callable(validate_muscriptor_soundfont)
+          assert f"v{__version__}" == os.environ["TAG"]
+          print("published backend feature imports verified")
+          PY
+
+          test "$(docker image inspect "$BACKEND_REF" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$GATEWAY_REF" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+
+          docker run -d --name published-gateway \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            -p 127.0.0.1:18081:8080 \
+            -e MUSIC_TO_MIDI_GATEWAY_MODE=selfhost \
+            -e SELF_HOST_PORT=18081 \
+            -e MAX_REQUEST_BODY_SIZE=1MiB \
+            "$GATEWAY_REF"
+          trap 'docker rm -f published-gateway >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18081/runtime-config.json \
+              > /tmp/published-runtime-config.json; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs published-gateway
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -F '"backend_url":"http://127.0.0.1:18081"' /tmp/published-runtime-config.json
+          grep -F '"frontend_url":"http://127.0.0.1:18081"' /tmp/published-runtime-config.json
+          test "$(docker image inspect "$BACKEND_REF" --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect "$GATEWAY_REF" --format '{{.Config.User}}')" = "10001:10001"
+
+      - name: 组装并严格校验同版本自托管发行包
+        id: bundle
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          BACKEND_REF: ${{ steps.images.outputs.backend_ref }}
+          GATEWAY_REF: ${{ steps.images.outputs.gateway_ref }}
+          BACKEND_DIGEST: ${{ steps.images.outputs.backend_digest }}
+          GATEWAY_DIGEST: ${{ steps.images.outputs.gateway_digest }}
+        run: |
+          set -euo pipefail
+          VERSION=${TAG#v}
+          BUNDLE_NAME="MusicToMidi-Docker-${TAG}"
+          BUNDLE_DIR="dist/${BUNDLE_NAME}"
+          mkdir -p "$BUNDLE_DIR/scripts"
+          cp compose.yaml "$BUNDLE_DIR/compose.yaml"
+          cp .env.selfhost.example "$BUNDLE_DIR/.env.selfhost.example"
+          cp scripts/docker_selfhost.sh "$BUNDLE_DIR/scripts/docker_selfhost.sh"
+          cp scripts/docker_selfhost.ps1 "$BUNDLE_DIR/scripts/docker_selfhost.ps1"
+          cp docs/docker-deployment.md "$BUNDLE_DIR/README.md"
+          cp LICENSE THIRD_PARTY_NOTICES.md "$BUNDLE_DIR/"
+          chmod 0755 "$BUNDLE_DIR/scripts/docker_selfhost.sh"
+
+          BACKEND_CONTAINER=$(docker create "$BACKEND_REF")
+          cleanup_backend_container() {
+            docker rm -f "$BACKEND_CONTAINER" >/dev/null 2>&1 || true
+          }
+          trap cleanup_backend_container EXIT
+          docker cp "$BACKEND_CONTAINER:/app/THIRD_PARTY_SBOM.txt" \
+            "$BUNDLE_DIR/THIRD_PARTY_SBOM.txt"
+          test -s "$BUNDLE_DIR/THIRD_PARTY_SBOM.txt"
+          cleanup_backend_container
+          trap - EXIT
+
+          TAG="$TAG" BACKEND_REF="$BACKEND_REF" GATEWAY_REF="$GATEWAY_REF" \
+            BUNDLE_DIR="$BUNDLE_DIR" python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          root = Path(os.environ["BUNDLE_DIR"])
+          tag = os.environ["TAG"]
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          if tag != f"v{version}":
+              raise SystemExit(f"tag/project version mismatch: tag={tag}, project={version}")
+          compose = (root / "compose.yaml").read_text(encoding="utf-8")
+          backend_tag = f"ghcr.io/mason369/music-to-midi-backend:{tag}"
+          gateway_tag = f"ghcr.io/mason369/music-to-midi-gateway:{tag}"
+          if compose.count(backend_tag) != 2 or compose.count(gateway_tag) != 1:
+              raise SystemExit("self-host compose image references do not match the release tag")
+          compose = compose.replace(backend_tag, os.environ["BACKEND_REF"])
+          compose = compose.replace(gateway_tag, os.environ["GATEWAY_REF"])
+          if ":latest" in compose or "\n    build:" in compose:
+              raise SystemExit("release compose contains a mutable image or local build")
+          (root / "compose.yaml").write_text(compose, encoding="utf-8", newline="\n")
+          env_text = (root / ".env.selfhost.example").read_text(encoding="utf-8")
+          if f"v{version}" not in env_text:
+              raise SystemExit("self-host environment template version is stale")
+          PY
+
+          cat > "$BUNDLE_DIR/IMAGE_DIGESTS.txt" <<EOF
+          Music to MIDI Docker release: ${TAG}
+          Source revision: ${GITHUB_SHA}
+          Platform: linux/amd64
+          Backend: ${BACKEND_REF}
+          Gateway: ${GATEWAY_REF}
+          EOF
+          TAG="$TAG" VERSION="$VERSION" BACKEND_REF="$BACKEND_REF" \
+            GATEWAY_REF="$GATEWAY_REF" BUNDLE_DIR="$BUNDLE_DIR" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "release_tag": os.environ["TAG"],
+              "application_version": os.environ["VERSION"],
+              "api_version": "2.0",
+              "source_revision": os.environ["GITHUB_SHA"],
+              "platform": "linux/amd64",
+              "accelerator": "NVIDIA CUDA 12.8",
+              "backend_image": os.environ["BACKEND_REF"],
+              "gateway_image": os.environ["GATEWAY_REF"],
+              "models_bundled": False,
+          }
+          path = Path(os.environ["BUNDLE_DIR"]) / "RELEASE-MANIFEST.json"
+          path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          cp "$BUNDLE_DIR/compose.yaml" "dist/MusicToMidi-Docker-compose-${TAG}.yaml"
+          cp "$BUNDLE_DIR/.env.selfhost.example" "dist/MusicToMidi-Docker-env-${TAG}.example"
+          cp "$BUNDLE_DIR/IMAGE_DIGESTS.txt" "dist/MusicToMidi-Docker-image-digests-${TAG}.txt"
+          cp "$BUNDLE_DIR/THIRD_PARTY_SBOM.txt" "dist/MusicToMidi-Docker-SBOM-${TAG}.txt"
+          docker compose --env-file "$BUNDLE_DIR/.env.selfhost.example" \
+            -f "$BUNDLE_DIR/compose.yaml" config --quiet
+          bash -n "$BUNDLE_DIR/scripts/docker_selfhost.sh"
+          pwsh -NoLogo -NoProfile -Command \
+            "[void][System.Management.Automation.Language.Parser]::ParseFile('$BUNDLE_DIR/scripts/docker_selfhost.ps1',[ref]\$null,[ref]\$null)"
+
+          (cd dist && zip -qr "${BUNDLE_NAME}.zip" "$BUNDLE_NAME")
+          tar -czf "dist/${BUNDLE_NAME}.tar.gz" -C dist "$BUNDLE_NAME"
+          (
+            cd dist
+            sha256sum \
+              "${BUNDLE_NAME}.zip" \
+              "${BUNDLE_NAME}.tar.gz" \
+              "MusicToMidi-Docker-compose-${TAG}.yaml" \
+              "MusicToMidi-Docker-env-${TAG}.example" \
+              "MusicToMidi-Docker-image-digests-${TAG}.txt" \
+              "MusicToMidi-Docker-SBOM-${TAG}.txt" \
+              > "MusicToMidi-Docker-SHA256SUMS-${TAG}.txt"
+          )
+          echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: 创建或更新 Release 并上传 Docker 发行资产
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          BUNDLE_NAME: ${{ steps.bundle.outputs.bundle_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$TAG" \
+              --notes "Docker 自托管发行资产已通过公开拉取、镜像内容和网关运行验收；完整版本说明仍由主发布流程更新。"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/${BUNDLE_NAME}.zip" \
+            "dist/${BUNDLE_NAME}.tar.gz" \
+            "dist/MusicToMidi-Docker-compose-${TAG}.yaml" \
+            "dist/MusicToMidi-Docker-env-${TAG}.example" \
+            "dist/MusicToMidi-Docker-image-digests-${TAG}.txt" \
+            "dist/MusicToMidi-Docker-SBOM-${TAG}.txt" \
+            "dist/MusicToMidi-Docker-SHA256SUMS-${TAG}.txt"

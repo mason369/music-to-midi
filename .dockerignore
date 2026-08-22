@@ -18,6 +18,7 @@ GEMINI.md
 .env
 .env.*
 !.env.production.example
+!.env.selfhost.example
 config/*.json
 
 venv

@@ -720,24 +720,26 @@ $acceleratorOrtPackages = if ($Accelerator -eq "xpu") {
 } else {
     @("onnxruntime-gpu==1.23.2")
 }
-& "$PIP" install `
-    "numpy==1.26.4" `
-    "beartype==0.18.5" `
-    "diffq-fixed==0.2.4" `
-    "julius==0.2.7" `
-    "ml_collections==1.1.0" `
-    "onnx-weekly==1.21.0.dev20260223" `
-    "onnx2torch-py313==1.6.0" `
-    "pydub==0.25.1" `
-    "requests>=2.32.5,<3" `
-    "chardet>=5,<6" `
-    @acceleratorOrtPackages `
-    "resampy==0.4.3" `
-    "rotary-embedding-torch==0.6.5" `
-    "samplerate==0.1.0" `
-    "h5py>=3.10,<4" `
-    "mirdata>=0.3.8,<1" `
+$audioSeparatorRuntimePackages = @(
+    "numpy==1.26.4"
+    "beartype==0.18.5"
+    "diffq-fixed==0.2.4"
+    "julius==0.2.7"
+    "ml_collections==1.1.0"
+    "onnx-weekly==1.21.0.dev20260223"
+    "onnx2torch-py313==1.6.0"
+    "pydub==0.25.1"
+    "requests>=2.32.5,<3"
+    "chardet>=5,<6"
+) + $acceleratorOrtPackages + @(
+    "resampy==0.4.3"
+    "rotary-embedding-torch==0.6.5"
+    "samplerate==0.1.0"
+    "h5py>=3.10,<4"
+    "mirdata>=0.3.8,<1"
     "six==1.17.0"
+)
+& "$PIP" install @audioSeparatorRuntimePackages
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 运行依赖安装失败" }
 
 $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
