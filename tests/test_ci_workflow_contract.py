@@ -155,12 +155,23 @@ class CiWorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("00859AAC6A54B8C1B3C139DE67846E64E7B82DB2", workflow)
+        self.assertIn(
+            "https://raw.githubusercontent.com/LABSN/sound-ci-helpers/"
+            "20a2b9bbd21fd005d8fe89933901506dba84ea4e/windows/devcon.exe",
+            workflow,
+        )
+        self.assertIn(
+            "97CFF42F8C0FE4FBDF991273159516BF78090625A933C3983EBD6F62284E329A",
+            workflow,
+        )
+        self.assertIn("VBAudioVACWDM", workflow)
         self.assertIn("Get-AuthenticodeSignature", workflow)
         self.assertIn("Get-PnpDevice -Class AudioEndpoint -PresentOnly", workflow)
         self.assertIn("*CABLE Input*", workflow)
         self.assertIn("QMediaDevices.audioOutputs()", workflow)
         self.assertIn("QMediaDevices.defaultAudioOutput()", workflow)
         self.assertNotIn("choco install vb-cable", workflow.lower())
+        self.assertNotIn("VBCABLE_Setup_x64.exe", workflow)
         self.assertLess(
             workflow.index("安装并验证虚拟音频输出 (Windows)"),
             workflow.index("校验 Qt 默认音频输出 (Windows)"),
