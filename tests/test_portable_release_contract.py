@@ -323,6 +323,12 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("validate_hashes=True", workflow)
         self.assertIn("Packaged MuScriptor Small/Medium/Large assets verified", workflow)
         self.assertIn("download_muscriptor_soundfont", workflow)
+        linux_staging = workflow.split("BUILD_ASSET_ROOT=\"$BUILD_ASSET_ROOT\" python - <<'PY'", 1)[
+            1
+        ].split("\n          PY", 1)[0]
+        self.assertIn("MUSCRIPTOR_SF2_FILENAME", linux_staging)
+        self.assertIn("assets_dir / MUSCRIPTOR_SF2_FILENAME", linux_staging)
+        self.assertNotIn("assets_dir / soundfont.name", linux_staging)
         self.assertIn("command -v fluidsynth", workflow)
         linux_system_packages = workflow.split("sudo apt-get install -y \\", 1)[1].split("\n\n", 1)[
             0
@@ -341,11 +347,18 @@ class PortableReleaseContractTests(unittest.TestCase):
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR",
             "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR",
             "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR",
+            "Copy-RequiredFileAsset",
+            "'filename': MUSCRIPTOR_SF2_FILENAME",
+            "-DestinationName $MuscriptorSoundFontName",
             "MuScriptor Small/Medium/Large portable assets verified",
             "Packaged MuScriptor Small/Medium/Large assets verified",
             "download_sota_models.py after accepting all three Hugging Face model terms",
         ):
             self.assertIn(expected, script)
+        self.assertNotIn(
+            "download_muscriptor_soundfont(printer=lambda _message: None).parent", script
+        )
+        self.assertNotIn("Copy-Tree -Source $MuscriptorAssetsSource", script)
 
     def test_release_workflow_prepares_miros_from_packaged_release_assets(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

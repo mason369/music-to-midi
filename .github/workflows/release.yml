@@ -526,7 +526,10 @@ jobs:
           from pathlib import Path
 
           from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
-          from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+          from src.utils.muscriptor_soundfont_downloader import (
+              MUSCRIPTOR_SF2_FILENAME,
+              download_muscriptor_soundfont,
+          )
 
           root = Path(os.environ["BUILD_ASSET_ROOT"])
           assets_dir = root / "muscriptor_assets"
@@ -541,7 +544,7 @@ jobs:
               shutil.copy2(weights, model_dir / weights.name)
               shutil.copy2(config, model_dir / config.name)
           soundfont = download_muscriptor_soundfont(printer=lambda _message: None)
-          shutil.copy2(soundfont, assets_dir / soundfont.name)
+          shutil.copy2(soundfont, assets_dir / MUSCRIPTOR_SF2_FILENAME)
           PY
 
           FLUIDSYNTH_SOURCE="$(command -v fluidsynth)" || {

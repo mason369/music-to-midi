@@ -271,6 +271,63 @@ function Copy-Tree {
     return $true
 }
 
+function Copy-RequiredFileAsset {
+    param(
+        [string]$Source,
+        [string]$DestinationDirectory,
+        [string]$DestinationName,
+        [string]$AllowedRoot,
+        [string]$Label,
+        [switch]$HardlinkSameVolume
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Source) -or -not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "Required file asset missing: ${Label}: $Source"
+    }
+    if (
+        [string]::IsNullOrWhiteSpace($DestinationName) -or
+        [IO.Path]::GetFileName($DestinationName) -ne $DestinationName
+    ) {
+        throw "Invalid destination filename for ${Label}: $DestinationName"
+    }
+
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $destinationDirectoryPath = [IO.Path]::GetFullPath($DestinationDirectory)
+    $allowedRootPath = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd("\")
+    $allowedPrefix = $allowedRootPath + "\"
+    if (-not $destinationDirectoryPath.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Destination for ${Label} escaped the allowed asset root: $destinationDirectoryPath"
+    }
+    $destinationPrefix = $destinationDirectoryPath.TrimEnd("\") + "\"
+    if (
+        $sourcePath -eq (Join-Path $destinationDirectoryPath $DestinationName) -or
+        $sourcePath.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "Refusing to replace $Label because source is inside the destination: $sourcePath"
+    }
+
+    if (Test-Path -LiteralPath $destinationDirectoryPath) {
+        Remove-Item -LiteralPath $destinationDirectoryPath -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Force -Path $destinationDirectoryPath | Out-Null
+    $destinationPath = Join-Path $destinationDirectoryPath $DestinationName
+    $sameVolume = (
+        [IO.Path]::GetPathRoot($sourcePath) -eq
+        [IO.Path]::GetPathRoot($destinationDirectoryPath)
+    )
+    if ($HardlinkSameVolume -and $sameVolume) {
+        New-Item -ItemType HardLink -Path $destinationPath -Target $sourcePath -ErrorAction Stop | Out-Null
+        Write-Host "[ok] Hard-linked $Label -> $destinationPath"
+    } else {
+        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Force -ErrorAction Stop
+        Write-Host "[ok] Copied $Label -> $destinationPath"
+    }
+    if (-not (Test-Path -LiteralPath $destinationPath -PathType Leaf)) {
+        throw "Staged file asset missing after copy: ${Label}: $destinationPath"
+    }
+    return $destinationPath
+}
+
 function Assert-XpuPortableRuntimeDlls {
     param(
         [string]$SourceDir,
@@ -556,14 +613,27 @@ $MuscriptorLargeSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR,
     ($muscriptorModelSourceText | Select-Object -Index 2)
 )
-$muscriptorAssetsSourceText = & $Python -c "from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont; print(download_muscriptor_soundfont(printer=lambda _message: None).parent)"
+$muscriptorSoundFontInfoText = & $Python -c "import json; from src.utils.muscriptor_soundfont_downloader import MUSCRIPTOR_SF2_FILENAME, download_muscriptor_soundfont; path = download_muscriptor_soundfont(printer=lambda _message: None); print(json.dumps({'filename': MUSCRIPTOR_SF2_FILENAME, 'path': str(path)}))"
 if ($LASTEXITCODE -ne 0) {
     throw "MuScriptor official SoundFont is not available or failed identity validation. Run download_sota_models.py."
 }
-$MuscriptorAssetsSource = Resolve-ExistingDir @(
-    $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR,
-    ($muscriptorAssetsSourceText | Select-Object -Last 1)
-)
+try {
+    $muscriptorSoundFontInfo = ($muscriptorSoundFontInfoText | Select-Object -Last 1) | ConvertFrom-Json -ErrorAction Stop
+} catch {
+    throw "MuScriptor official SoundFont resolver returned invalid metadata: $($_.Exception.Message)"
+}
+$MuscriptorSoundFontName = [string]$muscriptorSoundFontInfo.filename
+$MuscriptorSoundFontSource = [string]$muscriptorSoundFontInfo.path
+if (-not [string]::IsNullOrWhiteSpace($env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR)) {
+    $explicitMuscriptorAssetsDir = [IO.Path]::GetFullPath($env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR)
+    if (-not (Test-Path -LiteralPath $explicitMuscriptorAssetsDir -PathType Container)) {
+        throw "Explicit MuScriptor playback asset directory is missing: $explicitMuscriptorAssetsDir"
+    }
+    $MuscriptorSoundFontSource = Join-Path $explicitMuscriptorAssetsDir $MuscriptorSoundFontName
+}
+if (-not (Test-Path -LiteralPath $MuscriptorSoundFontSource -PathType Leaf)) {
+    throw "MuScriptor official SoundFont file is missing: $MuscriptorSoundFontSource"
+}
 $fluidsynthSourceText = & $Python -c "from src.utils.fluidsynth_runtime import get_fluidsynth_executable; print(get_fluidsynth_executable().parent.parent)"
 if ($LASTEXITCODE -ne 0) {
     throw "Pinned FluidSynth runtime is unavailable. Run download_fluidsynth_runtime.py."
@@ -640,7 +710,13 @@ Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros sour
 Copy-Tree -Source $MuscriptorSmallSource -Destination $MuscriptorSmallBundle -Label "MuScriptor-small model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $MuscriptorMediumSource -Destination $MuscriptorMediumBundle -Label "MuScriptor-medium model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $MuscriptorLargeSource -Destination $MuscriptorLargeBundle -Label "MuScriptor-large model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
-Copy-Tree -Source $MuscriptorAssetsSource -Destination $MuscriptorAssetsBundle -Label "MuScriptor playback assets" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-RequiredFileAsset `
+    -Source $MuscriptorSoundFontSource `
+    -DestinationDirectory $MuscriptorAssetsBundle `
+    -DestinationName $MuscriptorSoundFontName `
+    -AllowedRoot $BuildAssetRoot `
+    -Label "MuScriptor playback SoundFont" `
+    -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 $muscriptorPortableCheck = @"
 from pathlib import Path
