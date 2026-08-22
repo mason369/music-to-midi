@@ -203,6 +203,13 @@ def _prepare_torch_runtime_before_pyqt() -> None:
         ) from exc
 
 
+def _emit_self_test_message(message: str) -> None:
+    """Write CLI diagnostics when the executable has an attached console."""
+    stream = getattr(sys, "stdout", None)
+    if stream is not None:
+        print(message, file=stream)
+
+
 def _run_self_test(
     transcriber_cls=None,
     success_message: str = "SELF-TEST OK: YourMT3+ available",
@@ -224,7 +231,7 @@ def _run_self_test(
                 reason_getter() if callable(reason_getter) else t("startup.yourmt3_unavailable")
             )
             logger.error(t("startup.portable_self_test_failed", reason=reason))
-            print(reason)
+            _emit_self_test_message(reason)
             return 1
 
         transcriber = None
@@ -243,11 +250,65 @@ def _run_self_test(
                     unload_model()
 
         logger.info(t("startup.portable_self_test_passed"))
-        print(success_message)
+        _emit_self_test_message(success_message)
         return 0
     except Exception as e:
         logger.error(t("startup.portable_self_test_exception", error=e), exc_info=True)
-        print(f"SELF-TEST FAILED: {e}")
+        _emit_self_test_message(f"SELF-TEST FAILED: {e}")
+        return 1
+
+
+def _run_gui_package_self_test() -> int:
+    """Validate the frozen GUI accelerator stack without claiming device execution."""
+    setup_chinese_environment()
+    logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
+    try:
+        accelerator = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "").strip().lower()
+        if accelerator not in {"cuda", "xpu"}:
+            raise RuntimeError(
+                "GUI package self-test requires an explicit "
+                "MUSIC_TO_MIDI_ACCELERATOR=cuda or xpu"
+            )
+
+        _prepare_torch_runtime_before_pyqt()
+        from PyQt6.QtWidgets import QApplication  # noqa: F401
+
+        import onnxruntime as ort
+        import torch
+        from audio_separator.separator import Separator  # noqa: F401
+
+        torch_version = str(getattr(torch, "__version__", ""))
+        expected_torch_marker = "+cu128" if accelerator == "cuda" else "+xpu"
+        if expected_torch_marker not in torch_version.lower():
+            raise RuntimeError(
+                f"Packaged torch {torch_version or '<unknown>'} is not the expected "
+                f"{accelerator.upper()} build ({expected_torch_marker})"
+            )
+
+        providers = ort.get_available_providers()
+        expected_provider = (
+            "CUDAExecutionProvider" if accelerator == "cuda" else "OpenVINOExecutionProvider"
+        )
+        if expected_provider not in providers:
+            raise RuntimeError(
+                f"Packaged ONNX Runtime did not expose {expected_provider}: " + ", ".join(providers)
+            )
+
+        logger.info(
+            "GUI package self-test passed without accelerator device execution: "
+            "accelerator=%s torch=%s providers=%s",
+            accelerator,
+            torch_version,
+            providers,
+        )
+        _emit_self_test_message(
+            "SELF-TEST OK: packaged GUI + Qt + ONNX Runtime "
+            f"{accelerator.upper()} stack (device not executed)"
+        )
+        return 0
+    except Exception as exc:
+        logger.error("GUI package self-test failed: %s", exc, exc_info=True)
+        _emit_self_test_message(f"SELF-TEST FAILED: packaged GUI accelerator stack: {exc}")
         return 1
 
 
@@ -298,11 +359,13 @@ def _run_gui_runtime_self_test() -> int:
             device,
             providers,
         )
-        print("SELF-TEST OK: GUI + Qt + ONNX Runtime " f"{accelerator.upper()} load order")
+        _emit_self_test_message(
+            "SELF-TEST OK: GUI + Qt + ONNX Runtime " f"{accelerator.upper()} load order"
+        )
         return 0
     except Exception as exc:
         logger.error("GUI runtime self-test failed: %s", exc, exc_info=True)
-        print(f"SELF-TEST FAILED: GUI runtime load order: {exc}")
+        _emit_self_test_message(f"SELF-TEST FAILED: GUI runtime load order: {exc}")
         return 1
 
 
@@ -468,13 +531,16 @@ def main():
 
         print(
             f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] "
-            "[--self-test-miros] [--self-test-gui-runtime] [--web-api ...]\n"
+            "[--self-test-miros] [--self-test-gui-package] "
+            "[--self-test-gui-runtime] [--web-api ...]\n"
             "\n"
             f"{t('cli.options')}:\n"
             f"  -h, --help          {t('cli.help')}\n"
             f"  --self-test         {t('cli.self_test')}\n"
             f"  --self-test-no-load {t('cli.self_test_no_load')}\n"
             f"  --self-test-miros   {t('cli.self_test_miros')}\n"
+            "  --self-test-gui-package  Validate packaged Qt + accelerator providers "
+            "without device execution\n"
             "  --self-test-gui-runtime  Validate Qt + CUDA/OpenVINO accelerator runtime\n"
             "  --web-api           Run the standalone inference HTTP service\n"
             f"  --miros-worker      {t('cli.miros_worker')}"
@@ -499,6 +565,9 @@ def main():
                 load_model=False,
             )
         )
+
+    if "--self-test-gui-package" in sys.argv:
+        sys.exit(_run_gui_package_self_test())
 
     if "--self-test-gui-runtime" in sys.argv:
         sys.exit(_run_gui_runtime_self_test())

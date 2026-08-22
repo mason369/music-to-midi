@@ -292,6 +292,25 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("Join-Path $ResolvedDistRoot $AppName", web_build)
         self.assertIn("Join-Path $ResolvedDistRoot $BackendName", web_build)
 
+    def test_release_separates_package_stack_checks_from_real_gpu_device_acceptance(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        build_script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+        main_source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+        package_self_test = main_source.split("def _run_gui_package_self_test", 1)[1].split(
+            "def _run_gui_runtime_self_test", 1
+        )[0]
+
+        self.assertIn("--self-test-gui-package", build_script)
+        self.assertNotIn("--self-test-gui-runtime", build_script)
+        self.assertIn("device execution is a separate hardware gate", build_script)
+        self.assertIn("MUSIC_TO_MIDI_ACCELERATOR=cuda", workflow)
+        self.assertIn('"$SMOKE_EXE" --self-test-gui-package', workflow)
+        self.assertIn("PACKAGE_TEST_TIMEOUT_SECONDS=120", workflow)
+        self.assertIn("--self-test-gui-runtime", main_source)
+        self.assertNotIn("get_accelerator_type", package_self_test)
+        self.assertNotIn("get_device", package_self_test)
+        self.assertNotIn('os.environ.get("CI"', package_self_test)
+
     def test_release_workflow_stages_linux_bundle_assets_before_pyinstaller(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 

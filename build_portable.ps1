@@ -874,20 +874,34 @@ if ($Accelerator -eq "xpu") {
         -SourceDir $XpuLibraryBin `
         -DistributionDir $DistDir
 }
+$GuiPackageRuntimeRoot = Join-Path $DistDir "runtime"
+$GuiPackageLogDir = Join-Path $GuiPackageRuntimeRoot "logs"
 $GuiRuntimeSelfTest = Start-Process `
     -FilePath $PortableExe `
-    -ArgumentList "--self-test-gui-runtime" `
+    -ArgumentList "--self-test-gui-package" `
     -PassThru `
     -WindowStyle Hidden
 if (-not $GuiRuntimeSelfTest.WaitForExit(120000)) {
     Stop-Process -Id $GuiRuntimeSelfTest.Id -Force -ErrorAction SilentlyContinue
-    throw "Portable GUI/Qt/ONNX Runtime self-test timed out after 120 seconds."
+    throw "Portable GUI/Qt/ONNX Runtime package self-test timed out after 120 seconds."
 }
 $GuiRuntimeSelfTest.Refresh()
 if ($GuiRuntimeSelfTest.ExitCode -ne 0) {
-    throw "Portable GUI/Qt/ONNX Runtime self-test failed with exit code $($GuiRuntimeSelfTest.ExitCode)."
+    $GuiPackageLogText = ""
+    if (Test-Path -LiteralPath $GuiPackageLogDir -PathType Container) {
+        $GuiPackageLog = Get-ChildItem -LiteralPath $GuiPackageLogDir -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($GuiPackageLog) {
+            $GuiPackageLogText = Get-Content -LiteralPath $GuiPackageLog -Raw
+        }
+    }
+    throw "Portable GUI/Qt/ONNX Runtime package self-test failed with exit code $($GuiRuntimeSelfTest.ExitCode).`n$GuiPackageLogText"
 }
-Write-Host "[ok] Portable GUI + Qt + ONNX Runtime $($Accelerator.ToUpperInvariant()) load order verified"
+Write-Host "[ok] Portable GUI + Qt + ONNX Runtime $($Accelerator.ToUpperInvariant()) package stack verified (device execution is a separate hardware gate)"
+if (Test-Path -LiteralPath $GuiPackageRuntimeRoot) {
+    Remove-Item -LiteralPath $GuiPackageRuntimeRoot -Recurse -Force
+}
 
 $muscriptorDistCheck = @"
 from pathlib import Path

@@ -135,6 +135,108 @@ class MainSelfTestTests(unittest.TestCase):
         ensure_runtime.assert_called_once_with("cuda:0")
         self.assertIn("GUI + Qt + ONNX Runtime CUDA", stdout.getvalue())
 
+    def test_gui_package_self_test_checks_cuda_stack_without_device_detection(self):
+        fake_logger = Mock()
+        fake_qt_widgets = types.ModuleType("PyQt6.QtWidgets")
+        fake_qt_widgets.QApplication = object
+        fake_ort = types.ModuleType("onnxruntime")
+        fake_ort.get_available_providers = lambda: [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        fake_torch = types.ModuleType("torch")
+        fake_torch.__version__ = "2.7.0+cu128"
+        fake_separator = types.ModuleType("audio_separator.separator")
+        fake_separator.Separator = object
+        stdout = io.StringIO()
+
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            patch.dict(os.environ, {"MUSIC_TO_MIDI_ACCELERATOR": "cuda"}),
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_runtime,
+            patch("src.utils.gpu_utils.get_device") as get_device,
+            patch.dict(
+                sys.modules,
+                {
+                    "PyQt6.QtWidgets": fake_qt_widgets,
+                    "onnxruntime": fake_ort,
+                    "torch": fake_torch,
+                    "audio_separator.separator": fake_separator,
+                },
+            ),
+            redirect_stdout(stdout),
+        ):
+            exit_code = main_module._run_gui_package_self_test()
+
+        self.assertEqual(exit_code, 0)
+        prepare_runtime.assert_called_once_with()
+        get_device.assert_not_called()
+        self.assertIn("device not executed", stdout.getvalue())
+        self.assertIn("without accelerator device execution", fake_logger.info.call_args.args[0])
+
+    def test_gui_package_self_test_checks_xpu_stack_without_device_detection(self):
+        fake_logger = Mock()
+        fake_qt_widgets = types.ModuleType("PyQt6.QtWidgets")
+        fake_qt_widgets.QApplication = object
+        fake_ort = types.ModuleType("onnxruntime")
+        fake_ort.get_available_providers = lambda: [
+            "OpenVINOExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        fake_torch = types.ModuleType("torch")
+        fake_torch.__version__ = "2.11.0+xpu"
+        fake_separator = types.ModuleType("audio_separator.separator")
+        fake_separator.Separator = object
+
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            patch.dict(os.environ, {"MUSIC_TO_MIDI_ACCELERATOR": "xpu"}),
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_runtime,
+            patch("src.utils.gpu_utils.get_device") as get_device,
+            patch.dict(
+                sys.modules,
+                {
+                    "PyQt6.QtWidgets": fake_qt_widgets,
+                    "onnxruntime": fake_ort,
+                    "torch": fake_torch,
+                    "audio_separator.separator": fake_separator,
+                },
+            ),
+        ):
+            exit_code = main_module._run_gui_package_self_test()
+
+        self.assertEqual(exit_code, 0)
+        prepare_runtime.assert_called_once_with()
+        get_device.assert_not_called()
+
+    def test_self_test_succeeds_when_windowed_binary_has_no_stdout(self):
+        fake_logger = Mock()
+
+        class FakeYourMT3Transcriber:
+            def __init__(self, _config):
+                pass
+
+            @staticmethod
+            def is_available():
+                return True
+
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            patch.object(sys, "stdout", None),
+        ):
+            exit_code = main_module._run_self_test(
+                transcriber_cls=FakeYourMT3Transcriber,
+                load_model=False,
+            )
+
+        self.assertEqual(exit_code, 0)
+
     def test_self_test_returns_zero_when_yourmt3_available(self):
         fake_logger = Mock()
 
@@ -394,6 +496,21 @@ class MainSelfTestTests(unittest.TestCase):
         with (
             patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-gui-runtime"]),
             patch.object(main_module, "_run_gui_runtime_self_test", return_value=0) as self_test,
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as normal_prepare,
+            patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication,
+        ):
+            with self.assertRaises(SystemExit) as cm:
+                main_module.main()
+
+        self.assertEqual(cm.exception.code, 0)
+        self_test.assert_called_once_with()
+        normal_prepare.assert_not_called()
+        qapplication.assert_not_called()
+
+    def test_main_dispatches_gui_package_self_test_before_normal_gui_startup(self):
+        with (
+            patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-gui-package"]),
+            patch.object(main_module, "_run_gui_package_self_test", return_value=0) as self_test,
             patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as normal_prepare,
             patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication,
         ):

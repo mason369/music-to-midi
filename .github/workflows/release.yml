@@ -897,11 +897,17 @@ jobs:
           )
           export QT_QPA_PLATFORM=offscreen
           chmod +x "$SMOKE_EXE" "$BACKEND_EXE" "$FRONTEND_EXE"
+          PACKAGE_TEST_TIMEOUT_SECONDS=120
+          PACKAGE_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-package-test-output.log"
           SELF_TEST_TIMEOUT_SECONDS=900
           SELF_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-self-test-output.log"
           MIROS_WORKER_TIMEOUT_SECONDS=120
           MIROS_WORKER_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-miros-worker-output.log"
           dump_linux_portable_logs() {
+            if [ -f "$PACKAGE_TEST_OUTPUT" ]; then
+              echo "=== Portable package self-test output: $PACKAGE_TEST_OUTPUT ===" >&2
+              tail -n 200 "$PACKAGE_TEST_OUTPUT" >&2 || true
+            fi
             if [ -f "$SELF_TEST_OUTPUT" ]; then
               echo "=== Portable self-test output: $SELF_TEST_OUTPUT ===" >&2
               tail -n 200 "$SELF_TEST_OUTPUT" >&2 || true
@@ -928,6 +934,22 @@ jobs:
               cat "$STATUS_JSON" >&2 || true
             fi
           }
+          set +e
+          MUSIC_TO_MIDI_ACCELERATOR=cuda \
+            timeout --signal=TERM --kill-after=30s "${PACKAGE_TEST_TIMEOUT_SECONDS}s" \
+            "$SMOKE_EXE" --self-test-gui-package 2>&1 | tee "$PACKAGE_TEST_OUTPUT"
+          PACKAGE_TEST_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "$PACKAGE_TEST_EXIT" -eq 124 ] || [ "$PACKAGE_TEST_EXIT" -eq 137 ]; then
+            echo "Portable package self-test timed out after ${PACKAGE_TEST_TIMEOUT_SECONDS}s" >&2
+            dump_linux_portable_logs
+            exit 1
+          fi
+          if [ "$PACKAGE_TEST_EXIT" -ne 0 ]; then
+            echo "Portable package self-test failed. ExitCode=${PACKAGE_TEST_EXIT}" >&2
+            dump_linux_portable_logs
+            exit "$PACKAGE_TEST_EXIT"
+          fi
           set +e
           timeout --signal=TERM --kill-after=30s "${SELF_TEST_TIMEOUT_SECONDS}s" \
             "$SMOKE_EXE" --self-test-no-load 2>&1 | tee "$SELF_TEST_OUTPUT"
