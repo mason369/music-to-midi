@@ -10,7 +10,7 @@ import soundfile as sf
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtMultimedia import QAudioFormat, QMediaDevices
+from PyQt6.QtMultimedia import QAudio, QAudioFormat, QMediaDevices
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -88,6 +88,39 @@ def test_aligned_pcm_loader_rejects_a_different_frame_axis(tmp_path: Path) -> No
     assert _load_aligned_mono_pcm(reference).shape == (100,)
     with pytest.raises(RuntimeError, match="do not share one frame axis"):
         _load_aligned_mono_pcm(mismatched, expected_frames=100)
+
+
+def test_exhausted_idle_source_finishes_even_when_backend_clock_lags() -> None:
+    class ExhaustedSource:
+        frame_count = 44_100
+        playback_rate = 1.0
+
+        @staticmethod
+        def atEnd() -> bool:  # noqa: N802 - mirrors QIODevice
+            return True
+
+    class LaggingSink:
+        @staticmethod
+        def processedUSecs() -> int:  # noqa: N802 - mirrors QAudioSink
+            return 0
+
+    player = SynchronizedPcmPlayer()
+    player._source = ExhaustedSource()
+    player._sink = LaggingSink()
+    player._playing = True
+    finished: list[bool] = []
+    player.finished.connect(lambda: finished.append(True))
+
+    try:
+        player._on_sink_state_changed(QAudio.State.IdleState)
+
+        assert finished == [True]
+        assert player.is_playing is False
+        assert player._finished_emitted is True
+        assert player._frozen_position_frame == 44_100.0
+    finally:
+        player._sink = None
+        player._source = None
 
 
 @pytest.mark.skipif(

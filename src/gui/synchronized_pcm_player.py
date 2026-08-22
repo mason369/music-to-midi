@@ -495,9 +495,12 @@ class SynchronizedPcmPlayer(QObject):
         if (
             state == QAudio.State.IdleState
             and self._source.atEnd()
-            and self._processed_position_frame() >= self._source.frame_count - 1
             and not self._finished_emitted
         ):
+            # Qt enters IdleState after its pull-mode QIODevice has no more
+            # data. Some backends publish processedUSecs() slightly behind
+            # that terminal state and do not emit another state transition,
+            # so the exhausted source is the authoritative completion gate.
             self._playing = False
             self._suspended = False
             self._frozen_position_frame = float(self._source.frame_count)

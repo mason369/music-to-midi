@@ -187,10 +187,10 @@ def test_container_workflow_publishes_amd64_images_with_supply_chain_evidence():
     for action in (
         "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-        "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
-        "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",
-        "docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051",
-        "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
+        "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e",
+        "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
+        "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302",
+        "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
         "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
     ):
         assert action in workflow
