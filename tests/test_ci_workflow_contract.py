@@ -145,6 +145,11 @@ class CiWorkflowContractTests(unittest.TestCase):
 
     def test_windows_release_ci_provides_a_verified_qt_audio_output(self):
         workflow = (WORKFLOWS_DIR / "release.yml").read_text(encoding="utf-8")
+        qt_probe = workflow[
+            workflow.index("- name: 校验 Qt 默认音频输出 (Windows)") : workflow.index(
+                "- name: 运行便携发布回归测试"
+            )
+        ]
 
         self.assertIn(
             "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip",
@@ -171,6 +176,7 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("QMediaDevices.audioOutputs()", workflow)
         self.assertIn("QMediaDevices.defaultAudioOutput()", workflow)
         self.assertIn("'VB-Audio Virtual Cable' not in default_output.description()", workflow)
+        self.assertIn("PYTHONIOENCODING: utf-8", qt_probe)
         self.assertNotIn("choco install vb-cable", workflow.lower())
         self.assertNotIn("VBCABLE_Setup_x64.exe", workflow)
         self.assertLess(

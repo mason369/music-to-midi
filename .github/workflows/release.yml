@@ -360,6 +360,7 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
         run: |
           @'
           from PyQt6.QtCore import QCoreApplication
