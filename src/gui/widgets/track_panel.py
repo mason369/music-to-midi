@@ -21,12 +21,14 @@ from src.gui.widgets.muscriptor_instrument_selector import MuscriptorInstrumentS
 from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
 from src.i18n.translator import get_translator, t
 from src.models.data_models import (
-    MAX_MIDI_BPM,
-    MIN_MIDI_BPM,
+    MAX_TEMPO_BPM,
+    MIN_TEMPO_BPM,
     MidiTrackMode,
     MultiInstrumentModel,
     MuscriptorModel,
+    MuscriptorProcessingChain,
     ProcessingMode,
+    TempoMode,
     TrackLayout,
     YourMT3Model,
 )
@@ -291,6 +293,41 @@ class TrackPanel(QGroupBox):
         muscriptor_model_row.addRow(self._muscriptor_model_label, self.muscriptor_model_combo)
         main_layout.addWidget(self._muscriptor_model_row)
 
+        self._muscriptor_processing_chain_row = QWidget()
+        muscriptor_processing_chain_row = self._selector_layout(
+            self._muscriptor_processing_chain_row
+        )
+        self._muscriptor_processing_chain_label = QLabel(
+            t("main.engine.muscriptor_processing_chain_label") + ":"
+        )
+        self._muscriptor_processing_chain_label.setWordWrap(True)
+        self._muscriptor_processing_chain_label.setStyleSheet(
+            "font-size: 11px; color: #b0b8c8; font-weight: normal;"
+        )
+        self.muscriptor_processing_chain_combo = NoWheelComboBox()
+        self._configure_combo(self.muscriptor_processing_chain_combo)
+        self.muscriptor_processing_chain_combo.addItem(
+            t("main.engine.muscriptor_processing_chains.official"),
+            MuscriptorProcessingChain.OFFICIAL.value,
+        )
+        self.muscriptor_processing_chain_combo.addItem(
+            t("main.engine.muscriptor_processing_chains.telknet"),
+            MuscriptorProcessingChain.TELKNET.value,
+        )
+        self.muscriptor_processing_chain_combo.setCurrentIndex(
+            self.muscriptor_processing_chain_combo.findData(
+                MuscriptorProcessingChain.OFFICIAL.value
+            )
+        )
+        self.muscriptor_processing_chain_combo.setToolTip(
+            t("main.engine.muscriptor_processing_chain_tooltip")
+        )
+        muscriptor_processing_chain_row.addRow(
+            self._muscriptor_processing_chain_label,
+            self.muscriptor_processing_chain_combo,
+        )
+        main_layout.addWidget(self._muscriptor_processing_chain_row)
+
         self.muscriptor_instrument_selector = MuscriptorInstrumentSelector()
         main_layout.addWidget(self.muscriptor_instrument_selector)
 
@@ -303,28 +340,33 @@ class TrackPanel(QGroupBox):
         tempo_row = self._selector_layout(self._tempo_row)
         self._tempo_label = QLabel(t("main.tempo.label") + ":")
         self._tempo_label.setWordWrap(True)
-        self._tempo_label.setStyleSheet(
-            "font-size: 11px; color: #b0b8c8; font-weight: normal;"
-        )
+        self._tempo_label.setStyleSheet("font-size: 11px; color: #b0b8c8; font-weight: normal;")
         tempo_controls = QWidget()
         tempo_controls_layout = QHBoxLayout(tempo_controls)
         tempo_controls_layout.setContentsMargins(0, 0, 0, 0)
         tempo_controls_layout.setSpacing(6)
         self.tempo_mode_combo = NoWheelComboBox()
         self._configure_combo(self.tempo_mode_combo)
-        self.tempo_mode_combo.addItem(t("main.tempo.auto"), "auto")
-        self.tempo_mode_combo.addItem(t("main.tempo.custom"), "custom")
+        self.tempo_mode_combo.addItem(t("main.tempo.adaptive"), TempoMode.ADAPTIVE.value)
+        self.tempo_mode_combo.addItem(t("main.tempo.fixed_auto"), TempoMode.FIXED_AUTO.value)
+        self.tempo_mode_combo.addItem(t("main.tempo.fixed_manual"), TempoMode.FIXED_MANUAL.value)
+        self.tempo_mode_combo.setCurrentIndex(
+            self.tempo_mode_combo.findData(TempoMode.FIXED_AUTO.value)
+        )
+        self.tempo_mode_combo.setToolTip(t("main.tempo.mode_tooltip"))
         self.tempo_mode_combo.currentIndexChanged.connect(self._on_tempo_mode_changed)
         tempo_controls_layout.addWidget(self.tempo_mode_combo, 1)
         self.custom_bpm_spin = QDoubleSpinBox()
-        self.custom_bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)
+        self.custom_bpm_spin.setRange(MIN_TEMPO_BPM, MAX_TEMPO_BPM)
         self.custom_bpm_spin.setDecimals(1)
         self.custom_bpm_spin.setSingleStep(0.5)
         self.custom_bpm_spin.setValue(120.0)
         self.custom_bpm_spin.setSuffix(" BPM")
         self.custom_bpm_spin.setEnabled(False)
         self.custom_bpm_spin.setToolTip(t("main.tempo.custom_tooltip"))
-        self.custom_bpm_spin.setStyleSheet(self._combo_style().replace("QComboBox", "QDoubleSpinBox"))
+        self.custom_bpm_spin.setStyleSheet(
+            self._combo_style().replace("QComboBox", "QDoubleSpinBox")
+        )
         tempo_controls_layout.addWidget(self.custom_bpm_spin, 1)
         tempo_row.addRow(self._tempo_label, tempo_controls)
         main_layout.addWidget(self._tempo_row)
@@ -405,9 +447,9 @@ class TrackPanel(QGroupBox):
         self._refresh_labels()
 
     def _on_tempo_mode_changed(self, _index: int) -> None:
-        self.custom_bpm_spin.setEnabled(
-            self._controls_enabled and self.tempo_mode_combo.currentData() == "custom"
-        )
+        is_manual = self.tempo_mode_combo.currentData() == TempoMode.FIXED_MANUAL.value
+        self.custom_bpm_spin.setVisible(is_manual)
+        self.custom_bpm_spin.setEnabled(self._controls_enabled and is_manual)
 
     def _mode_tooltip(self) -> str:
         mode = self.get_processing_mode()
@@ -509,7 +551,7 @@ class TrackPanel(QGroupBox):
         model_label = (
             model_info.get("ui_label") or model_info.get("name") or self.get_yourmt3_model()
         )
-        return f"♪ YourMT3+ — {model_label}"
+        return f"YourMT3+: {model_label}"
 
     def _model_options(self, mode: str | None = None) -> list[tuple[str, str]]:
         mode = mode or self.get_processing_mode()
@@ -639,14 +681,45 @@ class TrackPanel(QGroupBox):
             raise ValueError(f"Unsupported MuScriptor model size: {model_name!r}")
         self.muscriptor_model_combo.setCurrentIndex(index)
 
+    def get_muscriptor_processing_chain(self) -> str:
+        processing_chain = self.muscriptor_processing_chain_combo.currentData()
+        if processing_chain is None:
+            raise RuntimeError("No MuScriptor processing chain is selected")
+        return str(processing_chain)
+
+    def set_muscriptor_processing_chain(self, processing_chain: str) -> None:
+        normalized = (
+            str(processing_chain or MuscriptorProcessingChain.OFFICIAL.value).strip().lower()
+        )
+        index = self.muscriptor_processing_chain_combo.findData(normalized)
+        if index < 0:
+            raise ValueError(f"Unsupported MuScriptor processing chain: {processing_chain!r}")
+        self.muscriptor_processing_chain_combo.setCurrentIndex(index)
+
+    def get_tempo_mode(self) -> str:
+        mode = self.tempo_mode_combo.currentData()
+        if mode is None:
+            raise RuntimeError("No tempo mode is selected")
+        return str(mode)
+
+    def set_tempo_mode(self, mode: str) -> None:
+        normalized = str(mode or TempoMode.FIXED_AUTO.value).strip().lower()
+        index = self.tempo_mode_combo.findData(normalized)
+        if index < 0:
+            raise ValueError(f"Unsupported tempo mode: {mode!r}")
+        self.tempo_mode_combo.setCurrentIndex(index)
+        self._on_tempo_mode_changed(index)
+
     def get_custom_bpm(self) -> float | None:
-        if self.tempo_mode_combo.currentData() != "custom":
+        if self.tempo_mode_combo.currentData() != TempoMode.FIXED_MANUAL.value:
             return None
         return float(self.custom_bpm_spin.value())
 
     def set_custom_bpm(self, bpm: float | None) -> None:
         is_custom = bpm is not None
-        index = self.tempo_mode_combo.findData("custom" if is_custom else "auto")
+        index = self.tempo_mode_combo.findData(
+            TempoMode.FIXED_MANUAL.value if is_custom else TempoMode.FIXED_AUTO.value
+        )
         if index < 0:
             raise RuntimeError("Tempo mode option was not populated")
         self.tempo_mode_combo.setCurrentIndex(index)
@@ -688,6 +761,10 @@ class TrackPanel(QGroupBox):
             uses_model_selector
             and self.get_multi_instrument_model() == MultiInstrumentModel.MUSCRIPTOR.value
         )
+        shows_muscriptor_processing_chain = shows_muscriptor_instruments or mode in {
+            ProcessingMode.VOCAL_SPLIT.value,
+            ProcessingMode.SIX_STEM_SPLIT.value,
+        }
 
         self._model_row.setVisible(uses_model_selector)
         self._yourmt3_model_row.setVisible(shows_yourmt3_model)
@@ -695,6 +772,7 @@ class TrackPanel(QGroupBox):
         self.yourmt3_model_title_label.setVisible(shows_yourmt3_model)
         self.yourmt3_model_hint_label.setVisible(shows_yourmt3_model)
         self._muscriptor_model_row.setVisible(shows_muscriptor_instruments)
+        self._muscriptor_processing_chain_row.setVisible(shows_muscriptor_processing_chain)
         self.muscriptor_instrument_selector.setVisible(shows_muscriptor_instruments)
         self._vocal_split_options.setVisible(False)
 
@@ -713,6 +791,12 @@ class TrackPanel(QGroupBox):
         )
         self._muscriptor_model_label.setEnabled(
             self._controls_enabled and shows_muscriptor_instruments
+        )
+        self.muscriptor_processing_chain_combo.setEnabled(
+            self._controls_enabled and shows_muscriptor_processing_chain
+        )
+        self._muscriptor_processing_chain_label.setEnabled(
+            self._controls_enabled and shows_muscriptor_processing_chain
         )
         self.muscriptor_instrument_selector.setEnabled(
             self._controls_enabled and shows_muscriptor_instruments
@@ -741,6 +825,9 @@ class TrackPanel(QGroupBox):
         self._model_label.setText(self._model_label_text() + ":")
         self._yourmt3_model_label.setText(t("main.engine.yourmt3_model_label") + ":")
         self._muscriptor_model_label.setText(t("main.engine.muscriptor_model_label") + ":")
+        self._muscriptor_processing_chain_label.setText(
+            t("main.engine.muscriptor_processing_chain_label") + ":"
+        )
         self._tempo_label.setText(t("main.tempo.label") + ":")
         mode_labels = {
             ProcessingMode.SMART.value: "main.mode.smart",
@@ -768,15 +855,36 @@ class TrackPanel(QGroupBox):
             if index < 0:
                 raise RuntimeError(f"MuScriptor model option was not populated: {model_name!r}")
             self.muscriptor_model_combo.setItemText(index, t(key))
-        self.tempo_mode_combo.setItemText(
-            self.tempo_mode_combo.findData("auto"),
-            t("main.tempo.auto"),
-        )
-        self.tempo_mode_combo.setItemText(
-            self.tempo_mode_combo.findData("custom"),
-            t("main.tempo.custom"),
-        )
+        processing_chain_labels = {
+            MuscriptorProcessingChain.TELKNET.value: (
+                "main.engine.muscriptor_processing_chains.telknet"
+            ),
+            MuscriptorProcessingChain.OFFICIAL.value: (
+                "main.engine.muscriptor_processing_chains.official"
+            ),
+        }
+        for processing_chain, key in processing_chain_labels.items():
+            index = self.muscriptor_processing_chain_combo.findData(processing_chain)
+            if index < 0:
+                raise RuntimeError(
+                    "MuScriptor processing chain option was not populated: " f"{processing_chain!r}"
+                )
+            self.muscriptor_processing_chain_combo.setItemText(index, t(key))
+        tempo_mode_labels = {
+            TempoMode.ADAPTIVE.value: "main.tempo.adaptive",
+            TempoMode.FIXED_AUTO.value: "main.tempo.fixed_auto",
+            TempoMode.FIXED_MANUAL.value: "main.tempo.fixed_manual",
+        }
+        for tempo_mode, key in tempo_mode_labels.items():
+            index = self.tempo_mode_combo.findData(tempo_mode)
+            if index < 0:
+                raise RuntimeError(f"Tempo mode option was not populated: {tempo_mode!r}")
+            self.tempo_mode_combo.setItemText(index, t(key))
         self.custom_bpm_spin.setToolTip(t("main.tempo.custom_tooltip"))
+        self.tempo_mode_combo.setToolTip(t("main.tempo.mode_tooltip"))
+        self.muscriptor_processing_chain_combo.setToolTip(
+            t("main.engine.muscriptor_processing_chain_tooltip")
+        )
         self.muscriptor_instrument_selector.update_translations()
         self._vocal_split_merge_check.setText(t("main.mode.vocal_split_merge_midi"))
         self._refresh_labels()

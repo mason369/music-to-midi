@@ -15,6 +15,8 @@ from src.models.data_models import (
     ProcessingProgress,
     ProcessingStage,
 )
+from src.utils.gpu_utils import get_device
+from src.utils.inference_lock import acquire_accelerator_lock
 
 ProgressCallback = Callable[[ProcessingProgress], None]
 CancelCheck = Callable[[], bool]
@@ -101,17 +103,14 @@ class AudioSeparationService:
             missing = sorted(expected - actual_names)
             unexpected = sorted(actual_names - expected)
             raise RuntimeError(
-                "分离输出不符合契约："
-                f"缺少={missing or '无'}，意外输出={unexpected or '无'}"
+                "分离输出不符合契约：" f"缺少={missing or '无'}，意外输出={unexpected or '无'}"
             )
 
         validated: dict[str, str] = {}
         for name in expected_names:
             path = Path(separated_audio[name]).resolve()
             if not path.is_file() or path.stat().st_size <= 0:
-                raise RuntimeError(
-                    f"分离音轨不存在或为空：track={name}, path={path}"
-                )
+                raise RuntimeError(f"分离音轨不存在或为空：track={name}, path={path}")
             validated[name] = str(path)
         return validated
 
@@ -120,15 +119,15 @@ class AudioSeparationService:
 
         if not VocalSeparator.is_available():
             raise RuntimeError(
-                "人声分离不可用。请安装: "
+                "人声分离不可用。依赖安装命令："
                 "pip install audio-separator==0.44.1 --no-deps"
             )
         if not VocalSeparator.is_model_available():
             raise RuntimeError(
-                "人声分离模型未下载。请运行 python download_sota_models.py 后重试。"
+                "人声分离模型未下载。资源准备命令：python download_sota_models.py"
             )
 
-        device = "cuda:0" if self.config.use_gpu else "cpu"
+        device = get_device(self.config.use_gpu, self.config.gpu_device)
         separator = VocalSeparator(
             language=self.config.language,
             primary_device=device,
@@ -148,11 +147,11 @@ class AudioSeparationService:
 
         if not SixStemSeparator.is_available():
             raise RuntimeError(
-                "六声部分离不可用，请安装: "
+                "六声部分离不可用。依赖安装命令："
                 "pip install audio-separator==0.44.1 --no-deps"
             )
 
-        device = "cuda:0" if self.config.use_gpu else "cpu"
+        device = get_device(self.config.use_gpu, self.config.gpu_device)
         separator = SixStemSeparator(
             language=self.config.language,
             target_device=device,
@@ -180,64 +179,70 @@ class AudioSeparationService:
             ProcessingMode.VOCAL_SPLIT.value,
             ProcessingMode.SIX_STEM_SPLIT.value,
         }:
-            raise ValueError(
-                f"AudioSeparationService does not support processing mode {mode!r}"
+            raise ValueError(f"AudioSeparationService does not support processing mode {mode!r}")
+
+        def report_lock_wait() -> None:
+            self._emit_progress(
+                ProcessingStage.PREPROCESSING,
+                0.0,
+                0.0,
+                self._pt("progress.waiting_accelerator_lock"),
             )
 
-        source_path = Path(audio_path).resolve()
-        if not source_path.is_file() or source_path.stat().st_size <= 0:
-            raise FileNotFoundError(
-                f"Input audio does not exist or is empty: {source_path}"
-            )
-        resolved_output_dir = Path(output_dir).resolve()
-        resolved_output_dir.mkdir(parents=True, exist_ok=True)
+        with acquire_accelerator_lock(
+            self.config.gpu_device,
+            cancel_check=self._is_cancelled,
+            on_wait=report_lock_wait,
+        ):
+            self._check_cancelled()
+            source_path = Path(audio_path).resolve()
+            if not source_path.is_file() or source_path.stat().st_size <= 0:
+                raise FileNotFoundError(f"Input audio does not exist or is empty: {source_path}")
+            resolved_output_dir = Path(output_dir).resolve()
+            resolved_output_dir.mkdir(parents=True, exist_ok=True)
 
-        self._emit_progress(
-            ProcessingStage.PREPROCESSING,
-            0.0,
-            0.0,
-            self._pt("progress.analyzing_audio"),
-        )
-        self._check_cancelled()
-        wav_path = MusicToMidiPipeline._ensure_wav(
-            str(source_path),
-            str(resolved_output_dir),
-        )
-        self._check_cancelled()
-        self._emit_progress(
-            ProcessingStage.PREPROCESSING,
-            1.0,
-            0.05,
-            self._pt("progress.separation_only_ready"),
-        )
-
-        if mode == ProcessingMode.VOCAL_SPLIT.value:
-            separated_audio = self._separate_vocals(
-                wav_path, str(resolved_output_dir)
+            self._emit_progress(
+                ProcessingStage.PREPROCESSING,
+                0.0,
+                0.0,
+                self._pt("progress.analyzing_audio"),
             )
-        else:
-            separated_audio = self._separate_six_stems(
-                wav_path, str(resolved_output_dir)
+            self._check_cancelled()
+            wav_path = MusicToMidiPipeline._ensure_wav(
+                str(source_path),
+                str(resolved_output_dir),
             )
-        self._check_cancelled()
+            self._check_cancelled()
+            self._emit_progress(
+                ProcessingStage.PREPROCESSING,
+                1.0,
+                0.05,
+                self._pt("progress.separation_only_ready"),
+            )
 
-        processing_time = time.time() - start_time
-        self._emit_progress(
-            ProcessingStage.COMPLETE,
-            1.0,
-            1.0,
-            self._pt(
-                "progress.separation_only_complete",
-                seconds=f"{processing_time:.1f}",
-            ),
-        )
-        return SeparationResult(
-            mode=mode,
-            source_path=str(source_path),
-            output_dir=str(resolved_output_dir),
-            separated_audio=separated_audio,
-            processing_time=processing_time,
-        )
+            if mode == ProcessingMode.VOCAL_SPLIT.value:
+                separated_audio = self._separate_vocals(wav_path, str(resolved_output_dir))
+            else:
+                separated_audio = self._separate_six_stems(wav_path, str(resolved_output_dir))
+            self._check_cancelled()
+
+            processing_time = time.time() - start_time
+            self._emit_progress(
+                ProcessingStage.COMPLETE,
+                1.0,
+                1.0,
+                self._pt(
+                    "progress.separation_only_complete",
+                    seconds=f"{processing_time:.1f}",
+                ),
+            )
+            return SeparationResult(
+                mode=mode,
+                source_path=str(source_path),
+                output_dir=str(resolved_output_dir),
+                separated_audio=separated_audio,
+                processing_time=processing_time,
+            )
 
     def cancel(self) -> None:
         self._cancelled = True

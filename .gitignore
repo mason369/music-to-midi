@@ -56,6 +56,7 @@ coverage.xml
 
 # Environments
 .env
+.env.production
 .venv
 env/
 venv/
@@ -81,6 +82,8 @@ Thumbs.db
 
 # Project specific
 /models/
+/MidiOutput/
+/runtime/
 /tools/ffmpeg/bin/
 *.wav
 *.mp3
@@ -109,6 +112,7 @@ pasted-text*
 !/docs/
 /docs/*
 !/docs/muscriptor-model.md
+!/docs/docker-deployment.md
 .tmp/ai4m-miros/
 /external/ai4m-miros/
 /.tmp/

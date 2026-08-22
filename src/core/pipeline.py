@@ -41,10 +41,12 @@ from src.models.data_models import (
     ProcessingProgress,
     ProcessingResult,
     ProcessingStage,
+    TempoMode,
     Track,
     TrackType,
 )
 from src.utils.gpu_utils import clear_gpu_memory
+from src.utils.inference_lock import acquire_accelerator_lock
 from src.utils.midi_output import (
     publish_midi_output,
     remove_temporary_midi,
@@ -107,7 +109,8 @@ class MusicToMidiPipeline:
             )
         )
         self.aria_amt_transcriber = AriaAmtTranscriber(
-            language=getattr(config, "language", Translator.DEFAULT_LANGUAGE)
+            language=getattr(config, "language", Translator.DEFAULT_LANGUAGE),
+            config=config,
         )
         self.bytedance_piano_transcriber = ByteDancePianoTranscriber(config)
         self.transkun_transcriber = TranskunTranscriber(config)
@@ -306,7 +309,7 @@ class MusicToMidiPipeline:
         except FileNotFoundError as exc:
             raise RuntimeError(
                 "FFmpeg 不可用，无法转换非 WAV 音频。\n"
-                "请安装 FFmpeg 并确保 ffmpeg 可执行文件在 PATH 或打包资源中。"
+                "ffmpeg 可执行文件应来自系统 PATH 或完整打包资源。"
             ) from exc
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
@@ -330,14 +333,15 @@ class MusicToMidiPipeline:
         audio_path: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> BeatInfo:
+        beat_source = str(getattr(self, "_tempo_audio_path", None) or audio_path)
         try:
             detect_params = inspect.signature(self.beat_detector.detect).parameters
             if progress_callback is not None and "progress_callback" in detect_params:
                 beat_info = self.beat_detector.detect(
-                    audio_path, progress_callback=progress_callback
+                    beat_source, progress_callback=progress_callback
                 )
             else:
-                beat_info = self.beat_detector.detect(audio_path)
+                beat_info = self.beat_detector.detect(beat_source)
         except Exception as exc:
             logger.error("节拍检测失败: %s", exc)
             raise RuntimeError(f"节拍检测失败，已停止: {exc}") from exc
@@ -345,13 +349,16 @@ class MusicToMidiPipeline:
         if beat_info is None:
             raise RuntimeError("节拍检测失败，检测器未返回 BPM，已停止。")
 
-        detected_bpm = float(beat_info.bpm)
-        if self.config.custom_bpm is not None:
+        detected_bpm = float(
+            beat_info.source_bpm if beat_info.source_bpm is not None else beat_info.bpm
+        )
+        tempo_mode = str(getattr(self.config, "tempo_mode", TempoMode.FIXED_AUTO.value))
+        if tempo_mode == TempoMode.FIXED_MANUAL.value:
             project_bpm = float(self.config.custom_bpm)
             logger.info(
-                "原曲速度检测完成: %.1f BPM；用户工程 BPM 覆盖值: %.1f BPM；"
-                "导出 MIDI 将保留参考音乐 tick 并按工程 BPM 真实变速，"
-                "结果页原音/MIDI 联动试听使用相同比率",
+                "节拍证据来自 %s；检测 BPM: %.6f；手动唯一 BPM: %.1f；"
+                "导出时保留检测 BPM 的音乐 tick 并写入目标速度",
+                beat_source,
                 detected_bpm,
                 project_bpm,
             )
@@ -369,7 +376,17 @@ class MusicToMidiPipeline:
                 source_bpm=detected_bpm,
             )
 
-        logger.info("节拍检测完成: %.1f BPM", detected_bpm)
+        if tempo_mode == TempoMode.FIXED_AUTO.value and beat_info.tempo_map:
+            beat_info = BeatInfo(
+                bpm=detected_bpm,
+                beat_times=list(beat_info.beat_times),
+                downbeats=beat_info.downbeats,
+                time_signature=beat_info.time_signature,
+                tempo_map=[],
+                source_bpm=None,
+            )
+
+        logger.info("节拍检测完成: %.1f BPM；节拍源=%s", detected_bpm, beat_source)
         return beat_info
 
     @staticmethod
@@ -422,6 +439,7 @@ class MusicToMidiPipeline:
         audio_path: str,
         output_dir: str,
         progress_callback: Optional[Callable[[ProcessingProgress], None]] = None,
+        tempo_audio_path: Optional[str] = None,
     ) -> ProcessingResult:
         """
         处理音频文件并输出 MIDI。
@@ -437,26 +455,51 @@ class MusicToMidiPipeline:
         self.config.validate()
         self._check_cancelled()
 
-        # 非 WAV 格式自动转换为 WAV
-        audio_path = self._ensure_wav(audio_path, output_dir)
-        self._check_cancelled()
+        def report_lock_wait() -> None:
+            self._report(
+                ProcessingStage.PREPROCESSING,
+                0.0,
+                0.0,
+                self._pt("progress.waiting_accelerator_lock"),
+            )
 
-        mode = self.config.processing_mode
-        if mode == ProcessingMode.SMART.value:
-            return self._process_smart(audio_path, output_dir)
-        if mode == ProcessingMode.VOCAL_SPLIT.value:
-            return self._process_vocal_split(audio_path, output_dir)
-        if mode == ProcessingMode.SIX_STEM_SPLIT.value:
-            return self._process_six_stem_split(audio_path, output_dir)
-        if mode == ProcessingMode.PIANO_TRANSKUN.value:
-            return self._process_piano_transkun(audio_path, output_dir)
-        if mode == ProcessingMode.PIANO_TRANSKUN_V2_AUG.value:
-            return self._process_piano_transkun_v2_aug(audio_path, output_dir)
-        if mode == ProcessingMode.PIANO_ARIA_AMT.value:
-            return self._process_piano_aria_amt(audio_path, output_dir)
-        if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
-            return self._process_piano_bytedance_pedal(audio_path, output_dir)
-        raise ValueError(f"Unsupported processing mode: {mode!r}")
+        with acquire_accelerator_lock(
+            self.config.gpu_device,
+            cancel_check=lambda: self._cancelled,
+            on_wait=report_lock_wait,
+        ):
+            self._check_cancelled()
+            # Transcription consumes the selected track. A separated-track job may
+            # explicitly keep song-level BPM/meter analysis on the original mix.
+            original_audio_path = str(Path(audio_path).resolve())
+            audio_path = self._ensure_wav(original_audio_path, output_dir)
+            if tempo_audio_path is None:
+                self._tempo_audio_path = audio_path
+            else:
+                requested_tempo_source = str(Path(tempo_audio_path).resolve())
+                self._tempo_audio_path = (
+                    audio_path
+                    if requested_tempo_source == original_audio_path
+                    else self._ensure_wav(requested_tempo_source, output_dir)
+                )
+            self._check_cancelled()
+
+            mode = self.config.processing_mode
+            if mode == ProcessingMode.SMART.value:
+                return self._process_smart(audio_path, output_dir)
+            if mode == ProcessingMode.VOCAL_SPLIT.value:
+                return self._process_vocal_split(audio_path, output_dir)
+            if mode == ProcessingMode.SIX_STEM_SPLIT.value:
+                return self._process_six_stem_split(audio_path, output_dir)
+            if mode == ProcessingMode.PIANO_TRANSKUN.value:
+                return self._process_piano_transkun(audio_path, output_dir)
+            if mode == ProcessingMode.PIANO_TRANSKUN_V2_AUG.value:
+                return self._process_piano_transkun_v2_aug(audio_path, output_dir)
+            if mode == ProcessingMode.PIANO_ARIA_AMT.value:
+                return self._process_piano_aria_amt(audio_path, output_dir)
+            if mode == ProcessingMode.PIANO_BYTEDANCE_PEDAL.value:
+                return self._process_piano_bytedance_pedal(audio_path, output_dir)
+            raise ValueError(f"Unsupported processing mode: {mode!r}")
 
     @staticmethod
     def _has_note_messages(track) -> bool:
@@ -882,11 +925,11 @@ class MusicToMidiPipeline:
             mode_label="TransKun",
             output_suffix="piano_transkun",
             install_hint=(
-                "TransKun 不可用，请先安装：\n"
+                "TransKun 不可用。安装命令：\n"
                 f"  python -m pip install transkun=={TRANSKUN_PACKAGE_VERSION}"
             ),
             model_hint=(
-                "TransKun 预训练资源缺失或安装不完整，请执行：\n"
+                "TransKun 预训练资源缺失或安装不完整。修复命令：\n"
                 "  python -m pip install --force-reinstall "
                 f"transkun=={TRANSKUN_PACKAGE_VERSION}"
             ),
@@ -905,11 +948,11 @@ class MusicToMidiPipeline:
             mode_label="TransKun V2 Aug",
             output_suffix="piano_transkun_v2_aug",
             install_hint=(
-                "TransKun V2 Aug 运行时不可用，请先安装：\n"
+                "TransKun V2 Aug 运行时不可用。安装命令：\n"
                 f"  python -m pip install transkun=={TRANSKUN_PACKAGE_VERSION}"
             ),
             model_hint=(
-                "TransKun V2 Aug 官方 checkpoint 缺失或校验失败，请执行：\n"
+                "TransKun V2 Aug 官方 checkpoint 缺失或校验失败。准备命令：\n"
                 "  python download_transkun_v2_aug_model.py"
             ),
         )
@@ -923,11 +966,11 @@ class MusicToMidiPipeline:
             mode_label="Aria-AMT",
             output_suffix="piano_aria",
             install_hint=(
-                "Aria-AMT 不可用，请先安装：\n"
+                "Aria-AMT 不可用。安装命令：\n"
                 f'  python -m pip install "{ARIA_AMT_SOURCE_REQUIREMENT}"'
             ),
             model_hint=(
-                "Aria-AMT 模型权重缺失，请先下载：\n" "  python download_aria_amt_model.py"
+                "Aria-AMT 模型权重缺失。准备命令：\n" "  python download_aria_amt_model.py"
             ),
         )
 
@@ -940,13 +983,13 @@ class MusicToMidiPipeline:
             mode_label="ByteDance Piano",
             output_suffix="piano_bytedance_pedal",
             install_hint=(
-                "ByteDance Piano 不可用，请先安装：\n"
+                "ByteDance Piano 不可用。安装命令：\n"
                 "  python -m pip install "
                 f"piano-transcription-inference=={BYTEDANCE_PIANO_PACKAGE_VERSION} "
                 '"torchlibrosa>=0.1.0,<0.2"'
             ),
             model_hint=(
-                "ByteDance Piano checkpoint 缺失或不完整，请先下载：\n"
+                "ByteDance Piano checkpoint 缺失或不完整。准备命令：\n"
                 "  python download_bytedance_piano_model.py"
             ),
         )
@@ -1161,8 +1204,8 @@ class MusicToMidiPipeline:
                     label="MuScriptor MuseScore tempo metadata",
                 )
             )
-            # Tempo normalization cannot add notes, but the published result is
-            # checked again so the user-visible artifact itself is the proof.
+            # Recheck the published MIDI after tempo normalization so the
+            # selected-instrument constraint covers the downloadable file.
             validate_muscriptor_midi_constraint(midi_path, selected)
         except InterruptedError:
             raise
@@ -1195,7 +1238,7 @@ class MusicToMidiPipeline:
         )
 
     def _process_smart(self, audio_path: str, output_dir: str) -> ProcessingResult:
-        """智能模式：直接对完整混音进行多乐器转写。"""
+        """SMART 模式：直接对完整混音进行多乐器转写。"""
         audio_path = str(audio_path)
         output_dir = str(output_dir)
         Path(output_dir).mkdir(parents=True, exist_ok=True)

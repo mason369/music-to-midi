@@ -30,7 +30,9 @@ def _is_within(path: Path, parent: Path) -> bool:
 
 
 def _expected_venv_paths(project_root: Path, platform_name: str) -> tuple[Path, Path]:
-    venv_root = project_root / "venv"
+    accelerator = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "").strip().lower()
+    venv_name = "venv-xpu" if accelerator == "xpu" else "venv"
+    venv_root = project_root / venv_name
     if platform_name == "nt":
         return venv_root, venv_root / "Scripts" / "python.exe"
     return venv_root, venv_root / "bin" / "python"

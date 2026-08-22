@@ -73,7 +73,7 @@ def build_muscriptor_result_html(
         "sourceTrackName": str(state.get("source_track_name", "")),
         "previewApi": str(state.get("preview_api", "")),
         "previewToken": str(state.get("preview_token", "")),
-        "originalUrl": track_file_url(str(state["audio_path"])),
+        "originalUrl": track_file_url(str(state["playback_audio_path"])),
         "instruments": instruments,
         "downloads": {
             "midi": track_file_url(str(state["midi_path"])),

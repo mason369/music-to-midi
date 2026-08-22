@@ -42,7 +42,7 @@ def _write_semantic_midi(path: Path, *, include_tempo: bool = False) -> None:
     midi.save(path)
 
 
-@pytest.mark.parametrize("custom_bpm", [10.0, 97.5])
+@pytest.mark.parametrize("custom_bpm", [30.0, 97.5])
 def test_custom_bpm_keeps_detected_source_tempo_and_sets_independent_target(custom_bpm):
     pipeline = MusicToMidiPipeline(Config(custom_bpm=custom_bpm))
     calls = []
@@ -67,7 +67,7 @@ def test_custom_bpm_keeps_detected_source_tempo_and_sets_independent_target(cust
     assert beat_info.tempo_map == []
 
 
-@pytest.mark.parametrize("custom_bpm", [3.9, 400.1, float("nan"), float("inf")])
+@pytest.mark.parametrize("custom_bpm", [3.9, 29.9, 300.1, 400.1, float("nan"), float("inf")])
 def test_custom_bpm_validation_rejects_unusable_values(custom_bpm):
     with pytest.raises(ValueError, match="BPM"):
         Config(custom_bpm=custom_bpm).validate()
@@ -562,19 +562,19 @@ def test_report_detected_bpm_constant_tempo():
 def test_report_detected_bpm_exposes_source_and_custom_target():
     from src.models.data_models import BeatInfo, Config
 
-    pipeline = MusicToMidiPipeline(Config(custom_bpm=23.0))
+    pipeline = MusicToMidiPipeline(Config(custom_bpm=86.1))
     reports = []
     pipeline._progress_callback = reports.append
 
     pipeline._report_detected_bpm(
-        BeatInfo(bpm=23.0, source_bpm=117.9),
+        BeatInfo(bpm=86.1, source_bpm=117.9),
         1.0,
         0.1,
     )
 
     assert len(reports) == 1
     assert reports[0].source_bpm == pytest.approx(117.9)
-    assert reports[0].target_bpm == pytest.approx(23.0)
+    assert reports[0].target_bpm == pytest.approx(86.1)
 
 
 def test_specialized_piano_writes_automatic_tempo_map_by_default(tmp_path):

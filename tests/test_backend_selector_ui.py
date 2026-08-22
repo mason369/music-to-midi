@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import QApplication
 
 from src.gui.widgets.track_panel import TrackPanel
 from src.i18n.translator import set_language
-from src.models.data_models import Config
+from src.models.data_models import Config, MuscriptorProcessingChain
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
 
@@ -66,7 +66,7 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_yourmt3_model(), "yptf_moe_multi_nops")
         self.assertEqual(panel.mode_combo.currentText(), "Multi-Instrument MIDI")
         self.assertNotIn("YourMT3", panel.mode_combo.currentText())
-        self.assertEqual(panel._model_label.text(), "Multi-Instrument Backend:")
+        self.assertEqual(panel._model_label.text(), "Multi-Instrument Model:")
         self.assertEqual(
             [panel.model_combo.itemData(index) for index in range(panel.model_combo.count())],
             ["yourmt3", "miros", "muscriptor"],
@@ -75,6 +75,36 @@ class TestBackendSelectorUi(unittest.TestCase):
             "Aria-AMT",
             [panel.model_combo.itemText(index) for index in range(panel.model_combo.count())],
         )
+
+    def test_muscriptor_processing_chain_defaults_to_official_and_remains_explicit(self):
+        panel = TrackPanel()
+
+        self.assertEqual(
+            panel.get_muscriptor_processing_chain(),
+            MuscriptorProcessingChain.OFFICIAL.value,
+        )
+        self.assertEqual(
+            [
+                panel.muscriptor_processing_chain_combo.itemData(index)
+                for index in range(panel.muscriptor_processing_chain_combo.count())
+            ],
+            [
+                MuscriptorProcessingChain.OFFICIAL.value,
+                MuscriptorProcessingChain.TELKNET.value,
+            ],
+        )
+        self.assertTrue(panel._muscriptor_processing_chain_row.isHidden())
+
+        panel.set_transcription_backend("muscriptor")
+        self.assertFalse(panel._muscriptor_processing_chain_row.isHidden())
+        panel.set_muscriptor_processing_chain(MuscriptorProcessingChain.TELKNET.value)
+        self.assertEqual(
+            panel.get_muscriptor_processing_chain(),
+            MuscriptorProcessingChain.TELKNET.value,
+        )
+
+        panel.set_processing_mode("vocal_split")
+        self.assertFalse(panel._muscriptor_processing_chain_row.isHidden())
 
     def test_smart_mode_rejects_aria_amt_as_displayed_full_mix_engine(self):
         panel = TrackPanel()
@@ -132,11 +162,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertTrue(panel._yourmt3_model_row.isHidden())
         self.assertTrue(panel.yourmt3_model_card.isHidden())
         self.assertIn(
-            "Split the audio into bass, drums, guitar, piano, vocals, and other WAV tracks",
+            "BS-RoFormer SW creates bass, drums, guitar, piano, vocals, and other WAV tracks",
             panel.hint_label.text(),
         )
         self.assertIn(
-            "convert each track to MIDI independently",
+            "each completed track can use its own model for MIDI conversion",
             panel.hint_label.text(),
         )
 
@@ -177,10 +207,10 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
         self.assertIn("Leap XE + PolarFormer", panel.mode_desc_label.text())
         self.assertIn(
-            "Extract vocals and accompaniment into two WAV tracks", panel.hint_label.text()
+            "Leap XE and PolarFormer create two WAV tracks", panel.hint_label.text()
         )
         self.assertIn(
-            "convert each track to MIDI independently",
+            "each completed track can use its own model for MIDI conversion",
             panel.hint_label.text(),
         )
 
@@ -324,11 +354,11 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
         self.assertIn("BS-RoFormer SW", panel.mode_desc_label.text())
         self.assertIn(
-            "Split the audio into bass, drums, guitar, piano, vocals, and other WAV tracks",
+            "BS-RoFormer SW creates bass, drums, guitar, piano, vocals, and other WAV tracks",
             panel.hint_label.text(),
         )
         self.assertIn(
-            "convert each track to MIDI independently",
+            "each completed track can use its own model for MIDI conversion",
             panel.hint_label.text(),
         )
 
@@ -382,10 +412,29 @@ class TestBackendSelectorUi(unittest.TestCase):
     def test_custom_tempo_accepts_ten_bpm_without_reverting_to_default(self):
         panel = TrackPanel()
 
-        panel.set_custom_bpm(10.0)
+        self.assertTrue(panel.custom_bpm_spin.isHidden())
+        self.assertFalse(panel.custom_bpm_spin.isEnabled())
 
-        self.assertEqual(panel.custom_bpm_spin.value(), 10.0)
-        self.assertEqual(panel.get_custom_bpm(), 10.0)
+        panel.set_tempo_mode("adaptive")
+        self.assertTrue(panel.custom_bpm_spin.isHidden())
+        self.assertFalse(panel.custom_bpm_spin.isEnabled())
+
+        panel.set_custom_bpm(30.0)
+
+        self.assertEqual(panel.custom_bpm_spin.value(), 30.0)
+        self.assertEqual(panel.get_custom_bpm(), 30.0)
+        self.assertFalse(panel.custom_bpm_spin.isHidden())
+        self.assertTrue(panel.custom_bpm_spin.isEnabled())
+
+        panel.set_processing_controls_enabled(False)
+        self.assertFalse(panel.custom_bpm_spin.isHidden())
+        self.assertFalse(panel.custom_bpm_spin.isEnabled())
+
+        panel.set_processing_controls_enabled(True)
+        panel.set_tempo_mode("fixed_auto")
+        self.assertTrue(panel.custom_bpm_spin.isHidden())
+        self.assertFalse(panel.custom_bpm_spin.isEnabled())
+        self.assertIsNone(panel.get_custom_bpm())
 
 
 if __name__ == "__main__":

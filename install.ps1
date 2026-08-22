@@ -4,6 +4,13 @@
 # 或双击 install.bat
 
 #Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [ValidateSet("cuda", "xpu")]
+    [string]$Accelerator = "cuda",
+    [string]$VenvName = ""
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 # 设置控制台输出编码为 UTF-8，避免中文乱码
@@ -12,7 +19,15 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = "utf-8"
 
 $REPO_DIR = $PSScriptRoot
-$VENV_DIR = Join-Path $REPO_DIR "venv"
+$Accelerator = $Accelerator.ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($VenvName)) {
+    $VenvName = if ($Accelerator -eq "xpu") { "venv-xpu" } else { "venv" }
+}
+if ($VenvName -notmatch '^[A-Za-z0-9._-]+$') {
+    throw "非法虚拟环境目录名: $VenvName"
+}
+$env:MUSIC_TO_MIDI_ACCELERATOR = $Accelerator
+$VENV_DIR = Join-Path $REPO_DIR $VenvName
 $PIP      = Join-Path $VENV_DIR "Scripts\pip.exe"
 $PYTHON   = Join-Path $VENV_DIR "Scripts\python.exe"
 . (Join-Path $REPO_DIR "scripts\powershell_helpers.ps1")
@@ -72,7 +87,7 @@ function Invoke-Download {
 # --- 标题 ---
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Music to MIDI  -  Windows 安装程序" -ForegroundColor Cyan
+Write-Host "  Music to MIDI  -  Windows $($Accelerator.ToUpperInvariant()) 安装程序" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -101,7 +116,7 @@ if ($nonAscii -or $hasSpaceOrParen) {
     Write-Host ""
     $continue = Read-Host "  是否仍要继续安装？(y/N)"
     if ($continue -ne 'y' -and $continue -ne 'Y') {
-        Write-Host "  已取消安装。请将项目移动到无特殊字符的路径后重试。" -ForegroundColor Yellow
+        Write-Host "  安装已取消。支持的项目路径不包含特殊字符。" -ForegroundColor Yellow
         exit 1
     }
     Write-Warn "继续安装（路径问题可能导致运行失败）..."
@@ -150,7 +165,7 @@ if (-not $PYTHON_BIN) {
 if (-not $PYTHON_BIN) {
     Write-Host "[错误] 未找到兼容的 Python 版本（需要 3.11~3.12）。" -ForegroundColor Red
     Write-Host "  当前系统可能安装了过旧或过新的 Python，Aria-AMT 需要 3.11+。" -ForegroundColor Yellow
-    Write-Host "  请安装 Python 3.11: winget install Python.Python.3.11" -ForegroundColor Yellow
+    Write-Host "  Python 3.11 安装命令: winget install Python.Python.3.11" -ForegroundColor Yellow
     Write-Host "  或访问 https://www.python.org/downloads/ 下载 3.11 或 3.12" -ForegroundColor Yellow
     exit 1
 }
@@ -166,7 +181,7 @@ try {
     Write-Ok "找到 $gitVer"
 }
 catch {
-    Write-Host "[错误] 未找到 git，请执行: winget install Git.Git" -ForegroundColor Red
+    Write-Host "[错误] 未找到 git。安装命令: winget install Git.Git" -ForegroundColor Red
     exit 1
 }
 
@@ -321,7 +336,7 @@ catch {
         } else { throw "still not found" }
     }
     catch {
-        Write-Err "ffmpeg 安装后仍无法在当前进程执行；请确认安装路径后重新运行。根因: $_"
+        Write-Err "ffmpeg 安装后仍无法在当前进程执行；当前安装路径不可用。根因: $_"
     }
 }
 
@@ -467,9 +482,10 @@ Write-Info "第 6 步/共 12 步  升级 pip..."
 if ($LASTEXITCODE -ne 0) { Write-Err "pip 升级失败" }
 Write-Ok "pip 升级成功"
 
-# --- 第 7 步/共 12 步：严格验证 NVIDIA CUDA 12.8 / PyTorch ---
-Write-Info "第 7 步/共 12 步  验证完整七模式 NVIDIA CUDA 12.8 运行时..."
+# --- 第 7 步/共 12 步：严格验证隔离的 PyTorch 加速器运行时 ---
+Write-Info "第 7 步/共 12 步  验证完整七模式 $($Accelerator.ToUpperInvariant()) 运行时..."
 
+if ($Accelerator -eq "cuda") {
 $nvidiaOk = $false
 $nvOutput = $null
 try {
@@ -556,9 +572,95 @@ if ($pythonExitCode -ne 0) {
     }
 }
 Write-Ok "PyTorch 三件套与 NVIDIA CUDA 12.8 实测通过"
+} else {
+    $intelGpu = @()
+    try {
+        $intelGpu = @(
+            Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+                Where-Object { $_.Name -match 'Intel.*(Arc|Graphics|UHD|Iris)' }
+        )
+    } catch {
+        Write-Err "无法读取 Intel 显卡信息，不能验证 XPU 目标硬件: $_"
+    }
+    if ($intelGpu.Count -eq 0) {
+        Write-Err "未检测到 Intel GPU；XPU 安装不会静默改用 CUDA、DirectML 或 CPU。"
+    }
+    foreach ($adapter in $intelGpu) {
+        Write-Info "Intel GPU: $($adapter.Name)；驱动: $($adapter.DriverVersion)"
+    }
+
+    $torchCudaRuntimeCheck = @"
+import os
+from importlib import metadata
+os.environ['PYTORCH_DEBUG_XPU_FALLBACK'] = '1'
+expected = {'torch': '2.11.0', 'torchaudio': '2.11.0', 'torchvision': '0.26.0'}
+actual = {name: metadata.version(name) for name in expected}
+base = {name: version.split('+', 1)[0] for name, version in actual.items()}
+if base != expected or any('+xpu' not in version for version in actual.values()):
+    raise RuntimeError(f'Expected the pinned PyTorch XPU trio: {actual}')
+try:
+    metadata.version('intel-extension-for-pytorch')
+except metadata.PackageNotFoundError:
+    pass
+else:
+    raise RuntimeError('intel-extension-for-pytorch must not be installed; native torch.xpu is required')
+import torch, torchaudio, torchvision
+if getattr(torch.version, 'cuda', None) is not None or getattr(torch.version, 'hip', None) is not None:
+    raise RuntimeError(f'XPU venv contains a CUDA/ROCm wheel: CUDA={torch.version.cuda!r}, HIP={torch.version.hip!r}')
+if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
+    raise RuntimeError('torch.xpu.is_available() is False; check the Intel graphics driver')
+if torch.xpu.device_count() < 1:
+    raise RuntimeError('torch.xpu reports no Intel GPU')
+value = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device='xpu:0')
+result = torch.mm(value, value)
+if result.device.type != 'xpu' or result.device.index != 0:
+    raise RuntimeError(f'XPU probe ran on the wrong device: {result.device}')
+if result.cpu().tolist() != [[7.0, 10.0], [15.0, 22.0]]:
+    raise RuntimeError('XPU matrix multiplication returned an invalid result')
+import warnings
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    signal = torch.linspace(-1.0, 1.0, steps=4096, device='xpu:0')
+    spectrum = torch.fft.rfft(signal)
+    restored = torch.fft.irfft(spectrum, n=signal.shape[-1])
+    torch.xpu.synchronize(0)
+fallbacks = [
+    str(item.message) for item in caught
+    if 'xpu' in str(item.message).lower()
+    and 'cpu' in str(item.message).lower()
+    and ('fallback' in str(item.message).lower() or 'falling back' in str(item.message).lower())
+]
+if fallbacks:
+    raise RuntimeError(f'XPU FFT fell back to CPU: {fallbacks}')
+if float((signal - restored).abs().max().cpu()) > 1e-4:
+    raise RuntimeError('XPU FFT numerical probe failed')
+torch.xpu.synchronize(0)
+print('PyTorch trio:', actual)
+print('Intel XPU device:', torch.xpu.get_device_name(0))
+"@
+
+    $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
+    if ($pythonExitCode -ne 0) {
+        Write-Info "正在安装固定的原生 PyTorch XPU 三件套（不安装 IPEX）..."
+        & "$PIP" install "torch==2.11.0" "torchaudio==2.11.0" "torchvision==0.26.0" `
+            --index-url "https://download.pytorch.org/whl/xpu" --force-reinstall
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "PyTorch 2.11.0 / torchaudio 2.11.0 / torchvision 0.26.0 XPU 安装失败"
+        }
+        $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
+        if ($pythonExitCode -ne 0) {
+            Write-Err "PyTorch XPU 安装后仍未通过版本、设备驻留与真实张量运算门禁"
+        }
+    }
+    Write-Ok "原生 PyTorch XPU 三件套与 Intel GPU 实测通过"
+}
 
 # --- 第 8 步/共 12 步：锁定完整运行时 ---
-Write-Info "第 8 步/共 12 步  完整七模式固定使用 NVIDIA CUDA，不安装 IPEX/CPU 降级运行时。"
+if ($Accelerator -eq "xpu") {
+    Write-Info "第 8 步/共 12 步  完整七模式固定使用原生 PyTorch XPU + OpenVINO GPU；不安装 IPEX，不允许 CPU 降级。"
+} else {
+    Write-Info "第 8 步/共 12 步  完整七模式固定使用 NVIDIA CUDA，不安装 IPEX/CPU 降级运行时。"
+}
 
 # --- 第 9 步/共 12 步：安装项目依赖 ---
 Write-Info "第 9 步/共 12 步  安装项目 Python 依赖..."
@@ -571,7 +673,7 @@ if (Test-PythonPackageInstalled -PackageName "audio-separator") {
 }
 
 $ortPackagesToRemove = @()
-foreach ($ortPackage in @("onnxruntime", "onnxruntime-gpu")) {
+foreach ($ortPackage in @("onnxruntime", "onnxruntime-gpu", "onnxruntime-openvino", "openvino")) {
     if (Test-PythonPackageInstalled -PackageName $ortPackage) {
         $ortPackagesToRemove += $ortPackage
     }
@@ -586,9 +688,18 @@ $tmpReq = Join-Path $env:TEMP (
 )
 $requirementsExitCode = 1
 try {
-    Get-Content -Encoding UTF8 (Join-Path $REPO_DIR "requirements.txt") |
-        Where-Object { $_ -notmatch '^\s*aria-amt\s*@' } |
-        Set-Content -Encoding UTF8 $tmpReq
+    $requirementLines = @(
+        Get-Content -Encoding UTF8 (Join-Path $REPO_DIR "requirements.txt") |
+            Where-Object { $_ -notmatch '^\s*aria-amt\s*@' }
+    )
+    if ($Accelerator -eq "xpu") {
+        $requirementLines = @(
+            $requirementLines | Where-Object {
+                $_ -notmatch '^\s*(torch|torchaudio|torchvision|onnxruntime|onnxruntime-gpu)(?:\s|[=<>!~@;\[])'
+            }
+        )
+    }
+    $requirementLines | Set-Content -Encoding UTF8 $tmpReq
 
     & "$PIP" install -r $tmpReq
     $requirementsExitCode = $LASTEXITCODE
@@ -601,9 +712,14 @@ finally {
 if ($requirementsExitCode -ne 0) { Write-Err "requirements.txt 安装失败" }
 Write-Ok "Python 依赖安装成功"
 
-# audio-separator 0.44.1 声明 numpy>=2，但当前桌面栈和 PyTorch 2.7 在 Windows
+# audio-separator 0.44.1 声明 numpy>=2，但当前 Windows CUDA 2.7 / XPU 2.11 桌面栈
 # 上需要 NumPy 1.26.x。按发布脚本的做法，先安装其运行依赖，再 no-deps 安装包本体。
 Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
+$acceleratorOrtPackages = if ($Accelerator -eq "xpu") {
+    @("onnxruntime-openvino==1.24.1", "openvino==2025.4.1")
+} else {
+    @("onnxruntime-gpu==1.23.2")
+}
 & "$PIP" install `
     "numpy==1.26.4" `
     "beartype==0.18.5" `
@@ -615,7 +731,7 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "pydub==0.25.1" `
     "requests>=2.32.5,<3" `
     "chardet>=5,<6" `
-    "onnxruntime-gpu==1.23.2" `
+    @acceleratorOrtPackages `
     "resampy==0.4.3" `
     "rotary-embedding-torch==0.6.5" `
     "samplerate==0.1.0" `
@@ -624,24 +740,14 @@ Write-Info "安装 audio-separator 运行依赖（固定兼容 NumPy 1.26）..."
     "six==1.17.0"
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 运行依赖安装失败" }
 
-$ortProviderCheck = @"
-import onnxruntime as ort
-import torch
-providers = ort.get_available_providers()
-print('ONNX Runtime providers:', providers)
-if getattr(torch.version, 'hip', None):
-    raise RuntimeError(f'ROCm runtime is unsupported: HIP={torch.version.hip}')
-if torch.version.cuda != '12.8' or not torch.cuda.is_available():
-    raise RuntimeError(f'Expected working PyTorch CUDA 12.8, got CUDA={torch.version.cuda!r}')
-if 'CUDAExecutionProvider' not in providers:
-    raise RuntimeError('Complete seven-mode runtime requires ONNX Runtime CUDAExecutionProvider')
-"@
 $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $torchCudaRuntimeCheck
 if ($pythonExitCode -ne 0) {
-    Write-Err "requirements.txt 安装后 PyTorch 三件套版本或 CUDA 12.8 运行时被改变"
+    Write-Err "requirements.txt 安装后固定的 $($Accelerator.ToUpperInvariant()) PyTorch 运行时被改变"
 }
-$pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $ortProviderCheck
-if ($pythonExitCode -ne 0) { Write-Err "ONNX Runtime CUDAExecutionProvider 严格校验失败" }
+& "$PYTHON" (Join-Path $REPO_DIR "tools\validate_accelerator_runtime.py") --accelerator $Accelerator
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "$($Accelerator.ToUpperInvariant()) PyTorch/ONNX Runtime 实际执行门禁失败"
+}
 
 & "$PIP" install "audio-separator==0.44.1" --no-deps
 if ($LASTEXITCODE -ne 0) { Write-Err "audio-separator 安装失败" }
@@ -650,7 +756,7 @@ Write-Ok "audio-separator 安装成功"
 Write-Info "下载其它大型模型前预检 MuScriptor Small/Medium/Large gated 访问权限..."
 & "$PYTHON" -c "from src.utils.muscriptor_downloader import preflight_muscriptor_download_access; preflight_muscriptor_download_access()"
 if ($LASTEXITCODE -ne 0) {
-    Write-Err "MuScriptor gated 访问预检失败；请在浏览器逐项接受三个仓库条款，并用项目 venv 登录 Hugging Face 后重试。"
+    Write-Err "MuScriptor gated 访问预检失败；访问条件是浏览器已逐项接受三个仓库条款，并在项目 venv 中登录 Hugging Face。"
 }
 Write-Ok "MuScriptor Small/Medium/Large gated 访问权限预检通过"
 
@@ -714,7 +820,7 @@ if ($pythonExitCode -ne 0) {
     Write-Info "Aria-AMT 缺失或源码身份不匹配，正在强制安装固定 GitHub archive..."
     & "$PIP" install "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" --no-deps --force-reinstall
     if ($LASTEXITCODE -ne 0) {
-        Write-Err "Aria-AMT 安装失败，请确认 Python 3.11+ 且能访问 GitHub 仓库。"
+        Write-Err "Aria-AMT 安装校验失败：需要 Python 3.11+ 和可访问的 GitHub 仓库。"
     }
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $ariaCheckScript
     if ($pythonExitCode -ne 0) {
@@ -743,7 +849,7 @@ sys.exit(0 if ByteDancePianoTranscriber.is_available() else 1)
 
 $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $byteDanceCheckScript
 if ($pythonExitCode -ne 0) {
-    Write-Err "ByteDance Piano 安装失败，请确认 piano-transcription-inference、torchlibrosa 与 matplotlib 已安装。"
+    Write-Err "ByteDance Piano 安装校验失败：piano-transcription-inference、torchlibrosa 或 matplotlib 不完整。"
 }
 
 & "$PYTHON" (Join-Path $REPO_DIR "download_bytedance_piano_model.py")
@@ -856,7 +962,7 @@ print('YourMT3+ patched source files:', file_count)
 "@
 $pythonExitCode = Invoke-PythonScript -PythonExecutable $PYTHON -Script $yourMt3SourceIdentityScript
 if ($pythonExitCode -ne 0) {
-    Write-Err "YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。"
+    Write-Err "YourMT3+ 源码树缺失或身份不匹配；需要恢复当前项目版本，可变上游源码与本版本不兼容。"
 }
 Write-Ok "YourMT3+ 源码身份检查通过"
 
@@ -903,17 +1009,21 @@ Write-Host "  安装完成！" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  运行方式：" -ForegroundColor White
-Write-Host "  .\run.bat                 （推荐）" -ForegroundColor Green
-Write-Host "  .\run.ps1" -ForegroundColor Green
+if ($Accelerator -eq "xpu") {
+    Write-Host "  .\run_xpu.ps1             （Intel XPU）" -ForegroundColor Green
+} else {
+    Write-Host "  .\run.bat                 （NVIDIA CUDA，推荐）" -ForegroundColor Green
+    Write-Host "  .\run.ps1" -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "  模型维护命令：" -ForegroundColor White
-Write-Host "  venv\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_beat_this_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_accompaniment_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_transkun_v2_aug_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_muscriptor_model.py --size all" -ForegroundColor Yellow
-  Write-Host "  venv\Scripts\python.exe download_fluidsynth_runtime.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_sota_models.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_beat_this_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_multistem_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_vocal_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_accompaniment_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_transkun_v2_aug_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_bytedance_piano_model.py" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_muscriptor_model.py --size all" -ForegroundColor Yellow
+Write-Host "  $VenvName\Scripts\python.exe download_fluidsynth_runtime.py" -ForegroundColor Yellow
 Write-Host ""

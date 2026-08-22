@@ -73,7 +73,7 @@ def test_smart_yourmt3_uses_official_direct_midi_output(monkeypatch, tmp_path):
     result = pipeline._process_smart(str(input_path), str(output_dir))
 
     assert fake_yourmt3.calls == [(str(input_path), str(output_dir / "song.mid"))]
-    assert result.midi_path == str(output_dir / "song.mid")
+    assert Path(result.midi_path) == output_dir / "song.mid"
     assert result.beat_info == BeatInfo(bpm=96.0)
     assert result.total_notes == 9
     messages = [message for track in mido.MidiFile(result.midi_path).tracks for message in track]
@@ -129,7 +129,7 @@ def test_smart_miros_uses_official_direct_midi_output(monkeypatch, tmp_path):
     result = pipeline._process_smart(str(input_path), str(output_dir))
 
     assert fake_miros.calls == [(str(input_path), str(output_dir / "song.mid"))]
-    assert result.midi_path == str(output_dir / "song.mid")
+    assert Path(result.midi_path) == output_dir / "song.mid"
     assert result.beat_info == BeatInfo(bpm=132.0)
     assert result.total_notes == 7
     messages = [message for track in mido.MidiFile(result.midi_path).tracks for message in track]

@@ -767,7 +767,7 @@ class MidiGenerator:
         is_drum: bool = False
     ) -> List[NoteEvent]:
         """
-        最小化后处理 - 极致质量模式
+        ``best`` 模式使用的最小后处理。
 
         只移除明显的错误，保留所有细节:
         1. 移除 duration < 10ms 的极短音符（噪音）- 鼓除外
@@ -827,7 +827,7 @@ class MidiGenerator:
         参数:
             notes: 音符列表
             tempo: BPM
-            quality: 内部质量标记；应用入口固定使用最高质量策略
+            quality: 内部质量标记；应用入口固定使用 ``best``
             instrument: 可选的乐器类型
             is_drum: 是否为鼓轨道（鼓不过滤短音符）
 
@@ -845,7 +845,7 @@ class MidiGenerator:
             return notes
 
         elif quality == "best":
-            # 极致质量模式：最小化后处理
+            # best 模式：最小后处理
             return self.post_process_minimal(notes, tempo, is_drum=is_drum)
 
         else:  # balanced
@@ -1270,7 +1270,7 @@ class MidiGenerator:
 
         增强功能:
         - 使用固定高质量后处理策略
-        - 智能通道分配（超过15种乐器时合并同族）
+        - 通道分配（超过 15 种乐器时合并同族）
         - 人声特殊处理（program 100/101）
         - 保留所有音符，不会因通道限制丢失
 
@@ -1279,7 +1279,7 @@ class MidiGenerator:
             drum_notes: 鼓音高(35-81)到音符列表的字典
             tempo: BPM
             output_path: 输出 MIDI 文件路径
-            quality: 内部质量标记；应用入口固定使用最高质量策略
+            quality: 内部质量标记；应用入口固定使用 ``best``
 
         返回:
             输出 MIDI 文件路径
@@ -1289,7 +1289,7 @@ class MidiGenerator:
         total_instrument_notes = sum(len(notes) for notes in instrument_notes.values())
         total_drum_notes = sum(len(notes) for notes in drum_notes.values())
 
-        logger.info(f"正在生成极致精度 MIDI: {output_path}")
+        logger.info(f"正在生成 MIDI: {output_path}")
         logger.info(f"质量模式: {quality}")
         logger.info(f"乐器: {len(instrument_notes)} 种，共 {total_instrument_notes} 个音符")
         logger.info(f"鼓: {len(drum_notes)} 种音高，共 {total_drum_notes} 个音符")
@@ -1343,7 +1343,7 @@ class MidiGenerator:
 
         main_track.append(MetaMessage('end_of_track', time=0))
 
-        # 智能通道分配策略
+        # 按 MIDI 通道上限分配乐器
         # MIDI 有 16 个通道，通道 9 (索引) 专用于鼓
         # 所以最多 15 个乐器通道
         MAX_INSTRUMENT_CHANNELS = 15
@@ -1355,9 +1355,9 @@ class MidiGenerator:
             reverse=True
         )
 
-        # 如果乐器超过限制，需要智能合并
+        # 乐器数超过 MIDI 通道上限时，合并同族乐器
         if len(sorted_instruments) > MAX_INSTRUMENT_CHANNELS:
-            logger.info(f"乐器数量 ({len(sorted_instruments)}) 超过通道限制 ({MAX_INSTRUMENT_CHANNELS})，启用智能合并")
+            logger.info(f"乐器数量 ({len(sorted_instruments)}) 超过通道限制 ({MAX_INSTRUMENT_CHANNELS})，开始合并同族乐器")
             sorted_instruments = self._merge_instruments_for_channels(
                 sorted_instruments, MAX_INSTRUMENT_CHANNELS
             )
@@ -1408,7 +1408,7 @@ class MidiGenerator:
 
             track.append(MetaMessage('track_name', name=track_name, time=0))
 
-            # 音色变更 — YourMT3 人声程序号 100/101 不是标准 GM，
+            # 音色变更：YourMT3 人声程序号 100/101 不是标准 GM，
             # 写入 MIDI 时映射为 GM 0 (钢琴) 以获得正确回放
             midi_program = 0 if program in (100, 101) else program
             track.append(Message(
@@ -1472,7 +1472,7 @@ class MidiGenerator:
 
         # 输出保留率统计
         retention_rate = final_total / max(initial_total, 1)
-        logger.info(f"极致精度 MIDI 已保存: {output_path}")
+        logger.info(f"MIDI 已保存: {output_path}")
         logger.info(f"音符保留率: {final_total}/{initial_total} = {retention_rate:.1%}")
         logger.info(f"轨道总数: {len(midi.tracks)} (含指挥轨道)")
 
@@ -1515,7 +1515,7 @@ class MidiGenerator:
         )
         if len(sorted_instruments) > MAX_INSTRUMENT_CHANNELS:
             logger.info(
-                f"乐器数量 ({len(sorted_instruments)}) 超过通道限制 ({MAX_INSTRUMENT_CHANNELS})，启用智能合并"
+                f"乐器数量 ({len(sorted_instruments)}) 超过通道限制 ({MAX_INSTRUMENT_CHANNELS})，开始合并同族乐器"
             )
             sorted_instruments = self._merge_instruments_for_channels(
                 sorted_instruments, MAX_INSTRUMENT_CHANNELS
@@ -1614,7 +1614,7 @@ class MidiGenerator:
         max_channels: int
     ) -> List[tuple]:
         """
-        当乐器数量超过通道限制时，智能合并同族乐器
+        乐器数量超过 MIDI 通道限制时，合并同族乐器。
 
         策略:
         1. 保留音符数最多的乐器
@@ -1693,7 +1693,7 @@ class MidiGenerator:
 
                 logger.info(f"合并了 {len(extra)} 个额外轨道到其他乐器")
 
-        logger.info(f"智能合并: {len(sorted_instruments)} -> {len(result)} 个轨道 (合并 {merged_count} 个同族乐器)")
+        logger.info(f"同族乐器合并: {len(sorted_instruments)} -> {len(result)} 个轨道 (合并 {merged_count} 个乐器)")
 
         return result
 

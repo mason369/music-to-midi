@@ -35,6 +35,8 @@ class ProcessingWorker(QThread):
         output_dir: str,
         config: Config,
         parent=None,
+        *,
+        tempo_audio_path: str | None = None,
     ):
         """
         初始化工作线程
@@ -48,6 +50,7 @@ class ProcessingWorker(QThread):
         super().__init__(parent)
 
         self.audio_path = audio_path
+        self.tempo_audio_path = tempo_audio_path
         self.output_dir = output_dir
         self.config = config
         self._translator = Translator(config.language)
@@ -79,6 +82,7 @@ class ProcessingWorker(QThread):
                 self.audio_path,
                 self.output_dir,
                 self._on_progress,
+                tempo_audio_path=self.tempo_audio_path,
             )
 
             self.processing_finished.emit(result)

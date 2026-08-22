@@ -87,4 +87,4 @@ def test_oom_retry_records_final_batch_size_and_reports_progress(monkeypatch):
         "failed_batch_size": 4,
         "final_batch_size": 2,
     }
-    assert any("最终 batch=2" in message for message in messages)
+    assert any("每批数量：4 → 2" in message for message in messages)

@@ -57,12 +57,20 @@ MIROS_AUDIO_SEGMENTS_CPU_BLOCK = "\n".join(
     )
 )
 MIROS_INFERENCE_CONTEXT_OLD = "    with torch.cuda.amp.autocast(dtype=torch.bfloat16):"
-MIROS_INFERENCE_CONTEXT_TARGET = "\n".join(
+MIROS_INFERENCE_CONTEXT_CUDA_ONLY = "\n".join(
     (
         "    with torch.inference_mode(), torch.autocast(",
         "            device_type=device.type,",
         "            dtype=torch.bfloat16,",
         '            enabled=device.type == "cuda"):',
+    )
+)
+MIROS_INFERENCE_CONTEXT_TARGET = "\n".join(
+    (
+        "    with torch.inference_mode(), torch.autocast(",
+        "            device_type=device.type,",
+        "            dtype=torch.bfloat16,",
+        '            enabled=device.type in {"cuda", "xpu"}):',
     )
 )
 MIROS_INFERENCE_CONTEXT_ADAPTIVE = "\n".join(
@@ -93,6 +101,25 @@ MIROS_MODEL_RETURN_ADAPTIVE = "\n".join(
         '            f"expected only torch.float32, got {sorted(map(str, parameter_dtypes))}"',
         "        )",
         "    return model",
+    )
+)
+MIROS_MODEL_RETURN_XPU = "\n".join(
+    (
+        "    model.eval()",
+        "    _validate_model_device(model, device)",
+        "    return model",
+    )
+)
+MIROS_CHECKPOINT_LOAD_OLD = (
+    '    checkpoint = torch.load(dir_info["last_ckpt_path"], weights_only=False)'
+)
+MIROS_CHECKPOINT_LOAD_TARGET = "\n".join(
+    (
+        "    checkpoint = torch.load(",
+        '        dir_info["last_ckpt_path"],',
+        '        map_location="cpu",',
+        "        weights_only=False,",
+        "    )",
     )
 )
 MIROS_PRECISION_HELPERS = """
@@ -188,6 +215,60 @@ def _resolve_runtime_precision(device):
     return dtype, dtype != torch.float32
 """.strip()
 MIROS_PRECISION_HELPERS_ANCHOR = "import torchaudio"
+MIROS_DEVICE_HELPERS = r'''
+MIROS_DEVICE_ENV = "MUSIC_TO_MIDI_MIROS_DEVICE"
+
+
+def _resolve_runtime_device():
+    requested = os.environ.get(MIROS_DEVICE_ENV, "").strip().lower()
+    if not requested:
+        if torch.cuda.is_available():
+            requested = "cuda:0"
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            requested = "xpu:0"
+        else:
+            requested = "cpu"
+
+    device = torch.device(requested)
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"MIROS requested {device}, but CUDA is unavailable")
+        torch.cuda.set_device(device)
+        probe = torch.ones(1, device=device).add(1)
+        if float(probe.item()) != 2.0:
+            raise RuntimeError(f"MIROS CUDA probe produced an invalid result on {device}")
+        torch.cuda.synchronize(device)
+    elif device.type == "xpu":
+        if not hasattr(torch, "xpu") or not torch.xpu.is_available():
+            raise RuntimeError(f"MIROS requested {device}, but native PyTorch XPU is unavailable")
+        device_index = 0 if device.index is None else int(device.index)
+        device_count = int(torch.xpu.device_count())
+        if device_index < 0 or device_index >= device_count:
+            raise RuntimeError(
+                f"MIROS XPU device index is unavailable: requested={device_index}, "
+                f"count={device_count}"
+            )
+        probe = torch.ones(1, device=device).add(1)
+        if probe.device.type != "xpu" or float(probe.item()) != 2.0:
+            raise RuntimeError(f"MIROS XPU probe failed on {device}: actual={probe.device}")
+        torch.xpu.synchronize(device_index)
+    elif device.type != "cpu":
+        raise RuntimeError(f"MIROS does not support the requested device: {device}")
+    return device
+
+
+def _validate_model_device(model, device):
+    expected = torch.device(device)
+    wrong = [
+        f"{name}={tensor.device}"
+        for name, tensor in model.state_dict().items()
+        if tensor.device != expected
+    ]
+    if wrong:
+        raise RuntimeError(
+            f"MIROS model did not remain on {expected}: " + ", ".join(wrong[:8])
+        )
+'''.strip()
 MIROS_MUSICFM_PRECISION_TARGET = "\n".join(
     (
         "        if self.is_flash and (x.dtype != torch.bfloat16):",
@@ -694,6 +775,45 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
         )
         source_patch_applied = True
 
+    device_helpers_count = transcribe_text.count(MIROS_DEVICE_HELPERS)
+    if device_helpers_count not in {0, 1}:
+        raise RuntimeError(
+            "Unexpected MIROS XPU device helper state: "
+            f"count={device_helpers_count} ({transcribe_path})"
+        )
+    if device_helpers_count == 0:
+        anchor_count = transcribe_text.count(MIROS_PRECISION_HELPERS_ANCHOR)
+        if anchor_count != 1:
+            raise RuntimeError(
+                "Unexpected MIROS device helper anchor count: "
+                f"count={anchor_count} ({transcribe_path})"
+            )
+        transcribe_text = transcribe_text.replace(
+            MIROS_PRECISION_HELPERS_ANCHOR,
+            MIROS_PRECISION_HELPERS_ANCHOR + "\n\n\n" + MIROS_DEVICE_HELPERS,
+            1,
+        )
+        source_patch_applied = True
+
+    checkpoint_load_old_count = transcribe_text.count(MIROS_CHECKPOINT_LOAD_OLD)
+    checkpoint_load_target_count = transcribe_text.count(MIROS_CHECKPOINT_LOAD_TARGET)
+    if (checkpoint_load_old_count, checkpoint_load_target_count) not in {
+        (1, 0),
+        (0, 1),
+    }:
+        raise RuntimeError(
+            "Unexpected MIROS checkpoint load patch state: "
+            f"old={checkpoint_load_old_count}, target={checkpoint_load_target_count} "
+            f"({transcribe_path})"
+        )
+    if checkpoint_load_old_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_CHECKPOINT_LOAD_OLD,
+            MIROS_CHECKPOINT_LOAD_TARGET,
+            1,
+        )
+        source_patch_applied = True
+
     inference_replacements = (
         (
             MIROS_AUDIO_SEGMENTS_GPU_BLOCK,
@@ -724,27 +844,44 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
 
     target_return_count = transcribe_text.count(MIROS_MODEL_RETURN_TARGET)
     adaptive_return_count = transcribe_text.count(MIROS_MODEL_RETURN_ADAPTIVE)
-    if (target_return_count, adaptive_return_count) not in {(1, 0), (0, 1)}:
+    xpu_return_count = transcribe_text.count(MIROS_MODEL_RETURN_XPU)
+    if target_return_count + adaptive_return_count + xpu_return_count != 1:
         raise RuntimeError(
             "Unexpected MIROS model return state: "
-            f"target={target_return_count}, adaptive={adaptive_return_count} "
+            f"target={target_return_count}, adaptive={adaptive_return_count}, "
+            f"xpu={xpu_return_count} "
             f"({transcribe_path})"
         )
-    if adaptive_return_count == 1:
+    if target_return_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_MODEL_RETURN_TARGET,
+            MIROS_MODEL_RETURN_XPU,
+            1,
+        )
+        source_patch_applied = True
+    elif adaptive_return_count == 1:
         transcribe_text = transcribe_text.replace(
             MIROS_MODEL_RETURN_ADAPTIVE,
-            MIROS_MODEL_RETURN_TARGET,
+            MIROS_MODEL_RETURN_XPU,
             1,
         )
         source_patch_applied = True
 
     old_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_OLD)
+    cuda_only_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_CUDA_ONLY)
     target_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_TARGET)
     adaptive_context_count = transcribe_text.count(MIROS_INFERENCE_CONTEXT_ADAPTIVE)
-    if old_context_count + target_context_count + adaptive_context_count != 1:
+    if (
+        old_context_count
+        + cuda_only_context_count
+        + target_context_count
+        + adaptive_context_count
+        != 1
+    ):
         raise RuntimeError(
             "Unexpected MIROS inference precision patch state: "
-            f"old={old_context_count}, target={target_context_count}, "
+            f"old={old_context_count}, cuda_only={cuda_only_context_count}, "
+            f"target={target_context_count}, "
             f"adaptive={adaptive_context_count} ({transcribe_path})"
         )
     if old_context_count == 1:
@@ -761,6 +898,13 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
             1,
         )
         source_patch_applied = True
+    elif cuda_only_context_count == 1:
+        transcribe_text = transcribe_text.replace(
+            MIROS_INFERENCE_CONTEXT_CUDA_ONLY,
+            MIROS_INFERENCE_CONTEXT_TARGET,
+            1,
+        )
+        source_patch_applied = True
 
     target_device_count = transcribe_text.count(MIROS_DEVICE_TARGET)
     adaptive_device_count = transcribe_text.count(MIROS_DEVICE_ADAPTIVE)
@@ -770,10 +914,10 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
             f"target={target_device_count}, adaptive={adaptive_device_count} "
             f"({transcribe_path})"
         )
-    if adaptive_device_count == 2:
+    if target_device_count == 2:
         transcribe_text = transcribe_text.replace(
-            MIROS_DEVICE_ADAPTIVE,
             MIROS_DEVICE_TARGET,
+            MIROS_DEVICE_ADAPTIVE,
             2,
         )
         source_patch_applied = True
@@ -782,7 +926,7 @@ def _patch_miros_source(repo_dir: Path, printer: Optional[Callable[[str], None]]
         transcribe_path.write_text(transcribe_text, encoding="utf-8")
         _log(
             printer,
-            f"Patched MIROS bounded upstream-precision inference: {transcribe_path}",
+            f"Patched MIROS bounded device-safe inference: {transcribe_path}",
         )
 
     musicfm_path = repo_dir / MIROS_MUSICFM_REL_PATH

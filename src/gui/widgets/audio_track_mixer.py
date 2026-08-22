@@ -298,6 +298,11 @@ class _AudioTrackRow(QFrame):
         )
         self.path_label.setToolTip(str(path))
         self.path_label.setStyleSheet("color: #8292aa; font-size: 10px;")
+        self.path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.path_label.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout.addWidget(self.path_label)
 
         self.midi_status_label = QLabel()
@@ -305,6 +310,11 @@ class _AudioTrackRow(QFrame):
         self.midi_status_label.setWordWrap(True)
         self.midi_status_label.setMinimumWidth(0)
         self.midi_status_label.setStyleSheet("color: #9fb3d9; font-size: 10px; padding: 1px 0;")
+        self.midi_status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.midi_status_label.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout.addWidget(self.midi_status_label)
 
         self.waveform = WaveformLane(path, color, self)
@@ -563,10 +573,7 @@ class _AudioTrackRow(QFrame):
     @staticmethod
     def _midi_error_summary(error: str) -> str:
         lines = [line.strip() for line in str(error).splitlines() if line.strip()]
-        summary = lines[-1] if lines else str(error).strip()
-        if len(summary) > 240:
-            return summary[:237].rstrip() + "…"
-        return summary
+        return "\n".join(lines) if lines else str(error).strip()
 
     def _refresh_midi_status(self) -> None:
         if self._midi_state == "idle":
@@ -846,6 +853,11 @@ class AudioTrackMixerWidget(QWidget):
         self.error_label.setObjectName("audioMixerErrorLabel")
         self.error_label.setWordWrap(True)
         self.error_label.setMinimumWidth(0)
+        self.error_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.error_label.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.error_label.setStyleSheet(
             "background: #3a1f2a; border: 1px solid #b84d68; "
             "border-radius: 5px; color: #ffb3c3; padding: 8px;"

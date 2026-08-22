@@ -733,16 +733,17 @@ TRACK_MIXER_JS = r"""
   MixerSession.prototype.startSources = function () {
     var ctx = ensureAudioContext();
     var self = this;
+    var startAt = ctx.currentTime + 0.02;
     this.tracks.forEach(function (track) {
       self.stopTrackSource(track);
       if (!track.buffer || track.failed) {
         return;
       }
       var local = self.playStartPosition - track.offsetS;
-      var when = ctx.currentTime;
+      var when = startAt;
       var offset = local;
       if (local < 0) {
-        when = ctx.currentTime + -local;
+        when = startAt + -local;
         offset = 0;
       }
       if (offset >= track.buffer.duration) {
@@ -758,17 +759,16 @@ TRACK_MIXER_JS = r"""
       track.source = source;
       track.gain = gain;
     });
+    return startAt;
   };
 
   MixerSession.prototype.currentPosition = function () {
     if (!this.playing) {
       return this.position;
     }
-    return clamp(
-      this.playStartPosition + (ensureAudioContext().currentTime - this.playCtxTime),
-      0,
-      this.duration
-    );
+    var scheduledPosition =
+      this.playStartPosition + (ensureAudioContext().currentTime - this.playCtxTime);
+    return clamp(Math.max(this.playStartPosition, scheduledPosition), 0, this.duration);
   };
 
   MixerSession.prototype.togglePlay = function () {
@@ -795,8 +795,7 @@ TRACK_MIXER_JS = r"""
     );
     this.playing = true;
     this.playStartPosition = this.position;
-    this.playCtxTime = ctx.currentTime;
-    this.startSources();
+    this.playCtxTime = this.startSources();
     this.updateToolbar();
     this.startClock();
   };
@@ -828,8 +827,7 @@ TRACK_MIXER_JS = r"""
     this.position = 0;
     if (this.playing) {
       this.playStartPosition = 0;
-      this.playCtxTime = ensureAudioContext().currentTime;
-      this.startSources();
+      this.playCtxTime = this.startSources();
     }
     this.updatePositionUI();
     this.layoutPlayhead();
@@ -842,8 +840,7 @@ TRACK_MIXER_JS = r"""
     this.position = clamp(seconds, 0, this.duration);
     if (this.playing) {
       this.playStartPosition = this.position;
-      this.playCtxTime = ensureAudioContext().currentTime;
-      this.startSources();
+      this.playCtxTime = this.startSources();
     }
     this.updatePositionUI();
     this.layoutPlayhead();
@@ -884,8 +881,7 @@ TRACK_MIXER_JS = r"""
   MixerSession.prototype.onTimelineShapeChanged = function () {
     if (this.playing) {
       this.playStartPosition = this.currentPosition();
-      this.playCtxTime = ensureAudioContext().currentTime;
-      this.startSources();
+      this.playCtxTime = this.startSources();
     }
     this.recomputeDuration();
     this.layout();

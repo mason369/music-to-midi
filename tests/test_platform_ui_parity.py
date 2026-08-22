@@ -47,24 +47,55 @@ def test_project_bpm_contract_is_shared_by_desktop_space_and_colab():
     track_panel = Path("src/gui/widgets/track_panel.py").read_text(encoding="utf-8")
     zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
     en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
+    web_zh = json.loads(Path("web/locales/zh_CN.json").read_text(encoding="utf-8"))
+    web_en = json.loads(Path("web/locales/en_US.json").read_text(encoding="utf-8"))
 
-    assert "self.custom_bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)" in track_panel
-    assert "value=0.0" in space
-    assert "minimum=0.0" in space
-    assert "maximum=400.0" in space
-    assert "value=0.0" in colab
-    assert "minimum=0.0" in colab
-    assert "maximum=400.0" in colab
+    assert "self.custom_bpm_spin.setRange(MIN_TEMPO_BPM, MAX_TEMPO_BPM)" in track_panel
+    assert "choices=TEMPO_MODE_CHOICES" in space
+    assert "value=TempoMode.FIXED_AUTO.value" in space
+    assert "minimum=MIN_TEMPO_BPM" in space
+    assert "maximum=MAX_TEMPO_BPM" in space
+    assert "choices=TEMPO_MODE_CHOICES" in colab
+    assert "value=TempoMode.FIXED_AUTO.value" in colab
+    assert "minimum=MIN_TEMPO_BPM" in colab
+    assert "maximum=MAX_TEMPO_BPM" in colab
     assert "normalize_optional_project_bpm(custom_bpm)" in space
     assert "normalize_optional_project_bpm(custom_bpm)" in colab
-    assert zh["main"]["tempo"]["label"] == "工程 BPM"
-    assert en["main"]["tempo"]["label"] == "Project BPM"
-    assert zh["main"]["tempo"]["custom_tooltip"].startswith("0 表示保持自动检测")
-    assert en["main"]["tempo"]["custom_tooltip"].startswith("0 keeps automatic detection")
-    assert "保留 tick" in zh["main"]["tempo"]["custom_tooltip"]
-    assert "真实变速" in zh["main"]["tempo"]["custom_tooltip"]
-    assert "those ticks are retained" in en["main"]["tempo"]["custom_tooltip"]
-    assert "change speed" in en["main"]["tempo"]["custom_tooltip"]
+    assert zh["main"]["tempo"]["label"] == "速度方案"
+    assert en["main"]["tempo"]["label"] == "Tempo mode"
+    for catalog in (zh, en):
+        assert "Beat This final0" in catalog["main"]["tempo"]["mode_tooltip"]
+    assert web_zh["config.tempo_mode"] == "速度方案"
+    assert web_en["config.tempo_mode"] == "Tempo mode"
+    for catalog in (web_zh, web_en):
+        assert "Beat This final0" in catalog["config.tempo_help"]
+    assert zh["main"]["tempo"]["fixed_auto"] == "自动检测唯一 BPM（推荐）"
+    assert en["main"]["tempo"]["fixed_auto"] == "Auto-detect one BPM (recommended)"
+    assert "30–300 BPM" in zh["main"]["tempo"]["custom_tooltip"]
+    assert "播放速度按手动 BPM ÷ 检测 BPM 变化" in zh["main"]["tempo"]["custom_tooltip"]
+    assert (
+        "preserves the musical ticks established at the detected BPM"
+        in en["main"]["tempo"]["custom_tooltip"]
+    )
+    assert "manual BPM ÷ detected BPM" in en["main"]["tempo"]["custom_tooltip"]
+
+
+def test_space_and_colab_retain_original_mix_for_separated_track_tempo_analysis():
+    space = _space_source()
+    colab = _colab_source()
+    zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
+    en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
+
+    assert "_copy_tempo_source_into_request(audio_path, output_dir)" in space
+    assert 'state.get("tempo_audio_path")' in space
+    assert "tempo_audio_path=str(tempo_audio_file)" in space
+    assert 'st("dialogs.complete.audio_tracks.tempo_source_unavailable")' in space
+    for catalog in (zh, en):
+        assert catalog["dialogs"]["complete"]["audio_tracks"]["tempo_source_unavailable"]
+
+    assert 'output_dir / f"tempo-source{source_audio.suffix.lower()}"' in colab
+    assert 'state.get("tempo_audio_path")' in colab
+    assert "tempo_audio_path=str(tempo_audio_path)" in colab
 
 
 def test_shared_action_label_keys_exist_in_every_language():
@@ -92,7 +123,7 @@ def test_all_platforms_use_the_shared_action_label_keys():
     space = _space_source()
     colab = _colab_source()
 
-    # Direct modes convert, split modes separate — same wording everywhere.
+    # Direct modes convert and split modes separate; the wording matches everywhere.
     assert 't("toolbar.start_convert")' in desktop
     assert 't("toolbar.start_separation")' in desktop
     assert 'st("toolbar.start_convert")' in space
@@ -314,6 +345,8 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
         assert "source_track_name" in source
         assert "build_muscriptor_result_html(" in source
         assert "prepare_midi_playback_assets" in source
+        assert '"playback_audio_path"' in source
+        assert "assets.original_wav" in source
         assert "rewrite_midi_tempo_preserving_ticks" in source
         assert "source-tempo-playback.mid" in source
         assert "result.beat_info.source_bpm" in source
@@ -370,6 +403,7 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
         ),
         duration=2.0,
         transcription_wav=tmp_path / "transcription.wav",
+        original_wav=tmp_path / "original-live.wav",
         stereo_mix_wav=tmp_path / "stereo.wav",
         instrument_wavs={"acoustic_piano": tmp_path / "piano.wav"},
     )
@@ -411,6 +445,7 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
         assert state["downbeats"] == [0.25, 1.25]
         assert state["time_signature"] == (3, 4)
         assert state["repeat_tempo_per_note_track"] is True
+        assert state["playback_audio_path"] == str(assets.original_wav)
         assert state["preview_api"] == "./api/render_edited_midi_preview"
         assert state["preview_token"] == "preview-token"
 
@@ -419,6 +454,7 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
     raw_state = {
         "kind": "midi_result",
         "audio_path": str(tmp_path / "audio.wav"),
+        "playback_audio_path": str(tmp_path / "original-live.wav"),
         "midi_path": str(tmp_path / "result.mid"),
         "transcription_wav": str(tmp_path / "transcription.wav"),
         "stereo_mix_wav": str(tmp_path / "stereo.wav"),
@@ -482,5 +518,57 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         assert state["downbeats"] == raw_state["downbeats"]
         assert state["time_signature"] == raw_state["time_signature"]
         assert state["repeat_tempo_per_note_track"] is True
+        assert Path(state["playback_audio_path"]).resolve() == Path(
+            raw_state["playback_audio_path"]
+        ).resolve()
         assert state["preview_api"] == "./api/render_edited_midi_preview"
         assert state["preview_token"] == "preview-token"
+
+
+def test_desktop_style_progress_panel_is_shared_by_space_and_colab():
+    """Both web platforms stream real job progress to the desktop-style panel."""
+    space = _space_source()
+    colab = _colab_source()
+    zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
+    en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
+
+    for source in (space, colab):
+        # Same stage checklists as the desktop ProgressWidget.
+        assert '_SPLIT_STAGE_KEYS = ("preprocessing", "separation")' in source
+        assert '_DEFAULT_STAGE_KEYS = ("preprocessing", "transcription", "synthesis")' in source
+        # Same streaming machinery: worker thread + queue relay + generator.
+        assert "def _stream_gpu_job(" in source
+        assert "class _ProgressRelay" in source
+        assert "threading.Thread(target=_worker, daemon=True" in source
+        # The panel renders deterministic percent and stage states.
+        assert "def _progress_panel_html(" in source
+        assert "main.progress.stages.{key}" in source
+        # The convert action streams into the panel, not only returns at the end.
+        assert "yield from _stream_gpu_job(" in source
+        assert "outputs=[file_output, status_output, track_state, progress_html]" in source
+        # Progress panel markup carries the shared styling hooks.
+        assert 'class="progress-track"' in source
+        assert "stage-item" in source
+
+    # Stage label keys exist in every language (shared desktop catalog).
+    for catalog in (zh, en):
+        stages = catalog["main"]["progress"]["stages"]
+        for key in ("preprocessing", "separation", "transcription", "synthesis"):
+            assert stages[key]
+
+    # Behaviour: deterministic percent and stage states from the Space builder.
+    panel = _isolated_function(
+        space,
+        "_progress_panel_html",
+        st=lambda key, **kwargs: key,
+        _stage_keys_for_mode=lambda mode: ("preprocessing", "transcription", "synthesis"),
+    )
+    running = panel("smart", "transcription", 0.5, "working")
+    assert "50%" in running
+    assert "stage-item done" in running
+    assert "stage-item current" in running
+    done = panel("smart", None, 1.0, "", finished=True)
+    assert "100%" in done
+    assert done.count("stage-item done") == 3
+    failed = panel("smart", "transcription", 0.0, "boom", failed=True)
+    assert "stage-item failed" in failed

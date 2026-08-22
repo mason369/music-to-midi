@@ -16,6 +16,7 @@ from src.gui.main_window import MainWindow
 from src.gui.widgets.audio_track_mixer import (
     _YOURMT3_MANUAL_MODELS,
     MIDI_ROUTE_MIROS,
+    MIDI_ROUTE_MUSCRIPTOR,
     MIDI_ROUTE_PIANO_ARIA_AMT,
     MIDI_ROUTE_PIANO_BYTEDANCE_PEDAL,
     MIDI_ROUTE_PIANO_TRANSKUN,
@@ -23,7 +24,14 @@ from src.gui.widgets.audio_track_mixer import (
     MIDI_ROUTE_YOURMT3_PREFIX,
 )
 from src.gui.workers.separation_worker import SeparationResult, SeparationWorker
-from src.models.data_models import Config, MultiInstrumentModel, ProcessingMode
+from src.models.data_models import (
+    BeatInfo,
+    Config,
+    MultiInstrumentModel,
+    MuscriptorProcessingChain,
+    ProcessingMode,
+    TempoMode,
+)
 
 
 @pytest.fixture(scope="module")
@@ -236,8 +244,17 @@ class _Signal:
 class _RecordingWorker:
     created = []
 
-    def __init__(self, audio_path, output_dir, config, parent=None):
+    def __init__(
+        self,
+        audio_path,
+        output_dir,
+        config,
+        parent=None,
+        *,
+        tempo_audio_path=None,
+    ):
         self.audio_path = str(audio_path)
+        self.tempo_audio_path = None if tempo_audio_path is None else str(tempo_audio_path)
         self.output_dir = str(output_dir)
         self.config = config
         self.parent = parent
@@ -300,8 +317,10 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
 ):
     vocals = tmp_path / "source_vocals.wav"
     piano = tmp_path / "source_piano.wav"
+    original_mix = tmp_path / "source.wav"
     vocals.write_bytes(b"vocals")
     piano.write_bytes(b"piano")
+    original_mix.write_bytes(b"original-mix")
     mixer = _RecordingMixer({"vocals": vocals, "piano": piano})
     _RecordingWorker.created = []
 
@@ -316,6 +335,7 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
             )
         )
         window.audio_mixer = mixer
+        window.current_file = str(original_mix)
         try:
             window._start_track_midi_conversion(
                 "vocals",
@@ -328,6 +348,7 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
             first_output_dir = tmp_path / "midi" / MIDI_ROUTE_MIROS
             assert first.started is True
             assert Path(first.audio_path) == vocals.resolve()
+            assert Path(first.tempo_audio_path) == original_mix.resolve()
             assert Path(first.output_dir) == first_output_dir.resolve()
             assert Path(first.config.output_dir) == first_output_dir.resolve()
             assert first.config.processing_mode == ProcessingMode.SMART.value
@@ -363,6 +384,7 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
             second_output_dir = tmp_path / "midi" / MIDI_ROUTE_PIANO_TRANSKUN
             assert second.started is True
             assert Path(second.audio_path) == piano.resolve()
+            assert Path(second.tempo_audio_path) == original_mix.resolve()
             assert Path(second.output_dir) == second_output_dir.resolve()
             assert Path(second.config.output_dir) == second_output_dir.resolve()
             assert second.config.processing_mode == ProcessingMode.PIANO_TRANSKUN.value
@@ -383,3 +405,155 @@ def test_main_window_starts_only_clicked_track_in_route_specific_directory(
             window.audio_mixer = None
             window.close()
             qapp.processEvents()
+
+
+def test_main_window_primary_start_can_switch_adaptive_config_back_to_fixed_auto(
+    qapp,
+    tmp_path,
+):
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"source")
+    _RecordingWorker.created = []
+
+    with (
+        mock.patch.object(MainWindow, "_start_gpu_detection", return_value=None),
+        mock.patch("src.gui.main_window.ProcessingWorker", _RecordingWorker),
+    ):
+        window = MainWindow(Config(tempo_mode=TempoMode.ADAPTIVE.value))
+        window.current_file = str(source)
+        window.output_dir_edit.setText(str(tmp_path / "output"))
+        window.track_panel.set_tempo_mode(TempoMode.FIXED_AUTO.value)
+        try:
+            window._start_processing()
+
+            assert len(_RecordingWorker.created) == 1
+            worker = _RecordingWorker.created[0]
+            assert worker.config.tempo_mode == TempoMode.FIXED_AUTO.value
+            assert worker.config.custom_bpm is None
+            assert worker.config.enable_tempo_map is False
+            assert window.config.tempo_mode == TempoMode.FIXED_AUTO.value
+            assert window.config.enable_tempo_map is False
+        finally:
+            window.worker = None
+            window.close()
+            qapp.processEvents()
+
+
+def test_main_window_manual_track_uses_controls_changed_after_separation(
+    qapp,
+    tmp_path,
+):
+    stem = tmp_path / "source_vocals.wav"
+    original_mix = tmp_path / "source.wav"
+    stem.write_bytes(b"vocals")
+    original_mix.write_bytes(b"original-mix")
+    mixer = _RecordingMixer({"vocals": stem})
+    _RecordingWorker.created = []
+
+    with (
+        mock.patch.object(MainWindow, "_start_gpu_detection", return_value=None),
+        mock.patch("src.gui.main_window.ProcessingWorker", _RecordingWorker),
+    ):
+        window = MainWindow(
+            Config(
+                processing_mode=ProcessingMode.VOCAL_SPLIT.value,
+                muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+                tempo_mode=TempoMode.ADAPTIVE.value,
+            )
+        )
+        window.audio_mixer = mixer
+        window.current_file = str(original_mix)
+        try:
+            window.track_panel.set_muscriptor_processing_chain(
+                MuscriptorProcessingChain.TELKNET.value
+            )
+            window.track_panel.set_custom_bpm(133.0)
+            window._start_track_midi_conversion(
+                "vocals",
+                str(stem),
+                MIDI_ROUTE_MUSCRIPTOR,
+            )
+
+            assert len(_RecordingWorker.created) == 1
+            first = _RecordingWorker.created[0]
+            assert (
+                first.config.muscriptor_processing_chain == MuscriptorProcessingChain.TELKNET.value
+            )
+            assert first.config.tempo_mode == TempoMode.FIXED_MANUAL.value
+            assert first.config.custom_bpm == pytest.approx(133.0)
+            assert first.config.enable_tempo_map is False
+            assert (
+                window.config.muscriptor_processing_chain == MuscriptorProcessingChain.TELKNET.value
+            )
+
+            first.running = False
+            window._on_worker_thread_finished(first)
+
+            window.track_panel.set_muscriptor_processing_chain(
+                MuscriptorProcessingChain.OFFICIAL.value
+            )
+            window.track_panel.set_tempo_mode(TempoMode.FIXED_AUTO.value)
+            window._start_track_midi_conversion(
+                "vocals",
+                str(stem),
+                MIDI_ROUTE_MUSCRIPTOR,
+            )
+
+            assert len(_RecordingWorker.created) == 2
+            second = _RecordingWorker.created[1]
+            assert (
+                second.config.muscriptor_processing_chain
+                == MuscriptorProcessingChain.OFFICIAL.value
+            )
+            assert second.config.tempo_mode == TempoMode.FIXED_AUTO.value
+            assert second.config.custom_bpm is None
+            assert second.config.enable_tempo_map is False
+        finally:
+            window.worker = None
+            window._manual_midi_context = None
+            window.audio_mixer = None
+            window.close()
+            qapp.processEvents()
+
+
+def test_pipeline_analyzes_explicit_original_mix_instead_of_the_selected_stem(
+    tmp_path,
+    monkeypatch,
+):
+    original_mix = (tmp_path / "original.wav").resolve()
+    stem = (tmp_path / "vocals.wav").resolve()
+    original_mix.write_bytes(b"original")
+    stem.write_bytes(b"stem")
+    detected_paths = []
+
+    class RecordingBeatDetector:
+        def detect(self, audio_path):
+            detected_paths.append(Path(audio_path).resolve())
+            return BeatInfo(bpm=120.0, beat_times=[0.0, 0.5, 1.0, 1.5])
+
+    pipeline = object.__new__(MusicToMidiPipeline)
+    pipeline.config = Config(
+        processing_mode=ProcessingMode.SMART.value,
+        use_gpu=False,
+    )
+    pipeline._cancelled = False
+    pipeline.beat_detector = RecordingBeatDetector()
+    monkeypatch.setattr(
+        pipeline,
+        "_ensure_wav",
+        lambda audio_path, _output_dir: str(Path(audio_path).resolve()),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_process_smart",
+        lambda audio_path, _output_dir: pipeline._detect_beat_or_raise(audio_path),
+    )
+
+    result = pipeline.process(
+        str(stem),
+        str(tmp_path / "output"),
+        tempo_audio_path=str(original_mix),
+    )
+
+    assert result.bpm == pytest.approx(120.0)
+    assert detected_paths == [original_mix]

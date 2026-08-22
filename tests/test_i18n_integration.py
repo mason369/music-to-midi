@@ -78,7 +78,7 @@ class TestDesktopI18nIntegration(unittest.TestCase):
             )
             labels = [label.text() for label in window.findChildren(QLabel)]
             self.assertIn("Music to MIDI", labels)
-            self.assertIn("Intelligently convert music to MIDI files", labels)
+            self.assertIn("Audio to editable MIDI", labels)
             self.assertEqual(window.start_btn.text(), "▶  Convert")
             self.assertEqual(window.stop_btn.text(), "■  Stop")
         finally:

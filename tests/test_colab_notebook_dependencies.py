@@ -102,6 +102,13 @@ class TestColabNotebookDependencies(unittest.TestCase):
             sources.append("".join(cell.get("source", [])))
         return "\n".join(sources)
 
+    def test_colab_log_path_is_defined_before_startup_handler_cleanup(self):
+        source_text = self._load_notebook_source_text()
+        assignment = source_text.index('LOG_FILE = "/tmp/midi_process.log"')
+        first_read = source_text.index("_handler_path == LOG_FILE")
+
+        self.assertLess(assignment, first_read)
+
     def test_restored_modes_and_dependencies_are_present(self):
         source_text = self._load_notebook_source_text()
 
@@ -112,7 +119,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "matplotlib",
             "TransKun",
             "TransKun V2 Aug",
-            "六声部分离",
+            '"mode_info.six_stem_split"',
             "six_stem_split",
             "piano_transkun_v2_aug",
             "piano_bytedance_pedal",
@@ -284,7 +291,11 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
     def test_colab_main_action_separates_split_modes_without_automatic_midi(self):
         source_text = self._load_notebook_source_text()
-        handler = _find_function(source_text, "convert_audio_to_midi")
+        handler = _find_function(source_text, "_convert_job_impl")
+        public_handler = _find_function(source_text, "convert_audio_to_midi")
+        public_source = _node_source(source_text, public_handler)
+        assert "yield from _stream_gpu_job(" in public_source
+        assert "_convert_job_impl(" in public_source
         split_branches = [
             node
             for node in ast.walk(handler)
@@ -383,9 +394,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertNotIn("fetch('./api/read_logs'", source_text)
         self.assertIn("log_refresh_timer = gr.Timer(2.0)", source_text)
         self.assertIn("log_refresh_timer.tick(", source_text)
-        clear_logs_source = _node_source(
-            source_text, _find_function(source_text, "clear_logs")
-        )
+        clear_logs_source = _node_source(source_text, _find_function(source_text, "clear_logs"))
         self.assertNotIn("except Exception", clear_logs_source)
         self.assertIn("COLAB_THEME = gr.themes.Base(", source_text)
         self.assertIn("configure_uvicorn_websocket_protocol()", source_text)
@@ -402,6 +411,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertIn(
             'demo.launch(share=True, server_name="0.0.0.0", server_port=7860, '
             "allowed_paths=[str(COLAB_OUTPUT_ROOT)], theme=COLAB_THEME, "
+            "css=COLAB_CSS, favicon_path=str(APP_ICON_PATH), "
             "head=mixer_head() + muscriptor_result_head())",
             source_text,
         )
@@ -681,7 +691,9 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "            backend_dropdown,\n            yourmt3_model_dropdown,\n"
             "            muscriptor_model,\n"
             "            muscriptor_instruments,\n"
-            "            custom_bpm,\n        ]",
+            "            custom_bpm,\n"
+            "            tempo_mode,\n"
+            "            muscriptor_processing_chain,\n        ]",
             source_text,
         )
 
@@ -845,11 +857,11 @@ class TestColabNotebookDependencies(unittest.TestCase):
         for expected_text in (
             "此 Colab 与桌面版、Space 使用同一套七模式工作流",
             "SMART 与四种钢琴模式",
-            "主按钮只生成 2/6 个 WAV",
+            "分别生成 2/6 个 WAV",
             "分离完成后显示真实波形音轨",
             "13 种转写路线",
-            "选择或滚动控件本身不会触发转换",
-            "The two split modes create WAV files only",
+            "每条音轨都可单独转换 MIDI",
+            "The two split modes create WAV stems",
         ):
             with self.subTest(expected_text=expected_text):
                 self.assertIn(expected_text, all_source_text)
@@ -863,12 +875,11 @@ class TestColabNotebookDependencies(unittest.TestCase):
 
         for expected_ui_text in (
             "输出说明",
-            "主按钮只分离并保留 vocals/accompaniment 两个 WAV",
-            "不会自动生成 MIDI 或合并 MIDI",
-            "每条音轨可独立勾选、选择 13 种转写路线之一",
-            "only separates and keeps vocals/accompaniment WAV files",
-            "does not generate stem or merged MIDI automatically",
-            "converted only by an explicit Start click",
+            "生成 vocals/accompaniment 两个 WAV",
+            "每条音轨都可选择 13 种转写路线之一并单独转换",
+            "Creates vocals and accompaniment WAV files",
+            "each track can be converted to MIDI separately",
+            "each track can choose one of 13 transcription routes and convert independently",
         ):
             with self.subTest(expected_ui_text=expected_ui_text):
                 self.assertIn(expected_ui_text, code_source_text)
@@ -890,11 +901,11 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "mode_info.piano_bytedance_pedal",
         ):
             with self.subTest(direct_key=direct_key):
-                self.assertIn("直接", zh_copy[direct_key])
-                self.assertIn("direct", en_copy[direct_key].lower())
-        self.assertIn("只生成", zh_copy["mode_info.vocal_split"])
+                self.assertIn("MIDI", zh_copy[direct_key])
+                self.assertIn("MIDI", en_copy[direct_key])
+        self.assertIn("WAV", zh_copy["mode_info.vocal_split"])
         self.assertIn("六个 WAV", zh_copy["mode_info.six_stem_split"])
-        self.assertIn("generates only", en_copy["mode_info.vocal_split"])
+        self.assertIn("WAV files", en_copy["mode_info.vocal_split"])
         self.assertIn("WAV files", en_copy["mode_info.six_stem_split"])
         self.assertIn("最多显示 {limit} 条音轨", zh_copy["error.too_many_tracks"])
         self.assertIn("At most {limit} tracks", en_copy["error.too_many_tracks"])
@@ -906,7 +917,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         shared_zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
         shared_en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
         self.assertIn(
-            "不会改变",
+            "鼠标滚轮用于滚动页面",
             shared_zh["dialogs"]["complete"]["audio_tracks"]["subtitle"],
         )
         self.assertIn(

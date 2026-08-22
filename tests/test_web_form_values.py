@@ -12,7 +12,7 @@ def test_zero_and_empty_web_project_bpm_keep_automatic_detection(value):
     assert Config(custom_bpm=normalized).custom_bpm is None
 
 
-@pytest.mark.parametrize("value", [4, 120.5, "400"])
+@pytest.mark.parametrize("value", [30, 120.5, "300"])
 def test_valid_web_project_bpm_remains_an_explicit_override(value):
     normalized = normalize_optional_project_bpm(value)
 
@@ -20,7 +20,7 @@ def test_valid_web_project_bpm_remains_an_explicit_override(value):
     assert Config(custom_bpm=normalized).custom_bpm == float(value)
 
 
-@pytest.mark.parametrize("value", [0.1, 3.9, 400.1, "not-a-number"])
+@pytest.mark.parametrize("value", [0.1, 29.9, 300.1, 400, "not-a-number"])
 def test_invalid_nonzero_web_project_bpm_still_fails_explicitly(value):
     with pytest.raises((TypeError, ValueError)):
         Config(custom_bpm=normalize_optional_project_bpm(value))

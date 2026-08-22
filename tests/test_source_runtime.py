@@ -8,6 +8,13 @@ import pytest
 from src.utils import source_runtime
 
 
+@pytest.fixture(autouse=True)
+def _isolate_accelerator_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep default-venv cases deterministic under CUDA and XPU test runners."""
+
+    monkeypatch.delenv("MUSIC_TO_MIDI_ACCELERATOR", raising=False)
+
+
 def _runtime_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     project_root = tmp_path / "project"
     venv_root = project_root / "venv"
@@ -48,6 +55,31 @@ def test_accepts_isolated_project_venv_and_exact_muscriptor(
     monkeypatch.setattr(source_runtime, "validate_muscriptor_runtime_identity", lambda _root: "")
 
     assert _validate(project_root, venv_root, python, package_root) == ""
+
+
+def test_accepts_isolated_xpu_venv_and_reports_its_exact_repair_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    venv_root = project_root / "venv-xpu"
+    python = venv_root / "Scripts" / "python.exe"
+    package_root = venv_root / "Lib" / "site-packages" / "muscriptor"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    package_root.mkdir(parents=True)
+    (venv_root / "pyvenv.cfg").write_text(
+        "include-system-site-packages = false\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("MUSIC_TO_MIDI_ACCELERATOR", "xpu")
+    monkeypatch.setattr(source_runtime, "validate_muscriptor_runtime_identity", lambda _root: "")
+
+    assert _validate(project_root, venv_root, python, package_root) == ""
+    failure = source_runtime.source_runtime_failure_message(
+        "broken runtime",
+        project_root,
+        platform_name="nt",
+    )
+    assert str(python) in failure
 
 
 @pytest.mark.parametrize("version_info", ((3, 10), (3, 13), (4, 0)))
@@ -161,7 +193,7 @@ def test_rejects_muscriptor_loaded_outside_project_site_packages(
     )
 
     assert "不是从项目虚拟环境" in error
-    assert str(global_package) in error
+    assert os.path.normcase(str(global_package)) in os.path.normcase(error)
 
 
 def test_preserves_exact_muscriptor_identity_failure(

@@ -497,9 +497,9 @@ jobs:
         shell: bash
         run: python tools/generate_third_party_sbom.py --output THIRD_PARTY_SBOM.txt
 
-      - name: 使用 build_portable.ps1 构建 (Windows)
+      - name: 构建桌面、独立后端与独立 Web 前端 (Windows)
         if: runner.os == 'Windows'
-        run: pwsh -ExecutionPolicy Bypass -File .\build_portable.ps1
+        run: pwsh -ExecutionPolicy Bypass -File .\build_web_executables.ps1
 
       - name: 使用 PyInstaller 构建 (Linux)
         if: runner.os == 'Linux'
@@ -538,18 +538,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $smokeDir = Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"
-          $logs = Join-Path $smokeDir 'runtime\logs'
-          if (Test-Path $smokeDir) {
-            Remove-Item -LiteralPath $smokeDir -Recurse -Force
-          }
-          Copy-Item -LiteralPath '.\dist\MusicToMidi' -Destination $smokeDir -Recurse
-          if (Test-Path $logs) {
-            Remove-Item -LiteralPath $logs -Recurse -Force
+          $appSmokeDir = (Resolve-Path -LiteralPath '.\dist\MusicToMidi-App').Path
+          $backendSmokeDir = (Resolve-Path -LiteralPath '.\dist\MusicToMidi-WebBackend').Path
+          $frontendSmokeDir = (Resolve-Path -LiteralPath '.\dist\MusicToMidi-WebFrontend').Path
+          $runtimeRoots = @(
+            (Join-Path $appSmokeDir 'runtime'),
+            (Join-Path $backendSmokeDir 'runtime'),
+            (Join-Path $frontendSmokeDir 'runtime')
+          )
+          $logs = Join-Path $appSmokeDir 'runtime\logs'
+          foreach ($runtimeRoot in $runtimeRoots) {
+            if (Test-Path -LiteralPath $runtimeRoot) {
+              Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
+            }
           }
           $SelfTestTimeoutSeconds = 900
-          $selfTestExe = Join-Path $smokeDir 'MusicToMidi.exe'
-          $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test-no-load' -PassThru
+          $selfTestExe = Join-Path $appSmokeDir 'MusicToMidi.exe'
+          $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test-no-load' -WindowStyle Hidden -PassThru
           if (-not $proc.WaitForExit($SelfTestTimeoutSeconds * 1000)) {
             try {
               $proc.Kill($true)
@@ -576,7 +581,7 @@ jobs:
           if ($logText -notmatch '便携包自检通过') {
             throw "Portable self-test failed. ExitCode=$($proc.ExitCode)`n$logText"
           }
-          $mirosDir = Join-Path $smokeDir '_internal\external\ai4m-miros'
+          $mirosDir = Join-Path $appSmokeDir '_internal\external\ai4m-miros'
           $statusJson = Join-Path $env:RUNNER_TEMP 'miros-worker-missing-input-smoke.json'
           $probeMidi = Join-Path $env:RUNNER_TEMP 'miros-worker-missing-input-smoke.mid'
           $MirosWorkerTimeoutSeconds = 120
@@ -589,7 +594,7 @@ jobs:
               '-o', $probeMidi,
               '--status-json', $statusJson
             )
-            $worker = Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe') -ArgumentList $args -PassThru
+            $worker = Start-Process -FilePath (Join-Path $appSmokeDir 'MusicToMidi.exe') -ArgumentList $args -WindowStyle Hidden -PassThru
             if (-not $worker.WaitForExit($MirosWorkerTimeoutSeconds * 1000)) {
               try {
                 $worker.Kill($true)
@@ -611,6 +616,77 @@ jobs:
           }
           if ($mirosStatus -notmatch 'MIROS input audio does not exist') {
             throw "MIROS worker missing-input smoke failed before the expected missing-input check:`n$mirosStatus"
+          }
+          $frontendExe = Join-Path $frontendSmokeDir 'MusicToMidiFrontend.exe'
+          if (-not (Test-Path -LiteralPath $frontendExe -PathType Leaf)) {
+            throw "Portable smoke package is missing the standalone Web frontend executable"
+          }
+          $backendConfig = Join-Path $env:RUNNER_TEMP 'music-to-midi-backend-smoke.json'
+          $frontendConfig = Join-Path $env:RUNNER_TEMP 'music-to-midi-frontend-smoke.json'
+          @{
+            host = '127.0.0.1'
+            port = 18765
+            data_dir = (Join-Path $env:RUNNER_TEMP 'music-to-midi-web-jobs')
+            allowed_origins = @('http://127.0.0.1:15173')
+            log_level = 'info'
+            retention_days = 1
+            retention_max_jobs = 10
+          } | ConvertTo-Json | Set-Content -LiteralPath $backendConfig -Encoding UTF8
+          @{
+            host = '127.0.0.1'
+            port = 15173
+            public_host = '127.0.0.1'
+            backend_url = 'http://127.0.0.1:18765'
+            open_app_window = $false
+            edge_path = ''
+          } | ConvertTo-Json | Set-Content -LiteralPath $frontendConfig -Encoding UTF8
+          $backendProcess = $null
+          $frontendProcess = $null
+          try {
+            $backendProcess = Start-Process -FilePath (Join-Path $backendSmokeDir 'MusicToMidiBackend.exe') -ArgumentList @('--config', $backendConfig) -WindowStyle Hidden -PassThru
+            $frontendProcess = Start-Process -FilePath $frontendExe -ArgumentList @('--config', $frontendConfig, '--no-window') -WindowStyle Hidden -PassThru
+            $health = $null
+            $runtimeConfig = $null
+            for ($attempt = 1; $attempt -le 60; $attempt++) {
+              try {
+                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:18765/api/v1/health' -TimeoutSec 2
+                $runtimeConfig = Invoke-RestMethod -Uri 'http://127.0.0.1:15173/runtime-config.json' -TimeoutSec 2
+                break
+              } catch {
+                if ($backendProcess.HasExited) {
+                  throw "Packaged backend exited during web smoke. ExitCode=$($backendProcess.ExitCode)"
+                }
+                if ($frontendProcess.HasExited) {
+                  throw "Packaged frontend exited during web smoke. ExitCode=$($frontendProcess.ExitCode)"
+                }
+                if ($attempt -eq 60) {
+                  throw "Packaged web services did not become healthy within 60 seconds: $($_.Exception.Message)"
+                }
+                Start-Sleep -Seconds 1
+              }
+            }
+            if ($health.status -ne 'ok' -or $health.api_version -ne '2.0') {
+              throw "Packaged backend returned an incompatible health contract: $($health | ConvertTo-Json -Compress)"
+            }
+            if ($runtimeConfig.expected_api_version -ne '2.0' -or $runtimeConfig.backend_url -ne 'http://127.0.0.1:18765') {
+              throw "Packaged frontend returned an incompatible runtime contract: $($runtimeConfig | ConvertTo-Json -Compress)"
+            }
+            $frontendResponse = Invoke-WebRequest -Uri 'http://127.0.0.1:15173/' -TimeoutSec 5 -UseBasicParsing
+            if ($frontendResponse.Headers['Content-Security-Policy'] -notmatch "connect-src 'self' http://127.0.0.1:18765") {
+              throw "Packaged frontend CSP does not authorize the configured backend origin"
+            }
+          } finally {
+            foreach ($serviceProcess in @($frontendProcess, $backendProcess)) {
+              if ($null -ne $serviceProcess -and -not $serviceProcess.HasExited) {
+                Stop-Process -Id $serviceProcess.Id -Force
+                $serviceProcess.WaitForExit(10000) | Out-Null
+              }
+            }
+            foreach ($runtimeRoot in $runtimeRoots) {
+              if (Test-Path -LiteralPath $runtimeRoot) {
+                Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
+              }
+            }
           }
 
       - name: 烟测便携产物 (Linux)
@@ -707,63 +783,53 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
-          for ($attempt = 1; $attempt -le 10; $attempt++) {
-            try {
-              Move-Item -LiteralPath 'dist/MusicToMidi' -Destination "dist/$name"
-              break
-            } catch {
-              if ($attempt -eq 10) {
-                throw
-              }
-              Start-Sleep -Seconds 3
-            }
+          $appName = "MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-App"
+          $backendName = "MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-WebBackend"
+          $frontendName = "MusicToMidi-${{ matrix.platform }}-WebFrontend"
+          Move-Item -LiteralPath 'dist/MusicToMidi-App' -Destination "dist/$appName"
+          Move-Item -LiteralPath 'dist/MusicToMidi-WebBackend' -Destination "dist/$backendName"
+          Move-Item -LiteralPath 'dist/MusicToMidi-WebFrontend' -Destination "dist/$frontendName"
+
+          foreach ($name in @($appName, $backendName)) {
+            Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_SBOM.txt', '.tmp/FFMPEG_BUILD_AUDIT.txt') -Destination "dist/$name" -Force
           }
-          Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_SBOM.txt', '.tmp/FFMPEG_BUILD_AUDIT.txt') -Destination "dist/$name" -Force
+          Copy-Item -LiteralPath @('LICENSE', 'THIRD_PARTY_NOTICES.md') -Destination "dist/$frontendName" -Force
 
-          $variantNote = @"
-          GPU 版（CUDA 12.8），支持 NVIDIA 显卡加速
-          需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡；不兼容时会显式报错，不生成 CPU 版
+          $appReadme = @"
+          音乐转 MIDI 转换器 Windows 桌面 App（CUDA 12.8）
+
+          MusicToMidi.exe 是桌面 App 入口。完整模型、FluidSynth 和 FFmpeg 已内置；运行环境需要兼容的 NVIDIA GPU 和驱动。
+          本目录提供桌面 App 入口及其完整运行环境；WebBackend 与 WebFrontend 位于完整 Windows 包的同级独立目录。
+          在 NTFS 上从完整 WIM 包一起解压时，App 与 WebBackend 的相同模型/运行时文件使用硬链接复用物理空间；复制本目录到另一台电脑时会成为完整独立文件，不依赖原电脑上的其他目录。
+
+          处理模式：SMART、VOCAL_SPLIT、SIX_STEM_SPLIT、PIANO_TRANSKUN、PIANO_TRANSKUN_V2_AUG、PIANO_ARIA_AMT、PIANO_BYTEDANCE_PEDAL。
           "@
+          $backendReadme = @"
+          音乐转 MIDI 转换器 Windows Web 后端（CUDA 12.8）
 
-          $readme = @"
-          音乐转MIDI转换器 ${{ matrix.platform }} 便携版（${{ matrix.variant }}）
-
-          使用方法：
-            运行 MusicToMidi.exe 即可启动（AI 模型已内置，无需额外下载）
-
-          $variantNote
-
-          支持格式：MP3, WAV, FLAC, OGG, M4A 等
-          输出格式：多轨道 MIDI（128 种 GM 乐器）
-
-          处理模式（完整 7 种）：
-            1. SMART：完整混音多乐器转写
-            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，只先输出两条 WAV
-            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，只先输出六条 WAV
-            4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
-            5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
-            6. PIANO_ARIA_AMT：Aria-AMT
-            7. PIANO_BYTEDANCE_PEDAL：ByteDance Piano（保留 CC64 踏板）
-
-          后端选择：
-            SMART 可显式选择五种 YourMT3+ checkpoint、MIROS 或 MuScriptor Small / Medium / Large。
-            VOCAL_SPLIT / SIX_STEM_SPLIT 分离阶段不调用 MIDI 后端；完成后可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。
-
-          内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
-            MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
-            TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
-
-          无需安装 Python，解压即用
+          MusicToMidiBackend.exe 是处理服务入口。首次运行会在 EXE 旁生成 MusicToMidiBackend.json。
+          同机默认监听 127.0.0.1:8765；局域网使用时，host 使用服务电脑的实际局域网 IPv4，allowed_origins 使用 Web 前端的实际来源。
+          本目录拥有独立后端入口及运行环境；从完整 WIM 包一起解压到 NTFS 时，与桌面 App 相同的模型/运行时文件以硬链接复用。可以把整个 WebBackend 目录单独复制到另一台 GPU 电脑，复制后不依赖 App 目录。
+          此包适用于受信任局域网，不内置认证、授权或 TLS，也不具备互联网部署所需的身份保护。
           "@
-          Set-Content -LiteralPath "dist/$name/使用说明.txt" -Value $readme -Encoding UTF8
+          $frontendReadme = @"
+          音乐转 MIDI 转换器 Windows Web 前端
+
+          Web 启动顺序为：GPU 电脑上的 WebBackend 在前，MusicToMidiFrontend.exe 在后。首次运行会在 EXE 旁生成 MusicToMidiFrontend.json。
+          同机默认连接 http://127.0.0.1:8765；局域网使用时把 backend_url 改为后端电脑的实际地址。
+          可以把整个 WebFrontend 目录或单独发布的 WebFrontend ZIP 复制到同一局域网的其他 Windows 电脑；该电脑不需要模型、CUDA 或 Python。
+          此包是轻量前端，不含模型或推理运行时；Web 处理仍由 WebBackend 提供。
+          "@
+          Set-Content -LiteralPath "dist/$appName/使用说明.txt" -Value $appReadme -Encoding UTF8
+          Set-Content -LiteralPath "dist/$backendName/使用说明.txt" -Value $backendReadme -Encoding UTF8
+          Set-Content -LiteralPath "dist/$frontendName/使用说明.txt" -Value $frontendReadme -Encoding UTF8
 
       - name: 创建便携包 (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
-          # 重命名 dist/MusicToMidi 为带平台标识的名称
+          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-App"
+          # Linux 当前只发布桌面 App。
           mv dist/MusicToMidi "dist/${NAME}"
           cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_SBOM.txt .tmp/FFMPEG_BUILD_AUDIT.txt "dist/${NAME}/"
 
@@ -790,8 +856,8 @@ jobs:
 
           处理模式（完整 7 种）：
             1. SMART：完整混音多乐器转写
-            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，只先输出两条 WAV
-            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，只先输出六条 WAV
+            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，生成两条 WAV
+            3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，生成六条 WAV
             4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
             5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
             6. PIANO_ARIA_AMT：Aria-AMT
@@ -811,47 +877,99 @@ jobs:
       - name: 压缩便携包
         shell: bash
         run: |
-          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+          NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-App"
           SEVENZ_LOW_MEM_ARGS=(-t7z -mx=5 -md=64m -mmt=on)
           echo "压缩前磁盘空间:"
           df -h .
 
           # PyInstaller 构建完成后，build/ 中的中间产物和 staged model assets
-          # 已经复制进 dist/${NAME}，压缩前清掉它们以降低 runner 磁盘峰值。
+          # 已经复制进 dist 下的角色目录，压缩前清掉它们以降低 runner 磁盘峰值。
           rm -rf build
           rm -rf "$HOME/.cache/pip" "$HOME/.cache/torch" "$HOME/.cache/music_ai_models" "$HOME/.music-to-midi"
           echo "清理构建缓存后磁盘空间:"
           df -h .
 
           if [ "${{ matrix.platform }}" = "Windows" ]; then
-            # 先检查未压缩目录大小，避免对大包做无意义的多轮压缩
-            DIR_SIZE=$(du -sb "dist/${NAME}" | cut -f1)
-            echo "未压缩目录大小: $(( DIR_SIZE / 1048576 )) MB"
-            if [ "$DIR_SIZE" -gt 3000000000 ]; then
-              # >3GB 目录直接用分卷 7z（跳过 zip 和单文件 7z）
-              echo "目录较大，直接使用分卷 7z 压缩..."
-              cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
-            else
-              # 小包先试 zip
-              cd dist && 7z a -tzip "../${NAME}-Portable.zip" "${NAME}" && cd ..
-              FILE_SIZE=$(stat -c%s "${NAME}-Portable.zip" 2>/dev/null || wc -c < "${NAME}-Portable.zip" | tr -d ' ')
-              if [ "$FILE_SIZE" -gt 1900000000 ]; then
-                rm "${NAME}-Portable.zip"
-                cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" "../${NAME}-Portable.7z" "${NAME}" && cd ..
-                SEVENZ_SIZE=$(stat -c%s "${NAME}-Portable.7z" 2>/dev/null || wc -c < "${NAME}-Portable.7z" | tr -d ' ')
-                if [ "$SEVENZ_SIZE" -gt 1900000000 ]; then
-                  rm "${NAME}-Portable.7z"
-                  cd dist && 7z a "${SEVENZ_LOW_MEM_ARGS[@]}" -v1900m "../${NAME}-Portable.7z" "${NAME}" && cd ..
-                fi
-              fi
-            fi
-
-            echo "校验 Windows 压缩包..."
-            for archive in "${NAME}-Portable.zip" "${NAME}-Portable.7z" "${NAME}-Portable.7z.001"; do
-              if [ -f "$archive" ]; then
-                7z t "$archive"
-              fi
+            WINDOWS_SHARED_NAME="MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}"
+            WINDOWS_APP_NAME="${WINDOWS_SHARED_NAME}-App"
+            WINDOWS_BACKEND_NAME="${WINDOWS_SHARED_NAME}-WebBackend"
+            WINDOWS_FRONTEND_NAME="MusicToMidi-${{ matrix.platform }}-WebFrontend"
+            WINDOWS_ROLE_NAMES=(
+              "${WINDOWS_APP_NAME}"
+              "${WINDOWS_BACKEND_NAME}"
+              "${WINDOWS_FRONTEND_NAME}"
+            )
+            for WINDOWS_ROLE_NAME in "${WINDOWS_ROLE_NAMES[@]}"; do
+              test -d "dist/${WINDOWS_ROLE_NAME}" || {
+                echo "::error::Windows portable role directory is missing: dist/${WINDOWS_ROLE_NAME}"
+                exit 1
+              }
+              DIR_SIZE=$(du -sb "dist/${WINDOWS_ROLE_NAME}" | cut -f1)
+              echo "${WINDOWS_ROLE_NAME} 未压缩目录大小: $(( DIR_SIZE / 1048576 )) MB"
             done
+
+            # App 与 WebBackend 仍是可以单独复制的完整目录；同机完整包通过
+            # WIM hard-link metadata 只保存一次相同模型/运行时文件。普通 7z
+            # 格式不支持保存 hard links，不能用 solid compression 冒充复用。
+            HARDLINK_PROBE_REL="_internal/models/audio-separator/download_checks.json"
+            APP_PROBE="dist/${WINDOWS_APP_NAME}/${HARDLINK_PROBE_REL}"
+            BACKEND_PROBE="dist/${WINDOWS_BACKEND_NAME}/${HARDLINK_PROBE_REL}"
+            python - "$APP_PROBE" "$BACKEND_PROBE" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          app_path, backend_path = map(Path, sys.argv[1:])
+          for path in (app_path, backend_path):
+              if not path.is_file() or path.stat().st_size <= 0:
+                  raise SystemExit(f"shared portable probe is missing or empty: {path}")
+          if not os.path.samefile(app_path, backend_path):
+              raise SystemExit(
+                  "App and WebBackend shared asset is not an NTFS hard link: "
+                  f"{app_path} != {backend_path}"
+              )
+          print(f"Input hard-link probe verified: {app_path} == {backend_path}")
+          PY
+
+            cd dist && 7z a -twim -snh -mx=5 -mmt=on -v1900m \
+              "../${WINDOWS_SHARED_NAME}-Portable.wim" \
+              "${WINDOWS_APP_NAME}" "${WINDOWS_BACKEND_NAME}" "${WINDOWS_FRONTEND_NAME}" && cd ..
+            SHARED_ARCHIVE="${WINDOWS_SHARED_NAME}-Portable.wim.001"
+            test -s "$SHARED_ARCHIVE" || {
+              echo "::error::Shared Windows WIM first volume is missing: ${SHARED_ARCHIVE}"
+              exit 1
+            }
+            7z t "$SHARED_ARCHIVE"
+
+            HARDLINK_PROBE_ROOT="${RUNNER_TEMP:-$PWD/.tmp}/music-to-midi-wim-hardlink-probe"
+            rm -rf "$HARDLINK_PROBE_ROOT"
+            mkdir -p "$HARDLINK_PROBE_ROOT"
+            7z x "$SHARED_ARCHIVE" \
+              "${WINDOWS_APP_NAME}/${HARDLINK_PROBE_REL}" \
+              "${WINDOWS_BACKEND_NAME}/${HARDLINK_PROBE_REL}" \
+              "-o${HARDLINK_PROBE_ROOT}" -y
+            python - \
+              "${HARDLINK_PROBE_ROOT}/${WINDOWS_APP_NAME}/${HARDLINK_PROBE_REL}" \
+              "${HARDLINK_PROBE_ROOT}/${WINDOWS_BACKEND_NAME}/${HARDLINK_PROBE_REL}" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          app_path, backend_path = map(Path, sys.argv[1:])
+          if not app_path.is_file() or not backend_path.is_file():
+              raise SystemExit("WIM hard-link probe did not extract both role files")
+          if not os.path.samefile(app_path, backend_path):
+              raise SystemExit(
+                  "WIM extraction did not restore App/WebBackend shared hard link: "
+                  f"{app_path} != {backend_path}"
+              )
+          print(f"Extracted WIM hard-link probe verified: {app_path} == {backend_path}")
+          PY
+            rm -rf "$HARDLINK_PROBE_ROOT"
+
+            # 局域网其他电脑只需这个轻量前端包，无需下载模型或 CUDA 运行时。
+            cd dist && 7z a -tzip "../${WINDOWS_FRONTEND_NAME}-Portable.zip" "${WINDOWS_FRONTEND_NAME}" && cd ..
+            7z t "${WINDOWS_FRONTEND_NAME}-Portable.zip"
           else
             # Linux GPU 包较大，直接流式写入分卷，避免先生成一个完整 tar.gz
             # 再 split 造成额外磁盘峰值。
@@ -862,7 +980,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}
-          path: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}-Portable*
+          path: MusicToMidi-${{ matrix.platform }}-*-Portable*
 
   release:
     name: 上传到 GitHub Release
@@ -952,7 +1070,7 @@ jobs:
           - 下载 MIDI 始终采用结果工作台当前显示的 BPM，并同时更新 tempo 元数据和真实播放时长；采纳 Standard MIDI tempo/tempo map 的 DAW 会与应用内试听保持一致。
           - 下载副本先通过源 tempo map 恢复事件绝对秒，再映射到检测 BPM 的音乐 tick；目标 BPM 阶段保持该 tick 网格和全部消息值/顺序，只替换第 0 轨、第 0 tick 的唯一 tempo 与检测拍号。不吸附节奏网格，也不改变力度、音色、弯音、SysEx 或 CC64 踏板。
           - 修复全部七种模式中后端固定 120 BPM 占位 tempo 的问题，并保留音符、力度、控制器、弯音与 CC64 踏板消息。
-          - 自动检测继续使用多引擎共识和拍间隔中位数倍频校正；变速 tempo map 仍为显式可选功能，低置信检测不会伪造速度变化。
+          - 速度方案明确分为三种：默认“自动检测唯一 BPM（推荐）”只写入检测到的全局 BPM；“手动设置唯一 BPM”只写入用户指定的一个速度事件；“跟随原曲速度变化”生成稳定的段落级 Tempo Map，在拍号证据可靠时优先按小节对齐，并过滤逐拍抖动以及半速、双速误判。
           - Mido、PrettyMIDI、FluidSynth、真实 3 分 27 秒 MuScriptor 结果和 Qt 播放链路均已回归。MuseScore 3/4 会对未量化的人类演奏型 MIDI 重新跟拍并可能覆盖乐谱页显示 BPM；这是其 MIDI 导入器行为，本版本不会用破坏音符时间的方式伪装适配。
 
           #### MIDI 编辑、试听与导出一致性
@@ -971,41 +1089,46 @@ jobs:
           - 播放时选择、拖动或批量编辑音符不再在 GUI 线程同步生成音频；编辑预览通过低优先级工作线程生成，并用 generation token 丢弃过期结果，避免旧任务覆盖新编辑。
           - 关闭结果页或再次转换时会停止计时器、取消待处理预览、等待 QThread 完整退出，再释放 Qt Multimedia 对象，修复退出/重置期间的卡死与闪退窗口。
           - 所有转 MIDI 路线统一使用钢琴卷帘与音轨控制；分离模式同时保留真实 WAV 波形和按需生成的 MIDI 音轨，每条音轨独立选择后端并显式开始转换。
-          - 人声/伴奏和六声部分离主按钮只生成 WAV，不再暗中自动转写或合并 MIDI；桌面版、Space 与 Colab 的逐轨工作台都提供同一套 13 条显式路线。
+          - 人声/伴奏和六声部分离会生成 WAV，MIDI 转换按音轨单独进行；桌面版、Space 与 Colab 的逐轨工作台都提供同一套 13 条路线。
+          - 分离后逐轨转 MIDI 的节拍分析统一使用保留的原始混音，不再拿稀疏单独声部误判全曲节拍；完整错误信息在桌面音轨工作台可选择和复制，节拍失败仍会显式停止，不会写入假 BPM。
           - Space 与 Colab 编辑音符后会通过受信任的结果 token 重新生成唯一试听资产；旧试听和旧下载在刷新完成前明确禁用，失败不会回退到编辑前缓存。
           - 播放头连续插值绘制和稳定的自动居中跟随；支持 \`Ctrl/Alt + 滚轮\` 以鼠标位置为中心缩放、\`Shift + 滚轮\` 横向滚动，手动滚动时退出自动跟随。
 
-          #### MuScriptor Small / Medium / Large：v0.3.0 节拍对齐与长音频高质量推理
+          #### MuScriptor Small / Medium / Large：v0.3.0 节拍对齐与长音频高质量推理（官方处理链路与分段边界连续性修复）
 
           ![MuScriptor vs YourMT3](https://raw.githubusercontent.com/mason369/music-to-midi/${TAG}/docs/MuScriptor_vs_YourMT3.png)
           *保留上一版更新日志中的 MuScriptor Large 与 YourMT3+ 公开评测对比图*
 
-          - 固定源码升级到未修改的上游官方 \`v0.3.0\` commit \`d73147e75e5b9b0c0a79ebe154587db4fd603e0c\`，并对七个运行时源码文件执行 SHA-256 身份校验；项目唯一的 Beat This 网格驱动官方 onset 相位校正、卷帘拍线/强拍/小节底色与 MuseScore 音符轨 tempo，不运行第二套检测。
-          - 三档模型均严格使用官方 5 秒窗口、prelude forcing、单次生成路径和默认 \`no_eos_is_ok=True\`，不叠加未合并分支，不私设严格 EOS，不提供静默降档，也不会更换或量化 Small/Medium/Large 权重。
+          - 固定源码保持未修改的上游官方 \`v0.3.0\` commit \`d73147e75e5b9b0c0a79ebe154587db4fd603e0c\`，并对七个运行时源码文件执行 SHA-256 身份校验；项目唯一的 Beat This final0 网格驱动官方 onset 相位校正、卷帘拍线/强拍/小节底色与 MuseScore 音符轨 tempo，不运行第二套节拍检测。
+          - 新增显式处理链路开关，默认“官方处理链路”严格保留上游 5 秒分段状态；可选“分段边界连续性修复链路”只阻断单一 program 在分段边界反复继承并自我强化的错误状态，同时保留真实延音。两条链路每个分段都只执行一次官方模型推理，不重试、不二次推理，也不事后改轨。
+          - 三档模型均保持官方 5 秒窗口、prelude forcing、单次生成路径和默认 \`no_eos_is_ok=True\`；不私设严格 EOS，不提供静默降档，也不会更换或量化 Small/Medium/Large 权重。
           - 完整混音的 \`SMART\` 模式，以及人声/伴奏、六声部分离后的逐轨转换，均支持 MuScriptor Small / Medium / Large；便携包同时内置并严格校验三套官方权重与配置。
           - 乐器选择支持搜索和真正的多选：留空时由模型自动识别；非空选择会作为生成阶段的硬约束，并在事件流和最终 MIDI 中再次校验，不是只在界面隐藏未选乐器。
           - 支持按 5 秒分片边转写边预览，显示已处理/可播放时间、耗时和预计完成时间；播放范围严格限制在已经生成的 MIDI。Small/Medium 为显存或速度受限设备提供更实用的选择，Large 保留最高容量。
           - 内置 MuseScore General SoundFont 与 FluidSynth，提供真实 MIDI 试听、原音/MIDI 混合、立体声、逐乐器静音/独奏，以及 MIDI、合成 WAV 和立体声结果下载。
 
           #### 平台、文档与发布
-          - 桌面版、Hugging Face Space 和 Colab 同步七种处理模式、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
+          - 桌面版与独立 Web 前端同步全部处理和逐轨工作台能力；Hugging Face Space 和 Colab 同步七种处理模式、三种速度方案、默认官方处理链路、可选分段边界连续性修复链路、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
+          - Windows 完整包保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的 EXE 和可单独复制的运行环境，同机解压到 NTFS 时相同模型/运行时文件通过 WIM 硬链接只占一份物理空间。另发不含模型的轻量 WebFrontend ZIP，供同一局域网的其他电脑单独使用。发布烟测会从三个独立目录真实启动并核对 API 2.0、运行时配置和 CSP。Web 两端不内置认证、授权或 TLS，适用范围为受信任局域网。
           - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
-          - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；首次使用者必须先在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
+          - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；使用条件是同一账户已在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
           - Windows/Linux GPU 便携包内置并校验完整模型资产、SoundFont、FluidSynth 与 FFmpeg；依赖或模型身份不匹配时显式失败，不静默切换后端或 CPU。
 
           ### 便携版下载
 
           | 文件 | 平台 | 推理方式 | 说明 |
           |------|------|----------|------|
-          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
-          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | 有 NVIDIA 显卡推荐 |
+          | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | 桌面 App + Web 推理后端 / CUDA 12.8 | 完整包；解压后仍是 App、WebBackend、WebFrontend 三个独立目录，NTFS 上复用相同模型/运行时文件 |
+          | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web 前端 | 可单独复制到局域网其他电脑，不含模型、CUDA 或 Python |
+          | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | 桌面 App / CUDA 12.8 | Debian、Ubuntu 或 WSL2 |
 
           ### 使用方法
-          1. 下载对应平台的 GPU 压缩包
-          2. 如果是分卷压缩，请先下载同名前缀的全部分卷（如 \`.7z.001\` / \`.7z.002\` 或 \`.partaa\` / \`.partab\`）
-          3. 解压到任意目录
-          4. 运行 \`MusicToMidi\`（Windows 为 \`.exe\`）即可使用（AI 模型已内置）
+          1. Windows App 或 WebBackend：下载 \`MusicToMidi-Windows-GPU-Portable.wim.*\` 的全部分卷，用 7-Zip 从 \`.wim.001\` 解压到 NTFS；会得到 App、WebBackend、WebFrontend 三个同级独立目录
+          2. 只部署局域网前端的其他电脑：仅下载并复制 \`MusicToMidi-Windows-WebFrontend-Portable.zip\`，不需要模型、CUDA 或 Python
+          3. 三个目录可以分别复制到其他电脑；复制 App 或 WebBackend 目录时，Windows 会把其中的硬链接内容复制成完整独立文件，不依赖原目录
+          4. 桌面 App：从 App 目录运行 \`MusicToMidi.exe\`；Web：先在 GPU 电脑从 WebBackend 目录运行 \`MusicToMidiBackend.exe\`，再在任意受信任局域网电脑运行 \`MusicToMidiFrontend.exe\`
+          5. 局域网 Web 按配置文件填写实际前后端地址与 CORS 来源；完整 WIM 也支持只选择 App 或 WebBackend 目录解压，7-Zip 会为该目录还原所需完整文件
 
           ### 说明
           - 无需安装 Python，解压即用
@@ -1024,10 +1147,13 @@ jobs:
           - 个别未声明许可的上游权重（Leap XE、BS-RoFormer SW Fixed、MIROS）由维护者以署名方式分发，权利人可以随时通过 Issue 要求移除
 
           ### 系统要求
-          - **Windows**：Windows 10/11 (x64)
-          - **Linux**：提供 Python 3.11/3.12 x64 的 Debian / Ubuntu / WSL2
-          - **GPU 版**：与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡
-          - **内存**：建议 8GB+
+
+          | 项目 | 要求 |
+          |---|---|
+          | Windows | Windows 10/11 (x64) |
+          | Linux | 提供 Python 3.11/3.12 x64 的 Debian / Ubuntu / WSL2 |
+          | GPU 版 | 与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡 |
+          | 内存 | 建议 8GB+ |
 
           ---
 
@@ -1038,27 +1164,31 @@ jobs:
           #### Source BPM, target BPM, and real playback speed
           - Source BPM and project BPM are now independent. Audio and MIDI playback use the real \`project BPM / detected BPM\` ratio, and BPM and speed controls remain synchronized in both directions.
           - Downloaded MIDI files preserve the musical tick grid while replacing placeholder tempo metadata with the current project BPM. Notes, velocities, program changes, pitch bends, SysEx, controllers, and CC64 pedal events are preserved.
-          - All seven processing modes now replace fixed 120 BPM backend placeholders consistently. Optional tempo-map generation remains explicit and requires high-confidence detection.
+          - All seven processing modes now replace fixed 120 BPM backend placeholders consistently. The default **Auto-detect one BPM** mode writes one detected global tempo; **Set one BPM manually** writes only the selected tempo event; **Follow source tempo changes** emits a stable section-level tempo map, prefers bar-aligned changes when meter evidence is reliable, and rejects beat jitter plus half/double-time errors.
 
           #### MIDI editing, preview, and track workflow
           - The result workspace now includes a full piano-roll editor with selection, add/delete, move, duration/velocity/instrument editing, clipboard operations, undo/redo, reset, and explicit quantization.
           - Edited previews are regenerated in a background worker and verified before they become playable or downloadable. Stale previews are disabled instead of silently falling back to pre-edit audio.
           - The desktop app, Space, and Colab share the same seven modes, 13 explicit per-track transcription routes, split-first WAV workflow, and synchronized transport behavior.
+          - Per-track MIDI conversion after separation retains the original mix as the tempo-analysis source instead of inferring whole-song tempo from a sparse isolated stem. Beat-grid failures remain explicit, and complete desktop track errors are selectable and copyable.
           - Qt media teardown and asynchronous preview lifecycle handling were hardened to prevent reset/close races and stale worker results.
 
           #### Models, installation, and runtime identity
-          - MuScriptor Small, Medium, and Large use the identity-checked official v0.3.0 runtime and original model generation path, with Beat This providing the shared beat grid.
+          - MuScriptor Small, Medium, and Large use the identity-checked official v0.3.0 runtime. The default **Official processing path** preserves upstream five-second segment state; the optional **Segment-boundary continuity fix path** only blocks recurrent single-program boundary feedback while preserving genuine tied notes. Both paths run one official inference per segment without retrying, second-pass inference, or post-hoc track rewriting.
           - Source installers verify the active project virtual environment, exact runtime assets, CUDA providers, and required model identities before inference. Missing or mismatched dependencies fail visibly; no backend or CPU fallback is introduced.
-          - MuScriptor repositories are gated. First-time source users must accept the license on all three Hugging Face model pages and authenticate with \`hf auth login\` or a private \`HF_TOKEN\`; anonymous fully automatic download is not available.
+          - MuScriptor repositories are gated. Source availability requires an account that has accepted the license on all three Hugging Face model pages and authenticated with \`hf auth login\` or a private \`HF_TOKEN\`; anonymous fully automatic download is not available.
           - PolarFormer now exclusively uses the official \`bs_polarformer_fp16.onnx\` asset. Retired FP32 files and selection paths are rejected.
 
           #### Portable downloads
           | File | Platform | Inference | Notes |
           |------|----------|-----------|-------|
-          | \`MusicToMidi-Windows-GPU-Portable.*\` | Windows | GPU (CUDA 12.8) | Recommended for compatible NVIDIA GPUs |
-          | \`MusicToMidi-Linux-GPU-Portable.*\` | Linux | GPU (CUDA 12.8) | Debian, Ubuntu, or WSL2 |
+          | \`MusicToMidi-Windows-GPU-Portable.wim.*\` | Windows | Desktop App + Web inference backend / CUDA 12.8 | Complete package; extracts to separate App, WebBackend, and WebFrontend directories while reusing identical model/runtime files through NTFS hard links |
+          | \`MusicToMidi-Windows-WebFrontend-Portable.zip\` | Windows | Web frontend | Standalone folder for another trusted LAN computer; no models, CUDA, or Python included |
+          | \`MusicToMidi-Linux-GPU-App-Portable.*\` | Linux | Desktop App / CUDA 12.8 | Debian, Ubuntu, or WSL2 |
 
-          Download every volume with the same prefix before extraction. Portable packages include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. No Python or separate CUDA Toolkit installation is required, but a compatible NVIDIA driver and GPU are mandatory.
+          The Windows package consists of every \`MusicToMidi-Windows-GPU-Portable.wim.*\` volume, with \`.wim.001\` as the 7-Zip entry point. Extracting to NTFS restores the shared hard links, so App and WebBackend remain visibly separate and independently copyable without storing duplicate model/runtime files on the GPU host. Extracting only one of those directories materializes every file required by that role. Portable GPU roles include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. Python and a separate CUDA Toolkit are not required; a compatible NVIDIA driver and GPU are part of the runtime requirements.
+
+          Windows publishes one hard-link-preserving WIM for the three separate role directories plus a standalone lightweight WebFrontend ZIP for remote LAN clients. On a LAN client, the complete WebFrontend directory connects to \`MusicToMidiBackend.exe\` on the GPU host through the configured LAN addresses and CORS origin; the backend starts before \`MusicToMidiFrontend.exe\`. This deployment does not include authentication, authorization, or TLS, so its intended environment is a trusted LAN rather than the Internet.
 
           The combined portable work is distributed under GPL-3.0 with component-specific notices. Aria-AMT remains CC BY-NC-SA 4.0; MuScriptor checkpoints remain CC BY-NC 4.0 plus their model-page conditions. See \`THIRD_PARTY_NOTICES.md\`, \`THIRD_PARTY_SBOM.txt\`, and \`FFMPEG_BUILD_AUDIT.txt\` inside the package for exact evidence and attribution.
           NOTES

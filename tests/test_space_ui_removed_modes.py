@@ -23,9 +23,7 @@ def test_space_ui_uses_shared_i18n_labels():
     assert "Component.api_info = _patched_component_api_info" in source_text
     assert 'if __name__ == "__main__":' in source_text
     assert "configure_uvicorn_websocket_protocol()" in source_text
-    assert (
-        '        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],'
-    ) in source_text
+    assert ("        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],") in source_text
 
 
 def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
@@ -34,7 +32,10 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
 
     assert zh["space"]["ui"]["download_section"] == "下载输出文件"
     assert en["space"]["ui"]["download_section"] == "Download Output Files"
-    for catalog in (zh, en):
+    for catalog, expected_default_name, expected_fix_name in (
+        (zh, "官方处理链路（默认）", "分段边界连续性修复链路"),
+        (en, "Official processing path (default)", "Segment-boundary continuity fix path"),
+    ):
         vocal_info = catalog["space"]["mode"]["vocal_split_info"]
         six_stem_info = catalog["space"]["mode"]["six_stem_split_info"]
         assert "WAV" in vocal_info
@@ -56,8 +57,11 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
                 *leaf_strings(catalog["space"]["mode"]),
             ]
         ).lower()
+        assert expected_default_name.lower() in product_copy
+        assert expected_fix_name.lower() in product_copy
+        assert "telknet issue #74" not in product_copy
+        assert "muscriptor v0.3.0" in product_copy
         for banned_phrase in (
-            "telknet",
             "对齐",
             "落后",
             "不声称",
@@ -458,15 +462,15 @@ def test_space_all_gpu_jobs_share_one_serial_concurrency_queue():
 def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
     readme = Path("space/README.md").read_text(encoding="utf-8")
 
-    assert "两个分离模式只先生成 WAV" in readme
-    assert "选择复选框或模型不会开始推理" in readme
-    assert "十三个明确路线" in readme
+    assert "两个分离模式生成 WAV 后进入多轨工作台" in readme
+    assert "复选框和模型用于设置音轨" in readme
+    assert "十三种转写路线" in readme
     assert "models:" in readme
     assert "MuScriptor/muscriptor-large" in readme
     assert "mimbres/YourMT3" in readme
     assert "minzwon/MusicFM" in readme
     assert "顶部 `license: mit` **只表示本 Space 自有应用代码使用 MIT**" in readme
-    assert "必须逐项接受条款" in readme
+    assert "同一个 Hugging Face 账户已逐项接受条款" in readme
     assert "`SMART` + MuScriptor Large" in readme
     assert "约 0.833 秒" in readme
     assert "`SMART` + MuScriptor Medium" in readme
@@ -474,5 +478,5 @@ def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
     assert "`SMART` + MuScriptor Small" in readme
     assert "约 3.571 秒" in readme
     assert "开始分离" in readme
-    assert "不会自动生成 vocal、accompaniment 或 merged MIDI" in readme
-    assert "不会自动生成六个 stem MIDI 或 merged MIDI" in readme
+    assert "`VOCAL_SPLIT` 生成两条经过校验的 WAV" in readme
+    assert "`SIX_STEM_SPLIT` 生成六条经过校验的 WAV" in readme

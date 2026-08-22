@@ -1,0 +1,49 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+	http_port 8080
+	https_port 8443
+}
+
+{$PUBLIC_ADDRESS} {
+	log {
+		output stdout
+		format json
+	}
+
+	encode zstd gzip
+
+	basic_auth argon2id {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	request_body {
+		max_size {$MAX_REQUEST_BODY_SIZE}
+	}
+
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; script-src 'self'; style-src 'self'"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	handle /runtime-config.json {
+		header Content-Type "application/json; charset=utf-8"
+		header Cache-Control "no-store"
+		respond `{"managed":true,"frontend_url":"{$PUBLIC_ORIGIN}","backend_url":"{$PUBLIC_ORIGIN}","expected_api_version":"2.0"}` 200
+	}
+
+	@api path /api/* /docs* /openapi.json
+	handle @api {
+		reverse_proxy backend:8765
+	}
+
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}

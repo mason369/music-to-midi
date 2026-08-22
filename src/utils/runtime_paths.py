@@ -131,6 +131,15 @@ def get_yourmt3_source_dir() -> Optional[Path]:
 
 
 def get_miros_source_dir() -> Optional[Path]:
+    configured = os.environ.get("MUSIC_TO_MIDI_MIROS_DIR", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if (candidate / "main.py").is_file() and (candidate / "transcribe.py").is_file():
+            return candidate
+        # An explicit operator path is authoritative. Do not silently pick up a
+        # different checkout from the image or current working directory.
+        return None
+
     candidates = [
         "ai4m-miros",
         "external/ai4m-miros",

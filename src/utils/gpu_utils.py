@@ -1,6 +1,7 @@
 """
 GPU检测和管理工具 - 支持 CUDA (NVIDIA)、ROCm (AMD)、MPS (Apple)、Intel XPU 和 CPU
 """
+import gc
 import logging
 import os
 import platform
@@ -110,6 +111,36 @@ _torch_checked = False  # 是否已尝试加载过 torch
 _torch_lock = threading.Lock()
 
 
+def get_torch_dll_troubleshooting(*, frozen: bool) -> str:
+    """Return accelerator-specific guidance for a Windows torch DLL load failure."""
+    accelerator = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "cuda").strip().lower()
+    if accelerator == "xpu":
+        runtime_action = (
+            "重新解压完整的 MusicToMidi-XPU 便携包"
+            if frozen
+            else "运行 install_xpu.ps1 重建独立的 venv-xpu"
+        )
+        return (
+            "  1. 未安装 Visual C++ Redistributable 2022: "
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+            "  2. Intel GPU 驱动未安装或不支持当前原生 PyTorch XPU 运行时\n"
+            "  3. XPU 的 libiomp5md.dll 缺失，或错误混入 CUDA 使用的 "
+            f"libomp140.x86_64.dll；{runtime_action}"
+        )
+
+    runtime_action = (
+        "重新解压完整的 NVIDIA CUDA 便携包"
+        if frozen
+        else "重新运行 install.bat 自动修复"
+    )
+    return (
+        "  1. 未安装 Visual C++ Redistributable 2022: "
+        "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
+        "  2. 没有 NVIDIA 显卡或未安装兼容 CUDA 12.8 的驱动\n"
+        f"  3. libomp140.x86_64.dll 缺失；{runtime_action}"
+    )
+
+
 def _get_torch():
     """获取 torch 模块，失败返回 None（结果会被缓存）"""
     global _torch_module, _torch_checked
@@ -143,21 +174,10 @@ def _get_torch():
             else:
                 logger.warning(f"torch DLL 加载失败: {e}")
                 is_frozen = getattr(sys, 'frozen', False)
-                if is_frozen:
-                    logger.warning(
-                        "可能原因：\n"
-                        "  1. 未安装 Visual C++ Redistributable 2022: "
-                        "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                        "  2. 没有 NVIDIA 显卡或未安装驱动，GPU 路径将不可用"
-                    )
-                else:
-                    logger.warning(
-                        "可能原因：\n"
-                        "  1. 未安装 Visual C++ Redistributable 2022: "
-                        "https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                        "  2. torch 安装不完整，尝试: pip install --force-reinstall torch\n"
-                        "  3. libomp140.x86_64.dll 缺失，重新运行 install.bat 可自动修复"
-                    )
+                logger.warning(
+                    "可能原因：\n%s",
+                    get_torch_dll_troubleshooting(frozen=is_frozen),
+                )
             return None
 
 
@@ -168,6 +188,20 @@ def _get_cuda_device_index(device: str) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _get_device_index(device: str) -> int:
+    """Return an explicit accelerator index from a canonical torch device string."""
+
+    if ":" not in device:
+        return 0
+    try:
+        index = int(device.split(":", 1)[1])
+    except ValueError as exc:
+        raise ValueError(f"无效的 PyTorch 设备字符串: {device!r}") from exc
+    if index < 0:
+        raise ValueError(f"PyTorch 设备索引不能为负数: {device!r}")
+    return index
 
 
 def is_unsupported_cuda_architecture_error(error: BaseException) -> bool:
@@ -249,6 +283,97 @@ def ensure_cuda_runtime_compatibility(device: str) -> None:
         raise
 
 
+def ensure_xpu_runtime_compatibility(device: str) -> None:
+    """Prove that native PyTorch XPU can execute and synchronize on ``device``.
+
+    Merely exposing ``torch.xpu`` is not enough: a non-XPU wheel can contain the
+    namespace while no Intel runtime or device is usable.  This probe is kept
+    deliberately small, but it performs a real device allocation, kernel, host
+    readback and synchronization.  Every failure is surfaced to the caller.
+    """
+
+    if not str(device).startswith("xpu"):
+        return
+
+    torch = _get_torch()
+    if torch is None:
+        raise RuntimeError("已请求 Intel XPU，但 PyTorch 无法导入")
+    xpu = getattr(torch, "xpu", None)
+    if xpu is None:
+        raise RuntimeError(
+            "已请求 Intel XPU，但当前 PyTorch 不包含 torch.xpu；"
+            "当前项目需要固定的 PyTorch XPU 运行时"
+        )
+    if not bool(xpu.is_available()):
+        raise RuntimeError(
+            "已请求 Intel XPU，但 torch.xpu.is_available() 为 False；"
+            "请检查 Intel 显卡驱动和 PyTorch XPU 运行时"
+        )
+
+    device_index = _get_device_index(str(device))
+    device_count = int(xpu.device_count())
+    if device_count <= 0:
+        raise RuntimeError("torch.xpu 可用但未报告任何 Intel XPU 设备")
+    if device_index >= device_count:
+        raise RuntimeError(
+            "Intel XPU 设备索引不可用: "
+            f"requested={device_index}, count={device_count}"
+        )
+
+    try:
+        probe = torch.ones(1, device=f"xpu:{device_index}")
+        result = probe.add(1)
+        if result.device.type != "xpu" or result.device.index != device_index:
+            raise RuntimeError(
+                "Intel XPU 张量探针落在错误设备: "
+                f"expected=xpu:{device_index}, actual={result.device}"
+            )
+        observed = float(result.item())
+        if observed != 2.0:
+            raise RuntimeError(f"Intel XPU 张量探针结果无效: {observed!r}")
+        xpu.synchronize(device_index)
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and str(exc).startswith("Intel XPU"):
+            raise
+        raise RuntimeError(f"Intel XPU 运行时探针失败 ({device}): {exc}") from exc
+
+
+def ensure_accelerator_runtime_compatibility(device: str) -> None:
+    """Validate the explicitly selected CUDA or XPU accelerator runtime."""
+
+    normalized = str(device)
+    if normalized.startswith("cuda"):
+        ensure_cuda_runtime_compatibility(normalized)
+    elif normalized.startswith("xpu"):
+        ensure_xpu_runtime_compatibility(normalized)
+
+
+def ensure_module_on_device(module, device: str, label: str) -> None:
+    """Require all parameters and buffers of a torch module on ``device``."""
+
+    torch = _get_torch()
+    if torch is None:
+        raise RuntimeError(f"{label} 设备校验失败：PyTorch 无法导入")
+    expected = torch.device(device)
+    wrong = []
+    seen = 0
+    for name, tensor in list(module.named_parameters()) + list(module.named_buffers()):
+        seen += 1
+        actual = tensor.device
+        same_type = actual.type == expected.type
+        same_index = expected.type == "cpu" or actual.index == expected.index
+        if not (same_type and same_index):
+            wrong.append(f"{name or '<unnamed>'}={actual}")
+            if len(wrong) >= 8:
+                break
+    if seen == 0:
+        raise RuntimeError(f"{label} 没有可校验的参数或缓冲区")
+    if wrong:
+        raise RuntimeError(
+            f"{label} 未完整驻留在 {expected}；错误张量: " + ", ".join(wrong)
+        )
+
+
 def get_accelerator_type() -> str:
     """
     检测可用的加速器类型。
@@ -257,7 +382,7 @@ def get_accelerator_type() -> str:
         'cuda'  - NVIDIA GPU (CUDA)
         'rocm'  - AMD GPU (ROCm，通过 torch.cuda 接口)
         'mps'   - Apple Silicon GPU (Metal Performance Shaders)
-        'xpu'   - Intel GPU (通过 Intel Extension for PyTorch)
+        'xpu'   - Intel GPU (原生 PyTorch XPU)
         'directml' - 任意 GPU (通过 DirectML，支持 NVIDIA/AMD/Intel)
         'cpu'   - 无GPU加速，回退到CPU
     """
@@ -276,13 +401,15 @@ def get_accelerator_type() -> str:
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         return "mps"
 
-    # Intel GPU (需要 intel_extension_for_pytorch)
-    try:
-        import intel_extension_for_pytorch as ipex  # noqa: F401
-        if hasattr(torch, 'xpu') and torch.xpu.is_available():
-            return "xpu"
-    except ImportError:
-        pass
+    # Intel GPU uses native PyTorch XPU.  IPEX is retired and is intentionally
+    # neither imported nor required here.
+    xpu = getattr(torch, "xpu", None)
+    if xpu is not None:
+        try:
+            if xpu.is_available():
+                return "xpu"
+        except Exception as exc:
+            logger.warning("Intel XPU 可用性检测失败: %s", exc)
 
     # DirectML（跨厂商 GPU 加速：NVIDIA/AMD/Intel，Windows 专用）
     try:
@@ -350,16 +477,25 @@ def get_device(prefer_gpu: bool = True, gpu_index: int = 0) -> str:
 
     if accel == "xpu":
         torch = _get_torch()
-        try:
-            count = torch.xpu.device_count() if torch and hasattr(torch, 'xpu') else 0
-            idx = min(gpu_index, count - 1) if count > 0 else 0
-            device = f"xpu:{idx}"
-            name = torch.xpu.get_device_name(idx) if hasattr(torch.xpu, 'get_device_name') else "Intel GPU"
-            logger.info(t("startup.device_intel_xpu", name=name, device=device))
-            return device
-        except Exception:
-            logger.info(t("startup.device_intel_xpu_default"))
-            return "xpu:0"
+        if torch is None or not hasattr(torch, "xpu"):
+            raise RuntimeError("检测到 Intel XPU，但当前 PyTorch 缺少 torch.xpu")
+        count = int(torch.xpu.device_count())
+        if count <= 0:
+            raise RuntimeError("检测到 Intel XPU，但 torch.xpu.device_count() 为 0")
+        idx = int(gpu_index)
+        if idx < 0 or idx >= count:
+            raise RuntimeError(
+                f"Intel XPU 设备索引不可用: requested={idx}, count={count}"
+            )
+        device = f"xpu:{idx}"
+        ensure_xpu_runtime_compatibility(device)
+        name = (
+            torch.xpu.get_device_name(idx)
+            if hasattr(torch.xpu, "get_device_name")
+            else "Intel GPU"
+        )
+        logger.info(t("startup.device_intel_xpu", name=name, device=device))
+        return device
 
     if accel == "directml":
         try:
@@ -388,10 +524,7 @@ def get_gpu_count() -> int:
     if accel == "mps":
         return 1
     if accel == "xpu":
-        try:
-            return torch.xpu.device_count() if hasattr(torch, 'xpu') else 0
-        except Exception:
-            return 1
+        return int(torch.xpu.device_count()) if hasattr(torch, "xpu") else 0
     if accel == "directml":
         try:
             import torch_directml
@@ -443,7 +576,7 @@ def get_gpu_info() -> List[dict]:
 
     elif accel == "xpu":
         try:
-            count = torch.xpu.device_count() if hasattr(torch, 'xpu') else 1
+            count = torch.xpu.device_count() if hasattr(torch, 'xpu') else 0
             for i in range(count):
                 name = "Intel GPU"
                 try:
@@ -451,12 +584,18 @@ def get_gpu_info() -> List[dict]:
                         name = torch.xpu.get_device_name(i)
                 except Exception:
                     pass
+                props = (
+                    torch.xpu.get_device_properties(i)
+                    if hasattr(torch.xpu, "get_device_properties")
+                    else None
+                )
+                total_memory = int(getattr(props, "total_memory", 0) or 0)
                 gpus.append({
                     "index": i,
                     "name": name,
                     "type": "XPU",
-                    "total_memory": 0,
-                    "total_memory_gb": 0.0,
+                    "total_memory": total_memory,
+                    "total_memory_gb": total_memory / (1024 ** 3),
                 })
         except Exception as e:
             logger.warning(f"获取 Intel XPU 信息失败: {e}")
@@ -507,8 +646,10 @@ def get_memory_info(device: str = None) -> Optional[Tuple[float, float]]:
             total = torch.cuda.get_device_properties(device_idx).total_memory / (1024 ** 3)
             return (allocated, total)
         if device.startswith("xpu") and hasattr(torch, 'xpu') and torch.xpu.is_available():
-            # Intel XPU 暂无标准内存查询 API，返回 None
-            return None
+            device_idx = _get_device_index(device)
+            allocated = torch.xpu.memory_allocated(device_idx) / (1024 ** 3)
+            total = torch.xpu.get_device_properties(device_idx).total_memory / (1024 ** 3)
+            return (allocated, total)
     except Exception as e:
         logger.debug(f"获取显存信息失败: {e}")
 
@@ -516,7 +657,7 @@ def get_memory_info(device: str = None) -> Optional[Tuple[float, float]]:
 
 
 def clear_gpu_memory() -> None:
-    """清除GPU显存缓存（CUDA/ROCm）"""
+    """Release completed accelerator work and unreferenced device allocations."""
     torch = _get_torch()
     if torch is None:
         return
@@ -531,9 +672,15 @@ def clear_gpu_memory() -> None:
             torch.mps.empty_cache()
             logger.info("MPS显存缓存已清除")
         elif accel == "xpu" and hasattr(torch, 'xpu') and torch.xpu.is_available():
-            if hasattr(torch.xpu, 'empty_cache'):
-                torch.xpu.empty_cache()
-                logger.info("Intel XPU显存缓存已清除")
+            # XPU client GPUs use unified memory, so a model retained by a
+            # Python reference cycle consumes the same Windows commit budget
+            # needed by the next inference process. Collect unreachable model
+            # graphs first, wait for their queued work to finish, and only then
+            # return unused blocks from the XPU caching allocator.
+            gc.collect()
+            torch.xpu.synchronize()
+            torch.xpu.empty_cache()
+            logger.info("Intel XPU队列已同步，未引用模型与显存缓存已清除")
     except Exception as e:
         logger.warning(f"清除GPU显存失败: {e}")
 
@@ -761,9 +908,9 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
 
     参数:
         n_segments: 音频分段数
-        quality: 内部质量标记；当前应用入口固定传入最高质量策略
+        quality: 内部质量标记；当前应用入口固定传入 ``best``
         device: 设备字符串 (如 "cpu", "cuda:0")
-        ultra_quality: 是否启用极致质量
+        ultra_quality: 是否沿用旧版 ultra-quality 配置
 
     返回:
         推荐的 batch size
@@ -792,6 +939,7 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
     is_directml = "privateuseone" in device
 
     is_cuda = device.startswith("cuda")
+    is_xpu = device.startswith("xpu")
 
     if is_gpu_device and not is_directml:
         vram = profile["gpu_vram_gb"] or 4.0
@@ -812,8 +960,13 @@ def get_optimal_batch_size(n_segments: int, quality: str, device: str,
                     bsz_table = {150: 6, 400: 3, 999999: 2}
                 else:
                     bsz_table = {150: 4, 400: 2, 999999: 1}
+        elif is_xpu:
+            # YourMT3 is autoregressive and the XPU route deliberately runs in
+            # FP32.  Start with one segment per batch until a specific device is
+            # measured; this avoids hiding memory pressure behind OOM retries.
+            bsz_table = {999999: 1}
         else:
-            # ROCm/MPS/XPU：无 fp16 autocast，使用保守 bsz
+            # ROCm/MPS：无 fp16 autocast，使用保守 bsz
             if is_best:
                 if vram >= 10:
                     bsz_table = {100: 24, 300: 20, 999999: 16}

@@ -6,8 +6,13 @@ import threading
 import time
 from pathlib import Path
 
+import mido
+import pytest
 from fastapi.testclient import TestClient
 
+import src.web_api.app as app_module
+import src.web_api.jobs as jobs_module
+from src.model_profiles import ALL_PROFILE_IDS, ModelProfileSnapshot, ModelProfileStatus
 from src.models.data_models import (
     Config,
     ProcessingProgress,
@@ -17,6 +22,21 @@ from src.models.data_models import (
 from src.web_api.app import create_app
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.jobs import JobManager
+
+
+@pytest.fixture(autouse=True)
+def available_model_profiles(monkeypatch):
+    snapshot = ModelProfileSnapshot(
+        selection_mode="test",
+        explicit_selection_required=False,
+        enabled_profiles=ALL_PROFILE_IDS,
+        profiles=tuple(
+            ModelProfileStatus(id=profile_id, enabled=True, available=True)
+            for profile_id in ALL_PROFILE_IDS
+        ),
+        ready=True,
+    )
+    monkeypatch.setattr(app_module, "inspect_model_profiles", lambda: snapshot)
 
 
 class FakeInferenceEngine:
@@ -33,6 +53,7 @@ class FakeInferenceEngine:
         progress_callback,
         processor_callback,
         track_id=None,
+        tempo_source_path=None,
     ):
         self.calls.append((kind, options.get("processing_mode") or options.get("route")))
         processor_callback(self)
@@ -102,6 +123,7 @@ def inference_options(mode: str = "smart") -> dict:
         "muscriptor_model": "large",
         "muscriptor_instruments": [],
         "midi_track_mode": "multi_track",
+        "tempo_mode": "fixed_auto",
         "custom_bpm": None,
         "use_gpu": True,
         "gpu_device": 0,
@@ -136,6 +158,16 @@ def test_capabilities_publish_all_current_modes_and_manual_routes(tmp_path):
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 200
             payload = response.json()
+            assert payload["api_version"] == "2.0"
+            assert payload["deployment"] == {
+                "trust_boundary": "trusted_lan",
+                "authentication": False,
+                "authorization": False,
+                "tls_terminated_here": False,
+                "tls_terminated_at_edge": False,
+                "configuration_ready": True,
+                "configuration_error": None,
+            }
             assert {item["id"] for item in payload["modes"]} == {
                 "smart",
                 "vocal_split",
@@ -146,13 +178,56 @@ def test_capabilities_publish_all_current_modes_and_manual_routes(tmp_path):
                 "piano_bytedance_pedal",
             }
             assert len(payload["manual_midi_routes"]) == 13
+            assert [item["id"] for item in payload["tempo_modes"]] == [
+                "adaptive",
+                "fixed_auto",
+                "fixed_manual",
+            ]
             assert payload["runtime"]["gpu_queue_concurrency"] == 1
+
+            # Labels must come from the same shared catalog the desktop,
+            # Space and Colab present, in both languages.
+            from src.i18n.translator import Translator
+            from src.utils.yourmt3_downloader import YOURMT3_MODELS
+
+            translator_zh = Translator("zh_CN")
+            translator_en = Translator("en_US")
+            for item in payload["modes"]:
+                mode_id = item["id"]
+                assert item["label_zh"] == translator_zh.t(f"main.mode.{mode_id}")
+                assert item["label_en"] == translator_en.t(f"main.mode.{mode_id}")
+            for item in payload["yourmt3_models"]:
+                assert item["label"] == YOURMT3_MODELS[item["id"]]["ui_label"]
+            assert [item["id"] for item in payload["muscriptor_models"]] == [
+                "large",
+                "medium",
+                "small",
+            ]
+            for item in payload["muscriptor_models"]:
+                assert item["label_zh"] == translator_zh.t(
+                    f"main.engine.muscriptor_models.{item['id']}"
+                )
+            yourmt3_route_labels = {
+                route["id"]: route["label"]
+                for route in payload["manual_midi_routes"]
+                if route["id"].startswith("yourmt3:")
+            }
+            for route_id, label in yourmt3_route_labels.items():
+                model_id = route_id.split(":", 1)[1]
+                assert label.endswith(YOURMT3_MODELS[model_id]["ui_label"])
     finally:
         manager.close()
 
 
-def test_processing_result_reports_specialized_route_not_default_backend():
-    result = ProcessingResult(midi_path="unused.mid")
+def test_processing_result_reports_specialized_route_and_metrics_from_final_midi(tmp_path):
+    midi_path = tmp_path / "metrics.mid"
+    midi = mido.MidiFile()
+    midi.tracks.append(mido.MidiTrack())
+    midi.tracks.append(mido.MidiTrack())
+    midi.tracks[1].append(mido.Message("note_on", note=60, velocity=90, time=0))
+    midi.tracks[1].append(mido.Message("note_off", note=60, velocity=0, time=120))
+    midi.save(midi_path)
+    result = ProcessingResult(midi_path=str(midi_path), total_notes=0)
 
     specialized = InferenceEngine._processing_payload(
         result,
@@ -160,14 +235,36 @@ def test_processing_result_reports_specialized_route_not_default_backend():
             processing_mode="piano_transkun",
             transcription_backend="yourmt3",
         ),
+        midi_path,
     )
     smart = InferenceEngine._processing_payload(
         result,
         Config(processing_mode="smart", transcription_backend="miros"),
+        midi_path,
     )
 
     assert specialized["transcription_backend"] == "piano_transkun"
     assert smart["transcription_backend"] == "miros"
+    assert smart["total_notes"] == 1
+    assert smart["track_count"] == 2
+    assert smart["quality_warnings"] == ["note_count_corrected_from_file"]
+
+
+def test_processing_result_exposes_valid_empty_midi_as_quality_warning(tmp_path):
+    midi_path = tmp_path / "empty.mid"
+    midi = mido.MidiFile()
+    midi.tracks.append(mido.MidiTrack())
+    midi.save(midi_path)
+
+    payload = InferenceEngine._processing_payload(
+        ProcessingResult(midi_path=str(midi_path), total_notes=0),
+        Config(processing_mode="smart", transcription_backend="miros"),
+        midi_path,
+    )
+
+    assert payload["total_notes"] == 0
+    assert payload["track_count"] == 1
+    assert payload["quality_warnings"] == ["empty_midi"]
 
 
 def test_primary_job_runs_outside_request_thread_and_publishes_artifact(
@@ -234,6 +331,7 @@ def test_separation_track_requires_explicit_manual_midi_child_job(tmp_path):
                 json={
                     "route": "piano_aria_amt",
                     "muscriptor_instruments": [],
+                    "tempo_mode": "fixed_auto",
                     "custom_bpm": None,
                     "use_gpu": True,
                     "gpu_device": 0,
@@ -251,6 +349,160 @@ def test_separation_track_requires_explicit_manual_midi_child_job(tmp_path):
                 ("manual_midi", "piano_aria_amt"),
             ]
     finally:
+        manager.close()
+
+
+def test_manual_midi_child_uses_the_parent_original_mix_as_tempo_source(tmp_path):
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine())
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            parent = post_audio(client, "vocal_split").json()
+            parent = wait_for_terminal(manager, parent["id"])
+            response = client.post(
+                f"/api/v1/jobs/{parent['id']}/tracks/vocals/midi",
+                json={
+                    "route": "piano_aria_amt",
+                    "muscriptor_instruments": [],
+                    "tempo_mode": "fixed_auto",
+                    "custom_bpm": None,
+                    "use_gpu": True,
+                    "gpu_device": 0,
+                    "language": "zh_CN",
+                },
+            )
+            assert response.status_code == 202, response.text
+            child_id = response.json()["id"]
+            child = wait_for_terminal(manager, child_id)
+            assert child["status"] == "succeeded"
+
+            with manager._lock:
+                parent_record = manager._jobs[parent["id"]]
+                child_record = manager._jobs[child_id]
+                assert child_record.source_path != parent_record.source_path
+                assert child_record.tempo_source_path == parent_record.source_path
+    finally:
+        manager.close()
+
+
+def test_parent_job_deletion_requires_explicit_cascade_and_removes_whole_family(tmp_path):
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine())
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            parent = wait_for_terminal(
+                manager,
+                post_audio(client, "vocal_split").json()["id"],
+            )
+            child_response = client.post(
+                f"/api/v1/jobs/{parent['id']}/tracks/vocals/midi",
+                json={
+                    "route": "piano_aria_amt",
+                    "muscriptor_instruments": [],
+                    "tempo_mode": "fixed_auto",
+                    "custom_bpm": None,
+                    "use_gpu": True,
+                    "gpu_device": 0,
+                    "language": "zh_CN",
+                },
+            )
+            child = wait_for_terminal(manager, child_response.json()["id"])
+
+            refused = client.delete(f"/api/v1/jobs/{parent['id']}")
+            assert refused.status_code == 409
+            assert "cascade=true" in refused.json()["detail"]
+
+            deleted = client.delete(f"/api/v1/jobs/{parent['id']}?cascade=true")
+            assert deleted.status_code == 204
+            assert client.get(f"/api/v1/jobs/{parent['id']}").status_code == 404
+            assert client.get(f"/api/v1/jobs/{child['id']}").status_code == 404
+            assert not (tmp_path / parent["id"]).exists()
+            assert not (tmp_path / child["id"]).exists()
+    finally:
+        manager.close()
+
+
+def test_retention_count_removes_oldest_terminal_job_and_keeps_latest(tmp_path):
+    manager = JobManager(
+        tmp_path,
+        engine=FakeInferenceEngine(),
+        retention_days=0,
+        retention_max_jobs=2,
+    )
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            completed_ids = []
+            for _index in range(3):
+                completed = wait_for_terminal(manager, post_audio(client).json()["id"])
+                completed_ids.append(completed["id"])
+            manager.prune_retained_jobs()
+            retained_ids = {job["id"] for job in client.get("/api/v1/jobs").json()}
+
+        assert retained_ids == set(completed_ids[-2:])
+        assert not (tmp_path / completed_ids[0]).exists()
+        assert all((tmp_path / job_id).is_dir() for job_id in completed_ids[-2:])
+    finally:
+        manager.close()
+
+
+def test_quarantined_cleanup_serializes_competing_retention_calls(tmp_path, monkeypatch):
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine(), start_worker=False)
+    trash_root = tmp_path / ".trash"
+    first_path = trash_root / "first"
+    second_path = trash_root / "second"
+    first_path.mkdir(parents=True)
+    second_path.mkdir(parents=True)
+    (first_path / "input").write_bytes(b"first")
+    (second_path / "input").write_bytes(b"second")
+
+    original_rmtree = jobs_module.shutil.rmtree
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release_first = threading.Event()
+    calls: list[Path] = []
+    call_lock = threading.Lock()
+
+    def controlled_rmtree(path, *, ignore_errors):
+        with call_lock:
+            calls.append(Path(path))
+            call_number = len(calls)
+        if call_number == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_entered.set()
+        return original_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(jobs_module.shutil, "rmtree", controlled_rmtree)
+    errors: list[BaseException] = []
+
+    def remove(path: Path) -> None:
+        try:
+            manager._remove_quarantined([path])
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=remove, args=(first_path,))
+    second = threading.Thread(target=remove, args=(second_path,))
+    try:
+        first.start()
+        assert first_entered.wait(timeout=5)
+        second.start()
+        assert not second_entered.wait(timeout=0.2)
+        release_first.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert not errors
+        assert calls == [first_path, second_path]
+        assert not first_path.exists()
+        assert not second_path.exists()
+    finally:
+        release_first.set()
+        if first.ident is not None:
+            first.join(timeout=5)
+        if second.ident is not None:
+            second.join(timeout=5)
         manager.close()
 
 
@@ -302,7 +554,7 @@ def test_restart_marks_nonterminal_manifest_failed_not_resumed(tmp_path):
     try:
         recovered = second.snapshot(job_id)
         assert recovered["status"] == "failed"
-        assert "不可安全续跑" in recovered["error"]
+        assert "本次处理无法继续" in recovered["error"]
     finally:
         second.close()
 
@@ -396,6 +648,23 @@ def test_static_client_guidance_tracks_real_job_state():
     assert ".guidance-target.is-guided" in styles
     assert ".guide-steps" not in styles
     assert 'class="guide-steps"' not in markup
+
+
+def test_static_client_enforces_api_version_heartbeat_delete_and_accessibility_contracts():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "web" / "app.js").read_text(encoding="utf-8")
+    markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert 'const FRONTEND_API_VERSION = "2.0"' in source
+    assert "assertCompatibleApiVersion(health" in source
+    assert "window.setInterval(probeBackend, BACKEND_HEARTBEAT_INTERVAL_MS)" in source
+    assert "markBackendUnavailable(error)" in source
+    assert "?cascade=true" in source
+    assert 'id="deleteJob"' in markup
+    assert 'aria-pressed="${track.muted}"' in source
+    assert 'aria-pressed="${track.solo}"' in source
+
+
 def test_terminal_job_retry_copies_input_and_preserves_options(tmp_path):
     engine = FakeInferenceEngine()
     manager = JobManager(tmp_path, engine=engine)
@@ -474,14 +743,31 @@ def test_legacy_manifest_artifact_hash_is_migrated_on_restart(tmp_path):
         second.close()
 
 
-def test_static_client_api_discovery_and_launcher_use_the_real_host_and_ports():
+def test_static_client_api_discovery_and_source_docs_use_unified_launcher():
     root = Path(__file__).resolve().parents[1]
     source = (root / "web" / "app.js").read_text(encoding="utf-8")
-    launcher = (root / "run_web.ps1").read_text(encoding="utf-8")
+    source_guide = (root / "web" / "README.md").read_text(encoding="utf-8")
 
     assert "window.location.hostname" in source
     assert 'new URLSearchParams(window.location.search).get("api")' in source
     assert "normalizeApiBase" in source
-    assert "EscapeDataString($apiBase)" in launcher
-    assert "MUSIC_TO_MIDI_ALLOWED_ORIGINS" in launcher
-    assert "-PublicHost is required" in launcher
+    assert 'fetch("runtime-config.json"' in source
+    assert not (root / "run_web.ps1").exists()
+    assert not (root / "run_web.bat").exists()
+    assert r".\venv\Scripts\python.exe -m src.web" in source_guide
+    assert "自动识别主要局域网 IPv4" in source_guide
+    assert "--host 192.168.1.50" in source_guide
+
+
+def test_static_client_draws_real_decoded_pcm_waveforms():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "web" / "app.js").read_text(encoding="utf-8")
+    markup = (root / "web" / "index.html").read_text(encoding="utf-8")
+
+    assert "context.decodeAudioData(arrayBuffer.slice(0))" in source
+    assert "track.buffer.getChannelData(0)" in source
+    assert "ctx.moveTo(px" in source
+    assert "ctx.lineTo(px" in source
+    assert '<div class="waveform-content"><canvas></canvas><i class="playhead"></i></div>' in source
+    assert 'id="zoomSlider"' in markup
+    assert 'id="alignTracks"' in markup

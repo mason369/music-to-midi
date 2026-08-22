@@ -1,0 +1,2 @@
+# Shell entry points must stay executable in Linux, WSL, and release CI.
+*.sh text eol=lf

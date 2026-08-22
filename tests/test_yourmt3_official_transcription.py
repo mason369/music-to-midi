@@ -83,15 +83,14 @@ def test_official_transcription_uses_torchaudio_nonoverlap_fixed_batch_and_write
 
     torchaudio = types.ModuleType("torchaudio")
 
-    def fake_load(*, uri):
-        calls["load_uri"] = uri
+    def fake_load_audio(path):
+        calls["load_path"] = path
         return waveform, 16_000
 
     def fake_resample(audio, source_rate, target_rate):
         calls["resample"] = (audio.detach().cpu().clone(), source_rate, target_rate)
         return audio
 
-    torchaudio.load = fake_load
     torchaudio.functional = types.SimpleNamespace(resample=fake_resample)
 
     utils_package = types.ModuleType("utils")
@@ -152,6 +151,7 @@ def test_official_transcription_uses_torchaudio_nonoverlap_fixed_batch_and_write
         "unique_midi_temp_path",
         lambda _output, _purpose: attempt_path,
     )
+    monkeypatch.setattr(yourmt3_module, "load_audio_tensor", fake_load_audio)
     monkeypatch.setenv("MUSIC_TO_MIDI_YOURMT3_OFFICIAL_BATCH_SIZE", "1")
     monkeypatch.setattr(YourMT3Transcriber, "_model", fake_model)
     monkeypatch.setattr(
@@ -171,7 +171,7 @@ def test_official_transcription_uses_torchaudio_nonoverlap_fixed_batch_and_write
     result = transcriber.transcribe_to_midi("source.wav", str(output_path))
 
     assert result == str(output_path.resolve())
-    assert calls["load_uri"] == "source.wav"
+    assert calls["load_path"] == "source.wav"
     assert calls["resample"][1:] == (16_000, 16_000)
     assert torch.equal(calls["resample"][0], torch.zeros((1, 4)))
     assert calls["slice"][1:] == (4, 4)
@@ -204,7 +204,6 @@ def test_official_transcription_emits_real_stable_prefix_snapshots_without_chang
     fake_model = FakeModel()
     waveform = torch.zeros((1, 36), dtype=torch.float32)
     torchaudio = types.ModuleType("torchaudio")
-    torchaudio.load = lambda *, uri: (waveform, 4)
     torchaudio.functional = types.SimpleNamespace(resample=lambda audio, _sr, _target: audio)
 
     utils_package = types.ModuleType("utils")
@@ -259,6 +258,11 @@ def test_official_transcription_emits_real_stable_prefix_snapshots_without_chang
     output_path = tmp_path / "streamed.mid"
     attempt_path = tmp_path / ".streamed.yourmt3.tmp.mid"
     monkeypatch.setattr(yourmt3_module, "unique_midi_temp_path", lambda *_args: attempt_path)
+    monkeypatch.setattr(
+        yourmt3_module,
+        "load_audio_tensor",
+        lambda _path: (waveform, 4),
+    )
     monkeypatch.setattr(YourMT3Transcriber, "_model", fake_model)
     monkeypatch.setattr(
         YourMT3Transcriber,

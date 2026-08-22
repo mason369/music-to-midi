@@ -7,6 +7,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QSignalSpy
 from PyQt6.QtWidgets import QApplication
 
@@ -259,7 +260,7 @@ def test_per_track_midi_status_machine_is_explicit_and_failure_detail_is_bounded
         assert "选择转写模型" in row.midi_status_label.text()
         route_index = row.midi_model_selector.findData("miros")
         row.midi_model_selector.setCurrentIndex(route_index)
-        assert "点击“开始转换”" in row.midi_status_label.text()
+        assert "尚未开始转换" in row.midi_status_label.text()
 
         row.set_midi_conversion_running("miros")
         assert "正在转 MIDI" in row.midi_status_label.text()
@@ -281,8 +282,15 @@ def test_per_track_midi_status_machine_is_explicit_and_failure_detail_is_bounded
         )
         row.set_midi_conversion_failed(full_error)
         assert "CUDA out of memory" in row.midi_status_label.text()
-        assert "adapter_utils.py" not in row.midi_status_label.text()
+        assert "adapter_utils.py" in row.midi_status_label.text()
+        assert full_error in row.midi_status_label.text()
         assert full_error == row.midi_status_label.toolTip()
+        assert row.midi_status_label.textInteractionFlags() & (
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        assert row.midi_status_label.textInteractionFlags() & (
+            Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
 
         row.set_midi_conversion_cancelled()
         assert "已取消" in row.midi_status_label.text()

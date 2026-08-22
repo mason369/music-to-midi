@@ -4,15 +4,11 @@
 
 ## 1. 结论
 
-MuScriptor Large / Medium / Small 是当前很有竞争力的**开放权重、完整混音、多乐器音频转 MIDI**模型族。本项目把三档都作为 `SMART` 和分离后逐 WAV 转 MIDI 的独立显式选择；Large 是质量优先基准，但不宣称它在所有 AMT 数据集、所有乐器和所有指标上都是绝对 SOTA。
+MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT 模型。本项目在 `SMART` 和分离后逐 WAV 转 MIDI 中分别提供三档选择，Large 作为质量优先档。
 
-这个判断基于三点：
+作者的 372 首多乐器 `D_Test` 报告显示，Large 的 Multi F1 为 47.8，同表 YourMT3+ 基线为 21.9。论文列出的 8 个公开跨域数据集中，Large 有 6 个 Multi F1 更高，在 RWC-C 和 RWC-R 上较低；Onset 与 Offset 指标也有输有赢。公开实现还存在这些边界：不输出 velocity、使用 36 组乐器分类、稀有乐器数据较少、显存与算力需求较高，权重采用 CC BY-NC 4.0 非商用许可。
 
-- 在作者自建的 372 首真实多乐器 `D_Test` 上，公开 Large 权重相对论文采用的 YourMT3+ 基线大幅提升，Multi F1 从 21.9 提升到 47.8。
-- 在论文列出的 8 个公开跨域数据集上，它的 Multi F1 高于 YourMT3+ 其中 6 个，但在 RWC-C 和 RWC-R 上较低；Onset/Offset 也并非处处领先。
-- 它公开了推理代码和三档权重，但仍有不输出 velocity、36 组乐器分类、稀有乐器长尾、较高显存/算力需求和 CC BY-NC 4.0 非商用许可等边界。
-
-因此，准确表述应是：**MuScriptor Large 是截至核验日最值得优先试用的公开完整混音 AMT 模型之一，也是作者数据上明显强于 YourMT3+ 基线的新模型；目前没有足够独立、同协议证据把它写成跨所有 benchmark 的无条件 SOTA。**
+现有证据支持把 MuScriptor Large 列为公开完整混音 AMT 的优先候选，也能证明它在作者数据上高于论文采用的 YourMT3+ 基线。这些数据不能证明它是跨所有 benchmark 的无条件 SOTA；独立、同协议复测仍是形成跨模型结论所缺少的证据。
 
 ## 2. 模型身份与发布时间
 
@@ -23,10 +19,18 @@ MuScriptor Large / Medium / Small 是当前很有竞争力的**开放权重、�
 | 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.3.0`：2026-08-05 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。完整 Beat This `final0` 网格驱动官方 onset 相位校正、真实 tempo/拍号/小节相位；卷帘显示拍线/强拍/小节，tempo 在归一化后复制到每个音符轨 |
+| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。产品在运行时显式选择官方 `TranscriptionModel` 或下游 TelkNet Issue #74 子类；模型原生音符秒数不做 onset 相位平移，Beat This `final0` 只负责独立的速度/拍号元数据与卷帘拍线 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
+| Intel XPU 加载 | `safetensors==0.8.0` 官方 `pread`；先打开惰性文件句柄，再建立约 5.50 GiB 统一内存模型，随后按偏移逐张量复制；不回退 mmap、不改精度、不靠扩大页面文件或重试 |
 
 这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.3.0` 在 8 月 5 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
+
+### 分段边界连续性链路
+
+- `官方处理链路（默认）`：直接实例化固定上游的 `TranscriptionModel`，不运行下述状态恢复或边界音符合并，严格保留官方分段输出。
+- `分段边界连续性修复链路`：显式可选项。在保持官方权重、tokenizer、5 秒窗口和 MIDI writer 的前提下，打破混合编制反复继承单一 program 后形成的分段自强化状态，同时保留真实 tie；另只合并严格命中 5 秒边界、并在后三个 10 ms 帧内重启的同乐器同音高连续音符，用于同输入 A/B。
+
+这个选项只控制 MuScriptor 的分段状态。速度模式仍由“跟随原曲速度变化 / 自动检测唯一 BPM / 手动设置唯一 BPM”独立决定；切换链路不会静默更换模型大小、权重、乐器约束或速度方案。
 
 ## 3. 架构、训练数据与输出能力
 
@@ -105,7 +109,7 @@ MuScriptor Large / Medium / Small 是当前很有竞争力的**开放权重、�
 
 所以它**不能被认定为**任何公开 MuScriptor checkpoint 的同一权重，也不能在本项目里通过重命名或切换 revision 获得。当前项目只集成可下载并可做哈希校验的公开 Large / Medium / Small 固定权重。
 
-## 8. 已接入模型档位与未来候选
+## 8. 已接入模型档位与评估范围
 
 | 方向 | 当前证据 | 项目判断 |
 |---|---|---|
@@ -115,7 +119,7 @@ MuScriptor Large / Medium / Small 是当前很有竞争力的**开放权重、�
 | 更强乐器检测与抗泄漏 | 挑战论文指出密集复音、相似音色、乐器 hallucination/leakage 仍是主要失败模式，并计划扩大 jazz/pop、稀有乐器与乐器检测评测 | 新模型优先看 instrument-aware F1、泄漏率和三乐器以上退化，而不只看单一 note F1。 |
 | 多模态 AMT | 2026 年研究开始联合音频与 MusicXML/图像乐谱 | 这类系统通常要求额外乐谱输入，不是本项目“仅音频转 MIDI”的直接替换；只有公开纯音频推理路径后再评估。 |
 
-未来模型进入本项目至少需要满足：公开且可固定的权重、明确许可、可复现推理代码、真实 MIDI writer、相同输入上的本地 A/B、长音频边界、流式事件契约、显存/速度数据，以及桌面、Space、Colab 三端一致性。只发表论文、只提供网页服务或只给不同协议高分，不等于已经成为可部署后端。
+可部署后端的证据集合包括：公开且可固定的权重、明确许可、可复现推理代码、真实 MIDI writer、相同输入上的本地 A/B、长音频边界、流式事件契约、显存/速度数据，以及桌面、Space、Colab 三端一致性。只有论文、网页服务或不同协议下的高分时，证据仍不足以支持本地部署。
 
 ## 9. 主要来源
 

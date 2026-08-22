@@ -132,7 +132,7 @@ def test_invalid_project_bpm_does_not_touch_existing_destination(
         rewrite_midi_tempo_preserving_seconds(source, destination, invalid_bpm)
 
     assert destination.read_bytes() == sentinel
-    assert list(tmp_path.glob(".*.tempo-preserving.*.tmp.mid")) == []
+    assert list(tmp_path.glob(".*.tmp.mid")) == []
 
 
 def test_tick_preserving_rewrite_changes_duration_without_moving_events(

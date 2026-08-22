@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import queue
 import shutil
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,26 @@ from src.models.data_models import ProcessingProgress
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.schemas import JobStatus
 
+LOGGER = logging.getLogger(__name__)
+
+
+class QueueCapacityError(RuntimeError):
+    """Raised when the configured waiting-job limit has been reached."""
+
+
+class InsufficientStorageError(RuntimeError):
+    """Raised before a job would violate the persistent-volume free-space floor."""
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass
@@ -46,6 +64,7 @@ class JobRecord:
     options: dict[str, Any]
     source_path: Path
     output_dir: Path
+    tempo_source_path: Path | None = None
     parent_job_id: str | None = None
     retry_of_job_id: str | None = None
     track_id: str | None = None
@@ -81,17 +100,43 @@ class JobManager:
         *,
         engine: InferenceEngine | None = None,
         start_worker: bool = True,
+        retention_days: int = 30,
+        retention_max_jobs: int = 200,
+        retention_max_bytes: int = 0,
+        max_queued_jobs: int = 0,
+        min_free_bytes: int = 0,
     ) -> None:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self._engine = engine or InferenceEngine()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
+        self._quarantine_cleanup_lock = threading.Lock()
         self._jobs: dict[str, JobRecord] = {}
         self._pending: list[str] = []
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._closed = False
+        if isinstance(retention_days, bool) or not 0 <= int(retention_days) <= 3650:
+            raise ValueError("retention_days must be an integer between 0 and 3650")
+        if isinstance(retention_max_jobs, bool) or not 0 <= int(retention_max_jobs) <= 100000:
+            raise ValueError("retention_max_jobs must be an integer between 0 and 100000")
+        if isinstance(retention_max_bytes, bool) or int(retention_max_bytes) < 0:
+            raise ValueError("retention_max_bytes must be a non-negative integer")
+        if isinstance(max_queued_jobs, bool) or not 0 <= int(max_queued_jobs) <= 100000:
+            raise ValueError("max_queued_jobs must be an integer between 0 and 100000")
+        if isinstance(min_free_bytes, bool) or int(min_free_bytes) < 0:
+            raise ValueError("min_free_bytes must be a non-negative integer")
+        self.retention_days = int(retention_days)
+        self.retention_max_jobs = int(retention_max_jobs)
+        self.retention_max_bytes = int(retention_max_bytes)
+        self.max_queued_jobs = int(max_queued_jobs)
+        self.min_free_bytes = int(min_free_bytes)
+        self._last_retention_run: str | None = None
+        self._last_retention_deleted_jobs = 0
+        self._last_retention_deleted_bytes = 0
+        self._last_retention_error: str | None = None
         self._load_manifests()
+        self.prune_retained_jobs()
         self._worker = threading.Thread(
             target=self._worker_loop,
             name="music-to-midi-inference",
@@ -99,6 +144,25 @@ class JobManager:
         )
         if start_worker:
             self._worker.start()
+
+    def require_submission_capacity(self, *, additional_bytes: int = 0) -> None:
+        if isinstance(additional_bytes, bool) or int(additional_bytes) < 0:
+            raise ValueError("additional_bytes must be a non-negative integer")
+        free_bytes = shutil.disk_usage(self.root).free
+        if free_bytes - int(additional_bytes) < self.min_free_bytes:
+            raise InsufficientStorageError(
+                "job storage does not have enough free space: "
+                f"free={free_bytes}, incoming={int(additional_bytes)}, "
+                f"required_reserve={self.min_free_bytes}"
+            )
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("job manager is closed")
+            if self.max_queued_jobs and len(self._pending) >= self.max_queued_jobs:
+                raise QueueCapacityError(
+                    "inference queue is full: "
+                    f"queued={len(self._pending)}, limit={self.max_queued_jobs}"
+                )
 
     def reserve_job_dir(self) -> tuple[str, Path]:
         with self._lock:
@@ -128,18 +192,25 @@ class JobManager:
         job_id: str,
         kind: str,
         source_path: str | Path,
+        tempo_source_path: str | Path | None = None,
         original_filename: str,
         options: dict[str, Any],
         parent_job_id: str | None = None,
         retry_of_job_id: str | None = None,
         track_id: str | None = None,
     ) -> dict[str, Any]:
+        self.require_submission_capacity()
         source = Path(source_path).resolve()
+        tempo_source = Path(tempo_source_path).resolve() if tempo_source_path else None
         job_dir = self._job_dir(job_id)
         if not source.is_file() or source.stat().st_size <= 0:
             raise FileNotFoundError(f"job input does not exist or is empty: {source}")
         if not job_dir.is_dir():
             raise FileNotFoundError(f"reserved job directory is missing: {job_dir}")
+        if tempo_source is not None and (
+            not tempo_source.is_file() or tempo_source.stat().st_size <= 0
+        ):
+            raise FileNotFoundError(f"job tempo source does not exist or is empty: {tempo_source}")
         now = _utc_now()
         record = JobRecord(
             id=job_id,
@@ -150,6 +221,7 @@ class JobManager:
             original_filename=original_filename,
             options=dict(options),
             source_path=source,
+            tempo_source_path=tempo_source,
             output_dir=(job_dir / "output").resolve(),
             parent_job_id=parent_job_id,
             retry_of_job_id=retry_of_job_id,
@@ -158,6 +230,11 @@ class JobManager:
         with self._condition:
             if self._closed:
                 raise RuntimeError("job manager is closed")
+            if self.max_queued_jobs and len(self._pending) >= self.max_queued_jobs:
+                raise QueueCapacityError(
+                    "inference queue is full: "
+                    f"queued={len(self._pending)}, limit={self.max_queued_jobs}"
+                )
             if job_id in self._jobs:
                 raise RuntimeError(f"job already exists: {job_id}")
             self._jobs[job_id] = record
@@ -196,6 +273,7 @@ class JobManager:
                 job_id=job_id,
                 kind="manual_midi",
                 source_path=source_path,
+                tempo_source_path=parent.source_path,
                 original_filename=original_filename,
                 options=options,
                 parent_job_id=parent_job_id,
@@ -212,6 +290,7 @@ class JobManager:
             if not source_record.status.terminal:
                 raise RuntimeError("running or queued jobs cannot be retried")
             source_path = source_record.source_path
+            tempo_source_path = source_record.tempo_source_path
             if not source_path.is_file() or source_path.stat().st_size <= 0:
                 raise RuntimeError("the retained job input is missing or empty")
             source_size = source_path.stat().st_size
@@ -221,6 +300,7 @@ class JobManager:
             parent_job_id = source_record.parent_job_id
             track_id = source_record.track_id
 
+        self.require_submission_capacity(additional_bytes=source_size)
         retry_id, retry_dir = self.reserve_job_dir()
         destination = retry_dir / "input" / f"source{source_path.suffix.lower()}"
         try:
@@ -234,6 +314,12 @@ class JobManager:
                 job_id=retry_id,
                 kind=kind,
                 source_path=destination,
+                tempo_source_path=(
+                    destination
+                    if tempo_source_path is not None
+                    and tempo_source_path.resolve() == source_path.resolve()
+                    else tempo_source_path
+                ),
                 original_filename=original_filename,
                 options=options,
                 parent_job_id=parent_job_id,
@@ -316,31 +402,132 @@ class JobManager:
                 raise KeyError(f"unknown artifact: {artifact_id}")
             return self._artifact_path_locked(record, artifact), artifact
 
-    def delete(self, job_id: str) -> None:
+    def delete(self, job_id: str, *, cascade: bool = False) -> None:
         with self._condition:
             record = self._require_job_locked(job_id)
             if not record.status.terminal:
                 raise RuntimeError("running or queued jobs must be cancelled before deletion")
-            active_children = [
-                child.id
-                for child in self._jobs.values()
-                if child.parent_job_id == job_id and not child.status.terminal
-            ]
-            if active_children:
+            descendants = self._descendant_ids_locked(job_id)
+            if descendants and not cascade:
                 raise RuntimeError(
-                    "job still owns active manual MIDI children: " + ", ".join(active_children)
+                    "job owns manual MIDI children; repeat deletion with cascade=true"
                 )
-            del self._jobs[job_id]
-            self._condition.notify_all()
-        shutil.rmtree(self._job_dir(job_id), ignore_errors=False)
+            delete_ids = [*descendants, job_id]
+            active = [
+                candidate
+                for candidate in delete_ids
+                if not self._require_job_locked(candidate).status.terminal
+            ]
+            if active:
+                raise RuntimeError("job family still contains active tasks: " + ", ".join(active))
+            quarantined, _deleted_bytes = self._quarantine_jobs_locked(delete_ids)
+        self._remove_quarantined(quarantined)
+
+    def prune_retained_jobs(self) -> dict[str, Any]:
+        """Apply age/count retention atomically to complete parent/child families."""
+        trash_root = self.root / ".trash"
+        if trash_root.is_dir():
+            self._remove_quarantined([path for path in trash_root.iterdir() if path.is_dir()])
+
+        with self._condition:
+            families = self._job_families_locked()
+            terminal_families: list[tuple[str, list[str], datetime, int]] = []
+            for root_id, family_ids in families.items():
+                records = [self._require_job_locked(item) for item in family_ids]
+                if not all(record.status.terminal for record in records):
+                    continue
+                newest = max(
+                    _parse_utc(record.finished_at or record.updated_at or record.created_at)
+                    for record in records
+                )
+                family_bytes = sum(self._job_dir_size(job_id) for job_id in family_ids)
+                terminal_families.append((root_id, family_ids, newest, family_bytes))
+
+            selected_roots: set[str] = set()
+            if self.retention_days:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
+                selected_roots.update(
+                    root_id
+                    for root_id, _family_ids, newest, _family_bytes in terminal_families
+                    if newest < cutoff
+                )
+
+            remaining = [
+                family
+                for family in sorted(terminal_families, key=lambda item: item[2])
+                if family[0] not in selected_roots
+            ]
+            remaining_job_count = sum(len(family_ids) for _, family_ids, _, _ in remaining)
+            if self.retention_max_jobs:
+                while remaining_job_count > self.retention_max_jobs and remaining:
+                    root_id, family_ids, _newest, _family_bytes = remaining.pop(0)
+                    selected_roots.add(root_id)
+                    remaining_job_count -= len(family_ids)
+
+            remaining_bytes = sum(family_bytes for _, _, _, family_bytes in remaining)
+            if self.retention_max_bytes:
+                while remaining_bytes > self.retention_max_bytes and remaining:
+                    root_id, _family_ids, _newest, family_bytes = remaining.pop(0)
+                    selected_roots.add(root_id)
+                    remaining_bytes -= family_bytes
+
+            delete_ids = [
+                job_id
+                for root_id, family_ids, _newest, _family_bytes in terminal_families
+                if root_id in selected_roots
+                for job_id in family_ids
+            ]
+            if delete_ids:
+                quarantined, deleted_bytes = self._quarantine_jobs_locked(delete_ids)
+            else:
+                quarantined, deleted_bytes = [], 0
+
+        try:
+            self._remove_quarantined(quarantined)
+        except Exception as exc:
+            with self._lock:
+                self._last_retention_error = str(exc)
+            raise
+
+        with self._lock:
+            self._last_retention_run = _utc_now()
+            self._last_retention_deleted_jobs = len(delete_ids)
+            self._last_retention_deleted_bytes = deleted_bytes
+            self._last_retention_error = None
+        if delete_ids:
+            LOGGER.info(
+                "Retention removed %d terminal jobs (%d bytes) across %d families",
+                len(delete_ids),
+                deleted_bytes,
+                len(selected_roots),
+            )
+        return {
+            "deleted_jobs": len(delete_ids),
+            "deleted_bytes": deleted_bytes,
+            "deleted_families": len(selected_roots),
+        }
 
     def health(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "worker_alive": self._worker.is_alive(),
                 "queued_jobs": len(self._pending),
+                "max_queued_jobs": self.max_queued_jobs,
                 "known_jobs": len(self._jobs),
                 "data_root": str(self.root),
+                "storage": {
+                    "free_bytes": shutil.disk_usage(self.root).free,
+                    "min_free_bytes": self.min_free_bytes,
+                },
+                "retention": {
+                    "days": self.retention_days,
+                    "max_jobs": self.retention_max_jobs,
+                    "max_bytes": self.retention_max_bytes,
+                    "last_run": self._last_retention_run,
+                    "last_deleted_jobs": self._last_retention_deleted_jobs,
+                    "last_deleted_bytes": self._last_retention_deleted_bytes,
+                    "error": self._last_retention_error,
+                },
             }
 
     def close(self) -> None:
@@ -391,7 +578,7 @@ class JobManager:
                 self._bind_processor(job_id, processor)
 
             try:
-                execution = self._engine.run(
+                run_kwargs = dict(
                     kind=record.kind,
                     source_path=record.source_path,
                     output_dir=record.output_dir,
@@ -400,11 +587,21 @@ class JobManager:
                     processor_callback=processor_callback,
                     track_id=record.track_id,
                 )
+                if record.tempo_source_path is not None:
+                    run_kwargs["tempo_source_path"] = record.tempo_source_path
+                execution = self._engine.run(**run_kwargs)
                 self._finish_success(job_id, execution)
             except InterruptedError:
                 self._finish_cancelled(job_id, "任务已按用户请求停止")
             except Exception as exc:
                 self._finish_failed(job_id, str(exc))
+            finally:
+                try:
+                    self.prune_retained_jobs()
+                except Exception as exc:
+                    with self._lock:
+                        self._last_retention_error = str(exc)
+                    LOGGER.exception("Retention maintenance failed after job %s", job_id)
 
     def _bind_processor(self, job_id: str, processor: object | None) -> None:
         cancel_immediately = False
@@ -572,6 +769,11 @@ class JobManager:
             **self._snapshot_locked(record),
             "options": record.options,
             "source_path": self._path_for_manifest(record.source_path),
+            "tempo_source_path": (
+                self._path_for_manifest(record.tempo_source_path)
+                if record.tempo_source_path is not None
+                else None
+            ),
             "output_dir": self._path_for_manifest(record.output_dir),
             "artifacts": [artifact.__dict__ for artifact in record.artifacts.values()],
         }
@@ -591,7 +793,7 @@ class JobManager:
                 if not status.terminal:
                     status = JobStatus.FAILED
                     payload["error"] = (
-                        "后端服务在任务到达终态前退出；该推理不可安全续跑，请重新提交。"
+                        "处理服务在任务完成前退出，本次处理无法继续；原始音频仍可重新提交。"
                     )
                     payload["finished_at"] = _utc_now()
                 artifacts = {
@@ -609,6 +811,11 @@ class JobManager:
                     original_filename=payload.get("original_filename", "input"),
                     options=dict(payload.get("options") or {}),
                     source_path=self._path_from_manifest(payload["source_path"]),
+                    tempo_source_path=(
+                        self._path_from_manifest(payload["tempo_source_path"])
+                        if payload.get("tempo_source_path")
+                        else None
+                    ),
                     output_dir=self._path_from_manifest(payload["output_dir"]),
                     parent_job_id=payload.get("parent_job_id"),
                     retry_of_job_id=payload.get("retry_of_job_id"),
@@ -650,6 +857,81 @@ class JobManager:
         candidate = Path(value)
         return candidate.resolve() if candidate.is_absolute() else (self.root / candidate).resolve()
 
+    def _descendant_ids_locked(self, job_id: str) -> list[str]:
+        descendants: list[str] = []
+        pending = [job_id]
+        while pending:
+            parent_id = pending.pop()
+            children = sorted(
+                record.id for record in self._jobs.values() if record.parent_job_id == parent_id
+            )
+            for child_id in children:
+                if child_id in descendants:
+                    raise RuntimeError("job parent graph contains a cycle")
+                descendants.append(child_id)
+                pending.append(child_id)
+        return descendants
+
+    def _job_families_locked(self) -> dict[str, list[str]]:
+        families: dict[str, list[str]] = {}
+        for record in self._jobs.values():
+            root_id = record.id
+            parent_id = record.parent_job_id
+            visited = {record.id}
+            while parent_id is not None and parent_id in self._jobs:
+                if parent_id in visited:
+                    raise RuntimeError("job parent graph contains a cycle")
+                visited.add(parent_id)
+                root_id = parent_id
+                parent_id = self._jobs[parent_id].parent_job_id
+            families.setdefault(root_id, []).append(record.id)
+        for family_ids in families.values():
+            family_ids.sort()
+        return families
+
+    def _quarantine_jobs_locked(self, job_ids: list[str]) -> tuple[list[Path], int]:
+        unique_ids = list(dict.fromkeys(job_ids))
+        trash_root = self.root / ".trash"
+        trash_root.mkdir(parents=True, exist_ok=True)
+        moved: list[tuple[Path, Path]] = []
+        deleted_bytes = 0
+        try:
+            for job_id in unique_ids:
+                self._require_job_locked(job_id)
+                source = self._job_dir(job_id)
+                if not source.is_dir():
+                    raise RuntimeError(f"job directory is missing: {source}")
+                deleted_bytes += sum(
+                    path.stat().st_size for path in source.rglob("*") if path.is_file()
+                )
+                quarantined = trash_root / f"{job_id}-{uuid.uuid4().hex}"
+                os.replace(source, quarantined)
+                moved.append((source, quarantined))
+        except Exception:
+            for source, quarantined in reversed(moved):
+                if quarantined.exists() and not source.exists():
+                    os.replace(quarantined, source)
+            raise
+
+        for job_id in unique_ids:
+            del self._jobs[job_id]
+            if job_id in self._pending:
+                self._pending.remove(job_id)
+        self._condition.notify_all()
+        return [quarantined for _source, quarantined in moved], deleted_bytes
+
+    def _remove_quarantined(self, paths: list[Path]) -> None:
+        with self._quarantine_cleanup_lock:
+            for path in paths:
+                if not path.exists():
+                    continue
+                try:
+                    shutil.rmtree(path, ignore_errors=False)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"failed to remove quarantined job data {path}: {exc}"
+                    ) from exc
+
     def _require_job_locked(self, job_id: str) -> JobRecord:
         record = self._jobs.get(job_id)
         if record is None:
@@ -660,6 +942,12 @@ class JobManager:
         if len(job_id) != 32 or any(char not in "0123456789abcdef" for char in job_id):
             raise ValueError("invalid job id")
         return (self.root / job_id).resolve()
+
+    def _job_dir_size(self, job_id: str) -> int:
+        job_dir = self._job_dir(job_id)
+        if not job_dir.is_dir():
+            return 0
+        return sum(path.stat().st_size for path in job_dir.rglob("*") if path.is_file())
 
     @staticmethod
     def _sha256(path: Path) -> str:

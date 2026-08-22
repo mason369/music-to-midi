@@ -32,7 +32,11 @@ def test_audio_export_worker_publishes_complete_files_only(tmp_path: Path):
 
     assert failed == []
     assert cancelled == []
-    assert succeeded == [(str(destination / "bass.wav"), str(destination / "drums.wav"))]
+    assert len(succeeded) == 1
+    assert tuple(Path(path) for path in succeeded[0]) == (
+        destination / "bass.wav",
+        destination / "drums.wav",
+    )
     assert (destination / "bass.wav").read_bytes() == source_a.read_bytes()
     assert (destination / "drums.wav").read_bytes() == source_b.read_bytes()
     assert list(destination.glob("*.music-to-midi.part")) == []

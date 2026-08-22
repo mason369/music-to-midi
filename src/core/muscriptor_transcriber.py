@@ -5,7 +5,6 @@ from __future__ import annotations
 import gc
 import inspect
 import logging
-import math
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -15,7 +14,7 @@ from src.core.muscriptor_midi import (
 )
 from src.core.muscriptor_model_loader import load_muscriptor_model_memory_bounded
 from src.i18n.translator import Translator
-from src.models.data_models import BeatInfo, Config
+from src.models.data_models import BeatInfo, Config, MuscriptorProcessingChain
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_REPRESENTATIVE_PROGRAMS,
     validate_muscriptor_instruments,
@@ -36,6 +35,12 @@ from src.utils.muscriptor_source_identity import (
     MUSCRIPTOR_SOURCE_REQUIREMENT,
     validate_muscriptor_runtime_identity,
 )
+from src.core.muscriptor_boundary_continuity import continuous_chunk_events
+from src.utils.gpu_utils import (
+    clear_gpu_memory,
+    ensure_accelerator_runtime_compatibility,
+    get_device,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ class MuscriptorTranscriber:
     def __init__(self, config: Optional[Config] = None):
         self.config = config or Config()
         self._model = None
+        self._loaded_processing_chain: str | None = None
         self._runtime_details: dict[str, object] | None = None
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
@@ -103,6 +109,24 @@ class MuscriptorTranscriber:
 
     def _selected_model_size(self) -> str:
         return normalize_muscriptor_model(getattr(self.config, "muscriptor_model", "large"))
+
+    def _selected_processing_chain(self) -> str:
+        selected = (
+            str(
+                getattr(
+                    self.config,
+                    "muscriptor_processing_chain",
+                    MuscriptorProcessingChain.OFFICIAL.value,
+                )
+                or MuscriptorProcessingChain.OFFICIAL.value
+            )
+            .strip()
+            .lower()
+        )
+        valid = {chain.value for chain in MuscriptorProcessingChain}
+        if selected not in valid:
+            raise ValueError(f"Unsupported MuScriptor processing chain: {selected!r}")
+        return selected
 
     def get_unavailable_reason(self) -> str:
         runtime_error = self._runtime_unavailable_reason()
@@ -186,16 +210,10 @@ class MuscriptorTranscriber:
                 "MuScriptor onset correction requires at least two finite, "
                 "strictly increasing project beat times"
             )
-        phase_candidates = list(info.downbeats or []) or list(info.beat_times)
-        if not phase_candidates:
-            raise RuntimeError(
-                "MuScriptor bar alignment requires at least one detected downbeat or beat"
-            )
-        first_downbeat = float(phase_candidates[0])
-        if not isfinite(first_downbeat) or first_downbeat < 0.0:
-            raise RuntimeError(
-                f"Invalid MuScriptor first downbeat for bar alignment: {first_downbeat!r}"
-            )
+        # Upstream interprets first_downbeat as permission to delay every note
+        # until MIDI bar 1 reaches that phase. TelkNet's reviewed contract keeps
+        # the model-native seconds and applies tempo/meter metadata afterwards.
+        first_downbeat = 0.0
         grid = BeatGrid(
             bpm=bpm,
             beats_per_bar=beats_per_bar,
@@ -214,8 +232,16 @@ class MuscriptorTranscriber:
             raise InterruptedError("MuScriptor transcription cancelled")
 
     def load_model(self):
+        processing_chain = self._selected_processing_chain()
         if self._model is not None:
-            return self._model
+            if self._loaded_processing_chain == processing_chain:
+                return self._model
+            logger.info(
+                "MuScriptor processing chain changed from %s to %s; reloading the model wrapper",
+                self._loaded_processing_chain,
+                processing_chain,
+            )
+            self.unload_model()
 
         runtime_error = self._runtime_unavailable_reason()
         if runtime_error:
@@ -224,25 +250,22 @@ class MuscriptorTranscriber:
         artifact = get_muscriptor_artifact(model_size)
         weights, _config = get_cached_muscriptor_paths(model_size, validate_hashes=True)
 
-        import torch
-
-        if self.config.use_gpu:
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    f"{artifact.display_name} 已选择 GPU 推理，但当前 PyTorch 看不到 CUDA；"
-                    "不会静默切换到 CPU。"
-                )
-            device = f"cuda:{int(self.config.gpu_device)}"
-        else:
-            device = "cpu"
+        device = get_device(self.config.use_gpu, self.config.gpu_device)
+        ensure_accelerator_runtime_compatibility(device)
 
         self._check_cancelled()
         logger.info("Loading pinned %s on %s from %s", artifact.display_name, device, weights)
-        self._model = load_muscriptor_model_memory_bounded(weights, device)
+        self._model = load_muscriptor_model_memory_bounded(
+            weights,
+            device,
+            processing_chain=processing_chain,
+        )
+        self._loaded_processing_chain = processing_chain
         logger.info(
             "%s loaded in place with its pinned upstream precision and cache configuration",
             artifact.display_name,
         )
+        uses_telknet_recovery = processing_chain == MuscriptorProcessingChain.TELKNET.value
         self._runtime_details = {
             "type": "runtime",
             "model": artifact.display_name,
@@ -254,7 +277,15 @@ class MuscriptorTranscriber:
             "kv_cache_reused_layers": 0,
             "batch_size": 1,
             "prelude_forcing": True,
-            "quality_mode": "official_v0.3.0",
+            "processing_chain": processing_chain,
+            "quality_mode": (
+                "official_v0.3.0+telknet_issue74_boundary_recovery_v1"
+                if uses_telknet_recovery
+                else "official_v0.3.0"
+            ),
+            "boundary_recovery": (
+                "telknet_issue74_single_program_v1" if uses_telknet_recovery else "official_v0.3.0"
+            ),
             "window_seconds": 5.0,
             "no_eos_is_ok": True,
             "package_version": MUSCRIPTOR_PACKAGE_VERSION,
@@ -290,7 +321,6 @@ class MuscriptorTranscriber:
         self.last_detected_instruments = []
         detected: set[str] = set()
         official_events: list[object] = []
-        completed_onsets: list[float] = []
         pending_note_ends: list[dict[str, object]] = []
         self._check_cancelled()
         if self._runtime_details is not None:
@@ -357,7 +387,6 @@ class MuscriptorTranscriber:
                 elif isinstance(event, NoteEndEvent):
                     instrument = str(event.start_event.instrument)
                     require_allowed_muscriptor_event_instrument(instrument, selected)
-                    completed_onsets.append(float(event.start_event.start_time))
                     pending_note_ends.append(
                         {
                             "index": int(event.start_event_index),
@@ -378,36 +407,51 @@ class MuscriptorTranscriber:
         flush_note_ends()
 
         self._check_cancelled()
-        beat_grid = beat_grid.with_onset_delay(completed_onsets)
-        onset_delay = float(beat_grid.onset_delay)
-        if not math.isfinite(onset_delay):
-            raise RuntimeError(
-                f"MuScriptor returned an invalid onset-phase correction: {onset_delay!r}"
+        processing_chain = self._loaded_processing_chain
+        if processing_chain == MuscriptorProcessingChain.TELKNET.value:
+            final_events, boundary_notes_merged = continuous_chunk_events(
+                official_events,
+                NoteStartEvent,
+                NoteEndEvent,
             )
-        self.last_onset_delay_seconds = onset_delay
-        self.last_bar_offset_seconds = float(beat_grid.bar_offset(min_shift=onset_delay))
+            chunk_boundary_continuity = "exact_5s_three_frame_note_continuity_v1"
+        elif processing_chain == MuscriptorProcessingChain.OFFICIAL.value:
+            final_events = official_events
+            boundary_notes_merged = 0
+            chunk_boundary_continuity = "official_v0.3.0"
+        else:
+            raise RuntimeError(
+                "MuScriptor loaded model has no valid processing-chain identity: "
+                f"{processing_chain!r}"
+            )
+        self.last_onset_delay_seconds = 0.0
+        self.last_bar_offset_seconds = float(beat_grid.bar_offset())
+        if abs(self.last_bar_offset_seconds) > 1e-9:
+            raise RuntimeError(
+                "MuScriptor native-timeline serialization retained a non-zero "
+                f"bar offset: {self.last_bar_offset_seconds}"
+            )
         if self._runtime_details is not None:
             self._runtime_details.update(
                 {
-                    "onset_phase_correction": "official_v0.3.0",
-                    "onset_delay_seconds": self.last_onset_delay_seconds,
-                    "onset_correction_applied": abs(self.last_onset_delay_seconds) > 1e-9,
-                    "completed_onset_count": len(
-                        set(round(value, 3) for value in completed_onsets)
-                    ),
+                    "onset_phase_correction": "disabled_native_seconds",
+                    "onset_delay_seconds": 0.0,
+                    "onset_correction_applied": False,
                     "bar_offset_seconds": self.last_bar_offset_seconds,
+                    "chunk_boundary_continuity": chunk_boundary_continuity,
+                    "boundary_notes_merged": boundary_notes_merged,
                 }
             )
             self._emit_event(dict(self._runtime_details))
         logger.info(
-            "MuScriptor v0.3.0 onset phase correction: delay=%+.3f ms, "
-            "completed_onsets=%d, bar_offset=%.4f s",
-            self.last_onset_delay_seconds * 1000.0,
-            len(set(round(value, 3) for value in completed_onsets)),
+            "MuScriptor native timeline: chain=%s, onset correction disabled, "
+            "bar_offset=%.4f s, exact boundary notes merged=%d",
+            processing_chain,
             self.last_bar_offset_seconds,
+            boundary_notes_merged,
         )
         midi_bytes = model.events_to_midi_bytes(
-            iter(official_events),
+            iter(final_events),
             beat_grid=beat_grid,
         )
         temporary = unique_midi_temp_path(output_path, "muscriptor-official")
@@ -429,14 +473,12 @@ class MuscriptorTranscriber:
     def unload_model(self) -> None:
         model = self._model
         self._model = None
+        self._loaded_processing_chain = None
         self._runtime_details = None
         if model is not None:
             del model
         gc.collect()
         try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            clear_gpu_memory()
         except Exception as exc:
-            logger.warning("MuScriptor CUDA cache cleanup failed: %s", exc)
+            logger.warning("MuScriptor accelerator cache cleanup failed: %s", exc)

@@ -69,6 +69,7 @@ from src.models.data_models import (
     Config,
     MultiInstrumentModel,
     MuscriptorModel,
+    MuscriptorProcessingChain,
     ProcessingResult,
 )
 from src.models.muscriptor_instruments import muscriptor_instrument_label
@@ -150,12 +151,12 @@ def test_config_round_trip_preserves_model_size_and_authoritative_bpm():
         Config(
             transcription_backend=MultiInstrumentModel.MUSCRIPTOR.value,
             muscriptor_model=MuscriptorModel.SMALL.value,
-            custom_bpm=10.0,
+            custom_bpm=60.0,
         ).to_dict()
     )
 
     assert restored.muscriptor_model == "small"
-    assert restored.custom_bpm == pytest.approx(10.0)
+    assert restored.custom_bpm == pytest.approx(60.0)
 
 
 def test_muscriptor_checkpoint_hash_is_reused_only_while_snapshot_is_unchanged(
@@ -339,9 +340,10 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
 
-    def fake_memory_bounded_loader(weights_path, device):
+    def fake_memory_bounded_loader(weights_path, device, *, processing_chain):
         captured["weights_path"] = Path(weights_path)
         captured["device"] = device
+        captured["processing_chain"] = processing_chain
         return loaded_model
 
     monkeypatch.setattr(
@@ -357,11 +359,28 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "src.core.muscriptor_transcriber.get_cached_muscriptor_paths",
         lambda *_args, **_kwargs: (weights, config_path),
     )
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    transcriber = MuscriptorTranscriber(Config(use_gpu=True, gpu_device=0))
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.get_device",
+        lambda *_args, **_kwargs: "cuda:0",
+    )
+    monkeypatch.setattr(
+        "src.core.muscriptor_transcriber.ensure_accelerator_runtime_compatibility",
+        lambda _device: None,
+    )
+    transcriber = MuscriptorTranscriber(
+        Config(
+            use_gpu=True,
+            gpu_device=0,
+            muscriptor_processing_chain=MuscriptorProcessingChain.TELKNET.value,
+        )
+    )
 
     assert transcriber.load_model() is loaded_model
-    assert captured == {"weights_path": weights, "device": "cuda:0"}
+    assert captured == {
+        "weights_path": weights,
+        "device": "cuda:0",
+        "processing_chain": MuscriptorProcessingChain.TELKNET.value,
+    }
     assert {parameter.dtype for parameter in inner_model.parameters()} == {torch.float32}
     assert transcriber._runtime_details == {
         "type": "runtime",
@@ -374,7 +393,9 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "kv_cache_reused_layers": 0,
         "batch_size": 1,
         "prelude_forcing": True,
-        "quality_mode": "official_v0.3.0",
+        "processing_chain": MuscriptorProcessingChain.TELKNET.value,
+        "quality_mode": "official_v0.3.0+telknet_issue74_boundary_recovery_v1",
+        "boundary_recovery": "telknet_issue74_single_program_v1",
         "window_seconds": 5.0,
         "no_eos_is_ok": True,
         "package_version": "0.3.0",
@@ -403,7 +424,7 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
             assert beat_grid.beats_per_bar == 4
             assert beat_grid.first_downbeat == pytest.approx(0.0)
             assert beat_grid.beats.tolist() == pytest.approx([0.0, 0.5, 1.0, 1.5])
-            assert beat_grid.onset_delay == pytest.approx(0.0)
+            assert beat_grid.onset_delay is None
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -418,6 +439,7 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
     )
     transcriber = MuscriptorTranscriber(config)
     transcriber._model = model
+    transcriber._loaded_processing_chain = config.muscriptor_processing_chain
     _configure_test_beat_grid(transcriber)
 
     assert transcriber.transcribe_to_midi(str(audio), str(output)) == str(output.resolve())
@@ -462,8 +484,14 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
     audio = tmp_path / "input.wav"
     audio.write_bytes(b"wav")
     output = tmp_path / "output.mid"
-    transcriber = MuscriptorTranscriber(Config(use_gpu=False))
+    transcriber = MuscriptorTranscriber(
+        Config(
+            use_gpu=False,
+            muscriptor_processing_chain=MuscriptorProcessingChain.TELKNET.value,
+        )
+    )
     transcriber._model = FakeModel()
+    transcriber._loaded_processing_chain = MuscriptorProcessingChain.TELKNET.value
     _configure_test_beat_grid(transcriber)
     transcriber._runtime_details = {
         "type": "runtime",
@@ -485,8 +513,12 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
     assert received[0]["onset_phase_correction"] == "pending"
     assert received[1] == {"type": "progress", "completed": 1, "total": 1}
     assert received[2] == transcriber._runtime_details
-    assert received[2]["onset_phase_correction"] == "official_v0.3.0"
+    assert received[2]["onset_phase_correction"] == "disabled_native_seconds"
     assert received[2]["onset_delay_seconds"] == pytest.approx(0.0)
+    assert received[2]["onset_correction_applied"] is False
+    assert received[2]["bar_offset_seconds"] == pytest.approx(0.0)
+    assert received[2]["chunk_boundary_continuity"] == ("exact_5s_three_frame_note_continuity_v1")
+    assert received[2]["boundary_notes_merged"] == 0
 
 
 def test_transcriber_applies_official_onset_phase_before_midi_writer(
@@ -517,15 +549,21 @@ def test_transcriber_applies_official_onset_phase_before_midi_writer(
     audio = tmp_path / "input.wav"
     audio.write_bytes(b"wav")
     output = tmp_path / "output.mid"
-    transcriber = MuscriptorTranscriber(Config(use_gpu=False))
+    transcriber = MuscriptorTranscriber(
+        Config(
+            use_gpu=False,
+            muscriptor_processing_chain=MuscriptorProcessingChain.TELKNET.value,
+        )
+    )
     transcriber._model = FakeModel()
+    transcriber._loaded_processing_chain = MuscriptorProcessingChain.TELKNET.value
     _configure_test_beat_grid(transcriber)
 
     transcriber.transcribe_to_midi(str(audio), str(output))
 
-    assert transcriber._model.written_grid.onset_delay == pytest.approx(0.012)
-    assert transcriber.last_onset_delay_seconds == pytest.approx(0.012)
-    assert transcriber.last_bar_offset_seconds >= transcriber.last_onset_delay_seconds
+    assert transcriber._model.written_grid.onset_delay is None
+    assert transcriber.last_onset_delay_seconds == pytest.approx(0.0)
+    assert transcriber.last_bar_offset_seconds == pytest.approx(0.0)
 
 
 def test_transcriber_refuses_backend_event_outside_selected_instruments(
@@ -548,6 +586,7 @@ def test_transcriber_refuses_backend_event_outside_selected_instruments(
     )
     transcriber = MuscriptorTranscriber(config)
     transcriber._model = ViolatingModel()
+    transcriber._loaded_processing_chain = config.muscriptor_processing_chain
     _configure_test_beat_grid(transcriber)
 
     with pytest.raises(RuntimeError, match="constraint violation"):
@@ -586,6 +625,7 @@ def test_transcriber_batches_dense_note_events_before_each_progress_anchor(
     output = tmp_path / "output.mid"
     transcriber = MuscriptorTranscriber(Config(use_gpu=False))
     transcriber._model = FakeModel()
+    transcriber._loaded_processing_chain = transcriber.config.muscriptor_processing_chain
     _configure_test_beat_grid(transcriber)
     received: list[dict[str, object]] = []
     transcriber.set_event_callback(received.append)
@@ -862,6 +902,7 @@ def test_preview_assets_round_up_non_frame_aligned_note_boundary(
 def test_stream_preview_enables_playback_before_final_midi_exists(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "source.wav", 1.0)
+    aligned_source = _silent_wav(tmp_path / "original-live.wav", 1.0)
     piano = _silent_wav(tmp_path / "acoustic_piano.wav", 1.0)
     note = MuscriptorRollNote("acoustic_piano", 60, 100, 0.0, 0.5)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
@@ -875,6 +916,7 @@ def test_stream_preview_enables_playback_before_final_midi_exists(tmp_path: Path
                 notes=(note,),
                 duration=1.0,
                 transcription_wav=piano,
+                original_wav=aligned_source,
                 instrument_wavs={"acoustic_piano": piano},
                 midi_gain_db=0.0,
             ),
@@ -887,8 +929,9 @@ def test_stream_preview_enables_playback_before_final_midi_exists(tmp_path: Path
         assert widget.mix_slider.isEnabled()
         assert not widget.stereo_checkbox.isEnabled()
         assert set(widget._normal_sources) == {"acoustic_piano"}
-        assert widget._normal_players == {}
-        assert len(widget._active_playback_players()) == 2
+        assert widget._playback_engine.is_configured
+        assert widget._playback_engine.output_stream_count == 1
+        assert widget._playback_engine.duration_seconds == pytest.approx(1.0)
 
         widget._toggle_playback()
         assert widget._playing
@@ -1187,12 +1230,14 @@ def test_generic_snapshot_does_not_unlock_playback_before_rendered_audio(tmp_pat
         assert "YourMT3+" in widget.status_label.text()
 
         rendered = _silent_wav(tmp_path / "gm-024.wav", 1.0)
+        aligned_source = _silent_wav(tmp_path / "generic-original-live.wav", 1.0)
         widget._on_preview_ready(
             1,
             MuscriptorPreviewAssets(
                 notes=tuple(widget._stream_notes),
                 duration=1.0,
                 transcription_wav=rendered,
+                original_wav=aligned_source,
                 instrument_wavs={"gm:024": rendered},
                 midi_gain_db=0.0,
             ),
@@ -1209,6 +1254,7 @@ def test_generic_snapshot_does_not_unlock_playback_before_rendered_audio(tmp_pat
 def test_new_preview_is_committed_only_after_current_playback_stops(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _tone_wav(tmp_path / "source.wav", 2.0, amplitude=0.1)
+    first_original = _tone_wav(tmp_path / "first-original.wav", 1.0, amplitude=0.1)
     first_audio = _tone_wav(tmp_path / "first.wav", 1.0, amplitude=0.1)
     second_audio = _tone_wav(tmp_path / "second.wav", 2.0, amplitude=0.1)
     first_note = MuscriptorRollNote("acoustic_piano", 60, 100, 0.0, 0.5)
@@ -1221,6 +1267,7 @@ def test_new_preview_is_committed_only_after_current_playback_stops(tmp_path: Pa
                 notes=(first_note,),
                 duration=1.0,
                 transcription_wav=first_audio,
+                original_wav=first_original,
                 instrument_wavs={"acoustic_piano": first_audio},
                 midi_gain_db=0.0,
             ),
@@ -1234,6 +1281,7 @@ def test_new_preview_is_committed_only_after_current_playback_stops(tmp_path: Pa
                 notes=(first_note, second_note),
                 duration=2.0,
                 transcription_wav=second_audio,
+                original_wav=source,
                 instrument_wavs={"acoustic_piano": second_audio},
                 midi_gain_db=0.0,
             ),
@@ -1254,10 +1302,7 @@ def test_new_preview_is_committed_only_after_current_playback_stops(tmp_path: Pa
         assert widget._deferred_preview is None
         assert widget._preview_duration == pytest.approx(2.0)
         assert widget.roll._notes == (first_note, second_note)
-        assert all(
-            player.playbackState().name != "PlayingState"
-            for player in widget._active_playback_players()
-        )
+        assert not widget._playback_engine.is_playing
     finally:
         widget.shutdown()
         widget.close()
@@ -1277,6 +1322,7 @@ def test_invalid_preview_commit_is_reported_without_escaping_qt_slot(tmp_path: P
                 notes=(invalid_note,),
                 duration=1.0,
                 transcription_wav=rendered,
+                original_wav=source,
                 instrument_wavs={"acoustic_piano": rendered},
                 midi_gain_db=0.0,
             ),
@@ -1308,6 +1354,7 @@ def test_invalid_deferred_preview_commit_is_reported_without_timer_exception(
                 notes=(invalid_note,),
                 duration=1.0,
                 transcription_wav=rendered,
+                original_wav=source,
                 instrument_wavs={"acoustic_piano": rendered},
                 midi_gain_db=0.0,
             ),
@@ -1338,6 +1385,7 @@ def test_invalid_final_asset_commit_is_reported_without_escaping_qt_slot(tmp_pat
         duration=1.0,
         transcription_wav=rendered,
         live_transcription_wav=rendered,
+        original_wav=source,
         stereo_mix_wav=rendered,
         original_left_wav=rendered,
         transcription_right_wav=rendered,
@@ -1360,8 +1408,9 @@ def test_invalid_final_asset_commit_is_reported_without_escaping_qt_slot(tmp_pat
         widget.close()
 
 
-def test_real_qmedia_preview_rollover_does_not_deadlock_event_loop(tmp_path: Path):
+def test_real_synchronized_preview_rollover_does_not_deadlock_event_loop(tmp_path: Path):
     source = _tone_wav(tmp_path / "source.wav", 2.0, amplitude=0.1)
+    first_original = _tone_wav(tmp_path / "first-original.wav", 1.0, amplitude=0.1)
     first = _tone_wav(tmp_path / "first.wav", 1.0, amplitude=0.1)
     second = _tone_wav(tmp_path / "second.wav", 2.0, amplitude=0.1)
     script = f"""
@@ -1381,6 +1430,7 @@ widget._on_preview_ready(
         notes=(note,),
         duration=1.0,
         transcription_wav={str(first)!r},
+        original_wav={str(first_original)!r},
         instrument_wavs={{"acoustic_piano": {str(first)!r}}},
         midi_gain_db=0.0,
     ),
@@ -1394,13 +1444,13 @@ def queue_second_preview():
             notes=(note,),
             duration=2.0,
             transcription_wav={str(second)!r},
+            original_wav={str(source)!r},
             instrument_wavs={{"acoustic_piano": {str(second)!r}}},
             midi_gain_db=0.0,
         ),
     )
-    # Drive the preview boundary explicitly without seeking live multimedia
-    # backends. QMediaPlayer startup timing depends on the host audio device,
-    # which is unrelated to the rollover/deadlock path under test.
+    # Drive the preview boundary explicitly. The synchronized sink owns one
+    # transport, so rollover only waits for that stream to stop.
     widget._position_ms = 1_000
 
 def verify_rollover():
@@ -1561,6 +1611,13 @@ def test_final_playback_transport_covers_notes_beyond_source_audio(
     midi = mido.MidiFile(type=1, ticks_per_beat=1_000)
     tempo = mido.MidiTrack()
     tempo.append(mido.MetaMessage("set_tempo", tempo=1_000_000, time=0))
+    tempo.append(
+        mido.MetaMessage(
+            "marker",
+            text="muscriptor:bar_offset=0.125000",
+            time=0,
+        )
+    )
     midi.tracks.append(tempo)
     piano = mido.MidiTrack()
     piano.append(mido.Message("program_change", program=0, channel=0, time=0))
@@ -1581,6 +1638,7 @@ def test_final_playback_transport_covers_notes_beyond_source_audio(
     assert assets.duration >= 1.5
     assert assets.duration == master.frames / master.samplerate
     for path in (
+        assets.original_wav,
         assets.original_left_wav,
         assets.transcription_right_wav,
         *assets.instrument_wavs.values(),
@@ -1588,6 +1646,16 @@ def test_final_playback_transport_covers_notes_beyond_source_audio(
     ):
         info = sf.info(path)
         assert (info.frames, info.samplerate) == (master.frames, master.samplerate)
+    original_bus, original_rate = sf.read(assets.original_wav, dtype="float32")
+    source_audio, source_rate = sf.read(source, dtype="float32")
+    padding_frames = round(0.125 * original_rate)
+    assert original_rate == source_rate == 44_100
+    assert float(np.max(np.abs(original_bus[:padding_frames]))) == 0.0
+    assert original_bus[padding_frames : padding_frames + len(source_audio)] == pytest.approx(
+        source_audio,
+        abs=1 / 32_768,
+    )
+    assert float(np.max(np.abs(original_bus[padding_frames + len(source_audio) :]))) == 0.0
 
 
 def test_empty_edited_midi_builds_exact_silence_without_invoking_fluidsynth(
@@ -1657,255 +1725,174 @@ def test_default_midi_monitoring_uses_one_combined_bus_and_real_mutes_use_stems(
                 notes=(note,),
                 duration=1.0,
                 transcription_wav=combined,
+                original_wav=source,
                 instrument_wavs=stems,
                 midi_gain_db=0.0,
             ),
         )
         app.processEvents()
 
-        assert len(widget._all_playback_players()) == 2
-        assert len(widget._active_playback_players()) == 2
-        assert widget._midi_normal is not None
-        assert widget._midi_normal[1].volume() == pytest.approx(0.75)
-        assert all(output.volume() == 0.0 for _player, output in widget._normal_players.values())
+        assert widget._playback_engine.output_stream_count == 1
+        assert widget._playback_engine._instrument_buses_loaded is False
+        assert widget._playback_engine._source is not None
+        assert widget._playback_engine._source._mix == pytest.approx(0.75)
 
         widget._muted = {instruments[0]}
         widget._apply_mix()
-        assert len(widget._all_playback_players()) == 8
-        # The silent combined MIDI bus stays active as the authoritative
-        # transport clock: MIDI + original + five audible instrument stems.
-        assert len(widget._active_playback_players()) == 7
-        assert widget._midi_normal[1].volume() == pytest.approx(0.0)
-        assert widget._normal_players[instruments[0]][1].volume() == pytest.approx(0.0)
-        assert widget._normal_players[instruments[1]][1].volume() == pytest.approx(0.75)
+        assert widget._playback_engine.output_stream_count == 1
+        assert widget._playback_engine._instrument_buses_loaded is True
+        assert widget._playback_engine._source._muted == frozenset({instruments[0]})
     finally:
         widget.shutdown()
         widget.close()
 
 
-def test_playhead_tick_never_reseeks_audio_players(tmp_path: Path):
-    from PyQt6.QtMultimedia import QMediaPlayer
-
+def test_playhead_tick_never_reseeks_synchronized_audio_stream(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "source.wav", 1.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
     app.processEvents()
 
-    class FakePlayer:
-        def __init__(self, position: int):
-            self._position = position
-            self._state = QMediaPlayer.PlaybackState.PlayingState
-            self.set_positions: list[int] = []
-            self.events: list[str] = []
+    class FakeSynchronizedEngine:
+        is_configured = True
+        is_playing = True
+        position_seconds = 1.234
 
-        def position(self):
-            return self._position
+        def __init__(self):
+            self.seek_calls: list[float] = []
 
-        def playbackState(self):
-            return self._state
+        def seek(self, seconds: float) -> None:
+            self.seek_calls.append(seconds)
 
-        def stop(self):
-            self.events.append("stop")
-            self._state = QMediaPlayer.PlaybackState.StoppedState
-
-        def setPosition(self, position):
-            assert self._state != QMediaPlayer.PlaybackState.PlayingState
-            self.events.append("seek")
-            self._position = position
-            self.set_positions.append(position)
-
-        def play(self):
-            self.events.append("play")
-            self._state = QMediaPlayer.PlaybackState.PlayingState
-
-        def mediaStatus(self):
-            return QMediaPlayer.MediaStatus.LoadedMedia
-
-    master = FakePlayer(1_234)
-    slave = FakePlayer(0)
-    midi_pair = widget._midi_normal
-    original_pair = widget._original_normal
-    original_players = widget._players
+    engine = FakeSynchronizedEngine()
+    original_engine = widget._playback_engine
     try:
-        widget._midi_normal = (master, object())
-        widget._original_normal = (slave, object())
-        widget._players = [master, slave]
+        widget._playback_engine = engine
         widget._playing = True
         widget._finalizing = True
         widget._preview_duration = 0.0
         widget._set_playback_duration(10.0)
 
         widget._tick()
-        for _ in range(100):
-            app.processEvents()
-            if widget._transport_seek_pending_ms is None:
-                break
-            QTest.qWait(1)
 
         assert widget._position_ms == 1_234
         assert widget.playback_slider.value() == 1_234
-        assert master.set_positions == [1_234]
-        assert slave.set_positions == [1_234]
-        assert master.events == ["stop", "seek", "play"]
-        assert slave.events == ["stop", "seek", "play"]
+        assert engine.seek_calls == []
     finally:
         widget._playing = False
-        widget._midi_normal = midi_pair
-        widget._original_normal = original_pair
-        widget._players = original_players
+        widget._playback_engine = original_engine
         widget.shutdown()
         widget.close()
 
 
-def test_end_of_media_pauses_every_player_without_automatic_rewind(tmp_path: Path):
-    from PyQt6.QtMultimedia import QMediaPlayer
+def test_transport_start_submits_one_synchronized_audio_stream(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    source = _silent_wav(tmp_path / "batch-start-source.wav", 1.0)
+    widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
 
+    class FakeSynchronizedEngine:
+        is_configured = True
+        is_playing = False
+        position_seconds = 0.0
+
+        def __init__(self):
+            self.seek_calls: list[float] = []
+            self.play_calls = 0
+
+        def set_mix_state(self, **_kwargs) -> None:
+            pass
+
+        def seek(self, seconds: float) -> None:
+            self.seek_calls.append(seconds)
+
+        def play(self) -> None:
+            self.play_calls += 1
+
+    engine = FakeSynchronizedEngine()
+    original_engine = widget._playback_engine
+    try:
+        widget._playback_engine = engine
+        widget._position_ms = 750
+        widget._toggle_playback()
+
+        assert engine.seek_calls == [0.75]
+        assert engine.play_calls == 1
+        assert widget._playing is True
+    finally:
+        widget._playing = False
+        widget._playback_engine = original_engine
+        widget.shutdown()
+        widget.close()
+        app.processEvents()
+
+
+def test_end_of_stream_stops_transport_without_automatic_rewind(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "source.wav", 1.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
     app.processEvents()
-
-    class FakePlayer:
-        def __init__(self, position: int, duration: int, status):
-            self._position = position
-            self._duration = duration
-            self._status = status
-            self._state = QMediaPlayer.PlaybackState.PlayingState
-            self.pause_calls = 0
-            self.set_positions: list[int] = []
-
-        def position(self):
-            return self._position
-
-        def duration(self):
-            return self._duration
-
-        def setPosition(self, position):
-            self.set_positions.append(position)
-
-        def mediaStatus(self):
-            return self._status
-
-        def playbackState(self):
-            return self._state
-
-        def pause(self):
-            self.pause_calls += 1
-            self._state = QMediaPlayer.PlaybackState.PausedState
-
-    master = FakePlayer(990, 1_000, QMediaPlayer.MediaStatus.EndOfMedia)
-    midi = FakePlayer(950, 1_000, QMediaPlayer.MediaStatus.LoadedMedia)
-    midi_pair = widget._midi_normal
-    original_players = widget._players
     try:
-        widget._midi_normal = (master, object())
-        widget._players = [master, midi]
         widget._playing = True
         widget._finalizing = True
         widget._preview_duration = 0.0
         widget._position_ms = 990
+        widget._set_playback_duration(1.0)
 
-        widget._tick()
-        for _ in range(100):
-            app.processEvents()
-            if widget._transport_seek_pending_ms is None:
-                break
-            QTest.qWait(1)
+        widget._on_synchronized_playback_finished()
 
         assert widget._playing is False
         assert widget._playback_finished is True
         assert widget._position_ms == 1_000
-        assert master.pause_calls == 1
-        assert midi.pause_calls == 1
-        assert master.set_positions == []
-        assert midi.set_positions == []
         assert widget.clock_label.text() == "1.0s"
 
         widget._tick()
-        for _ in range(100):
-            app.processEvents()
-            if widget._transport_seek_pending_ms is None:
-                break
-            QTest.qWait(1)
-        assert master.pause_calls == 1
-        assert midi.pause_calls == 1
-        assert master.set_positions == []
-        assert midi.set_positions == []
+        assert widget._position_ms == 1_000
     finally:
         widget._playing = False
-        widget._midi_normal = midi_pair
-        widget._players = original_players
         widget.shutdown()
         widget.close()
 
 
-def test_stream_end_of_media_schedules_buffered_preview_application(tmp_path: Path):
-    from PyQt6.QtMultimedia import QMediaPlayer
-
+def test_stream_end_schedules_buffered_preview_application(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "stream-end-source.wav", 1.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
     app.processEvents()
-
-    class FakePlayer:
-        def position(self):
-            return 990
-
-        def duration(self):
-            return 990
-
-        def mediaStatus(self):
-            return QMediaPlayer.MediaStatus.EndOfMedia
-
-        def pause(self):
-            pass
-
-    master = FakePlayer()
-    midi_pair = widget._midi_normal
-    original_players = widget._players
     scheduled: list[bool] = []
     try:
-        widget._midi_normal = (master, object())
-        widget._players = [master]
         widget._playing = True
         widget._finalizing = False
         widget._preview_duration = 1.0
         widget._position_ms = 990
-        widget._schedule_deferred_assets = lambda: scheduled.append(True)
+        widget._set_playback_duration(1.0)
+        widget._apply_deferred_after_playback_stop = lambda: scheduled.append(True)
 
-        widget._tick()
+        widget._on_synchronized_playback_finished()
 
         assert widget._playing is False
         assert widget._playback_finished is True
         assert scheduled == [True]
     finally:
         widget._playing = False
-        widget._midi_normal = midi_pair
-        widget._players = original_players
         widget.shutdown()
         widget.close()
 
 
-def test_deferred_preview_waits_for_media_backend_to_finish_pausing(tmp_path: Path):
-    from PyQt6.QtMultimedia import QMediaPlayer
-
+def test_deferred_preview_waits_for_synchronized_sink_to_finish_pausing(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "pause-transition.wav", 1.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
     app.processEvents()
 
-    class FakePlayer:
+    class FakeSynchronizedEngine:
         def __init__(self):
-            self.state = QMediaPlayer.PlaybackState.PlayingState
+            self.is_playing = True
 
-        def playbackState(self):
-            return self.state
-
-    player = FakePlayer()
-    original_players = widget._players
+    engine = FakeSynchronizedEngine()
+    original_engine = widget._playback_engine
     applied: list[bool] = []
     try:
-        widget._players = [player]
+        widget._playback_engine = engine
         widget._playing = False
         widget._apply_deferred_assets = lambda: applied.append(True)
 
@@ -1915,18 +1902,18 @@ def test_deferred_preview_waits_for_media_backend_to_finish_pausing(tmp_path: Pa
         assert applied == []
         assert widget._deferred_apply_scheduled is True
 
-        player.state = QMediaPlayer.PlaybackState.PausedState
-        widget._on_player_playback_state_changed(player.state)
+        engine.is_playing = False
+        widget._try_apply_deferred_assets()
 
         assert applied == [True]
         assert widget._deferred_apply_scheduled is False
     finally:
-        widget._players = original_players
+        widget._playback_engine = original_engine
         widget.shutdown()
         widget.close()
 
 
-def test_preview_replacement_silences_retired_midi_output_immediately(tmp_path: Path):
+def test_preview_replacement_closes_the_retired_synchronized_stream(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "source.wav", 1.0)
     first_midi = _tone_wav(tmp_path / "first-midi.wav", 1.0)
@@ -1940,14 +1927,16 @@ def test_preview_replacement_silences_retired_midi_output_immediately(tmp_path: 
                 notes=(note,),
                 duration=1.0,
                 transcription_wav=first_midi,
+                original_wav=source,
                 instrument_wavs={"acoustic_piano": first_midi},
                 midi_gain_db=0.0,
             ),
         )
         app.processEvents()
-        assert widget._midi_normal is not None
-        retired_player, retired_output = widget._midi_normal
-        retired_player.play()
+        retired_source = widget._playback_engine._source
+        retired_sink = widget._playback_engine._sink
+        assert retired_source is not None
+        assert retired_sink is not None
 
         widget._on_preview_ready(
             2,
@@ -1955,12 +1944,16 @@ def test_preview_replacement_silences_retired_midi_output_immediately(tmp_path: 
                 notes=(note,),
                 duration=1.0,
                 transcription_wav=second_midi,
+                original_wav=source,
                 instrument_wavs={"acoustic_piano": second_midi},
                 midi_gain_db=0.0,
             ),
         )
 
-        assert retired_output.isMuted() is True
+        assert retired_source.isOpen() is False
+        assert widget._playback_engine._source is not retired_source
+        assert widget._playback_engine._sink is not retired_sink
+        assert widget._playback_engine.output_stream_count == 1
         app.processEvents()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         app.processEvents()
@@ -1972,7 +1965,7 @@ def test_preview_replacement_silences_retired_midi_output_immediately(tmp_path: 
         widget.close()
 
 
-def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move_left(
+def test_follow_playhead_ignores_audio_clock_rollback_and_explicit_seek_can_move_left(
     tmp_path: Path,
 ):
     app = QApplication.instance() or QApplication([])
@@ -1986,33 +1979,25 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
     )
     app.processEvents()
 
-    class FakePlayer:
-        def __init__(self, positions: list[int]):
+    class FakeSynchronizedEngine:
+        is_configured = True
+        is_playing = True
+
+        def __init__(self, positions: list[float]):
             self._positions = iter(positions)
-            self._position = 0
-            self.set_positions: list[int] = []
+            self.seek_positions: list[float] = []
 
-        def position(self):
-            self._position = next(self._positions)
-            return self._position
+        @property
+        def position_seconds(self) -> float:
+            return next(self._positions)
 
-        def setPosition(self, position):
-            self._position = position
-            self.set_positions.append(position)
+        def seek(self, position: float) -> None:
+            self.seek_positions.append(position)
 
-        def mediaStatus(self):
-            from PyQt6.QtMultimedia import QMediaPlayer
-
-            return QMediaPlayer.MediaStatus.LoadedMedia
-
-    master = FakePlayer([8_300, 8_270, 8_340])
-    midi_pair = widget._midi_normal
-    original_pair = widget._original_normal
-    original_players = widget._players
+    engine = FakeSynchronizedEngine([8.3, 8.27, 8.34])
+    original_engine = widget._playback_engine
     try:
-        widget._midi_normal = (master, object())
-        widget._original_normal = None
-        widget._players = [master]
+        widget._playback_engine = engine
         widget._playing = True
         widget._finalizing = True
         widget._preview_duration = 30.0
@@ -2032,12 +2017,11 @@ def test_follow_playhead_ignores_media_clock_rollback_and_explicit_seek_can_move
         widget._playing = False
         widget.seek(2.0)
         assert widget._position_ms == 2_000
+        assert engine.seek_positions == [2.0]
         assert widget.roll_scroll.horizontalScrollBar().value() < previous_scroll
     finally:
         widget._playing = False
-        widget._midi_normal = midi_pair
-        widget._original_normal = original_pair
-        widget._players = original_players
+        widget._playback_engine = original_engine
         widget.shutdown()
         widget.close()
 
@@ -2097,8 +2081,8 @@ def test_transport_slider_supports_absolute_click_and_continuous_drag_seek(
             original_seek(seconds)
 
         widget.seek = recording_seek
-        widget.pause = lambda: pytest.fail("scrubbing must not pause QMediaPlayer")
-        widget._toggle_playback = lambda: pytest.fail("scrubbing must not restart QMediaPlayer")
+        widget.pause = lambda: pytest.fail("scrubbing must not pause the audio sink")
+        widget._toggle_playback = lambda: pytest.fail("scrubbing must not restart the audio sink")
         widget._playing = True
         QTest.mousePress(
             slider,
@@ -2121,119 +2105,74 @@ def test_transport_slider_supports_absolute_click_and_continuous_drag_seek(
         widget.close()
 
 
-def test_real_qmedia_players_can_seek_during_playback_without_deadlock(tmp_path: Path):
-    source = _silent_wav(tmp_path / "real-player-scrub.wav", 2.0)
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows audio-device regression")
+def test_real_synchronized_stream_can_seek_during_playback_without_deadlock(tmp_path: Path):
+    source = _silent_wav(tmp_path / "real-synchronized-scrub.wav", 2.0)
     script = f"""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from pathlib import Path
-from time import monotonic
-from PyQt6.QtCore import QPoint, QTimer, Qt
-from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtTest import QTest
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
-from src.core.muscriptor_result_assets import MuscriptorRollNote
+from src.core.muscriptor_result_assets import MuscriptorPreviewAssets, MuscriptorRollNote
 from src.gui.widgets.muscriptor_result import MuscriptorResultWidget
 
 app = QApplication([])
-source = Path({str(source)!r})
-widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
-pairs = [widget._make_player(source) for _ in range(8)]
-widget._midi_normal = pairs[0]
-widget._original_normal = pairs[1]
-widget._active_playback_players = lambda: [player for player, _output in pairs]
-widget.play_button.setEnabled(True)
-widget._set_playback_duration(2.0)
+source = {str(source)!r}
 note = MuscriptorRollNote("acoustic_piano", 60, 100, 0.25, 0.75)
-widget.roll.set_notes((note,), duration=2.0)
-widget.roll.set_editable(True)
-widget.resize(1000, 720)
-widget.show()
+widget = MuscriptorResultWidget(source, ["acoustic_piano"])
+widget._on_preview_ready(
+    1,
+    MuscriptorPreviewAssets(
+        notes=(note,),
+        duration=2.0,
+        transcription_wav=source,
+        original_wav=source,
+        instrument_wavs={{"acoustic_piano": source}},
+        midi_gain_db=0.0,
+    ),
+)
 failure = []
-deadline = monotonic() + 5.0
 
-def fail(message):
-    failure.append(message)
-    app.exit(2)
-
-def run_step(step):
+def run(action):
     try:
-        step()
+        action()
     except Exception as exc:
-        fail(f"{{type(exc).__name__}}: {{exc}}")
+        failure.append(f"{{type(exc).__name__}}: {{exc}}")
+        app.exit(2)
 
-def wait_until(predicate, continuation, description):
-    try:
-        ready = predicate()
-    except Exception as exc:
-        fail(f"{{type(exc).__name__}} while waiting for {{description}}: {{exc}}")
-        return
-    if ready:
-        QTimer.singleShot(0, lambda: run_step(continuation))
-        return
-    if monotonic() >= deadline:
-        fail(f"timed out waiting for {{description}}")
-        return
-    QTimer.singleShot(10, lambda: wait_until(predicate, continuation, description))
-
-def exercise():
+def start():
     widget._toggle_playback()
-    note_point = QPoint(
-        round(widget.roll.x_for_time_float(0.5)),
-        (108 - 60) * 7 + 3,
-    )
-    QTest.mouseClick(widget.roll, Qt.MouseButton.LeftButton, pos=note_point)
-    widget.speed_spin.setValue(1.1)
-    wait_until(
-        lambda: widget._transport_seek_pending_ms is None
-        and all(
-            player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-            for player, _output in pairs
-        ),
-        scrub,
-        "initial serialized playback",
-    )
 
-def scrub():
-    slider = widget.playback_slider
-    target = QPoint(round(slider.width() * 0.6), slider.rect().center().y())
-    QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=target)
-    wait_until(
-        lambda: widget._transport_seek_pending_ms is None,
-        verify,
-        "serialized playback seek",
-    )
+def pause_seek_resume():
+    widget.pause()
+    widget.seek(1.2)
+    widget._toggle_playback()
+
+def change_rate_and_rewind():
+    widget.speed_spin.setValue(1.1)
+    widget.seek(0.0)
 
 def verify():
-    if not widget._playing:
-        fail("playback stopped after an in-flight slider click")
-        return
-    if widget.roll.selected_indices != (0,):
-        fail(f"note selection was lost: {{widget.roll.selected_indices}}")
-        return
-    if not 900 <= widget._position_ms <= 1800:
-        fail(f"seek did not commit: {{widget._position_ms}}")
-        return
-    positions = [player.position() for player, _output in pairs]
-    if any(position < 850 or position > 1900 for position in positions):
-        fail(f"players did not seek together: {{positions}}")
-        return
+    if widget._playback_engine.output_stream_count != 1:
+        failure.append("result playback created more than one output stream")
+    if not widget._playing or not widget._playback_engine.is_playing:
+        failure.append("single synchronized stream stopped after seek/rate controls")
+    if not 0.05 <= widget._playback_engine.position_seconds <= 0.8:
+        failure.append(
+            f"rewind did not resume from the shared cursor: "
+            f"{{widget._playback_engine.position_seconds}}"
+        )
     widget.shutdown()
     widget.close()
     app.quit()
 
-ready_statuses = {{
-    QMediaPlayer.MediaStatus.LoadedMedia,
-    QMediaPlayer.MediaStatus.BufferedMedia,
-}}
-wait_until(
-    lambda: all(player.mediaStatus() in ready_statuses for player, _output in pairs),
-    exercise,
-    "all local media sources",
-)
+QTimer.singleShot(0, lambda: run(start))
+QTimer.singleShot(120, lambda: run(pause_seek_resume))
+QTimer.singleShot(260, lambda: run(change_rate_and_rewind))
+QTimer.singleShot(650, lambda: run(verify))
 app.exec()
 if failure:
-    raise RuntimeError(failure[0])
+    raise RuntimeError("; ".join(failure))
 """
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
@@ -2256,7 +2195,12 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "editable-bpm-playback.wav", 2.0)
     widget = MuscriptorResultWidget(str(source), ["acoustic_piano"])
-    widget._midi_normal = widget._make_player(source)
+    widget._configure_synchronized_playback(
+        original_wav=source,
+        midi_wav=source,
+        instrument_wavs={},
+        stereo_available=False,
+    )
     widget.play_button.setEnabled(True)
     widget._set_playback_duration(2.0)
     widget.set_bpm_context(117.9, 23.0)
@@ -2274,10 +2218,8 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
         widget.set_bpm_context(117.9, 23.0)
         assert widget.speed_spin.value() == pytest.approx(1.25)
         assert widget.bpm_spin.value() == pytest.approx(147.4)
-        assert all(
-            player.playbackRate() == pytest.approx(147.4 / 117.9)
-            for player in widget._all_playback_players()
-        )
+        assert widget._playback_engine._source is not None
+        assert widget._playback_engine._source.playback_rate == pytest.approx(147.4 / 117.9)
         widget._toggle_playback()
         widget.bpm_spin.setValue(132.5)
         app.processEvents()
@@ -2286,10 +2228,7 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
         assert widget._bpm_user_overridden is True
         assert widget.bpm_spin.value() == pytest.approx(132.5)
         assert widget.speed_spin.value() == pytest.approx(132.5 / 117.9, abs=0.001)
-        assert all(
-            player.playbackRate() == pytest.approx(132.5 / 117.9)
-            for player in widget._all_playback_players()
-        )
+        assert widget._playback_engine._source.playback_rate == pytest.approx(132.5 / 117.9)
         assert widget._editor_grid_seconds() == pytest.approx(60.0 / 117.9 / 4.0)
 
         widget.set_detected_bpm(90.0)
@@ -2303,12 +2242,7 @@ def test_project_bpm_and_playback_speed_are_bidirectionally_linked(
 
         assert widget.bpm_spin.value() == pytest.approx(88.4)
         assert widget.speed_spin.value() == pytest.approx(0.75)
-        assert all(
-            player.playbackRate() == pytest.approx(88.4 / 117.9)
-            for player in widget._all_playback_players()
-        )
-        late_player = widget._make_player(source)[0]
-        assert late_player.playbackRate() == pytest.approx(88.4 / 117.9)
+        assert widget._playback_engine._source.playback_rate == pytest.approx(88.4 / 117.9)
     finally:
         widget.shutdown()
         widget.close()
@@ -2806,6 +2740,7 @@ def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render
         duration=1.0,
         transcription_wav=original_render,
         live_transcription_wav=original_render,
+        original_wav=source_audio,
         stereo_mix_wav=original_render,
         original_left_wav=source_audio,
         transcription_right_wav=original_render,
@@ -2818,6 +2753,7 @@ def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render
         duration=1.0,
         transcription_wav=edited_render,
         live_transcription_wav=edited_render,
+        original_wav=source_audio,
         stereo_mix_wav=edited_render,
         original_left_wav=source_audio,
         transcription_right_wav=edited_render,
@@ -2831,7 +2767,8 @@ def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render
         widget.set_detected_bpm(120.0)
         widget._apply_final_assets(original_assets)
         assert widget.play_button.isEnabled()
-        assert Path(widget._midi_normal[0].source().toLocalFile()) == original_render.resolve()
+        assert widget._playback_engine._source is not None
+        assert float(np.max(np.abs(widget._playback_engine._source._midi_mix))) > 0.0
 
         widget._record_editor_commit((note,), ())
 
@@ -2854,7 +2791,8 @@ def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render
         assert widget._detected == []
         assert widget.play_button.isEnabled()
         assert widget.playback_slider.isEnabled()
-        assert Path(widget._midi_normal[0].source().toLocalFile()) == edited_render.resolve()
+        assert widget._playback_engine._source is not None
+        assert float(np.max(np.abs(widget._playback_engine._source._midi_mix))) == 0.0
         with pytest.raises(RuntimeError, match="stale edited MIDI audio"):
             widget._apply_editor_audio_assets(
                 generation - 1,
@@ -3782,6 +3720,8 @@ def test_browser_midi_workbench_uses_virtualized_smooth_transport_and_shortcuts(
     assert "e.ctrlKey||e.altKey" in MUSCRIPTOR_RESULT_JS
     assert "e.shiftKey" in MUSCRIPTOR_RESULT_JS
     assert 'CustomEvent("music-to-midi-playback-start"' in MUSCRIPTOR_RESULT_JS
+    assert "var startAt = context.currentTime + 0.02" in MUSCRIPTOR_RESULT_JS
+    assert "source.start(startAt, self.position)" in MUSCRIPTOR_RESULT_JS
     assert 'this.playhead.style.transform="translate3d(' in MUSCRIPTOR_RESULT_JS
     assert 'querySelectorAll(".msr-root:not([data-msr-init])")' in MUSCRIPTOR_RESULT_JS
 
@@ -3808,6 +3748,7 @@ def test_browser_midi_editor_exposes_daw_commands_and_upward_resize_handle():
 def test_browser_midi_workbench_labels_generic_gm_programs():
     state = {
         "audio_path": "C:/tmp/source.wav",
+        "playback_audio_path": "C:/tmp/original-live.wav",
         "midi_path": "C:/tmp/result.mid",
         "transcription_wav": "C:/tmp/result.wav",
         "stereo_mix_wav": "C:/tmp/stereo.wav",
@@ -3825,11 +3766,14 @@ def test_browser_midi_workbench_labels_generic_gm_programs():
     assert "Acoustic Grand Piano" in markup
     assert "YourMT3+" in markup
     assert "vocals" in markup
+    assert "original-live.wav" in markup
+    assert "source.wav" not in markup
 
 
 def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     state = {
         "audio_path": "C:/tmp/source.wav",
+        "playback_audio_path": "C:/tmp/original-live.wav",
         "midi_path": "C:/tmp/result.mid",
         "transcription_wav": "C:/tmp/result.wav",
         "stereo_mix_wav": "C:/tmp/stereo.wav",
@@ -3872,6 +3816,7 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert '"repeatTempoPerNoteTrack": true' in markup
     assert '"previewApi": "./api/render_edited_midi_preview"' in markup
     assert '"previewToken": "opaque-preview-token"' in markup
+    assert '"originalUrl": "/gradio_api/file=C%3A/tmp/original-live.wav"' in markup
     assert '"program": 24' in markup
     assert '"track_index": 2' in markup
     assert '"channel": 3' in markup
@@ -4121,8 +4066,13 @@ def test_muscriptor_result_shutdown_unloads_edited_wav_before_temp_cleanup(
     generation_dir = edit_root / "generation-000001"
     generation_dir.mkdir()
     edited_wav = _silent_wav(generation_dir / "midi-live.wav", 0.2)
-    player, _output = widget._make_player(edited_wav)
-    player.play()
+    widget._configure_synchronized_playback(
+        original_wav=edited_wav,
+        midi_wav=edited_wav,
+        instrument_wavs={},
+        stereo_available=False,
+    )
+    widget._playback_engine.play()
     QTest.qWait(100)
     app.processEvents()
 
@@ -4133,7 +4083,7 @@ def test_muscriptor_result_shutdown_unloads_edited_wav_before_temp_cleanup(
     widget.close()
 
 
-def test_muscriptor_shutdown_drains_pending_retired_media_before_deletion(tmp_path: Path):
+def test_muscriptor_shutdown_closes_synchronized_stream_before_deletion(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     source = _silent_wav(tmp_path / "retired-source.wav", 0.2)
     widget = MuscriptorResultWidget(str(source), [], backend_label="MuScriptor-large")
@@ -4141,22 +4091,23 @@ def test_muscriptor_shutdown_drains_pending_retired_media_before_deletion(tmp_pa
     generation_dir = preview_root / "generation-000001"
     generation_dir.mkdir()
     preview_wav = _silent_wav(generation_dir / "midi-live.wav", 0.2)
-    player, _output = widget._make_player(preview_wav)
-    player.play()
-    QTest.qWait(80)
-    player.stop()
-    app.processEvents()
+    widget._configure_synchronized_playback(
+        original_wav=preview_wav,
+        midi_wav=preview_wav,
+        instrument_wavs={},
+        stereo_available=False,
+    )
+    retired_source = widget._playback_engine._source
+    assert retired_source is not None
 
     widget._dispose_dynamic_players()
-    assert widget._retired_media_timer.isActive()
-    assert widget._retired_media
+    assert not widget._playback_engine.is_configured
+    assert retired_source.isOpen() is False
 
     widget.shutdown()
     widget.close()
     app.processEvents()
 
-    assert not widget._retired_media_timer.isActive()
-    assert widget._retired_media == []
     assert not preview_root.exists()
 
 

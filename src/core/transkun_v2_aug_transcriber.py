@@ -158,7 +158,7 @@ class TranskunV2AugTranscriber(TranskunTranscriber):
         validation_error = self.get_model_validation_error()
         if validation_error:
             raise RuntimeError(
-                f"{validation_error}\n请执行: python download_transkun_v2_aug_model.py"
+                f"{validation_error}\n资源准备命令：python download_transkun_v2_aug_model.py"
             )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)

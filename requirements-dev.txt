@@ -5,6 +5,9 @@
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-qt>=4.2.0
+# Runtime-contract tests import the exact Space UI stack.
+gradio==6.17.3
+spaces==0.51.1
 # Starlette 1.x TestClient is built on httpx2; plain httpx is deprecated.
 httpx2>=2.0.0,<3
 

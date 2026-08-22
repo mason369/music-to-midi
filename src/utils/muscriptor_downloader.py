@@ -217,7 +217,7 @@ def preflight_muscriptor_download_access(*, printer=print) -> None:
     except ImportError as exc:
         raise RuntimeError(
             "缺少 huggingface_hub，无法预检 MuScriptor gated 模型访问权限；"
-            "请先安装 requirements.txt。"
+            "依赖来源：requirements.txt。"
         ) from exc
 
     inaccessible: list[MuscriptorArtifact] = []
@@ -295,7 +295,7 @@ def download_muscriptor_model(
     except ImportError as exc:
         raise RuntimeError(
             f"缺少 huggingface_hub，无法下载 {artifact.display_name}；"
-            "请先安装 requirements.txt。"
+            "依赖来源：requirements.txt。"
         ) from exc
 
     try:

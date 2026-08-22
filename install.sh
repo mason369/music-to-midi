@@ -39,7 +39,7 @@ fi
 
 # ───────────────────────── 检查 sudo ─────────────────────────
 if ! sudo -n true 2>/dev/null; then
-    warn "需要 sudo 权限安装系统依赖，请输入密码..."
+    warn "安装系统依赖需要 sudo 权限，终端会请求密码..."
 fi
 
 # ───────────────────────── 检查 Python ─────────────────────────
@@ -78,7 +78,7 @@ if [ -z "$PYTHON_BIN" ]; then
         fi
     done
     if [ -z "$PYTHON_BIN" ]; then
-        error "当前 apt 软件源不提供 64 位 Python 3.11/3.12 及其 venv/dev 包；请先配置发行版官方软件源并安装兼容 Python，不能使用 3.10 或 3.13+ 继续。"
+        error "当前 apt 软件源不提供 64 位 Python 3.11/3.12 及其 venv/dev 包。兼容环境需要发行版官方软件源中的 Python 3.11/3.12；3.10 和 3.13+ 不受支持。"
     fi
 fi
 
@@ -216,7 +216,7 @@ if $IS_WSL; then
     info "检查 WSL 显示环境..."
     if [ -z "${DISPLAY:-}" ]; then
         if [ -d "/mnt/wslg" ]; then
-            warn "WSLg 检测到。请确保 ~/.bashrc 包含: export DISPLAY=:0"
+            warn "WSLg 已检测到。所需 shell 设置：export DISPLAY=:0"
         else
             warn "未检测到 WSLg。"
             warn "  - Windows 11: 确保 WSLg 已启用（通常默认开启）"
@@ -399,7 +399,7 @@ success "audio-separator 安装完成"
 
 info "下载其它大型模型前预检 MuScriptor Small/Medium/Large gated 访问权限..."
 if ! (cd "$REPO_DIR" && "$PYTHON" -c 'from src.utils.muscriptor_downloader import preflight_muscriptor_download_access; preflight_muscriptor_download_access()'); then
-    error "MuScriptor gated 访问预检失败；请在浏览器逐项接受三个仓库条款，并用项目 venv 登录 Hugging Face 后重试。"
+    error "MuScriptor gated 访问预检失败；访问条件是浏览器已逐项接受三个仓库条款，并在项目 venv 中登录 Hugging Face。"
 fi
 success "MuScriptor Small/Medium/Large gated 访问权限预检通过"
 
@@ -470,7 +470,7 @@ print('ByteDance Piano model:', ByteDancePianoTranscriber().is_model_available()
 raise SystemExit(0 if ByteDancePianoTranscriber.is_available() else 1)
 PY
 then
-    error "ByteDance Piano 安装失败，请确认 piano-transcription-inference、torchlibrosa 与 matplotlib 已安装。"
+    error "ByteDance Piano 安装校验失败：piano-transcription-inference、torchlibrosa 或 matplotlib 不完整。"
 fi
 
 "$PYTHON" "${REPO_DIR}/download_bytedance_piano_model.py"
@@ -534,7 +534,7 @@ print("YourMT3+ patched source manifest:", manifest)
 print("YourMT3+ patched source files:", file_count)
 PY
 then
-    error "YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。"
+    error "YourMT3+ 源码树缺失或身份不匹配；需要恢复当前项目版本，可变上游源码与本版本不兼容。"
 fi
 success "YourMT3+ 源码身份检查通过"
 
@@ -571,7 +571,7 @@ success "TransKun V2 Aug model ready"
 info "验证版本控制的启动脚本..."
 RUN_SCRIPT="${REPO_DIR}/run.sh"
 if [ ! -f "$RUN_SCRIPT" ]; then
-    error "缺少版本控制的 run.sh；请重新取得完整项目，而不是由安装器生成过期副本。"
+    error "缺少版本控制的 run.sh；完整项目应包含该文件，安装器不会生成替代副本。"
 fi
 chmod +x "$RUN_SCRIPT"
 success "启动脚本已验证: run.sh"
@@ -618,6 +618,6 @@ echo -e "  ${YELLOW}venv/bin/python download_bytedance_piano_model.py${NC}"
 echo -e "  ${YELLOW}venv/bin/python download_muscriptor_model.py --size all${NC}"
 echo ""
 if $IS_WSL; then
-    echo -e "  ${YELLOW}WSL 提示：${NC}如果首次运行，请先执行 source ~/.bashrc"
+    echo -e "  ${YELLOW}WSL 首次运行环境命令：${NC}source ~/.bashrc"
     echo ""
 fi

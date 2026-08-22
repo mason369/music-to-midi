@@ -5,15 +5,17 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.models.data_models import (
-    MAX_MIDI_BPM,
-    MIN_MIDI_BPM,
+    MAX_TEMPO_BPM,
+    MIN_TEMPO_BPM,
     MidiTrackMode,
     MultiInstrumentModel,
     MuscriptorModel,
+    MuscriptorProcessingChain,
     ProcessingMode,
+    TempoMode,
     YourMT3Model,
 )
 
@@ -40,8 +42,10 @@ class InferenceOptions(BaseModel):
     transcription_backend: str = MultiInstrumentModel.YOURMT3.value
     yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
     muscriptor_model: str = MuscriptorModel.LARGE.value
+    muscriptor_processing_chain: str = MuscriptorProcessingChain.OFFICIAL.value
     muscriptor_instruments: list[str] = Field(default_factory=list)
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value
+    tempo_mode: str = TempoMode.FIXED_AUTO.value
     custom_bpm: float | None = None
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
@@ -92,15 +96,44 @@ class InferenceOptions(BaseModel):
             raise ValueError(f"unsupported MIDI track mode: {value!r}")
         return normalized
 
+    @field_validator("muscriptor_processing_chain")
+    @classmethod
+    def validate_muscriptor_processing_chain(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        valid = {chain.value for chain in MuscriptorProcessingChain}
+        if normalized not in valid:
+            raise ValueError(f"unsupported MuScriptor processing chain: {value!r}")
+        return normalized
+
+    @field_validator("tempo_mode")
+    @classmethod
+    def validate_tempo_mode(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        valid = {mode.value for mode in TempoMode}
+        if normalized not in valid:
+            raise ValueError(f"unsupported tempo mode: {value!r}")
+        return normalized
+
     @field_validator("custom_bpm")
     @classmethod
     def validate_custom_bpm(cls, value: float | None) -> float | None:
         if value is None:
             return None
         normalized = float(value)
-        if not MIN_MIDI_BPM <= normalized <= MAX_MIDI_BPM:
-            raise ValueError(f"custom BPM must be between {MIN_MIDI_BPM:g} and {MAX_MIDI_BPM:g}")
+        if not MIN_TEMPO_BPM <= normalized <= MAX_TEMPO_BPM:
+            raise ValueError(f"custom BPM must be between {MIN_TEMPO_BPM:g} and {MAX_TEMPO_BPM:g}")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_tempo_contract(self):
+        if "tempo_mode" not in self.model_fields_set and self.custom_bpm is not None:
+            self.tempo_mode = TempoMode.FIXED_MANUAL.value
+        if self.tempo_mode == TempoMode.FIXED_MANUAL.value and self.custom_bpm is None:
+            raise ValueError("manual tempo mode requires custom_bpm")
+        if self.tempo_mode != TempoMode.FIXED_MANUAL.value and self.custom_bpm is not None:
+            raise ValueError("custom_bpm is only valid in manual tempo mode")
+        return self
+
 
 class ManualMidiOptions(BaseModel):
     """Explicit route selection for one separated or locally added track."""
@@ -109,6 +142,8 @@ class ManualMidiOptions(BaseModel):
 
     route: str
     muscriptor_instruments: list[str] = Field(default_factory=list)
+    muscriptor_processing_chain: str = MuscriptorProcessingChain.OFFICIAL.value
+    tempo_mode: str = TempoMode.FIXED_AUTO.value
     custom_bpm: float | None = None
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
@@ -124,15 +159,43 @@ class ManualMidiOptions(BaseModel):
             raise ValueError(f"unsupported manual MIDI route: {value!r}")
         return normalized
 
+    @field_validator("tempo_mode")
+    @classmethod
+    def validate_tempo_mode(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        valid = {mode.value for mode in TempoMode}
+        if normalized not in valid:
+            raise ValueError(f"unsupported tempo mode: {value!r}")
+        return normalized
+
+    @field_validator("muscriptor_processing_chain")
+    @classmethod
+    def validate_muscriptor_processing_chain(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        valid = {chain.value for chain in MuscriptorProcessingChain}
+        if normalized not in valid:
+            raise ValueError(f"unsupported MuScriptor processing chain: {value!r}")
+        return normalized
+
     @field_validator("custom_bpm")
     @classmethod
     def validate_custom_bpm(cls, value: float | None) -> float | None:
         if value is None:
             return None
         normalized = float(value)
-        if not MIN_MIDI_BPM <= normalized <= MAX_MIDI_BPM:
-            raise ValueError(f"custom BPM must be between {MIN_MIDI_BPM:g} and {MAX_MIDI_BPM:g}")
+        if not MIN_TEMPO_BPM <= normalized <= MAX_TEMPO_BPM:
+            raise ValueError(f"custom BPM must be between {MIN_TEMPO_BPM:g} and {MAX_TEMPO_BPM:g}")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_tempo_contract(self):
+        if "tempo_mode" not in self.model_fields_set and self.custom_bpm is not None:
+            self.tempo_mode = TempoMode.FIXED_MANUAL.value
+        if self.tempo_mode == TempoMode.FIXED_MANUAL.value and self.custom_bpm is None:
+            raise ValueError("manual tempo mode requires custom_bpm")
+        if self.tempo_mode != TempoMode.FIXED_MANUAL.value and self.custom_bpm is not None:
+            raise ValueError("custom_bpm is only valid in manual tempo mode")
+        return self
 
 
 class ProgressSnapshot(BaseModel):

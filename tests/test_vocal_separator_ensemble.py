@@ -1,3 +1,4 @@
+import os
 import tempfile
 import threading
 import time
@@ -179,21 +180,21 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         loading_index = next(
             index
             for index, event in enumerate(events)
-            if event[0] == "progress" and "Loading the Leap XE (vocals) model" in event[1]
+            if event[0] == "progress" and "Loading Leap XE (vocals)" in event[1]
         )
         build_index = next(index for index, event in enumerate(events) if event[0] == "build")
         running_index = next(
             index
             for index, event in enumerate(events)
-            if event[0] == "progress" and "Leap XE (vocals) audio chunk 1-2/5" in event[1]
+            if event[0] == "progress" and "Leap XE is processing vocals · chunk 1-2/5" in event[1]
         )
         forward_index = next(index for index, event in enumerate(events) if event[0] == "forward")
 
         self.assertLess(loading_index, build_index)
         self.assertLess(build_index, running_index)
         self.assertLess(running_index, forward_index)
-        self.assertIn("bs_leap_xe_voc.ckpt", events[loading_index][1])
-        self.assertIn("PyTorch · cpu · FP32 · batch=2", events[running_index][1])
+        self.assertEqual("Loading Leap XE (vocals)...", events[loading_index][1])
+        self.assertIn("about 0s each", events[running_index][1])
 
     def test_polarformer_reports_model_and_chunk_before_slow_calls(self):
         class FakeOrtFailure(Exception):
@@ -216,6 +217,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         class RunOptions:
             def __init__(self):
                 self.terminate = False
+
+        class SessionOptions:
+            def add_session_config_entry(self, key, value):
+                events.append(("session_config", f"{key}={value}"))
 
         class Features:
             @staticmethod
@@ -251,6 +256,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         fake_ort = SimpleNamespace(
             InferenceSession=Session,
             RunOptions=RunOptions,
+            SessionOptions=SessionOptions,
         )
 
         def prepare_stft(*_args, **_kwargs):
@@ -292,13 +298,14 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             index
             for index, event in enumerate(events)
             if event[0] == "progress"
-            and "Loading the PolarFormer (accompaniment) model" in event[1]
+            and "Loading PolarFormer (accompaniment)" in event[1]
         )
         session_index = next(index for index, event in enumerate(events) if event[0] == "session")
         running_index = next(
             index
             for index, event in enumerate(events)
-            if event[0] == "progress" and "PolarFormer (accompaniment) audio chunk 1/1" in event[1]
+            if event[0] == "progress"
+            and "PolarFormer is processing accompaniment · chunk 1/1" in event[1]
         )
         prepare_index = next(index for index, event in enumerate(events) if event[0] == "prepare")
         run_index = next(index for index, event in enumerate(events) if event[0] == "run")
@@ -307,11 +314,8 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertLess(session_index, running_index)
         self.assertLess(running_index, prepare_index)
         self.assertLess(prepare_index, run_index)
-        self.assertIn("bs_polarformer_fp16.onnx", events[running_index][1])
-        self.assertIn(
-            "ONNX Runtime · CUDAExecutionProvider + CPUExecutionProvider",
-            events[running_index][1],
-        )
+        self.assertEqual("Loading PolarFormer (accompaniment)...", events[loading_index][1])
+        self.assertIn("about 0s each", events[running_index][1])
 
     def test_separate_reports_switch_before_saving_and_polarformer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -379,7 +383,8 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertLess(leap_index, switching_index)
         self.assertLess(switching_index, first_write_index)
         self.assertLess(first_write_index, polar_index)
-        self.assertIn("bs_polarformer_fp16.onnx", events[switching_index][1])
+        self.assertIn("正在保存 WAV", events[switching_index][1])
+        self.assertIn("准备 PolarFormer（伴奏）", events[switching_index][1])
 
     def test_polarformer_cancel_terminates_active_onnx_run(self):
         config = {
@@ -404,6 +409,10 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         class RunOptions:
             def __init__(self):
                 self.terminate = False
+
+        class SessionOptions:
+            def add_session_config_entry(self, key, value):
+                observed["session_config"] = (key, value)
 
         class Features:
             @staticmethod
@@ -440,6 +449,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         fake_ort = SimpleNamespace(
             InferenceSession=BlockingSession,
             RunOptions=RunOptions,
+            SessionOptions=SessionOptions,
         )
 
         separator = VocalSeparator()
@@ -509,6 +519,11 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             def __init__(self):
                 self.terminate = False
 
+        class SessionOptions:
+            @staticmethod
+            def add_session_config_entry(_key, _value):
+                return None
+
         class Features:
             @staticmethod
             def numpy():
@@ -538,6 +553,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         fake_ort = SimpleNamespace(
             InferenceSession=FailingSession,
             RunOptions=RunOptions,
+            SessionOptions=SessionOptions,
         )
 
         separator = VocalSeparator()
@@ -586,6 +602,106 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             [0, 200, 400, 600, 800, 1_000],
         )
 
+    def test_leap_xpu_uses_native_fp16_amp_and_single_chunk_batches(self):
+        self.assertEqual(
+            vocal_separator._resolve_leap_execution_settings("xpu", True, 2),
+            (True, 1),
+        )
+        self.assertEqual(
+            vocal_separator._resolve_leap_execution_settings("xpu", False, 2),
+            (False, 1),
+        )
+        self.assertEqual(
+            vocal_separator._resolve_leap_execution_settings("cuda", True, 2),
+            (True, 2),
+        )
+        self.assertEqual(
+            vocal_separator._resolve_leap_execution_settings("cpu", True, 2),
+            (False, 2),
+        )
+        with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
+            vocal_separator._resolve_leap_execution_settings("xpu", True, 0)
+
+    def test_leap_xpu_query_chunking_is_numerically_equivalent_and_inference_only(self):
+        import torch
+
+        class Attend(torch.nn.Module):
+            def forward(self, q, k, v):
+                scale = q.shape[-1] ** -0.5
+                weights = torch.matmul(q, k.transpose(-1, -2)) * scale
+                return torch.matmul(weights.softmax(dim=-1), v)
+
+        class AttentionModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.attention = Attend()
+
+        torch.manual_seed(7)
+        model = AttentionModel().eval()
+        q = torch.randn(2, 3, 11, 5)
+        k = torch.randn(2, 3, 13, 5)
+        v = torch.randn(2, 3, 13, 7)
+        expected = model.attention(q, k, v)
+
+        enabled = vocal_separator._enable_leap_xpu_exact_query_chunking(
+            model,
+            SimpleNamespace(type="xpu"),
+            query_chunk_size=4,
+            attention_module_type=Attend,
+        )
+        self.assertEqual(enabled, 1)
+        torch.testing.assert_close(model.attention(q, k, v), expected)
+
+        model.train()
+        with self.assertRaisesRegex(RuntimeError, "inference-only"):
+            model.attention(q, k, v)
+
+    def test_leap_query_chunking_leaves_non_xpu_model_untouched(self):
+        class Model:
+            @staticmethod
+            def modules():
+                raise AssertionError("non-XPU path must not inspect the model")
+
+        self.assertEqual(
+            vocal_separator._enable_leap_xpu_exact_query_chunking(
+                Model(),
+                SimpleNamespace(type="cuda"),
+            ),
+            0,
+        )
+
+    def test_polarformer_chunk_size_uses_verified_default_and_explicit_override(self):
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("POLARFORMER_MAX_CHUNK_SIZE", None)
+            self.assertEqual(
+                vocal_separator._resolve_polarformer_chunk_size(882_000),
+                441_000,
+            )
+            self.assertEqual(
+                vocal_separator._resolve_polarformer_chunk_size(220_500),
+                220_500,
+            )
+
+        with patch.dict(
+            "os.environ",
+            {"POLARFORMER_MAX_CHUNK_SIZE": "330750"},
+        ):
+            self.assertEqual(
+                vocal_separator._resolve_polarformer_chunk_size(882_000),
+                330_750,
+            )
+
+    def test_polarformer_chunk_size_rejects_invalid_values(self):
+        with self.assertRaisesRegex(RuntimeError, "chunk_size is invalid"):
+            vocal_separator._resolve_polarformer_chunk_size(0)
+
+        with patch.dict(
+            "os.environ",
+            {"POLARFORMER_MAX_CHUNK_SIZE": "invalid"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "POLARFORMER_MAX_CHUNK_SIZE"):
+                vocal_separator._resolve_polarformer_chunk_size(882_000)
+
     def test_audio_chunk_progress_explains_duration_overlap_and_non_stage_semantics(self):
         kwargs = {
             "model": "PolarFormer",
@@ -602,17 +718,14 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                 Translator("zh_CN").t,
                 **kwargs,
             ),
-            "音频分片进度：PolarFormer 伴奏 2/24（每片覆盖约 20 秒音频，相邻重叠约 10 秒音频；"
-            "不是预计耗时、处理阶段或重试）",
+            "PolarFormer 伴奏 · 分片 2/24 · 每片约 20s",
         )
         self.assertEqual(
             vocal_separator._audio_chunk_progress_message(
                 Translator("en_US").t,
                 **kwargs,
             ),
-            "Audio chunk progress: PolarFormer accompaniment 2/24 "
-            "(each chunk covers ~20s of audio with ~10s of adjacent audio overlap; "
-            "not time estimates, workflow stages, or retries)",
+            "PolarFormer accompaniment · chunk 2/24 · about 20s each",
         )
 
     def test_leap_reference_demix_uses_configured_overlap_batching_and_reconstructs(self):
@@ -663,10 +776,8 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
 
         self.assertEqual(sample_rate, 44_100)
         self.assertEqual(observed_batch_sizes, [2, 2, 1])
-        self.assertIn("Running inference: Leap XE (vocals) audio chunk 5/5", progress_messages[-1])
-        self.assertIn("model model.ckpt", progress_messages[-1])
-        self.assertIn(
-            "not time estimates, workflow stages, or retries",
+        self.assertEqual(
+            "Leap XE is processing vocals · chunk 5/5 · about 0s each",
             progress_messages[-1],
         )
         np.testing.assert_allclose(vocals, audio, atol=1e-6, rtol=0.0)

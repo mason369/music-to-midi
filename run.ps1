@@ -4,13 +4,29 @@
 # 或双击 run.bat
 
 #Requires -Version 5.1
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [ValidateSet("cuda", "xpu")]
+    [string]$Accelerator = "cuda",
+    [string]$VenvName = "",
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$AppArgs = @()
+)
 
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $env:PYTHONIOENCODING = "utf-8"
 
 $REPO_DIR    = $PSScriptRoot
-$VENV_PYTHON = Join-Path $REPO_DIR "venv\Scripts\python.exe"
+$Accelerator = $Accelerator.ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($VenvName)) {
+    $VenvName = if ($Accelerator -eq "xpu") { "venv-xpu" } else { "venv" }
+}
+if ($VenvName -notmatch '^[A-Za-z0-9._-]+$') {
+    throw "非法虚拟环境目录名: $VenvName"
+}
+$env:MUSIC_TO_MIDI_ACCELERATOR = $Accelerator
+$VENV_PYTHON = Join-Path $REPO_DIR "$VenvName\Scripts\python.exe"
 . (Join-Path $REPO_DIR "scripts\powershell_helpers.ps1")
 
 function Write-Info { param($msg) Write-Host "[信息]  $msg" -ForegroundColor Cyan }
@@ -53,6 +69,7 @@ if (-not $NEED_INSTALL) {
 
 # 检查 3：精确 PyTorch/CUDA/ONNX Runtime GPU 契约
 if (-not $NEED_INSTALL) {
+if ($Accelerator -eq "cuda") {
     Write-Info "检查完整七模式 NVIDIA CUDA 12.8 运行时..."
     $checkGpuRuntimeScript = @"
 from importlib import metadata
@@ -87,6 +104,16 @@ print('NVIDIA device:', torch.cuda.get_device_name(0))
     } else {
         Write-Ok "NVIDIA CUDA 12.8 运行时实测通过"
     }
+} else {
+    Write-Info "检查完整七模式 Intel XPU + OpenVINO GPU 运行时..."
+    & "$VENV_PYTHON" (Join-Path $REPO_DIR "tools\validate_accelerator_runtime.py") --accelerator xpu
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "完整七模式的原生 PyTorch XPU/OpenVINO GPU 实际执行门禁未通过"
+        $NEED_INSTALL = $true
+    } else {
+        Write-Ok "Intel XPU + OpenVINO GPU 运行时实测通过"
+    }
+}
 }
 
 # 检查 4：受控 YourMT3+ 源码身份
@@ -104,7 +131,7 @@ print('YourMT3+ patched source files:', file_count)
 "@
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkYourMt3SourceScript
     if ($pythonExitCode -ne 0) {
-        Write-Host "[错误] YourMT3+ 源码树缺失或身份不匹配；请重新取得当前项目版本，不能用可变上游源码替代。" -ForegroundColor Red
+        Write-Host "[错误] YourMT3+ 源码树缺失或身份不匹配；需要恢复当前项目版本，可变上游源码与本版本不兼容。" -ForegroundColor Red
         exit 1
     }
     Write-Ok "YourMT3+ 源码身份检查通过"
@@ -154,7 +181,7 @@ sys.exit(0)
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMultiStemScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 BS-RoFormer SW Fixed 六声部模型，或文件校验失败"
-        Write-Warn "  请先运行: python download_multistem_model.py"
+        Write-Warn "  资源准备命令: python download_multistem_model.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "BS-RoFormer SW Fixed 六声部模型检查通过"
@@ -225,7 +252,7 @@ sys.exit(0 if is_transkun_v2_aug_model_available() else 1)
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkTransKunV2AugScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "TransKun V2 Aug 模型缺失或校验失败"
-        Write-Warn "  请先运行: python download_transkun_v2_aug_model.py"
+        Write-Warn "  资源准备命令: python download_transkun_v2_aug_model.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "TransKun V2 Aug 模型检查通过"
@@ -249,7 +276,7 @@ sys.exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_availab
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkAriaScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 Aria-AMT 包或模型权重"
-        Write-Warn "  请先运行: python download_aria_amt_model.py"
+        Write-Warn "  资源准备命令: python download_aria_amt_model.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "Aria-AMT 后端检查通过"
@@ -271,7 +298,7 @@ sys.exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkByteDanceScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 ByteDance Piano 包或模型权重"
-        Write-Warn "  请先运行: python download_bytedance_piano_model.py"
+        Write-Warn "  资源准备命令: python download_bytedance_piano_model.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "ByteDance Piano 后端检查通过"
@@ -294,7 +321,7 @@ sys.exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_avai
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMirosScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "未找到 MIROS 源码、运行依赖或模型权重"
-        Write-Warn "  请先运行: python download_miros_model.py"
+        Write-Warn "  资源准备命令: python download_miros_model.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "MIROS 后端检查通过"
@@ -334,7 +361,7 @@ print('FluidSynth:', fluidsynth)
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkMuscriptorScript
     if ($pythonExitCode -ne 0) {
         Write-Warn "Beat This、MuScriptor Small/Medium/Large 或其真实 MIDI 播放资源缺失/身份校验失败"
-        Write-Warn "  请接受 Hugging Face 模型条款后运行: python download_sota_models.py"
+        Write-Warn "  Hugging Face 条款授权后的资源准备命令: python download_sota_models.py"
         $NEED_INSTALL = $true
     } else {
         Write-Ok "MuScriptor Small/Medium/Large 与真实 SoundFont 播放链检查通过"
@@ -345,19 +372,21 @@ print('FluidSynth:', fluidsynth)
 if ($NEED_INSTALL) {
     Write-Info "依赖不完整，正在运行安装程序..."
     $installScript = Join-Path $REPO_DIR "install.ps1"
-    & powershell -ExecutionPolicy Bypass -File "$installScript"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$installScript" `
+        -Accelerator $Accelerator -VenvName $VenvName
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[错误] 安装失败，请查看上方错误信息。" -ForegroundColor Red
+        Write-Host "[错误] 安装失败；上方日志包含具体错误。" -ForegroundColor Red
         Read-Host "按回车键退出"
         exit 1
     }
     Write-Ok "安装完成，正在重新执行完整依赖与身份校验..."
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSCommandPath" @args
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSCommandPath" `
+        -Accelerator $Accelerator -VenvName $VenvName @AppArgs
     exit $LASTEXITCODE
 }
 
 # --- 启动应用 ---
 Write-Ok "依赖已就绪，正在启动 Music to MIDI..."
 Set-Location $REPO_DIR
-& "$VENV_PYTHON" -m src.main @args
+& "$VENV_PYTHON" -m src.main @AppArgs
 

@@ -15,7 +15,9 @@ from src.models.data_models import Config
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import (
     clear_gpu_memory,
+    ensure_accelerator_runtime_compatibility,
     ensure_cuda_runtime_compatibility,
+    ensure_module_on_device,
     get_device,
     rewrite_cuda_runtime_error,
 )
@@ -43,6 +45,53 @@ BYTEDANCE_PIANO_CHECKPOINT_SHA256 = (
 )
 # Compatibility alias for callers that previously used a minimum-size threshold.
 BYTEDANCE_PIANO_MIN_CHECKPOINT_BYTES = BYTEDANCE_PIANO_CHECKPOINT_SIZE
+
+
+def _create_bytedance_transcriptor(module, checkpoint_path: Path, device: str):
+    """Construct the pinned upstream runtime without its CUDA-only device branch."""
+
+    if not device.startswith("xpu"):
+        return module.PianoTranscription(
+            device=device,
+            checkpoint_path=str(checkpoint_path),
+        )
+
+    import torch
+    from piano_transcription_inference import config as upstream_config
+    from piano_transcription_inference.models import Note_pedal
+
+    # piano-transcription-inference 0.0.6 treats every non-CUDA device as CPU
+    # and only moves/wraps the model when the device string contains "cuda".
+    # Reproduce its fixed constructor state exactly, but load the model onto the
+    # native XPU without CUDA DataParallel or a misleading CPU inference path.
+    transcriptor = module.PianoTranscription.__new__(module.PianoTranscription)
+    transcriptor.segment_samples = 16000 * 10
+    transcriptor.frames_per_second = upstream_config.frames_per_second
+    transcriptor.classes_num = upstream_config.classes_num
+    transcriptor.onset_threshold = 0.3
+    transcriptor.offset_threshod = 0.3
+    transcriptor.frame_threshold = 0.1
+    transcriptor.pedal_offset_threshold = 0.2
+
+    transcriptor.model = Note_pedal(
+        frames_per_second=transcriptor.frames_per_second,
+        classes_num=transcriptor.classes_num,
+    )
+    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+    try:
+        if not isinstance(checkpoint, dict) or "model" not in checkpoint:
+            raise RuntimeError("ByteDance Piano checkpoint 缺少 model state_dict")
+        transcriptor.model.load_state_dict(checkpoint["model"], strict=False)
+    finally:
+        del checkpoint
+    transcriptor.model.to(device)
+    ensure_module_on_device(
+        transcriptor.model,
+        device,
+        "ByteDance Piano model",
+    )
+    logger.info("ByteDance Piano model loaded for native inference on %s", device)
+    return transcriptor
 
 
 def validate_bytedance_piano_checkpoint(path: Path) -> Path:
@@ -87,7 +136,7 @@ class ByteDancePianoTranscriber:
         try:
             if importlib.util.find_spec("piano_transcription_inference") is None:
                 return (
-                    "ByteDance Piano 未安装。请执行: "
+                    "ByteDance Piano 未安装。安装命令："
                     "python -m pip install piano-transcription-inference==0.0.6 "
                     "torchlibrosa matplotlib"
                 )
@@ -95,12 +144,12 @@ class ByteDancePianoTranscriber:
             try:
                 installed_version = metadata.version(BYTEDANCE_PIANO_PACKAGE_NAME)
             except metadata.PackageNotFoundError:
-                return "ByteDance Piano 缺少 distribution metadata，无法验证包版本"
+                return "ByteDance Piano 安装信息缺失，无法验证包版本"
             if installed_version != BYTEDANCE_PIANO_PACKAGE_VERSION:
                 return (
-                    "ByteDance Piano 包版本不匹配: "
-                    f"expected {BYTEDANCE_PIANO_PACKAGE_VERSION}, got {installed_version}。"
-                    "请执行: python -m pip install --force-reinstall "
+                    "ByteDance Piano 包版本不匹配："
+                    f"需要 {BYTEDANCE_PIANO_PACKAGE_VERSION}，当前 {installed_version}。"
+                    "修复命令：python -m pip install --force-reinstall "
                     "piano-transcription-inference==0.0.6"
                 )
 
@@ -111,7 +160,7 @@ class ByteDancePianoTranscriber:
             return ""
         except (ImportError, ModuleNotFoundError) as exc:
             return (
-                f"ByteDance Piano 运行依赖缺失: {exc}。请执行: "
+                f"ByteDance Piano 运行依赖缺失：{exc}。安装命令："
                 "python -m pip install piano-transcription-inference==0.0.6 "
                 "torchlibrosa matplotlib"
             )
@@ -137,11 +186,14 @@ class ByteDancePianoTranscriber:
         if preferred.startswith("cuda"):
             ensure_cuda_runtime_compatibility(preferred)
             return "cuda"
+        if preferred.startswith("xpu"):
+            ensure_accelerator_runtime_compatibility(preferred)
+            return preferred
         if preferred == "cpu":
             return "cpu"
         raise RuntimeError(
-            "ByteDance Piano 当前仅对 CPU/CUDA 路径做了集成验证，"
-            f"检测到设备 {preferred}。请切换到 CPU 或 CUDA 后重试。"
+            "ByteDance Piano 当前仅支持 CPU、CUDA 或 Intel XPU，"
+            f"检测到不受支持的设备 {preferred}。"
         )
 
     @staticmethod
@@ -178,9 +230,9 @@ class ByteDancePianoTranscriber:
                 f"期望大小: {BYTEDANCE_PIANO_CHECKPOINT_SIZE} bytes",
                 f"期望 SHA-256: {BYTEDANCE_PIANO_CHECKPOINT_SHA256}",
                 f"当前检查路径: {self.checkpoint_path.resolve()}",
-                "如果曾将 checkpoint 改名为 matplotlib.pth，请改回上面的原始文件名。",
-                "matplotlib 是 Python 依赖，需要通过 pip 安装，不能通过重命名模型文件提供。",
-                "请执行: python download_bytedance_piano_model.py",
+                "checkpoint 需要保留上面的原始文件名；matplotlib.pth 不是有效名称。",
+                "matplotlib 是单独安装的 Python 依赖，与模型文件无关。",
+                "资源准备命令：python download_bytedance_piano_model.py",
             ]
         )
 
@@ -223,9 +275,10 @@ class ByteDancePianoTranscriber:
             if progress_callback:
                 progress_callback(0.20, self._pt("progress.running_bytedance_piano"))
 
-            transcriptor = module.PianoTranscription(
-                device=device,
-                checkpoint_path=str(self.checkpoint_path),
+            transcriptor = _create_bytedance_transcriptor(
+                module,
+                self.checkpoint_path,
+                device,
             )
             self._check_cancelled()
             event_callback = getattr(self, "_event_callback", None)

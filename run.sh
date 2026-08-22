@@ -124,7 +124,7 @@ print('BS-RoFormer SW Fixed config:', config_path)
 exit(0)
 "; then
     warn "BS-RoFormer SW Fixed six-stem model missing or checksum validation failed"
-    warn "  先运行: python download_multistem_model.py"
+    warn "  资源准备命令: python download_multistem_model.py"
     NEED_INSTALL=true
 fi
 
@@ -165,7 +165,7 @@ print('TransKun V2 Aug model available:', is_transkun_v2_aug_model_available())
 exit(0 if is_transkun_v2_aug_model_available() else 1)
 "; then
     warn "TransKun V2 Aug model missing or checksum validation failed"
-    warn "  先运行: python download_transkun_v2_aug_model.py"
+    warn "  资源准备命令: python download_transkun_v2_aug_model.py"
     NEED_INSTALL=true
 fi
 
@@ -180,7 +180,7 @@ print('Aria-AMT model:', transcriber.is_model_available())
 exit(0 if AriaAmtTranscriber.is_available() and transcriber.is_model_available() else 1)
 "; then
     warn "Aria-AMT backend or model missing"
-    warn "  先运行: python download_aria_amt_model.py"
+    warn "  资源准备命令: python download_aria_amt_model.py"
     NEED_INSTALL=true
 fi
 
@@ -193,7 +193,7 @@ print('ByteDance Piano model:', transcriber.is_model_available())
 exit(0 if ByteDancePianoTranscriber.is_available() and transcriber.is_model_available() else 1)
 "; then
     warn "ByteDance Piano backend or model missing"
-    warn "  先运行: python download_bytedance_piano_model.py"
+    warn "  资源准备命令: python download_bytedance_piano_model.py"
     NEED_INSTALL=true
 fi
 
@@ -207,7 +207,7 @@ print('MIROS model:', MirosTranscriber.is_model_available())
 exit(0 if MirosTranscriber.is_available() and MirosTranscriber.is_model_available() else 1)
 "; then
     warn "MIROS backend or model missing"
-    warn "  先运行: python download_miros_model.py"
+    warn "  资源准备命令: python download_miros_model.py"
     NEED_INSTALL=true
 fi
 

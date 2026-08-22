@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
+from contextlib import nullcontext
 from pathlib import Path
+from types import MethodType
 from typing import Callable, Dict, Optional
 
 from download_accompaniment_model import (
@@ -20,11 +23,13 @@ from download_vocal_model import (
 from src.i18n.translator import Translator
 from src.utils.gpu_utils import (
     clear_gpu_memory,
+    ensure_accelerator_runtime_compatibility,
     ensure_cuda_runtime_compatibility,
     get_device,
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
 )
+from src.utils.openvino_runtime import initialize_openvino_gpu_runtime
 from src.utils.runtime_paths import (
     activate_audio_separator_runtime,
     get_audio_separator_model_dir,
@@ -36,6 +41,8 @@ LEAP_CHECKPOINT_NAME = "bs_leap_xe_voc.ckpt"
 LEAP_CONFIG_NAME = "leap_xe_config_voc.yaml"
 POLARFORMER_ONNX_NAME = "bs_polarformer_fp16.onnx"
 POLARFORMER_CONFIG_NAME = "model_bs_polarformer_float16.yaml"
+DEFAULT_POLARFORMER_MAX_CHUNK_SIZE = 441_000
+LEAP_XPU_ATTENTION_QUERY_CHUNK_SIZE = 128
 
 # Compatibility constants retained for callers that imported the old names.
 ROFORMER_MODEL = LEAP_CHECKPOINT_NAME
@@ -96,9 +103,10 @@ def _resolve_torch_device(requested_device: Optional[str]):
 
     device_name = str(requested_device or get_device(prefer_gpu=True)).strip().lower()
     if device_name.startswith("cuda"):
-        if not torch.cuda.is_available():
-            raise RuntimeError(f"CUDA was requested but is unavailable: {device_name}")
         ensure_cuda_runtime_compatibility(device_name)
+        return torch.device(device_name)
+    if device_name.startswith("xpu"):
+        ensure_accelerator_runtime_compatibility(device_name)
         return torch.device(device_name)
     if device_name == "mps":
         if not torch.backends.mps.is_available():
@@ -284,6 +292,110 @@ def _leap_reference_forward(model, raw_audio):
     return reconstructed
 
 
+def _forward_leap_attention_in_query_chunks(
+    original_forward: Callable,
+    q,
+    k,
+    v,
+    *,
+    query_chunk_size: int,
+):
+    """Evaluate exact inference attention in bounded query-axis slices.
+
+    Each query row attends to the complete key/value sequence. Splitting only
+    the query axis therefore preserves the model's attention semantics while
+    bounding the temporary ``query_length * key_length`` allocation.
+    """
+
+    import torch
+
+    if query_chunk_size <= 0:
+        raise ValueError(
+            "Leap XE XPU attention query_chunk_size must be positive: " f"{query_chunk_size}"
+        )
+    if q.ndim < 2:
+        raise RuntimeError(
+            "Leap XE attention query tensor must expose a sequence axis at -2: "
+            f"shape={tuple(q.shape)}"
+        )
+
+    query_length = int(q.shape[-2])
+    if query_length <= query_chunk_size:
+        return original_forward(q, k, v)
+
+    outputs = [
+        original_forward(q[..., start : start + query_chunk_size, :], k, v)
+        for start in range(0, query_length, query_chunk_size)
+    ]
+    return torch.cat(outputs, dim=-2)
+
+
+def _enable_leap_xpu_exact_query_chunking(
+    model,
+    device,
+    query_chunk_size: int = LEAP_XPU_ATTENTION_QUERY_CHUNK_SIZE,
+    *,
+    attention_module_type=None,
+) -> int:
+    """Bound Leap XE attention memory on XPU without changing model context."""
+
+    if str(getattr(device, "type", "")).strip().lower() != "xpu":
+        return 0
+    if query_chunk_size <= 0:
+        raise ValueError(
+            "Leap XE XPU attention query_chunk_size must be positive: " f"{query_chunk_size}"
+        )
+
+    if attention_module_type is None:
+        activate_audio_separator_runtime()
+        from audio_separator.separator.uvr_lib_v5.roformer.attend import Attend
+
+        attention_module_type = Attend
+
+    attention_modules = [
+        module for module in model.modules() if isinstance(module, attention_module_type)
+    ]
+    if not attention_modules:
+        raise RuntimeError(
+            "Leap XE XPU attention memory guard found no pinned Attend modules; "
+            "the audio-separator source contract has changed"
+        )
+
+    for module in attention_modules:
+        if getattr(module, "_music_to_midi_xpu_query_chunking", False):
+            raise RuntimeError("Leap XE XPU attention was already query-chunked")
+
+        original_forward = type(module).forward
+
+        def query_chunked_forward(
+            self,
+            q,
+            k,
+            v,
+            _original_forward=original_forward,
+        ):
+            if self.training:
+                raise RuntimeError("Leap XE XPU exact query-chunk attention is inference-only")
+            return _forward_leap_attention_in_query_chunks(
+                lambda query, key, value: _original_forward(self, query, key, value),
+                q,
+                k,
+                v,
+                query_chunk_size=query_chunk_size,
+            )
+
+        module._music_to_midi_xpu_query_chunking = True
+        module.forward = MethodType(query_chunked_forward, module)
+
+    message = (
+        "Leap XE XPU exact query-chunk attention enabled | "
+        f"modules={len(attention_modules)} query_chunk={query_chunk_size}"
+    )
+    logger.info(message)
+    print(message, flush=True)
+    return len(attention_modules)
+
+
 def _build_leap_model(model_config: dict, checkpoint_path: Path, device):
     import torch
 
@@ -337,7 +449,9 @@ def _build_leap_model(model_config: dict, checkpoint_path: Path, device):
     else:
         state_dict = checkpoint
     model.load_state_dict(state_dict, strict=True)
-    return model.to(device).eval()
+    model = model.to(device).eval()
+    _enable_leap_xpu_exact_query_chunking(model, device)
+    return model
 
 
 def _leap_chunk_starts(total_samples: int, chunk_size: int, step: int) -> list[int]:
@@ -346,6 +460,21 @@ def _leap_chunk_starts(total_samples: int, chunk_size: int, step: int) -> list[i
             "Leap XE chunk scheduling requires positive total_samples, chunk_size, and step"
         )
     return list(range(0, total_samples, step))
+
+
+def _resolve_leap_execution_settings(
+    device_type: str,
+    configured_use_amp: bool,
+    configured_batch_size: int,
+) -> tuple[bool, int]:
+    """Apply the pinned model's AMP request with an XPU-safe inference batch."""
+
+    normalized_device = str(device_type).strip().lower()
+    if configured_batch_size <= 0:
+        raise ValueError(f"Leap XE batch_size must be positive: {configured_batch_size}")
+    use_amp = bool(configured_use_amp) and normalized_device in {"cuda", "xpu"}
+    batch_size = 1 if normalized_device == "xpu" else configured_batch_size
+    return use_amp, batch_size
 
 
 def _audio_chunk_progress_message(
@@ -447,13 +576,13 @@ def _run_leap_vocals_leg(
         raise RuntimeError("Leap XE config has no inference.chunk_size or audio.chunk_size")
     chunk_size = int(configured_chunk_size)
     num_overlap = int(inference_config.get("num_overlap", 2))
-    batch_size = int(inference_config.get("batch_size", 1))
+    configured_batch_size = int(inference_config.get("batch_size", 1))
     num_stems = int(model_config.get("num_stems", 1))
-    if chunk_size < 10 or num_overlap <= 0 or batch_size <= 0 or num_stems != 1:
+    if chunk_size < 10 or num_overlap <= 0 or configured_batch_size <= 0 or num_stems != 1:
         raise RuntimeError(
             "Invalid Leap XE inference config: "
             f"chunk_size={chunk_size}, num_overlap={num_overlap}, "
-            f"batch_size={batch_size}, num_stems={num_stems}"
+            f"batch_size={configured_batch_size}, num_stems={num_stems}"
         )
     step = chunk_size // num_overlap
     if step <= 0:
@@ -478,7 +607,11 @@ def _run_leap_vocals_leg(
     window[:fade_size] = torch.linspace(0.0, 1.0, fade_size)
     window[-fade_size:] = torch.linspace(1.0, 0.0, fade_size)
     device = _resolve_torch_device(requested_device)
-    use_amp = bool(training_config.get("use_amp", True)) and device.type == "cuda"
+    use_amp, batch_size = _resolve_leap_execution_settings(
+        device.type,
+        bool(training_config.get("use_amp", True)),
+        configured_batch_size,
+    )
     engine = f"PyTorch · {device} · {'AMP/FP16' if use_amp else 'FP32'} · batch={batch_size}"
     model = None
 
@@ -507,7 +640,12 @@ def _run_leap_vocals_leg(
         batch_data = []
         batch_locations = []
         processed_chunks = 0
-        with torch.inference_mode(), torch.amp.autocast(device_type="cuda", enabled=use_amp):
+        amp_context = (
+            torch.amp.autocast(device_type=device.type, dtype=torch.float16)
+            if use_amp
+            else nullcontext()
+        )
+        with torch.inference_mode(), amp_context:
             for index, start in enumerate(starts):
                 cancel_check()
                 part = mix_tensor[:, start : start + chunk_size].to(device)
@@ -662,7 +800,7 @@ def _resolve_onnx_providers(requested_device: Optional[str], ort_module) -> list
     available = set(ort_module.get_available_providers())
     device_name = str(requested_device or "").strip().lower()
     if not device_name:
-        device_name = "cuda:0" if "CUDAExecutionProvider" in available else "cpu"
+        device_name = get_device(prefer_gpu=True)
 
     if device_name == "cpu":
         if "CPUExecutionProvider" not in available:
@@ -679,7 +817,112 @@ def _resolve_onnx_providers(requested_device: Optional[str], ort_module) -> list
         except ValueError as exc:
             raise ValueError(f"Invalid CUDA device: {device_name!r}") from exc
         return [("CUDAExecutionProvider", {"device_id": device_id})]
+    if device_name.startswith("xpu"):
+        if "OpenVINOExecutionProvider" not in available:
+            raise RuntimeError(
+                "Intel XPU was requested for PolarFormer but ONNX Runtime has no "
+                "OpenVINOExecutionProvider; install onnxruntime-openvino==1.24.1 "
+                "and openvino==2025.4.1 in the XPU environment"
+            )
+        try:
+            device_id = int(device_name.split(":", 1)[1]) if ":" in device_name else 0
+        except ValueError as exc:
+            raise ValueError(f"Invalid Intel XPU device: {device_name!r}") from exc
+        if device_id < 0:
+            raise ValueError(f"Invalid Intel XPU device: {device_name!r}")
+        initialize_openvino_gpu_runtime()
+        return [
+            (
+                "OpenVINOExecutionProvider",
+                {"device_type": f"GPU.{device_id}"},
+            )
+        ]
     raise ValueError(f"Unsupported PolarFormer ONNX device: {device_name!r}")
+
+
+def _create_strict_onnx_session(ort_module, onnx_path: Path, providers: list, device: str):
+    """Create an ORT session and enforce the selected accelerator contract.
+
+    CUDA keeps ONNX Runtime's built-in CPU assignment for graph-management ops;
+    the PolarFormer graph cannot initialize when that assignment is disabled.
+    Intel XPU disables both CPU node assignment and Python's runtime EP retry.
+    ONNX Runtime still registers its built-in CPU provider in the returned
+    provider list, so GPU-only execution is proved by both fallback gates plus
+    OpenVINO remaining the primary provider.
+    """
+
+    session_options = ort_module.SessionOptions()
+    add_entry = getattr(session_options, "add_session_config_entry", None)
+    normalized_device = str(device).strip().lower()
+    strict_gpu_only = normalized_device.startswith("xpu")
+    if strict_gpu_only:
+        if not callable(add_entry):
+            raise RuntimeError(
+                "ONNX Runtime does not expose session.disable_cpu_ep_fallback; "
+                f"cannot prove accelerator-only execution for {device}"
+            )
+        add_entry("session.disable_cpu_ep_fallback", "1")
+
+    session = ort_module.InferenceSession(
+        str(onnx_path),
+        sess_options=session_options,
+        providers=providers,
+    )
+    actual = list(session.get_providers())
+    if normalized_device.startswith("cuda"):
+        if not actual or actual[0] != "CUDAExecutionProvider":
+            raise RuntimeError(
+                "PolarFormer ONNX CUDA provider contract failed: "
+                f"device={device}, expected_primary='CUDAExecutionProvider', actual={actual}"
+            )
+    elif strict_gpu_only:
+        expected = "OpenVINOExecutionProvider"
+        if not actual or actual[0] != expected:
+            raise RuntimeError(
+                "PolarFormer ONNX accelerator provider contract failed: "
+                f"device={device}, expected_primary={expected!r}, actual={actual}"
+            )
+        disable_runtime_fallback = getattr(session, "disable_fallback", None)
+        if not callable(disable_runtime_fallback):
+            raise RuntimeError(
+                "ONNX Runtime does not expose InferenceSession.disable_fallback(); "
+                f"cannot prevent runtime CPU retry for {device}"
+            )
+        disable_runtime_fallback()
+    return session
+
+
+def _describe_onnx_session(session, device: str) -> str:
+    """Describe effective ONNX execution without presenting registered EPs as active."""
+
+    actual = list(session.get_providers())
+    if not actual:
+        raise RuntimeError("ONNX Runtime session returned no execution providers")
+    normalized_device = str(device).strip().lower()
+    if normalized_device.startswith("xpu"):
+        device_id = normalized_device.split(":", 1)[1] if ":" in normalized_device else "0"
+        return f"ONNX Runtime · {actual[0]} " f"(GPU.{device_id}; CPU fallback disabled)"
+    return f"ONNX Runtime · {' + '.join(actual)}"
+
+
+def _resolve_polarformer_chunk_size(configured_chunk_size: int) -> int:
+    """Bound PolarFormer's inference window to a verified 16 GiB-safe default."""
+
+    if configured_chunk_size <= 0:
+        raise RuntimeError(f"PolarFormer chunk_size is invalid: {configured_chunk_size}")
+
+    raw_override = os.environ.get("POLARFORMER_MAX_CHUNK_SIZE", "").strip()
+    if raw_override:
+        try:
+            max_chunk_size = int(raw_override)
+        except ValueError as exc:
+            raise RuntimeError(f"POLARFORMER_MAX_CHUNK_SIZE is invalid: {raw_override!r}") from exc
+    else:
+        max_chunk_size = DEFAULT_POLARFORMER_MAX_CHUNK_SIZE
+
+    if max_chunk_size <= 0:
+        return configured_chunk_size
+    return max(1, min(configured_chunk_size, max_chunk_size))
 
 
 def _run_polarformer_accompaniment_leg(
@@ -715,7 +958,7 @@ def _run_polarformer_accompaniment_leg(
         raise RuntimeError(
             f"PolarFormer config expected {audio_channels} audio channel(s), not stereo"
         )
-    chunk_size = int(inference_config.get("chunk_size", 882_000))
+    chunk_size = _resolve_polarformer_chunk_size(int(inference_config.get("chunk_size", 882_000)))
     num_overlap = int(inference_config.get("num_overlap", 2))
     if chunk_size <= 0 or num_overlap <= 0:
         raise RuntimeError(
@@ -739,13 +982,19 @@ def _run_polarformer_accompaniment_leg(
                 engine=requested_engine,
             ),
         )
-    session = ort.InferenceSession(str(onnx_path), providers=providers)
+    effective_device = str(requested_device or get_device(prefer_gpu=True)).strip().lower()
+    session = _create_strict_onnx_session(
+        ort,
+        onnx_path,
+        providers,
+        effective_device,
+    )
     inputs = session.get_inputs()
     if len(inputs) != 1 or inputs[0].name != "stft_features":
         raise RuntimeError(
             "Unexpected PolarFormer ONNX input contract: " f"{[item.name for item in inputs]}"
         )
-    actual_engine = f"ONNX Runtime · {' + '.join(session.get_providers())}"
+    actual_engine = _describe_onnx_session(session, effective_device)
     logger.info(
         "PolarFormer accompaniment leg loaded with providers=%s chunks=%s",
         session.get_providers(),

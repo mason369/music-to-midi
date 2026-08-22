@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -31,6 +32,8 @@ from src.utils.artifact_identity import validate_file_identity  # noqa: E402
 
 AUDIO_SEPARATOR_PACKAGE_VERSION = "0.44.1"
 ONNXRUNTIME_GPU_PACKAGE_VERSION = "1.23.2"
+ONNXRUNTIME_OPENVINO_PACKAGE_VERSION = "1.24.1"
+OPENVINO_PACKAGE_VERSION = "2025.4.1"
 
 
 def _require_directory(path: Path | str, *, label: str) -> Path:
@@ -207,15 +210,35 @@ def _require_runtime_available(label: str, unavailable_reason: str) -> None:
 def validate_portable_runtime_identities() -> dict[str, str]:
     """Require exact package/source identities for every bundled runtime backend."""
 
+    accelerator = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "cuda").strip().lower()
+    onnxruntime_distributions = {
+        "cuda": ("onnxruntime-gpu", ONNXRUNTIME_GPU_PACKAGE_VERSION),
+        "xpu": ("onnxruntime-openvino", ONNXRUNTIME_OPENVINO_PACKAGE_VERSION),
+    }
+    try:
+        onnxruntime_package, onnxruntime_expected_version = onnxruntime_distributions[accelerator]
+    except KeyError as exc:
+        raise RuntimeError(
+            "Unsupported portable accelerator for runtime identity validation: " f"{accelerator!r}"
+        ) from exc
+
     audio_separator_version = _require_distribution_version(
         "audio-separator", AUDIO_SEPARATOR_PACKAGE_VERSION
     )
     onnxruntime_version = _require_distribution_version(
-        "onnxruntime-gpu", ONNXRUNTIME_GPU_PACKAGE_VERSION
+        onnxruntime_package, onnxruntime_expected_version
+    )
+    openvino_version = (
+        _require_distribution_version("openvino", OPENVINO_PACKAGE_VERSION)
+        if accelerator == "xpu"
+        else None
     )
     beat_this_version = _require_distribution_version("beat-this", "1.1.0")
 
-    for module_name in ("audio_separator.separator", "onnxruntime", "beat_this.inference"):
+    runtime_modules = ["audio_separator.separator", "onnxruntime", "beat_this.inference"]
+    if accelerator == "xpu":
+        runtime_modules.append("openvino")
+    for module_name in runtime_modules:
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -232,14 +255,17 @@ def validate_portable_runtime_identities() -> dict[str, str]:
             "TransKun packaged V2 resources failed exact size/SHA-256 identity validation"
         )
 
-    return {
+    identities = {
         "audio-separator": audio_separator_version,
-        "onnxruntime-gpu": onnxruntime_version,
+        onnxruntime_package: onnxruntime_version,
         "beat-this": beat_this_version,
         "aria-amt-source": aria_amt.ARIA_AMT_SOURCE_REVISION,
         "piano-transcription-inference": (bytedance_piano.BYTEDANCE_PIANO_PACKAGE_VERSION),
         "transkun": transkun.TRANSKUN_PACKAGE_VERSION,
     }
+    if openvino_version is not None:
+        identities["openvino"] = openvino_version
+    return identities
 
 
 def validate_portable_model_assets(

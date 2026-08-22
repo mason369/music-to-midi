@@ -1,0 +1,140 @@
+name: 发布 Docker 容器镜像
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  contract:
+    name: 容器与许可证门禁
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: 设置 Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: 安装静态门禁依赖
+        run: python -m pip install pytest==9.0.2 PyYAML==6.0.3
+
+      - name: 运行 Docker、发布许可与部署契约测试
+        run: >-
+          python -m pytest -q
+          tests/test_docker_deployment_contract.py
+          tests/test_third_party_notice_packaging.py
+
+  publish:
+    name: 构建并发布 ${{ matrix.component }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            dockerfile: docker/backend.Dockerfile
+          - component: gateway
+            dockerfile: docker/gateway.Dockerfile
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成 OCI 标签和元数据
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.component }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/master' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: 构建本地验收镜像
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: music-to-midi-${{ matrix.component }}:ci
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=container-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.component }}
+
+      - name: 镜像级烟雾验收
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            docker run --rm --entrypoint python \
+              music-to-midi-backend:ci \
+              -m src.model_profiles list > /tmp/model-profiles.txt
+            test "$(wc -l < /tmp/model-profiles.txt)" -eq 15
+            docker run --rm --entrypoint /bin/bash \
+              music-to-midi-backend:ci \
+              -c 'test -s /app/THIRD_PARTY_SBOM.txt && test "$(id -u)" = 10001'
+          else
+            docker run --rm --entrypoint caddy \
+              music-to-midi-gateway:ci version
+            test "$(docker image inspect music-to-midi-gateway:ci --format '{{.Config.User}}')" = "10001:10001"
+          fi
+
+      - name: 推送带 SBOM 与 provenance 的镜像
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=container-${{ matrix.component }}
+          provenance: mode=max
+          sbom: true
+
+      - name: 生成注册表证明
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.component }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

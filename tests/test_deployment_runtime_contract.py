@@ -14,6 +14,8 @@ from unittest import mock
 import gradio as gradio
 import pytest
 
+from src.models.data_models import MuscriptorProcessingChain, TempoMode
+
 
 def _function_source(path: str, name: str) -> str:
     source = Path(path).read_text(encoding="utf-8")
@@ -312,6 +314,7 @@ def test_zerogpu_duration_contract_rejects_a_request_above_free_window():
             "small": 0.7,
         },
         "MultiInstrumentModel": fake_multi_model,
+        "MuscriptorProcessingChain": MuscriptorProcessingChain,
         "math": math,
         "st": lambda key, **kwargs: f"{key}: {kwargs}",
         "gr": types.SimpleNamespace(Error=RuntimeError),
@@ -362,23 +365,27 @@ def test_zerogpu_admission_and_model_preparation_happen_before_gpu_entry():
     public_source = _function_source("space/app.py", "convert_audio_to_midi")
     events = []
 
-    def stream_gpu_job(function, args, mode, progress):
-        del mode
-        yield function(*args, progress=progress)
+    def _fake_stream(gpu_fn, args, panel_mode, progress):
+        del panel_mode
+        yield gpu_fn(*args, progress=progress)
 
     namespace = {
         "ZERO_GPU": True,
         "MODE_IDS": ("smart",),
+        "MuscriptorProcessingChain": MuscriptorProcessingChain,
+        "TempoMode": TempoMode,
         "gr": types.SimpleNamespace(Progress=lambda: None, Error=RuntimeError),
         "st": lambda key: key,
         "_estimate_zerogpu_duration": lambda *args, **kwargs: events.append("admit"),
         "_prepare_request_models": lambda *args, **kwargs: events.append("prepare"),
         "_convert_audio_to_midi_on_gpu": lambda *args, **kwargs: (events.append("gpu") or "result"),
-        "_stream_gpu_job": stream_gpu_job,
+        "_stream_gpu_job": _fake_stream,
     }
     exec(public_source, namespace)
 
-    result = list(
+    # The public handler is a streaming generator; driving it to completion is
+    # what must run admission -> preparation -> GPU entry in that order.
+    results = list(
         namespace["convert_audio_to_midi"](
             "clip.wav",
             "smart",
@@ -388,7 +395,7 @@ def test_zerogpu_admission_and_model_preparation_happen_before_gpu_entry():
         )
     )
 
-    assert result == ["result"]
+    assert results == ["result"]
     assert events == ["admit", "prepare", "gpu"]
 
     def reject(*args, **kwargs):

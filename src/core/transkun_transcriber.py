@@ -18,7 +18,9 @@ from src.models.data_models import Config
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import (
     clear_gpu_memory,
+    ensure_accelerator_runtime_compatibility,
     ensure_cuda_runtime_compatibility,
+    ensure_module_on_device,
     get_device,
     rewrite_cuda_runtime_error,
 )
@@ -62,7 +64,11 @@ def _transkun_worker(
         transkun_cls = conf_manager["Model"].module.TransKun
         conf = conf_manager["Model"].config
 
-        checkpoint = torch.load(str(weight_path), map_location=device)
+        ensure_accelerator_runtime_compatibility(device)
+        checkpoint = torch.load(
+            str(weight_path),
+            map_location="cpu" if device.startswith("xpu") else device,
+        )
         model = transkun_cls(conf=conf).to(device)
 
         state_dict = checkpoint.get("best_state_dict") or checkpoint.get("state_dict")
@@ -70,6 +76,7 @@ def _transkun_worker(
             raise RuntimeError("TransKun checkpoint 缺少 state_dict")
         model.load_state_dict(state_dict, strict=True)
         model.eval()
+        ensure_module_on_device(model, device, "TransKun model")
 
         fs, audio = readAudio(str(audio_path))
         if fs != model.fs:
@@ -221,7 +228,7 @@ class TranskunTranscriber:
         try:
             if importlib.util.find_spec("transkun.transcribe") is None:
                 return (
-                    "TransKun 未安装。请执行: "
+                    "TransKun 未安装。安装命令："
                     f"python -m pip install transkun=={TRANSKUN_PACKAGE_VERSION}"
                 )
         except (ImportError, ModuleNotFoundError, ValueError) as exc:
@@ -230,12 +237,12 @@ class TranskunTranscriber:
         try:
             installed_version = metadata.version(TRANSKUN_PACKAGE_NAME)
         except metadata.PackageNotFoundError:
-            return "TransKun 缺少 distribution metadata，无法验证包版本"
+            return "TransKun 安装信息缺失，无法验证包版本"
         if installed_version != TRANSKUN_PACKAGE_VERSION:
             return (
-                "TransKun 包版本不匹配: "
-                f"expected {TRANSKUN_PACKAGE_VERSION}, got {installed_version}。"
-                "请执行: python -m pip install --force-reinstall "
+                "TransKun 包版本不匹配："
+                f"需要 {TRANSKUN_PACKAGE_VERSION}，当前 {installed_version}。"
+                "修复命令：python -m pip install --force-reinstall "
                 f"transkun=={TRANSKUN_PACKAGE_VERSION}"
             )
         return ""
@@ -305,10 +312,13 @@ class TranskunTranscriber:
         if preferred.startswith("cuda"):
             ensure_cuda_runtime_compatibility(preferred)
             return preferred
+        if preferred.startswith("xpu"):
+            ensure_accelerator_runtime_compatibility(preferred)
+            return preferred
         if preferred != "cpu":
             raise RuntimeError(
-                "TransKun 当前仅对 CPU/CUDA 路径做了集成验证，"
-                f"检测到设备 {preferred}。请切换到 CPU 或 CUDA 后重试。"
+                "TransKun 当前仅支持 CPU、CUDA 或 Intel XPU，"
+                f"检测到不受支持的设备 {preferred}。"
             )
         return "cpu"
 
@@ -330,7 +340,7 @@ class TranskunTranscriber:
                 "TransKun 预训练资源缺失或身份校验失败。"
                 f"2.0.pt 期望 {TRANSKUN_WEIGHT_SIZE} bytes / {TRANSKUN_WEIGHT_SHA256}；"
                 f"2.0.conf 期望 {TRANSKUN_CONF_SIZE} bytes / {TRANSKUN_CONF_SHA256}。"
-                "请执行: python -m pip install --force-reinstall "
+                "修复命令：python -m pip install --force-reinstall "
                 f"transkun=={TRANSKUN_PACKAGE_VERSION}"
             )
 

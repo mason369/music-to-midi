@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#16213e" />
     <meta name="description" content="Music to MIDI browser application" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect rx=%2212%22 width=%2264%22 height=%2264%22 fill=%22%2316213e%22/><path d=%22M38 13v29a10 10 0 1 1-5-8.66V19l17-4v21a10 10 0 1 1-5-8.66V11z%22 fill=%22%234a9eff%22/></svg>" />
+    <link rel="icon" type="image/png" href="assets/app_icon.png" />
     <title>Music to MIDI</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="app.js" defer></script>
@@ -13,9 +13,9 @@
   <body>
     <header class="topbar">
       <a class="brand" href="#workspace" data-i18n-aria-label="brand.home_aria">
-        <span class="brand-mark" aria-hidden="true">♫</span>
+        <span class="brand-mark" aria-hidden="true"><img src="assets/app_icon.png" alt="" /></span>
         <span class="brand-copy">
-          <strong>Music to MIDI</strong>
+          <strong data-i18n="brand.name">Music to MIDI</strong>
         </span>
       </a>
 
@@ -31,7 +31,7 @@
     <div class="app-shell">
       <main id="workspace">
         <section class="workspace-header">
-          <div class="app-icon" aria-hidden="true">♫</div>
+          <div class="app-icon" aria-hidden="true"><img src="assets/app_icon.png" alt="" /></div>
           <div class="workspace-title">
             <h1 data-i18n="workspace.title"></h1>
             <p data-i18n="workspace.copy"></p>
@@ -97,17 +97,24 @@
               <select id="muscriptorSelect"></select>
               <small data-i18n="config.muscriptor_help"></small>
             </label>
-            <label class="field" id="trackModeField">
+            <label class="field" id="trackModeField" hidden>
               <span data-i18n="config.track_layout"></span>
               <select id="trackModeSelect"></select>
               <small data-i18n="config.track_layout_help"></small>
             </label>
             <label class="field">
-              <span data-i18n="config.project_bpm"></span>
-              <span class="inline-control">
-                <input id="customBpmEnabled" type="checkbox" />
-                <input id="customBpm" type="number" value="120" step="0.1" disabled />
-              </span>
+              <span data-i18n="config.tempo_mode"></span>
+              <select id="tempoModeSelect"></select>
+              <small data-i18n="config.tempo_help"></small>
+            </label>
+            <label class="field" id="muscriptorProcessingChainField" hidden>
+              <span data-i18n="config.muscriptor_chain"></span>
+              <select id="muscriptorProcessingChainSelect"></select>
+              <small data-i18n="config.muscriptor_chain_help"></small>
+            </label>
+            <label class="field" id="manualBpmField" hidden>
+              <span data-i18n="config.manual_bpm"></span>
+              <input id="customBpm" type="number" value="120" step="0.1" />
               <small data-i18n="config.bpm_help"></small>
             </label>
             <div class="field device-field">
@@ -125,12 +132,14 @@
             <span data-i18n="action.state"></span>
             <strong id="readyText" data-i18n="action.select_audio"></strong>
           </div>
-          <button class="stop-button" id="stopButton" type="button" disabled>
-            <span aria-hidden="true">■</span><b data-i18n="action.stop"></b>
-          </button>
-          <button class="start-button" id="startButton" type="button" disabled>
-            <span aria-hidden="true">▶</span><b id="startButtonLabel" data-i18n="action.start_conversion"></b>
-          </button>
+          <div class="action-buttons">
+            <button class="stop-button" id="stopButton" type="button" disabled>
+              <span aria-hidden="true">■</span><b data-i18n="action.stop"></b>
+            </button>
+            <button class="start-button" id="startButton" type="button" disabled>
+              <span aria-hidden="true">▶</span><b id="startButtonLabel" data-i18n="action.start_conversion"></b>
+            </button>
+          </div>
         </section>
 
         <section class="runtime-bar">
@@ -162,7 +171,7 @@
           </header>
           <div class="progress-track"><i id="progressBar"></i></div>
           <div class="stage-row" id="stageRow"></div>
-          <div class="job-identity"><span>JOB</span><code id="jobId">—</code></div>
+          <div class="job-identity"><span data-i18n="progress.job_id">Job</span><code id="jobId">—</code></div>
         </section>
 
         <section class="result-panel instrument-panel guidance-target" id="resultPanel" hidden>
@@ -171,7 +180,10 @@
               <h2 data-i18n="result.title"></h2>
               <p id="resultLead"></p>
             </div>
-            <button class="secondary-button" id="retryJob" type="button" hidden data-i18n="action.retry_job"></button>
+            <div class="result-actions">
+              <button class="secondary-button" id="retryJob" type="button" hidden data-i18n="action.retry_job"></button>
+              <button class="danger-button" id="deleteJob" type="button" hidden data-i18n="action.delete_job"></button>
+            </div>
           </header>
           <div class="result-metrics" id="resultMetrics"></div>
           <div class="artifact-list" id="artifactList"></div>
@@ -212,11 +224,34 @@
           <button class="icon-button" value="cancel" data-i18n-aria-label="dialog.close_aria">×</button>
         </header>
         <p data-i18n="dialog.hint"></p>
-        <label>
-          <span>Base URL</span>
-          <input id="apiBaseInput" type="url" required data-i18n-placeholder="dialog.url_placeholder" />
-        </label>
+        <div class="endpoint-grid">
+          <label class="endpoint-wide">
+            <span data-i18n="dialog.frontend_address"></span>
+            <input id="frontendAddress" type="url" readonly />
+          </label>
+          <label>
+            <span data-i18n="dialog.protocol"></span>
+            <select id="apiProtocol">
+              <option value="http:">HTTP</option>
+              <option value="https:">HTTPS</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="dialog.host"></span>
+            <input id="apiHost" type="text" required spellcheck="false" data-i18n-placeholder="dialog.host_placeholder" />
+          </label>
+          <label>
+            <span data-i18n="dialog.port"></span>
+            <input id="apiPort" type="number" min="1" max="65535" required />
+          </label>
+          <label class="endpoint-wide">
+            <span data-i18n="dialog.effective_url"></span>
+            <output id="effectiveApiUrl"></output>
+          </label>
+        </div>
+        <p class="connection-test-result" id="connectionTestResult" aria-live="polite"></p>
         <footer class="dialog-actions">
+          <button id="testApiConnection" type="button" data-i18n="dialog.test"></button>
           <button value="cancel" data-i18n="dialog.cancel"></button>
           <button class="primary" id="saveApiBase" value="default" data-i18n="dialog.connect"></button>
         </footer>

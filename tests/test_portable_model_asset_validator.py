@@ -308,12 +308,23 @@ def test_validator_rejects_invalid_duplicate_yourmt3_checkpoint_alias(tmp_path, 
         _validate(layout)
 
 
-def _patch_valid_runtime_identities(monkeypatch):
+def _patch_valid_runtime_identities(monkeypatch, *, accelerator="cuda"):
+    monkeypatch.setenv("MUSIC_TO_MIDI_ACCELERATOR", accelerator)
+    onnxruntime_package = {
+        "cuda": "onnxruntime-gpu",
+        "xpu": "onnxruntime-openvino",
+    }[accelerator]
+    onnxruntime_version = {
+        "cuda": validator.ONNXRUNTIME_GPU_PACKAGE_VERSION,
+        "xpu": validator.ONNXRUNTIME_OPENVINO_PACKAGE_VERSION,
+    }[accelerator]
     versions = {
         "audio-separator": validator.AUDIO_SEPARATOR_PACKAGE_VERSION,
-        "onnxruntime-gpu": validator.ONNXRUNTIME_GPU_PACKAGE_VERSION,
+        onnxruntime_package: onnxruntime_version,
         "beat-this": "1.1.0",
     }
+    if accelerator == "xpu":
+        versions["openvino"] = validator.OPENVINO_PACKAGE_VERSION
     monkeypatch.setattr(validator.metadata, "version", versions.__getitem__)
     monkeypatch.setattr(validator.importlib, "import_module", lambda _name: object())
     monkeypatch.setattr(validator.aria_amt, "get_aria_amt_runtime_unavailable_reason", lambda: "")
@@ -348,9 +359,35 @@ def test_runtime_validator_accepts_exact_pinned_packages_and_sources(monkeypatch
     assert identities["transkun"] == "2.0.1"
 
 
+def test_runtime_validator_accepts_exact_xpu_openvino_distribution(monkeypatch):
+    expected_versions = _patch_valid_runtime_identities(monkeypatch, accelerator="xpu")
+
+    identities = validator.validate_portable_runtime_identities()
+
+    assert identities["onnxruntime-openvino"] == expected_versions["onnxruntime-openvino"]
+    assert identities["openvino"] == expected_versions["openvino"]
+    assert "onnxruntime-gpu" not in identities
+
+
+def test_runtime_validator_rejects_unknown_accelerator(monkeypatch):
+    monkeypatch.setenv("MUSIC_TO_MIDI_ACCELERATOR", "unknown")
+
+    with pytest.raises(RuntimeError, match="Unsupported portable accelerator"):
+        validator.validate_portable_runtime_identities()
+
+
 @pytest.mark.parametrize("package_name", ["audio-separator", "onnxruntime-gpu", "beat-this"])
 def test_runtime_validator_rejects_wrong_distribution_version(monkeypatch, package_name):
     versions = _patch_valid_runtime_identities(monkeypatch)
+    versions[package_name] = "0.0.0-wrong"
+
+    with pytest.raises(RuntimeError, match=f"version mismatch for {package_name}"):
+        validator.validate_portable_runtime_identities()
+
+
+@pytest.mark.parametrize("package_name", ["onnxruntime-openvino", "openvino"])
+def test_runtime_validator_rejects_wrong_xpu_distribution_version(monkeypatch, package_name):
+    versions = _patch_valid_runtime_identities(monkeypatch, accelerator="xpu")
     versions[package_name] = "0.0.0-wrong"
 
     with pytest.raises(RuntimeError, match=f"version mismatch for {package_name}"):

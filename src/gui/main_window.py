@@ -62,10 +62,12 @@ from src.i18n.translator import get_resource_path, get_translator, set_language,
 from src.models.data_models import (
     Config,
     MultiInstrumentModel,
+    MuscriptorProcessingChain,
     ProcessingMode,
     ProcessingProgress,
     ProcessingResult,
     ProcessingStage,
+    TempoMode,
 )
 from src.utils.gpu_utils import get_memory_info
 
@@ -365,13 +367,21 @@ class MainWindow(QMainWindow):
         self.track_panel.set_yourmt3_model(
             getattr(self.config, "yourmt3_model", "yptf_moe_multi_nops")
         )
-        self.track_panel.set_muscriptor_model(
-            getattr(self.config, "muscriptor_model", "large")
+        self.track_panel.set_muscriptor_model(getattr(self.config, "muscriptor_model", "large"))
+        self.track_panel.set_muscriptor_processing_chain(
+            getattr(
+                self.config,
+                "muscriptor_processing_chain",
+                MuscriptorProcessingChain.OFFICIAL.value,
+            )
         )
         self.track_panel.set_muscriptor_instruments(
             getattr(self.config, "muscriptor_instruments", [])
         )
         self.track_panel.set_custom_bpm(getattr(self.config, "custom_bpm", None))
+        self.track_panel.set_tempo_mode(
+            getattr(self.config, "tempo_mode", TempoMode.FIXED_AUTO.value)
+        )
         self._add_shadow(self.track_panel)
 
         # 进度组件
@@ -1548,6 +1558,20 @@ class MainWindow(QMainWindow):
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
+    def _sync_current_midi_controls_to_config(self) -> None:
+        """Copy the chain and tempo controls that are selected at execution time."""
+        processing_chain = self.track_panel.get_muscriptor_processing_chain()
+        tempo_mode = self.track_panel.get_tempo_mode()
+        custom_bpm = self.track_panel.get_custom_bpm()
+
+        self.config.muscriptor_processing_chain = processing_chain
+        self.config.tempo_mode = tempo_mode
+        self.config.custom_bpm = custom_bpm
+        # Keep the legacy alias synchronized explicitly. Otherwise a config that
+        # previously used adaptive tempo can turn a later fixed-auto selection
+        # back into adaptive mode during Config.validate().
+        self.config.enable_tempo_map = tempo_mode == TempoMode.ADAPTIVE.value
+
     def _start_processing(self):
         """开始处理音频文件"""
         if not self.current_file:
@@ -1580,8 +1604,8 @@ class MainWindow(QMainWindow):
         self.config.midi_track_mode = self.track_panel.get_midi_track_mode()
         self.config.yourmt3_model = self.track_panel.get_yourmt3_model()
         self.config.muscriptor_model = self.track_panel.get_muscriptor_model()
+        self._sync_current_midi_controls_to_config()
         self.config.muscriptor_instruments = self.track_panel.get_muscriptor_instruments()
-        self.config.custom_bpm = self.track_panel.get_custom_bpm()
         self.config.vocal_split_merge_midi = self.track_panel.get_vocal_split_merge_midi()
         self.config.validate()
 
@@ -1697,6 +1721,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # Separation and per-track conversion are separate explicit actions.
+            # Re-read the current controls here so changes made after separation
+            # are honored by the clicked track instead of using the old snapshot.
+            self._sync_current_midi_controls_to_config()
+            self.config.validate()
             manual_config = self._manual_midi_config(
                 self.config,
                 route,
@@ -1710,6 +1739,7 @@ class MainWindow(QMainWindow):
                 str(output_dir),
                 manual_config,
                 self,
+                tempo_audio_path=self.current_file,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             logger.error(
@@ -1924,18 +1954,13 @@ class MainWindow(QMainWindow):
         if progress.bpm_display:
             self._last_detected_bpm = progress.bpm_display
             if self.muscriptor_result_widget is not None:
-                if (
-                    progress.source_bpm is not None
-                    and progress.target_bpm is not None
-                ):
+                if progress.source_bpm is not None and progress.target_bpm is not None:
                     self.muscriptor_result_widget.set_bpm_context(
                         progress.source_bpm,
                         progress.target_bpm,
                     )
                 else:
-                    self.muscriptor_result_widget.set_detected_bpm(
-                        progress.bpm_display
-                    )
+                    self.muscriptor_result_widget.set_detected_bpm(progress.bpm_display)
         # 节流内存标签更新（最多每 2 秒一次），避免阻塞 GUI 线程
         now = _time.monotonic()
         if now - self._last_memory_update >= 2.0:

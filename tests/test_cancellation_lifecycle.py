@@ -210,11 +210,11 @@ class CancellationLifecycleTests(unittest.TestCase):
                 window.current_file = str(Path(tmp) / "song.wav")
                 window.output_dir_edit.setText(tmp)
                 window.track_panel.set_transcription_backend("muscriptor")
-                window.track_panel.set_custom_bpm(10.0)
+                window.track_panel.set_custom_bpm(60.0)
                 with mock.patch("src.gui.main_window.ProcessingWorker", _FakeWorker):
                     window._start_processing()
 
-            self.assertEqual(window.config.custom_bpm, 10.0)
+            self.assertEqual(window.config.custom_bpm, 60.0)
             self.assertIsNotNone(window.muscriptor_result_widget)
             self.assertIsNone(window._last_detected_bpm)
 
@@ -223,21 +223,21 @@ class CancellationLifecycleTests(unittest.TestCase):
                     stage=ProcessingStage.PREPROCESSING,
                     stage_progress=1.0,
                     overall_progress=0.1,
-                    message="BPM: 10.0",
-                    bpm_display="10.0",
+                    message="BPM: 60.0",
+                    bpm_display="60.0",
                     source_bpm=117.9,
-                    target_bpm=10.0,
+                    target_bpm=60.0,
                 )
             )
 
-            self.assertEqual(window.muscriptor_result_widget.bpm_spin.value(), 10.0)
+            self.assertEqual(window.muscriptor_result_widget.bpm_spin.value(), 60.0)
             self.assertAlmostEqual(
                 window.muscriptor_result_widget._detected_bpm,
                 117.9,
             )
             self.assertAlmostEqual(
                 window.muscriptor_result_widget.speed_spin.value(),
-                10.0 / 117.9,
+                60.0 / 117.9,
                 places=3,
             )
         finally:

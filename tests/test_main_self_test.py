@@ -25,15 +25,13 @@ class MainSelfTestTests(unittest.TestCase):
                 path.write_bytes(b"dll")
 
             handles = [object(), object(), object()]
-            with patch.object(sys, "frozen", True, create=True), patch.object(
-                main_module, "os", types.SimpleNamespace(name="nt")
-            ), patch.object(
-                main_module, "get_bundle_roots", return_value=[root]
-            ), patch.object(
-                main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
-            ) as retained_handles, patch(
-                "ctypes.WinDLL", side_effect=handles, create=True
-            ) as win_dll:
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(main_module, "os", types.SimpleNamespace(name="nt")),
+                patch.object(main_module, "get_bundle_roots", return_value=[root]),
+                patch.object(main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []) as retained_handles,
+                patch("ctypes.WinDLL", side_effect=handles, create=True) as win_dll,
+            ):
                 main_module._preload_bundled_windows_vc_runtime()
 
         self.assertEqual(
@@ -46,17 +44,57 @@ class MainSelfTestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "msvcp140.dll").write_bytes(b"dll")
-            with patch.object(sys, "frozen", True, create=True), patch.object(
-                main_module, "os", types.SimpleNamespace(name="nt")
-            ), patch.object(
-                main_module, "get_bundle_roots", return_value=[root]
-            ), patch.object(
-                main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []
-            ), patch("ctypes.WinDLL", create=True) as win_dll:
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(main_module, "os", types.SimpleNamespace(name="nt")),
+                patch.object(main_module, "get_bundle_roots", return_value=[root]),
+                patch.object(main_module, "_BUNDLED_VC_RUNTIME_HANDLES", []),
+                patch("ctypes.WinDLL", create=True) as win_dll,
+            ):
                 with self.assertRaisesRegex(RuntimeError, "missing its required Visual"):
                     main_module._preload_bundled_windows_vc_runtime()
 
         win_dll.assert_not_called()
+
+    def test_prepare_torch_runtime_accepts_torchaudio_without_legacy_backend_setter(self):
+        fake_torch = types.ModuleType("torch")
+        fake_torchaudio = types.ModuleType("torchaudio")
+        fake_ort = types.ModuleType("onnxruntime")
+        fake_audio_separator = types.ModuleType("audio_separator")
+        fake_audio_separator.__path__ = []
+        fake_separator = types.ModuleType("audio_separator.separator")
+        fake_separator.Separator = object
+
+        with (
+            patch.object(
+                main_module,
+                "_preload_bundled_windows_vc_runtime",
+            ),
+            patch.object(
+                sys,
+                "frozen",
+                True,
+                create=True,
+            ),
+            patch(
+                "platform.system",
+                return_value="Linux",
+            ),
+            patch.object(main_module, "activate_audio_separator_runtime") as activate_separator,
+            patch.dict(
+                sys.modules,
+                {
+                    "torch": fake_torch,
+                    "torchaudio": fake_torchaudio,
+                    "onnxruntime": fake_ort,
+                    "audio_separator": fake_audio_separator,
+                    "audio_separator.separator": fake_separator,
+                },
+            ),
+        ):
+            main_module._prepare_torch_runtime_before_pyqt()
+
+        activate_separator.assert_called_once_with()
 
     def test_gui_runtime_self_test_loads_qt_before_onnx_and_requires_cuda(self):
         fake_logger = Mock()
@@ -71,27 +109,30 @@ class MainSelfTestTests(unittest.TestCase):
         fake_separator.Separator = object
         stdout = io.StringIO()
 
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(
-            main_module, "setup_logger", return_value=fake_logger
-        ), patch.object(
-            main_module, "_prepare_torch_runtime_before_pyqt"
-        ) as prepare_runtime, patch.object(
-            main_module, "activate_audio_separator_runtime"
-        ) as activate_ort, patch.dict(
-            sys.modules,
-            {
-                "PyQt6.QtWidgets": fake_qt_widgets,
-                "onnxruntime": fake_ort,
-                "audio_separator.separator": fake_separator,
-            },
-        ), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            patch("src.utils.gpu_utils.get_accelerator_type", return_value="cuda"),
+            patch("src.utils.gpu_utils.get_device", return_value="cuda:0"),
+            patch("src.utils.gpu_utils.ensure_accelerator_runtime_compatibility") as ensure_runtime,
+            patch.dict(os.environ, {"MUSIC_TO_MIDI_ACCELERATOR": "cuda"}),
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_runtime,
+            patch.dict(
+                sys.modules,
+                {
+                    "PyQt6.QtWidgets": fake_qt_widgets,
+                    "onnxruntime": fake_ort,
+                    "audio_separator.separator": fake_separator,
+                },
+            ),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_gui_runtime_self_test()
 
         self.assertEqual(exit_code, 0)
         prepare_runtime.assert_called_once_with()
-        activate_ort.assert_called_once_with()
+        ensure_runtime.assert_called_once_with("cuda:0")
         self.assertIn("GUI + Qt + ONNX Runtime CUDA", stdout.getvalue())
 
     def test_self_test_returns_zero_when_yourmt3_available(self):
@@ -106,9 +147,12 @@ class MainSelfTestTests(unittest.TestCase):
                 return True
 
         stdout = io.StringIO()
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_self_test(transcriber_cls=FakeYourMT3Transcriber)
 
         self.assertEqual(exit_code, 0)
@@ -134,9 +178,12 @@ class MainSelfTestTests(unittest.TestCase):
                 calls.append("unload_model")
 
         stdout = io.StringIO()
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_self_test(transcriber_cls=FakeYourMT3Transcriber)
 
         self.assertEqual(exit_code, 0)
@@ -160,9 +207,12 @@ class MainSelfTestTests(unittest.TestCase):
                 calls.append("load_model")
 
         stdout = io.StringIO()
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_self_test(
                 transcriber_cls=FakeMirosTranscriber,
                 success_message="SELF-TEST OK: MIROS available",
@@ -193,9 +243,12 @@ class MainSelfTestTests(unittest.TestCase):
                 calls.append("unload_model")
 
         stdout = io.StringIO()
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_self_test(
                 transcriber_cls=FakeYourMT3Transcriber,
                 success_message="SELF-TEST OK: YourMT3+ available without model load",
@@ -219,23 +272,32 @@ class MainSelfTestTests(unittest.TestCase):
                 return "缺少打包依赖"
 
         stdout = io.StringIO()
-        with patch.object(main_module, "setup_chinese_environment"), patch.object(
-            main_module, "get_logs_dir", return_value="logs"
-        ), patch.object(main_module, "setup_logger", return_value=fake_logger), redirect_stdout(stdout):
+        with (
+            patch.object(main_module, "setup_chinese_environment"),
+            patch.object(main_module, "get_logs_dir", return_value="logs"),
+            patch.object(main_module, "setup_logger", return_value=fake_logger),
+            redirect_stdout(stdout),
+        ):
             exit_code = main_module._run_self_test(transcriber_cls=FakeYourMT3Transcriber)
 
         self.assertEqual(exit_code, 1)
         self.assertIn("缺少打包依赖", stdout.getvalue())
 
     def test_main_dispatches_miros_worker_before_gui_startup(self):
-        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
-            main_module,
-            "_run_miros_worker",
-            return_value=7,
-        ) as worker, patch(
-            "PyQt6.QtWidgets.QApplication",
-            create=True,
-        ) as qapplication:
+        with (
+            patch.object(
+                sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]
+            ),
+            patch.object(
+                main_module,
+                "_run_miros_worker",
+                return_value=7,
+            ) as worker,
+            patch(
+                "PyQt6.QtWidgets.QApplication",
+                create=True,
+            ) as qapplication,
+        ):
             with self.assertRaises(SystemExit) as cm:
                 main_module.main()
 
@@ -244,27 +306,40 @@ class MainSelfTestTests(unittest.TestCase):
         qapplication.assert_not_called()
 
     def test_main_dispatches_miros_worker_before_torch_preload(self):
-        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
-            main_module,
-            "_run_miros_worker",
-            return_value=7,
-        ), patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch:
+        with (
+            patch.object(
+                sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]
+            ),
+            patch.object(
+                main_module,
+                "_run_miros_worker",
+                return_value=7,
+            ),
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch,
+        ):
             with self.assertRaises(SystemExit):
                 main_module.main()
 
         prepare_torch.assert_not_called()
 
     def test_main_uses_hard_exit_for_frozen_miros_worker(self):
-        with patch.object(sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]), patch.object(
-            sys,
-            "frozen",
-            True,
-            create=True,
-        ), patch.object(
-            main_module,
-            "_run_miros_worker",
-            return_value=7,
-        ) as worker, patch.object(main_module.os, "_exit") as hard_exit:
+        with (
+            patch.object(
+                sys, "argv", ["MusicToMidi.exe", "--miros-worker", "-i", "in.wav", "-o", "out.mid"]
+            ),
+            patch.object(
+                sys,
+                "frozen",
+                True,
+                create=True,
+            ),
+            patch.object(
+                main_module,
+                "_run_miros_worker",
+                return_value=7,
+            ) as worker,
+            patch.object(main_module.os, "_exit") as hard_exit,
+        ):
             main_module.main()
 
         worker.assert_called_once_with(["-i", "in.wav", "-o", "out.mid"])
@@ -272,9 +347,12 @@ class MainSelfTestTests(unittest.TestCase):
 
     def test_main_help_exits_before_gui_startup_and_torch_preload(self):
         stdout = io.StringIO()
-        with patch.object(sys, "argv", ["MusicToMidi.exe", "--help"]), patch.object(
-            main_module, "_prepare_torch_runtime_before_pyqt"
-        ) as prepare_torch, patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication, redirect_stdout(stdout):
+        with (
+            patch.object(sys, "argv", ["MusicToMidi.exe", "--help"]),
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch,
+            patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication,
+            redirect_stdout(stdout),
+        ):
             with self.assertRaises(SystemExit) as cm:
                 main_module.main()
 
@@ -288,14 +366,19 @@ class MainSelfTestTests(unittest.TestCase):
         qapplication.assert_not_called()
 
     def test_main_dispatches_self_test_no_load_before_gui_startup_and_torch_preload(self):
-        with patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-no-load"]), patch.object(
-            main_module,
-            "_run_self_test",
-            return_value=0,
-        ) as self_test, patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch, patch(
-            "PyQt6.QtWidgets.QApplication",
-            create=True,
-        ) as qapplication:
+        with (
+            patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-no-load"]),
+            patch.object(
+                main_module,
+                "_run_self_test",
+                return_value=0,
+            ) as self_test,
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as prepare_torch,
+            patch(
+                "PyQt6.QtWidgets.QApplication",
+                create=True,
+            ) as qapplication,
+        ):
             with self.assertRaises(SystemExit) as cm:
                 main_module.main()
 
@@ -308,15 +391,12 @@ class MainSelfTestTests(unittest.TestCase):
         qapplication.assert_not_called()
 
     def test_main_dispatches_gui_runtime_self_test_before_normal_gui_startup(self):
-        with patch.object(
-            sys, "argv", ["MusicToMidi.exe", "--self-test-gui-runtime"]
-        ), patch.object(
-            main_module, "_run_gui_runtime_self_test", return_value=0
-        ) as self_test, patch.object(
-            main_module, "_prepare_torch_runtime_before_pyqt"
-        ) as normal_prepare, patch(
-            "PyQt6.QtWidgets.QApplication", create=True
-        ) as qapplication:
+        with (
+            patch.object(sys, "argv", ["MusicToMidi.exe", "--self-test-gui-runtime"]),
+            patch.object(main_module, "_run_gui_runtime_self_test", return_value=0) as self_test,
+            patch.object(main_module, "_prepare_torch_runtime_before_pyqt") as normal_prepare,
+            patch("PyQt6.QtWidgets.QApplication", create=True) as qapplication,
+        ):
             with self.assertRaises(SystemExit) as cm:
                 main_module.main()
 
@@ -326,18 +406,14 @@ class MainSelfTestTests(unittest.TestCase):
         qapplication.assert_not_called()
 
     def test_miros_worker_writes_failure_status_json(self):
-        fake_transcribe = types.ModuleType("transcribe")
-
-        def boom(_input, _output):
-            raise RuntimeError("miros exploded")
-
-        fake_transcribe.transcribe = boom
-
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "in.wav"
             input_path.write_bytes(b"wav")
             status_path = Path(tmp) / "miros-status.json"
-            with patch.dict(sys.modules, {"transcribe": fake_transcribe}):
+            with patch(
+                "src.core.miros_stream_worker.run_miros_stream_worker",
+                side_effect=RuntimeError("miros exploded"),
+            ):
                 exit_code = main_module._run_miros_worker(
                     [
                         "-i",
@@ -395,6 +471,7 @@ class MainSelfTestTests(unittest.TestCase):
                 "\n".join(
                     [
                         "from pathlib import Path",
+                        "import torchaudio",
                         "import onnxruntime",
                         "if getattr(onnxruntime, '__version__', None) != '0.0':",
                         "    raise RuntimeError('onnxruntime was not isolated')",

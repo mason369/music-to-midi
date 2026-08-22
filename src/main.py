@@ -15,6 +15,16 @@ from contextlib import contextmanager
 from importlib.machinery import ModuleSpec
 from pathlib import Path
 
+
+def _is_web_api_runtime() -> bool:
+    return "--web-api" in sys.argv or (
+        getattr(sys, "frozen", False)
+        and Path(sys.executable).stem.casefold() in {"musictomidibackend", "musictomidibackendxpu"}
+    )
+
+
+_IS_WEB_API_RUNTIME = _is_web_api_runtime()
+
 if __name__ == "__main__":
     # Source runs must be stopped before importing GUI/runtime dependencies when
     # a global or foreign Python environment would leak incompatible packages.
@@ -32,10 +42,13 @@ from src.utils.runtime_paths import (
 )
 from src.utils.warnings_filter import ensure_standard_streams
 
-# 在导入其他模块之前抑制第三方库的警告
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 抑制 TensorFlow 所有日志
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # 禁用 oneDNN 警告
-os.environ["ABSL_MIN_LOG_LEVEL"] = "2"  # 抑制 absl 日志
+# The API executable must preserve its configured log level and dependency
+# warnings. These desktop-only noise controls used to run before entry-point
+# dispatch, which made the backend's info/debug settings ineffective.
+if not _IS_WEB_API_RUNTIME:
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+    os.environ["ABSL_MIN_LOG_LEVEL"] = "2"
 
 # PyInstaller windowed/portable 模式下标准流可能为 None，先补成安全可写流
 ensure_standard_streams()
@@ -43,19 +56,18 @@ ensure_standard_streams()
 # 预先注入 bundled ffmpeg/bin 到 PATH，供 librosa/audioread/subprocess 使用
 bootstrap_runtime_environment()
 
-# 抑制 Python 警告
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", module="tensorflow")
-warnings.filterwarnings("ignore", module="keras")
-warnings.filterwarnings("ignore", module="basic_pitch")
+if not _IS_WEB_API_RUNTIME:
+    warnings.filterwarnings("ignore", category=UserWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", module="tensorflow")
+    warnings.filterwarnings("ignore", module="keras")
+    warnings.filterwarnings("ignore", module="basic_pitch")
 
-# 抑制特定库的日志
-logging.getLogger("tensorflow").setLevel(logging.ERROR)
-logging.getLogger("keras").setLevel(logging.ERROR)
-logging.getLogger("absl").setLevel(logging.ERROR)
-logging.getLogger().setLevel(logging.ERROR)  # 根 logger
+    logging.getLogger("tensorflow").setLevel(logging.ERROR)
+    logging.getLogger("keras").setLevel(logging.ERROR)
+    logging.getLogger("absl").setLevel(logging.ERROR)
+    logging.getLogger().setLevel(logging.ERROR)
 
 from src.utils.logger import setup_logger
 from src.utils.warnings_filter import setup_chinese_environment
@@ -111,7 +123,13 @@ def _preload_bundled_windows_vc_runtime() -> None:
 
 
 def _prepare_torch_runtime_before_pyqt() -> None:
-    """Prepare torch DLLs before importing PyQt on GUI startup."""
+    """Load every required desktop native runtime before importing PyQt.
+
+    Importing ONNX Runtime after QtMultimedia or after a real ByteDance CUDA
+    inference can fail on Windows with ``DLL initialization routine failed``.
+    Keeping the native load order deterministic here lets the same long-lived
+    GUI process run PyTorch piano backends and later run ONNX separation.
+    """
     _preload_bundled_windows_vc_runtime()
     # 修复 Windows 特殊路径（中文用户名、空格、括号等）下 PyTorch DLL 加载失败的问题
     # 必须在任何 import torch 之前执行
@@ -161,23 +179,28 @@ def _prepare_torch_runtime_before_pyqt() -> None:
     try:
         import torch  # noqa: F401
 
-        # torchaudio 2.9+ 默认使用 torchcodec 后端，但该包未安装时会报错
-        # 老版本可显式切到 soundfile；新版本 dispatcher 模式下该调用会变成 no-op 并给出弃用告警
-        import torchaudio
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=".*set_audio_backend has been deprecated.*",
-                category=UserWarning,
-            )
-            torchaudio.set_audio_backend("soundfile")
+        # 只预加载 torchaudio 的原生运行时。2.9 起已移除全局 backend
+        # setter；项目转写器显式读取流水线生成的 WAV，不依赖可变全局状态。
+        import torchaudio  # noqa: F401
     except Exception as e:
         if getattr(sys, "frozen", False):
             raise RuntimeError(
                 "Portable torch/torchaudio runtime failed before PyQt startup"
             ) from e
         logging.getLogger(__name__).debug("torch 预加载失败（将在需要时重试）: %s", e)
+
+    # audio-separator is a required desktop component, not an optional route.
+    # Bind its ONNX Runtime before PyQt/QtMultimedia can load a conflicting
+    # native dependency and before any CUDA model initializes cuDNN kernels.
+    try:
+        activate_audio_separator_runtime()
+        import onnxruntime  # noqa: F401
+        from audio_separator.separator import Separator  # noqa: F401
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "Required desktop separation runtime failed before PyQt startup: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _run_self_test(
@@ -236,21 +259,46 @@ def _run_gui_runtime_self_test() -> int:
         _prepare_torch_runtime_before_pyqt()
         from PyQt6.QtWidgets import QApplication  # noqa: F401
 
-        activate_audio_separator_runtime()
         import onnxruntime as ort
         from audio_separator.separator import Separator  # noqa: F401
+        from src.utils.gpu_utils import (
+            ensure_accelerator_runtime_compatibility,
+            get_accelerator_type,
+            get_device,
+        )
 
-        providers = ort.get_available_providers()
-        if "CUDAExecutionProvider" not in providers:
+        requested = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "").strip().lower()
+        detected = get_accelerator_type()
+        accelerator = requested or detected
+        if accelerator not in {"cuda", "xpu"}:
             raise RuntimeError(
-                "Packaged ONNX Runtime did not expose CUDAExecutionProvider: "
-                + ", ".join(providers)
+                "GUI runtime self-test requires CUDA or Intel XPU, "
+                f"but detected {detected!r} (requested={requested or '<auto>'})"
+            )
+        if requested and detected != requested:
+            raise RuntimeError(
+                "Packaged accelerator does not match MUSIC_TO_MIDI_ACCELERATOR: "
+                f"requested={requested}, detected={detected}"
+            )
+        device = get_device(prefer_gpu=True, gpu_index=0)
+        if not device.startswith(f"{accelerator}:"):
+            raise RuntimeError(f"Expected {accelerator}:0 runtime device, got {device}")
+        ensure_accelerator_runtime_compatibility(device)
+        providers = ort.get_available_providers()
+        expected_provider = (
+            "CUDAExecutionProvider" if accelerator == "cuda" else "OpenVINOExecutionProvider"
+        )
+        if expected_provider not in providers:
+            raise RuntimeError(
+                f"Packaged ONNX Runtime did not expose {expected_provider}: " + ", ".join(providers)
             )
         logger.info(
-            "GUI runtime self-test passed: Qt loaded before ONNX Runtime; providers=%s",
+            "GUI runtime self-test passed: accelerator=%s device=%s providers=%s",
+            accelerator,
+            device,
             providers,
         )
-        print("SELF-TEST OK: GUI + Qt + ONNX Runtime CUDA load order")
+        print("SELF-TEST OK: GUI + Qt + ONNX Runtime " f"{accelerator.upper()} load order")
         return 0
     except Exception as exc:
         logger.error("GUI runtime self-test failed: %s", exc, exc_info=True)
@@ -318,19 +366,14 @@ def _run_miros_worker(argv=None) -> int:
         # MIROS inference does not use those metrics, so keep onnxruntime isolated
         # while importing the upstream transcribe module.
         with _temporary_onnxruntime_stub():
-            if args.events_jsonl:
-                from src.core.miros_stream_worker import run_miros_stream_worker
+            from src.core.miros_stream_worker import run_miros_stream_worker
 
-                run_miros_stream_worker(
-                    repo_dir,
-                    input_path,
-                    args.output,
-                    args.events_jsonl,
-                )
-            else:
-                from transcribe import transcribe
-
-                transcribe(str(input_path), args.output)
+            run_miros_stream_worker(
+                repo_dir,
+                input_path,
+                args.output,
+                args.events_jsonl,
+            )
         output_path = validate_midi_output(args.output, "MIROS worker")
         write_status(
             {
@@ -373,6 +416,15 @@ def _run_miros_worker(argv=None) -> int:
 def main():
     """主入口函数"""
     multiprocessing.freeze_support()
+    if "--web-inference-worker" in sys.argv:
+        worker_index = sys.argv.index("--web-inference-worker")
+        from src.web_api.inference_process import run_inference_worker
+
+        exit_code = run_inference_worker(sys.argv[worker_index + 1 :])
+        if getattr(sys, "frozen", False):
+            os._exit(exit_code)
+            return
+        sys.exit(exit_code)
     if "--miros-worker" in sys.argv:
         worker_index = sys.argv.index("--miros-worker")
         exit_code = _run_miros_worker(sys.argv[worker_index + 1 :])
@@ -380,6 +432,13 @@ def main():
             os._exit(exit_code)
             return
         sys.exit(exit_code)
+    if _is_web_api_runtime():
+        backend_arguments = list(sys.argv[1:])
+        if "--web-api" in backend_arguments:
+            backend_arguments.remove("--web-api")
+        from src.web_api.__main__ import main as run_web_api
+
+        sys.exit(run_web_api(backend_arguments))
 
     # Set console encoding before any localized CLI output.
     setup_chinese_environment()
@@ -389,14 +448,15 @@ def main():
 
         print(
             f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] "
-            "[--self-test-miros] [--self-test-gui-runtime]\n"
+            "[--self-test-miros] [--self-test-gui-runtime] [--web-api ...]\n"
             "\n"
             f"{t('cli.options')}:\n"
             f"  -h, --help          {t('cli.help')}\n"
             f"  --self-test         {t('cli.self_test')}\n"
             f"  --self-test-no-load {t('cli.self_test_no_load')}\n"
             f"  --self-test-miros   {t('cli.self_test_miros')}\n"
-            "  --self-test-gui-runtime  Validate Qt + ONNX Runtime CUDA load order\n"
+            "  --self-test-gui-runtime  Validate Qt + CUDA/OpenVINO accelerator runtime\n"
+            "  --web-api           Run the standalone inference HTTP service\n"
             f"  --miros-worker      {t('cli.miros_worker')}"
         )
         sys.exit(0)

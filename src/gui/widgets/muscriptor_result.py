@@ -22,11 +22,9 @@ from PyQt6.QtCore import (
     Qt,
     QThread,
     QTimer,
-    QUrl,
     pyqtSignal,
 )
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (
     QAbstractSlider,
     QCheckBox,
@@ -62,6 +60,7 @@ from src.core.muscriptor_result_assets import (
     read_midi_roll_notes,
 )
 from src.i18n.translator import get_translator, t
+from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
 from src.models.data_models import MAX_MIDI_BPM, MIN_MIDI_BPM, ProcessingResult
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -275,7 +274,7 @@ class _SmoothPlaybackClock:
         if reported > self._reported_ms:
             self._reported_ms = reported
         # Advance from the last painted position instead of snapping to every
-        # coarse QMediaPlayer sample. A bounded 1.5x correction closes genuine
+        # coarse device-clock sample. A bounded 1.5x correction closes genuine
         # forward drift smoothly while the lead ceiling still exposes a stalled
         # multimedia backend after ``max_lead_ms``.
         forward_drift = max(0.0, self._reported_ms - self._display_ms)
@@ -1232,8 +1231,8 @@ class _PianoRollCanvas(QWidget):
             self._marquee_base.clear()
             # A click on empty piano-roll space is a selection gesture while
             # edit mode is enabled.  Treating the same release as a transport
-            # seek made simple note-selection/deselection enter QMediaPlayer's
-            # synchronous seek path while audio was running.
+            # seek made simple note-selection/deselection rebuild the live audio
+            # buffer while playback was running.
             if before is not None and before != after:
                 self.edit_committed.emit(before, after)
             event.accept()
@@ -1625,26 +1624,10 @@ class MuscriptorResultWidget(QFrame):
         self._runtime_details: dict[str, object] = {}
         self._source_duration_seconds = 0.0
         self._position_ms = 0
-        self._last_drift_check_position_ms = 0
         self._playback_clock = _SmoothPlaybackClock()
         self._playing = False
         self._playback_finished = False
         self._transport_scrubbing = False
-        self._transport_seek_pending_ms: int | None = None
-        self._transport_seek_resume = False
-        self._transport_seek_pause_only = False
-        self._transport_seek_commit_scheduled = False
-        self._transport_seek_commit_players: tuple[QMediaPlayer, ...] = ()
-        self._transport_seek_commit_position_ms = 0
-        self._transport_seek_commit_pause_only = False
-        self._transport_seek_commit_index = 0
-        self._transport_seek_commit_phase = ""
-        self._transport_commit_timer = QTimer(self)
-        self._transport_commit_timer.setSingleShot(True)
-        self._transport_commit_timer.timeout.connect(self._commit_next_transport_player)
-        self._after_transport_timer = QTimer(self)
-        self._after_transport_timer.setSingleShot(True)
-        self._after_transport_timer.timeout.connect(self._apply_deferred_after_transport)
         self._deferred_assets_timer = QTimer(self)
         self._deferred_assets_timer.setSingleShot(True)
         self._deferred_assets_timer.timeout.connect(self._try_apply_deferred_assets)
@@ -1655,21 +1638,11 @@ class MuscriptorResultWidget(QFrame):
         self._muted: set[str] = set()
         self._soloed: str | None = None
         self._instrument_rows: dict[str, _InstrumentRow] = {}
-        self._players: list[QMediaPlayer] = []
         self._normal_sources: dict[str, Path] = {}
-        self._right_sources: dict[str, Path] = {}
-        self._normal_players: dict[str, tuple[QMediaPlayer, QAudioOutput]] = {}
-        self._right_players: dict[str, tuple[QMediaPlayer, QAudioOutput]] = {}
-        self._midi_normal: tuple[QMediaPlayer, QAudioOutput] | None = None
-        self._midi_right: tuple[QMediaPlayer, QAudioOutput] | None = None
-        self._original_normal: tuple[QMediaPlayer, QAudioOutput] | None = None
-        self._original_left: tuple[QMediaPlayer, QAudioOutput] | None = None
-        self._active_player_ids: frozenset[int] = frozenset()
-        self._startup_sync_pending = False
-        self._retired_media: list[tuple[QMediaPlayer, QAudioOutput | None]] = []
-        self._retired_media_timer = QTimer(self)
-        self._retired_media_timer.setSingleShot(True)
-        self._retired_media_timer.timeout.connect(self._release_retired_media)
+        self._stereo_playback_available = False
+        self._playback_engine = SynchronizedPcmPlayer(self)
+        self._playback_engine.finished.connect(self._on_synchronized_playback_finished)
+        self._playback_engine.error_occurred.connect(self._on_synchronized_playback_error)
         self._midi_path = ""
         self._original_edit_notes: tuple[MuscriptorRollNote, ...] = ()
         self._edited_notes: tuple[MuscriptorRollNote, ...] = ()
@@ -2112,10 +2085,6 @@ class MuscriptorResultWidget(QFrame):
         self.timer.setInterval(_PLAYHEAD_TIMER_MS)
         self.timer.timeout.connect(self._tick)
         self.timer.start()
-        audio_source = Path(self.audio_path)
-        if audio_source.is_file():
-            self._original_normal = self._make_player(audio_source)
-            self._original_normal[0].durationChanged.connect(self._on_source_duration_changed)
         self.update_translations()
         self.status_label.setText(t("transcription_result.streaming", backend=self.backend_label))
         self.progress_label.setText(t("muscriptor_result.progress_waiting"))
@@ -2308,7 +2277,7 @@ class MuscriptorResultWidget(QFrame):
         if self._preview_worker is not None and self._preview_worker.isRunning():
             self._preview_worker.cancel()
         self.status_label.setText(t("transcription_result.failed", error=error))
-        preview_available = self._midi_normal is not None and self._original_normal is not None
+        preview_available = self._playback_engine.is_configured
         self.play_button.setEnabled(preview_available)
         self.mix_slider.setEnabled(preview_available)
 
@@ -2429,7 +2398,7 @@ class MuscriptorResultWidget(QFrame):
             )
             return
         self._preview_ready_generation = generation
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             self._deferred_preview = (generation, payload)
             self.playback_status_label.setText(
                 t(
@@ -2452,21 +2421,27 @@ class MuscriptorResultWidget(QFrame):
         generation: int,
         payload: MuscriptorPreviewAssets,
     ) -> None:
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             raise RuntimeError("Cannot replace MIDI preview assets during transport activity")
         if generation <= self._preview_applied_generation:
             return
         self.roll.set_notes(payload.notes, duration=payload.duration)
         position_ms = self._position_ms
         self._dispose_dynamic_players()
-        self._ensure_original_player()
-        self._midi_normal = self._make_player(payload.transcription_wav)
-        self._normal_sources = dict(payload.instrument_wavs)
+        self._configure_synchronized_playback(
+            original_wav=payload.original_wav,
+            midi_wav=payload.transcription_wav,
+            instrument_wavs=payload.instrument_wavs,
+            stereo_available=False,
+        )
 
         self._preview_applied_generation = generation
         self._preview_note_count = len(payload.notes)
         self._preview_duration = payload.duration
         self._detected = list(dict.fromkeys(note.instrument for note in payload.notes))
+        self._muted.intersection_update(self._detected)
+        if self._soloed not in self._detected:
+            self._soloed = None
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
         self._set_playback_duration(self._preview_duration)
@@ -2485,11 +2460,10 @@ class MuscriptorResultWidget(QFrame):
         self._playback_finished = self._position_ms >= int(self._preview_duration * 1000) - 30
         self._playback_clock.reset(self._position_ms)
         self.playback_slider.setValue(self._position_ms)
-        for player in self._all_playback_players():
-            player.setPosition(self._position_ms)
+        self._playback_engine.seek(self._position_ms / 1000.0)
 
     def _apply_deferred_assets(self) -> None:
-        if self._playing or self._transport_seek_pending_ms is not None or self._shutting_down:
+        if self._playing or self._shutting_down:
             return
         if self._deferred_final_assets is not None:
             assets = self._deferred_final_assets
@@ -2526,244 +2500,38 @@ class MuscriptorResultWidget(QFrame):
         if not self._finalizing and not self._shutting_down and self._preview_error is None:
             self._start_pending_preview()
 
-    def _ensure_original_player(self) -> None:
-        if self._original_normal is not None:
-            return
-        source = Path(self.audio_path)
-        if not source.is_file():
-            raise FileNotFoundError(f"MuScriptor source audio is missing: {source}")
-        self._original_normal = self._make_player(source)
-        self._original_normal[0].durationChanged.connect(self._on_source_duration_changed)
-
     def _dispose_dynamic_players(self) -> None:
-        self._startup_sync_pending = False
-        original_player = self._original_normal[0] if self._original_normal is not None else None
-        retired_players = [player for player in self._players if player is not original_player]
-        self._players = [original_player] if original_player is not None else []
-        self._active_player_ids = frozenset(
-            {id(original_player)}
-            if original_player is not None
-            and original_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-            else set()
-        )
+        """Release the one synchronized sink before replacing its aligned buses."""
+
+        if self._playing:
+            raise RuntimeError("Cannot retire an active synchronized MIDI audio stream")
+        self._playback_engine.shutdown()
         self._normal_sources.clear()
-        self._right_sources.clear()
-        self._normal_players.clear()
-        self._right_players.clear()
-        self._midi_normal = None
-        self._midi_right = None
-        self._original_left = None
+        self._stereo_playback_available = False
 
-        if not retired_players:
-            return
+    def _configure_synchronized_playback(
+        self,
+        *,
+        original_wav: Path,
+        midi_wav: Path,
+        instrument_wavs: dict[str, Path],
+        stereo_available: bool,
+    ) -> None:
+        """Load every audible bus onto one sample cursor and one audio sink."""
 
-        # Silence retired outputs synchronously.  Asset replacement is forbidden
-        # while transport is playing, so every retired backend must already be
-        # quiescent before its source is unloaded.
-        for player in retired_players:
-            if player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-                raise RuntimeError("Cannot retire a playing MIDI audio backend")
-            output = player.audioOutput()
-            if output is not None:
-                output.setMuted(True)
-
-        # Keep both wrappers owned until a widget-bound timer reaches the next
-        # event-loop turn. A contextless singleShot closure can outlive this
-        # workbench and dereference an already deleted QMediaPlayer.
-        self._retired_media.extend((player, player.audioOutput()) for player in retired_players)
-        self._retired_media_timer.start(0)
-
-    def _release_retired_media(self) -> None:
-        """Unload retired Qt multimedia objects without leaving stale callbacks."""
-
-        retired_media = self._retired_media
-        self._retired_media = []
-        for player, output in retired_media:
-            if output is not None:
-                output.setMuted(True)
-            if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
-                player.stop()
-            player.setSource(QUrl())
-            player.setAudioOutput(None)
-            player.deleteLater()
-            if output is not None:
-                output.deleteLater()
-
-    def _on_source_duration_changed(self, duration_ms: int) -> None:
-        if duration_ms > 0:
-            self._source_duration_seconds = duration_ms / 1000.0
+        self._playback_engine.configure(
+            original_wav=original_wav,
+            midi_wav=midi_wav,
+            instrument_wavs=instrument_wavs,
+            playback_rate=self._result_playback_rate(),
+        )
+        self._normal_sources = dict(instrument_wavs)
+        self._stereo_playback_available = bool(stereo_available)
 
     def _on_asset_progress(self, progress: float, message: str) -> None:
         if self._shutting_down:
             return
         self.playback_status_label.setText(f"{int(progress * 100)}% · {message}")
-
-    def _make_player(self, source: Path) -> tuple[QMediaPlayer, QAudioOutput]:
-        player = QMediaPlayer(self)
-        output = QAudioOutput(self)
-        player.setAudioOutput(output)
-        player.setSource(QUrl.fromLocalFile(str(source)))
-        player.setPlaybackRate(self._result_playback_rate())
-        player.errorOccurred.connect(
-            lambda _error, message: self.playback_status_label.setText(
-                t("muscriptor_result.player_failed", error=message)
-            )
-        )
-        player.playbackStateChanged.connect(self._on_player_playback_state_changed)
-        self._players.append(player)
-        return player, output
-
-    def _on_player_playback_state_changed(self, _state) -> None:
-        if self._transport_seek_pending_ms is not None:
-            return
-        if self._deferred_apply_scheduled and not self._playing:
-            self._try_apply_deferred_assets()
-        if not self._playing or not self._startup_sync_pending:
-            return
-        active = self._active_playback_players()
-        if len(active) < 2 or any(
-            player.playbackState() != QMediaPlayer.PlaybackState.PlayingState for player in active
-        ):
-            return
-        master_position = active[0].position()
-        for player in active[1:]:
-            if abs(player.position() - master_position) > 20:
-                self._startup_sync_pending = False
-                self.seek(master_position / 1000.0)
-                return
-        self._startup_sync_pending = False
-
-    def _schedule_transport_seek_commit(self) -> None:
-        """Start one serialized stop/position/play transaction for all backends."""
-
-        if (
-            self._shutting_down
-            or self._transport_seek_pending_ms is None
-            or self._transport_seek_commit_scheduled
-        ):
-            return
-        self._transport_seek_commit_scheduled = True
-        self._transport_seek_commit_players = tuple(self._all_playback_players())
-        self._transport_seek_commit_position_ms = self._transport_seek_pending_ms
-        self._transport_seek_commit_pause_only = self._transport_seek_pause_only
-        self._transport_seek_commit_index = 0
-        self._transport_seek_commit_phase = (
-            "pause" if self._transport_seek_commit_pause_only else "stop"
-        )
-        self._transport_commit_timer.start(0)
-
-    def _finish_transport_seek_commit(self) -> None:
-        resume = self._transport_seek_resume and self._playing
-        self._transport_seek_pending_ms = None
-        self._transport_seek_resume = False
-        self._transport_seek_pause_only = False
-        self._transport_seek_commit_scheduled = False
-        self._transport_seek_commit_players = ()
-        self._transport_seek_commit_pause_only = False
-        self._transport_seek_commit_index = 0
-        self._transport_seek_commit_phase = ""
-        self._startup_sync_pending = False
-        if not resume and not self._shutting_down:
-            self._after_transport_timer.start(0)
-
-    def _apply_deferred_after_transport(self) -> None:
-        if self._shutting_down or self._playing or self._transport_seek_pending_ms is not None:
-            return
-        if self._deferred_editor_assets is not None:
-            generation, assets = self._deferred_editor_assets
-            self._deferred_editor_assets = None
-            self._on_editor_audio_ready(generation, assets)
-            return
-        if self._deferred_apply_scheduled:
-            self._try_apply_deferred_assets()
-        else:
-            self._schedule_deferred_assets()
-
-    def _commit_next_transport_player(self) -> None:
-        """Apply one backend mutation per event-loop turn to avoid Qt re-entry."""
-
-        if self._shutting_down or self._transport_seek_pending_ms is None:
-            self._finish_transport_seek_commit()
-            return
-        if (
-            self._transport_seek_pending_ms != self._transport_seek_commit_position_ms
-            or self._transport_seek_pause_only != self._transport_seek_commit_pause_only
-        ):
-            self._transport_seek_commit_players = tuple(self._all_playback_players())
-            self._transport_seek_commit_position_ms = self._transport_seek_pending_ms
-            self._transport_seek_commit_pause_only = self._transport_seek_pause_only
-            self._transport_seek_commit_index = 0
-            self._transport_seek_commit_phase = (
-                "pause" if self._transport_seek_commit_pause_only else "stop"
-            )
-
-        players = self._transport_seek_commit_players
-        if self._transport_seek_commit_phase == "pause":
-            if self._transport_seek_commit_index < len(players):
-                player = players[self._transport_seek_commit_index]
-                player.pause()
-                self._transport_seek_commit_index += 1
-                self._transport_commit_timer.start(0)
-                return
-            if self._transport_seek_resume and self._playing:
-                self._transport_seek_pause_only = False
-                self._transport_seek_commit_pause_only = False
-                self._transport_seek_commit_players = tuple(self._all_playback_players())
-                self._transport_seek_commit_index = 0
-                self._transport_seek_commit_phase = "stop"
-                self._transport_commit_timer.start(0)
-                return
-            self._finish_transport_seek_commit()
-            return
-
-        if self._transport_seek_commit_phase == "stop":
-            if self._transport_seek_commit_index < len(players):
-                player = players[self._transport_seek_commit_index]
-                if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
-                    player.stop()
-                self._transport_seek_commit_index += 1
-                self._transport_commit_timer.start(0)
-                return
-            self._transport_seek_commit_players = tuple(self._all_playback_players())
-            self._transport_seek_commit_index = 0
-            self._transport_seek_commit_phase = "position"
-            self._transport_commit_timer.start(0)
-            return
-
-        if self._transport_seek_commit_phase == "position":
-            if self._transport_seek_commit_index < len(players):
-                player = players[self._transport_seek_commit_index]
-                if player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
-                    raise RuntimeError("MIDI backend resumed before serialized seek positioning")
-                player.setPosition(self._transport_seek_commit_position_ms)
-                self._transport_seek_commit_index += 1
-                self._transport_commit_timer.start(0)
-                return
-            if not (self._transport_seek_resume and self._playing):
-                self._finish_transport_seek_commit()
-                return
-            active_players = self._active_playback_players()
-            self._active_player_ids = frozenset(id(player) for player in active_players)
-            self._transport_seek_commit_players = tuple(active_players)
-            self._transport_seek_commit_index = 0
-            self._transport_seek_commit_phase = "play"
-            self._transport_commit_timer.start(0)
-            return
-
-        if self._transport_seek_commit_phase != "play":
-            raise RuntimeError(
-                f"Invalid serialized MIDI seek phase: {self._transport_seek_commit_phase!r}"
-            )
-        if not (self._transport_seek_resume and self._playing):
-            self._finish_transport_seek_commit()
-            return
-        if self._transport_seek_commit_index < len(players):
-            player = players[self._transport_seek_commit_index]
-            player.play()
-            self._transport_seek_commit_index += 1
-            self._transport_commit_timer.start(0)
-            return
-        self._finish_transport_seek_commit()
 
     def _on_assets_ready(self, assets: object) -> None:
         if self._shutting_down:
@@ -2771,7 +2539,7 @@ class MuscriptorResultWidget(QFrame):
         if not isinstance(assets, MuscriptorPlaybackAssets):
             self._on_assets_failed("Invalid MuScriptor playback asset payload")
             return
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             self._deferred_final_assets = assets
             self.playback_status_label.setText(t("muscriptor_result.final_audio_buffered"))
             return
@@ -2782,7 +2550,7 @@ class MuscriptorResultWidget(QFrame):
             self._on_assets_failed(str(exc))
 
     def _apply_final_assets(self, assets: MuscriptorPlaybackAssets) -> None:
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             raise RuntimeError("Cannot replace final MIDI assets during transport activity")
         self.roll.set_notes(assets.notes, duration=assets.duration)
         self._original_assets = assets
@@ -2800,17 +2568,17 @@ class MuscriptorResultWidget(QFrame):
     ) -> None:
         """Atomically replace every audible MIDI bus while transport is paused."""
 
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             raise RuntimeError("Cannot replace MIDI playback assets during transport activity")
         position_ms = self._position_ms
         self._dispose_dynamic_players()
         self._assets = assets
-        self._ensure_original_player()
-        self._original_left = self._make_player(assets.original_left_wav)
-        self._midi_normal = self._make_player(assets.live_transcription_wav)
-        self._midi_right = self._make_player(assets.transcription_right_wav)
-        self._normal_sources = dict(assets.instrument_wavs)
-        self._right_sources = dict(assets.instrument_right_wavs)
+        self._configure_synchronized_playback(
+            original_wav=assets.original_wav,
+            midi_wav=assets.live_transcription_wav,
+            instrument_wavs=assets.instrument_wavs,
+            stereo_available=True,
+        )
         self._detected = list(dict.fromkeys(note.instrument for note in detected_notes))
         self._muted.intersection_update(self._detected)
         if self._soloed not in self._detected:
@@ -2826,8 +2594,7 @@ class MuscriptorResultWidget(QFrame):
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
         self.playback_slider.setValue(self._position_ms)
-        for player in self._all_playback_players():
-            player.setPosition(self._position_ms)
+        self._playback_engine.seek(self._position_ms / 1000.0)
         self._apply_mix()
         self._update_play_label()
 
@@ -3044,7 +2811,7 @@ class MuscriptorResultWidget(QFrame):
                 "Invalid edited MIDI playback asset payload",
             )
             return
-        if self._playing or self._transport_seek_pending_ms is not None:
+        if self._playing:
             self._deferred_editor_assets = (generation, payload)
             return
         try:
@@ -3460,7 +3227,7 @@ class MuscriptorResultWidget(QFrame):
         if self._shutting_down:
             return
         self.status_label.setText(t("muscriptor_result.audio_failed", error=error))
-        preview_available = self._midi_normal is not None and self._original_normal is not None
+        preview_available = self._playback_engine.is_configured
         self.playback_status_label.setText(
             t(
                 "muscriptor_result.final_audio_failed_preview"
@@ -3478,47 +3245,6 @@ class MuscriptorResultWidget(QFrame):
         if self._asset_worker is worker:
             self._asset_worker = None
 
-    def _all_playback_players(self) -> list[QMediaPlayer]:
-        return list(self._players)
-
-    def _ensure_instrument_players(self, *, stereo: bool) -> None:
-        sources = self._right_sources if stereo else self._normal_sources
-        players = self._right_players if stereo else self._normal_players
-        for instrument, source in sources.items():
-            if instrument not in players:
-                players[instrument] = self._make_player(source)
-
-    def _active_playback_pairs(self) -> list[tuple[QMediaPlayer, QAudioOutput]]:
-        stereo = (
-            self.stereo_checkbox.isChecked()
-            and self._original_left is not None
-            and self._midi_right is not None
-        )
-        original = self._original_left if stereo else self._original_normal
-        midi_mix = self._midi_right if stereo else self._midi_normal
-        if self._muted:
-            self._ensure_instrument_players(stereo=stereo)
-        instrument_players = self._right_players if stereo else self._normal_players
-        # The rendered MIDI mix is always the transport master, including when
-        # its gain is zero because per-instrument mute/solo playback is active.
-        # Keeping it scheduled makes the displayed progress and all seek/drift
-        # corrections follow playable MIDI time instead of the source audio.
-        pairs: list[tuple[QMediaPlayer, QAudioOutput]] = []
-        if midi_mix is not None:
-            pairs.append(midi_mix)
-        if original is not None:
-            pairs.append(original)
-        if self._muted:
-            pairs.extend(
-                pair
-                for instrument, pair in instrument_players.items()
-                if instrument not in self._muted
-            )
-        return pairs
-
-    def _active_playback_players(self) -> list[QMediaPlayer]:
-        return [player for player, _output in self._active_playback_pairs()]
-
     def _set_playback_duration(self, seconds: float) -> None:
         duration_ms = max(0, int(round(float(seconds) * 1000.0)))
         self.playback_slider.setRange(0, duration_ms)
@@ -3526,33 +3252,36 @@ class MuscriptorResultWidget(QFrame):
         self.duration_label.setText(f"/ {_format_seconds(duration_ms / 1000.0)}")
         self.playback_slider.setValue(min(self._position_ms, duration_ms))
 
-    def _sync_active_players(self) -> None:
-        active = self._active_playback_players()
-        next_ids = frozenset(id(player) for player in active)
-        if next_ids == self._active_player_ids:
+    def _on_synchronized_playback_finished(self) -> None:
+        if self._shutting_down:
             return
-        if self._transport_seek_pending_ms is not None:
-            self._active_player_ids = next_ids
+        self._finish_playback_at(self.playback_slider.maximum())
+        if self._preview_duration > 0:
+            self.playback_status_label.setText(
+                t(
+                    "muscriptor_result.preview_complete",
+                    time=_format_clock(self._preview_duration),
+                )
+            )
+        self._apply_deferred_after_playback_stop()
+
+    def _on_synchronized_playback_error(self, error: str) -> None:
+        if self._shutting_down:
             return
-        self._active_player_ids = next_ids
-        if self._playing:
-            master_position = active[0].position() if active else self._position_ms
-            self.seek(master_position / 1000.0)
+        was_playing = self._playing
+        self._position_ms = int(round(self._playback_engine.position_seconds * 1000.0))
+        self._playing = False
+        self._playback_clock.reset(self._position_ms)
+        self.playback_status_label.setText(t("muscriptor_result.player_failed", error=error))
+        self._update_play_label()
+        if was_playing:
+            self.playing_changed.emit(False)
+        self._apply_deferred_after_playback_stop()
 
     def _toggle_playback(self) -> None:
-        if self._original_normal is None or self._midi_normal is None:
+        if not self._playback_engine.is_configured:
             raise RuntimeError("MuScriptor playable audio is not ready")
         self._apply_mix()
-        if self._transport_seek_pending_ms is not None:
-            if self._playing:
-                self.pause()
-            else:
-                self._playing = True
-                self._transport_seek_resume = True
-                self._schedule_transport_seek_commit()
-                self.playing_changed.emit(True)
-                self._update_play_label()
-            return
         if self._playing:
             self.pause()
         else:
@@ -3566,14 +3295,10 @@ class MuscriptorResultWidget(QFrame):
                 and self._position_ms >= int(self._preview_duration * 1000) - 30
             ):
                 self._position_ms = 0
-            self._playing = True
-            self._startup_sync_pending = False
-            self._last_drift_check_position_ms = self._position_ms
             self._playback_clock.reset(self._position_ms)
-            self._transport_seek_pending_ms = self._position_ms
-            self._transport_seek_resume = True
-            self._transport_seek_pause_only = False
-            self._schedule_transport_seek_commit()
+            self._playback_engine.seek(self._position_ms / 1000.0)
+            self._playback_engine.play()
+            self._playing = True
             self.playing_changed.emit(True)
         self._update_play_label()
 
@@ -3701,41 +3426,24 @@ class MuscriptorResultWidget(QFrame):
 
     def _apply_result_playback_rate(self) -> None:
         rate = self._result_playback_rate()
-        active_players = self._active_playback_players()
-        master_position = (
-            active_players[0].position() if self._playing and active_players else self._position_ms
-        )
-        for player in self._all_playback_players():
-            player.setPlaybackRate(rate)
-        if self._playing:
-            for player in active_players[1:]:
-                if abs(player.position() - master_position) > 20:
-                    self.seek(master_position / 1000.0)
-                    break
-            self._position_ms = master_position
-            self._playback_clock.reset(master_position)
+        if not self._playback_engine.is_configured:
+            return
+        self._playback_engine.set_playback_rate(rate)
+        self._position_ms = int(round(self._playback_engine.position_seconds * 1000.0))
+        self._playback_clock.reset(self._position_ms)
 
     def pause(self) -> None:
         """Pause this workbench without changing its current play position."""
         was_playing = self._playing
-        self._transport_seek_resume = False
-        if was_playing and self._transport_seek_pending_ms is None:
-            active_players = self._active_playback_players()
-            if active_players:
-                self._position_ms = max(0, active_players[0].position())
-            self._transport_seek_pending_ms = self._position_ms
-        if self._transport_seek_pending_ms is not None:
-            self._transport_seek_pause_only = True
+        if was_playing:
+            self._playback_engine.pause()
+            self._position_ms = int(round(self._playback_engine.position_seconds * 1000.0))
         self._playing = False
-        self._startup_sync_pending = False
         self._playback_clock.reset(self._position_ms)
-        if self._transport_seek_pending_ms is not None:
-            self._schedule_transport_seek_commit()
-        else:
-            self._schedule_deferred_assets()
         self._update_play_label()
         if was_playing:
             self.playing_changed.emit(False)
+        self._apply_deferred_after_playback_stop()
 
     def _on_playback_scrub_started(self) -> None:
         self._transport_scrubbing = True
@@ -3754,8 +3462,8 @@ class MuscriptorResultWidget(QFrame):
 
     def _on_playback_scrub_finished(self, position_ms: int) -> None:
         try:
-            # Commit exactly once on release. Repeated setPosition/pause/play calls
-            # during mouse movement can deadlock Qt's Windows FFmpeg backend.
+            # Commit exactly once on release so one sink reset replaces the old
+            # position instead of rebuilding its output buffer for every mouse move.
             self.seek(position_ms / 1000.0)
         finally:
             self._transport_scrubbing = False
@@ -3766,7 +3474,6 @@ class MuscriptorResultWidget(QFrame):
         if duration_ms > 0:
             position = min(position, duration_ms / 1000.0)
         self._position_ms = int(position * 1000)
-        self._last_drift_check_position_ms = self._position_ms
         self._playback_finished = False
         self._playback_clock.reset(self._position_ms)
         self.roll.set_position(position)
@@ -3774,15 +3481,8 @@ class MuscriptorResultWidget(QFrame):
         self.playback_slider.setValue(self._position_ms)
         if self.follow_checkbox.isChecked():
             self._follow_roll_to_position(position, allow_backward=True)
-        if not self._all_playback_players():
-            return
-
-        self._transport_seek_pending_ms = self._position_ms
-        self._transport_seek_pause_only = False
-        if self._playing:
-            self._transport_seek_resume = True
-            self._startup_sync_pending = False
-        self._schedule_transport_seek_commit()
+        if self._playback_engine.is_configured:
+            self._playback_engine.seek(position)
 
     def _schedule_deferred_assets(self) -> None:
         if self._deferred_apply_scheduled or self._shutting_down:
@@ -3790,18 +3490,26 @@ class MuscriptorResultWidget(QFrame):
         self._deferred_apply_scheduled = True
         self._deferred_assets_timer.start(0)
 
+    def _apply_deferred_after_playback_stop(self) -> None:
+        if self._shutting_down or self._playing or self._playback_engine.is_playing:
+            return
+        if self._deferred_editor_assets is not None:
+            generation, assets = self._deferred_editor_assets
+            self._deferred_editor_assets = None
+            self._on_editor_audio_ready(generation, assets)
+            return
+        if self._deferred_apply_scheduled:
+            self._try_apply_deferred_assets()
+        else:
+            self._schedule_deferred_assets()
+
     def _try_apply_deferred_assets(self) -> None:
         if not self._deferred_apply_scheduled:
             return
         if self._shutting_down:
             self._deferred_apply_scheduled = False
             return
-        if self._transport_seek_pending_ms is not None:
-            return
-        if self._playing or any(
-            player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-            for player in self._all_playback_players()
-        ):
+        if self._playing or self._playback_engine.is_playing:
             return
         self._deferred_apply_scheduled = False
         self._apply_deferred_assets()
@@ -3903,12 +3611,7 @@ class MuscriptorResultWidget(QFrame):
         was_playing = self._playing
         self._playing = False
         self._playback_finished = True
-        self._startup_sync_pending = False
         self._position_ms = terminal_ms
-        self._transport_seek_pending_ms = terminal_ms
-        self._transport_seek_resume = False
-        self._transport_seek_pause_only = True
-        self._schedule_transport_seek_commit()
         self._playback_clock.reset(terminal_ms)
         position = terminal_ms / 1000.0
         self.roll.set_position(position)
@@ -3923,43 +3626,18 @@ class MuscriptorResultWidget(QFrame):
     def _tick(self) -> None:
         if not self._finalizing:
             self._update_stream_progress()
-        if self._transport_scrubbing or self._transport_seek_pending_ms is not None:
+        if self._transport_scrubbing:
             return
-        if not self._playing or self._midi_normal is None:
+        if not self._playing or not self._playback_engine.is_configured:
             return
-        master_pair = (
-            self._midi_right
-            if self.stereo_checkbox.isChecked() and self._midi_right is not None
-            else self._midi_normal
+        self._position_ms = max(
+            self._position_ms,
+            int(round(self._playback_engine.position_seconds * 1000.0)),
         )
-        master = master_pair[0]
-        # Local playback cannot legitimately move backwards between timer ticks. Some
-        # Windows multimedia backends briefly report an older clock sample; feeding
-        # that value into follow-scroll makes the entire piano roll shake left/right.
-        self._position_ms = max(self._position_ms, max(0, master.position()))
-        authoritative_position = self._position_ms / 1000.0
-        if self._preview_duration > 0 and authoritative_position >= self._preview_duration:
-            self._finish_playback_at(int(self._preview_duration * 1000))
-            self.playback_status_label.setText(
-                t(
-                    "muscriptor_result.preview_complete",
-                    time=_format_clock(self._preview_duration),
-                )
-            )
-            self._schedule_deferred_assets()
+        if not self._playback_engine.is_playing:
+            self._finish_playback_at(self.playback_slider.maximum())
+            self._apply_deferred_after_playback_stop()
             return
-        if master.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia:
-            terminal_ms = max(self._position_ms, max(0, master.duration()))
-            self._finish_playback_at(terminal_ms)
-            if self._preview_duration > 0:
-                self._schedule_deferred_assets()
-            return
-        if self._position_ms - self._last_drift_check_position_ms >= 500:
-            for player in self._active_playback_players()[1:]:
-                if abs(player.position() - self._position_ms) > 80:
-                    self.seek(self._position_ms / 1000.0)
-                    return
-            self._last_drift_check_position_ms = self._position_ms
         display_ms = self._playback_clock.sample(
             self._position_ms,
             playback_rate=self._result_playback_rate(),
@@ -4038,37 +3716,16 @@ class MuscriptorResultWidget(QFrame):
         self.slow_hint_label.show()
 
     def _apply_mix(self, *_args) -> None:
-        if self._original_normal is None:
+        if not self._playback_engine.is_configured:
             return
-        stereo_available = (
-            self._original_left is not None
-            and self._midi_right is not None
-            and bool(self._right_sources)
-        )
-        stereo = self.stereo_checkbox.isChecked() and stereo_available
+        stereo = self.stereo_checkbox.isChecked() and self._stereo_playback_available
         mix = self.mix_slider.value() / 100.0
-        use_instrument_stems = bool(self._muted)
-        if use_instrument_stems:
-            self._ensure_instrument_players(stereo=stereo)
         self.mix_slider.setEnabled(bool(self._normal_sources) and not stereo)
-        self._original_normal[1].setVolume(0.0 if stereo else 1.0 - mix)
-        if self._original_left is not None:
-            self._original_left[1].setVolume(1.0 if stereo else 0.0)
-        if self._midi_normal is not None:
-            self._midi_normal[1].setVolume(mix if not stereo and not use_instrument_stems else 0.0)
-        if self._midi_right is not None:
-            self._midi_right[1].setVolume(1.0 if stereo and not use_instrument_stems else 0.0)
-        for instrument in self._normal_sources:
-            audible = instrument not in self._muted
-            if instrument in self._normal_players:
-                self._normal_players[instrument][1].setVolume(
-                    mix if audible and not stereo and use_instrument_stems else 0.0
-                )
-            if instrument in self._right_sources and instrument in self._right_players:
-                self._right_players[instrument][1].setVolume(
-                    1.0 if audible and stereo and use_instrument_stems else 0.0
-                )
-        self._sync_active_players()
+        self._playback_engine.set_mix_state(
+            mix=mix,
+            stereo=stereo,
+            muted=frozenset(self._muted),
+        )
 
     def _toggle_mute(self, instrument: str) -> None:
         self._soloed = None
@@ -4283,19 +3940,10 @@ class MuscriptorResultWidget(QFrame):
         self._deferred_apply_scheduled = False
         self.timer.stop()
         self._edit_asset_debounce.stop()
-        self._transport_commit_timer.stop()
-        self._after_transport_timer.stop()
         self._deferred_assets_timer.stop()
-        self._retired_media_timer.stop()
         self._playing = False
         self._transport_scrubbing = False
-        self._transport_seek_pending_ms = None
-        self._transport_seek_resume = False
-        self._transport_seek_pause_only = False
-        self._transport_seek_commit_scheduled = False
-        self._transport_seek_commit_players = ()
-        self._transport_seek_commit_index = 0
-        self._transport_seek_commit_phase = ""
+        self._playback_engine.shutdown()
 
         # QThread objects must finish before their parent and the media objects
         # they publish into are destroyed. Waiting after media teardown leaves
@@ -4319,20 +3967,8 @@ class MuscriptorResultWidget(QFrame):
             edit_asset_worker.cancel()
             edit_asset_worker.wait()
 
-        active_media = [(player, player.audioOutput()) for player in self._all_playback_players()]
-        self._players.clear()
-        self._retired_media.extend(active_media)
-        self._release_retired_media()
-        self._active_player_ids = frozenset()
-        self._startup_sync_pending = False
         self._normal_sources.clear()
-        self._right_sources.clear()
-        self._normal_players.clear()
-        self._right_players.clear()
-        self._midi_normal = None
-        self._midi_right = None
-        self._original_normal = None
-        self._original_left = None
+        self._stereo_playback_available = False
         if self._preview_root.exists():
             try:
                 shutil.rmtree(self._preview_root)

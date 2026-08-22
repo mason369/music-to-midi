@@ -131,10 +131,10 @@ class MirosTranscriberTests(unittest.TestCase):
                 str(Path(miros_runtime.__file__).resolve().parents[2]),
                 captured["env"]["PYTHONPATH"],
             )
-            self.assertNotIn("MUSIC_TO_MIDI_MIROS_DEVICE", captured["env"])
+            self.assertEqual("cpu", captured["env"]["MUSIC_TO_MIDI_MIROS_DEVICE"])
             self.assertNotIn("MUSIC_TO_MIDI_MIROS_PRECISION", captured["env"])
 
-    def test_subprocess_enables_expandable_cuda_segments_without_overriding_user_value(self):
+    def test_cpu_subprocess_removes_cuda_allocator_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "external" / "ai4m-miros"
@@ -178,10 +178,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     str(root / "out" / "song.mid"),
                 )
 
-            self.assertEqual(
-                captured["env"]["PYTORCH_CUDA_ALLOC_CONF"],
-                "max_split_size_mb:64",
-            )
+            self.assertNotIn("PYTORCH_CUDA_ALLOC_CONF", captured["env"])
 
     def test_source_without_weights_is_not_available(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -637,7 +634,7 @@ class MirosTranscriberTests(unittest.TestCase):
                     transcriber.transcribe_to_midi(str(root / "song.wav"), str(output_path))
 
             self.assertEqual(output_path.read_bytes(), previous_bytes)
-            self.assertEqual(list(output_path.parent.glob(".*.miros.*.tmp.mid")), [])
+            self.assertEqual(list(output_path.parent.glob(".*.tmp.mid")), [])
 
     def test_transcribe_precise_reads_seconds_from_pretty_midi(self):
         pretty_midi_stub = types.ModuleType("pretty_midi")

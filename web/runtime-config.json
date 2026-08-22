@@ -1,0 +1,6 @@
+{
+  "managed": false,
+  "frontend_url": "http://127.0.0.1:5173",
+  "backend_url": "http://127.0.0.1:8765",
+  "expected_api_version": "2.0"
+}

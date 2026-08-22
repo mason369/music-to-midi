@@ -8,12 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import mido
+
 from src.core.manual_midi import build_manual_midi_config
 from src.models.data_models import (
     Config,
+    MuscriptorProcessingChain,
     ProcessingMode,
     ProcessingProgress,
     ProcessingResult,
+    TempoMode,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,8 +66,12 @@ class InferenceEngine:
         config.multi_instrument_model = str(options["transcription_backend"])
         config.yourmt3_model = str(options["yourmt3_model"])
         config.muscriptor_model = str(options["muscriptor_model"])
+        config.muscriptor_processing_chain = str(
+            options.get("muscriptor_processing_chain") or MuscriptorProcessingChain.OFFICIAL.value
+        )
         config.muscriptor_instruments = list(options.get("muscriptor_instruments") or [])
         config.midi_track_mode = str(options["midi_track_mode"])
+        config.tempo_mode = str(options.get("tempo_mode") or TempoMode.FIXED_AUTO.value)
         config.custom_bpm = options.get("custom_bpm")
         config.use_gpu = bool(options["use_gpu"])
         config.gpu_device = int(options["gpu_device"])
@@ -78,7 +86,12 @@ class InferenceEngine:
             language=str(options["language"]),
             use_gpu=bool(options["use_gpu"]),
             gpu_device=int(options["gpu_device"]),
+            tempo_mode=str(options.get("tempo_mode") or TempoMode.FIXED_AUTO.value),
             custom_bpm=options.get("custom_bpm"),
+            muscriptor_processing_chain=str(
+                options.get("muscriptor_processing_chain")
+                or MuscriptorProcessingChain.OFFICIAL.value
+            ),
         )
         return build_manual_midi_config(
             base,
@@ -101,7 +114,12 @@ class InferenceEngine:
         }
 
     @classmethod
-    def _processing_payload(cls, result: ProcessingResult, config: Config) -> dict:
+    def _processing_payload(
+        cls,
+        result: ProcessingResult,
+        config: Config,
+        midi_path: Path,
+    ) -> dict:
         backend = result.transcription_backend
         if not backend:
             backend = (
@@ -109,15 +127,31 @@ class InferenceEngine:
                 if config.processing_mode == ProcessingMode.SMART.value
                 else config.processing_mode
             )
+        try:
+            midi = mido.MidiFile(str(midi_path))
+        except Exception as exc:
+            raise RuntimeError(f"produced MIDI could not be parsed: {midi_path}: {exc}") from exc
+        total_notes = sum(
+            1
+            for track in midi.tracks
+            for message in track
+            if message.type == "note_on" and int(message.velocity) > 0
+        )
+        quality_warnings = []
+        if total_notes == 0:
+            quality_warnings.append("empty_midi")
+        if int(result.total_notes) != total_notes:
+            quality_warnings.append("note_count_corrected_from_file")
         return {
             "mode": config.processing_mode,
             "processing_time": float(result.processing_time),
-            "total_notes": int(result.total_notes),
-            "track_count": len(result.tracks),
+            "total_notes": total_notes,
+            "track_count": len(midi.tracks),
             "transcription_backend": backend,
             "selected_instruments": list(result.selected_instruments),
             "detected_instruments": list(result.detected_instruments),
             "beat": cls._beat_payload(result),
+            "quality_warnings": quality_warnings,
         }
 
     @staticmethod
@@ -137,6 +171,51 @@ class InferenceEngine:
         progress_callback: ProgressCallback,
         processor_callback: ProcessorCallback,
         track_id: str | None = None,
+        tempo_source_path: Path | None = None,
+    ) -> ExecutionResult:
+        from src.web_api.inference_process import (
+            XpuInferenceProcess,
+            should_isolate_xpu_inference,
+        )
+
+        if should_isolate_xpu_inference(options):
+            isolated = XpuInferenceProcess()
+            processor_callback(isolated)
+            try:
+                return isolated.run(
+                    kind=kind,
+                    source_path=source_path,
+                    output_dir=output_dir,
+                    options=options,
+                    progress_callback=progress_callback,
+                    track_id=track_id,
+                    tempo_source_path=tempo_source_path,
+                )
+            finally:
+                processor_callback(None)
+
+        return self._run_direct(
+            kind=kind,
+            source_path=source_path,
+            output_dir=output_dir,
+            options=options,
+            progress_callback=progress_callback,
+            processor_callback=processor_callback,
+            track_id=track_id,
+            tempo_source_path=tempo_source_path,
+        )
+
+    def _run_direct(
+        self,
+        *,
+        kind: str,
+        source_path: Path,
+        output_dir: Path,
+        options: dict,
+        progress_callback: ProgressCallback,
+        processor_callback: ProcessorCallback,
+        track_id: str | None = None,
+        tempo_source_path: Path | None = None,
     ) -> ExecutionResult:
         try:
             if kind == "primary":
@@ -155,6 +234,7 @@ class InferenceEngine:
                     progress_callback,
                     processor_callback,
                     track_id,
+                    tempo_source_path,
                 )
             raise RuntimeError(f"unsupported inference job kind: {kind!r}")
         finally:
@@ -225,7 +305,7 @@ class InferenceEngine:
             raise TypeError(f"pipeline returned unsupported result type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "MIDI output")
         return ExecutionResult(
-            self._processing_payload(result, config),
+            self._processing_payload(result, config, midi_path),
             (ArtifactSpec("midi", "midi", midi_path),),
         )
 
@@ -237,17 +317,24 @@ class InferenceEngine:
         progress_callback: ProgressCallback,
         processor_callback: ProcessorCallback,
         track_id: str | None,
+        tempo_source_path: Path | None,
     ) -> ExecutionResult:
         from src.core.pipeline import MusicToMidiPipeline
 
         config = self._manual_config(options)
         pipeline = MusicToMidiPipeline(config)
         processor_callback(pipeline)
-        result = pipeline.process(str(source_path), str(output_dir), progress_callback)
+        resolved_tempo_source = (tempo_source_path or source_path).resolve()
+        result = pipeline.process(
+            str(source_path),
+            str(output_dir),
+            progress_callback,
+            tempo_audio_path=str(resolved_tempo_source),
+        )
         if not isinstance(result, ProcessingResult):
             raise TypeError(f"manual MIDI route returned unsupported type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "manual MIDI output")
-        payload = self._processing_payload(result, config)
+        payload = self._processing_payload(result, config, midi_path)
         payload.update({"route": options["route"], "source_track_id": track_id})
         return ExecutionResult(
             payload,

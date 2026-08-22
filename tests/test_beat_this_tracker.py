@@ -4,6 +4,7 @@ from unittest import mock
 
 import numpy as np
 import pytest
+import torch
 
 from src.core.beat_this_tracker import (
     BEAT_THIS_CHECKPOINT_NAME,
@@ -14,7 +15,7 @@ from src.core.beat_this_tracker import (
     get_beat_this_checkpoint_path,
     remove_competing_beat_marks,
 )
-from src.models.data_models import Config
+from src.models.data_models import Config, TempoMode
 
 
 def test_linear_fit_removes_final0_frame_quantization_error():
@@ -74,6 +75,7 @@ def test_variable_performance_always_emits_beat_level_tempo_map():
     result = analyze_beat_this_grid(
         beats,
         beats[::4],
+        tempo_mode=TempoMode.ADAPTIVE.value,
     )
 
     assert result.is_variable_tempo
@@ -84,8 +86,8 @@ def test_variable_performance_always_emits_beat_level_tempo_map():
 
 def test_meter_uses_independent_sixty_percent_agreement_gate():
     beats = np.arange(36, dtype=float) * 0.5
-    # Bar-position gaps are 3, 3, 4, 3, 3: 80% agreement for 3/4.
-    downbeat_positions = [0, 3, 6, 10, 13, 16]
+    # Reliable meter evidence uses one stable three-beat bar lattice.
+    downbeat_positions = [0, 3, 6, 9, 12, 15]
     downbeats = beats[downbeat_positions]
 
     result = analyze_beat_this_grid(
@@ -155,6 +157,40 @@ def test_runtime_uses_only_final0_without_dbn_or_half_precision(tmp_path):
         "float16": False,
         "dbn": False,
     }
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_cuda_tracking_disables_cudnn_tf32_only_for_final0_call(tmp_path, raises):
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"audio-placeholder")
+    observed_allow_tf32 = []
+
+    class FakeRuntime:
+        def __call__(self, _audio_path):
+            observed_allow_tf32.append(torch.backends.cudnn.allow_tf32)
+            if raises:
+                raise RuntimeError("inference failed")
+            beats = np.arange(12, dtype=float) * 0.5
+            return beats, beats[::4]
+
+    tracker = BeatThisTracker(Config(use_gpu=True, gpu_device=0))
+    tracker._device = "cuda:0"
+    previous_allow_tf32 = torch.backends.cudnn.allow_tf32
+    torch.backends.cudnn.allow_tf32 = True
+    try:
+        with mock.patch.object(tracker, "_load_tracker", return_value=FakeRuntime()):
+            if raises:
+                with pytest.raises(RuntimeError, match="inference failed"):
+                    tracker.track_raw(str(audio))
+            else:
+                beats, downbeats = tracker.track_raw(str(audio))
+                assert len(beats) == 12
+                assert len(downbeats) == 3
+
+        assert observed_allow_tf32 == [False]
+        assert torch.backends.cudnn.allow_tf32 is True
+    finally:
+        torch.backends.cudnn.allow_tf32 = previous_allow_tf32
 
 
 def test_frozen_runtime_never_substitutes_a_user_cache_checkpoint(tmp_path):

@@ -6,7 +6,12 @@ const LOCALE_FILES = {
   en_US: "locales/en_US.json",
 };
 
+const FRONTEND_API_VERSION = "2.0";
+const BACKEND_HEARTBEAT_INTERVAL_MS = 5000;
+
 const TRACK_COLORS = ["#c89b55", "#50b7a3", "#be7058", "#8298b7", "#9b7aa5", "#8faf69", "#c77988", "#6ca2ad"];
+const STARTUP_API_QUERY = new URLSearchParams(window.location.search).get("api");
+const STARTUP_STORED_API = localStorage.getItem("musicToMidiApiBase");
 
 function normalizeApiBase(value) {
   const url = new URL(value);
@@ -15,14 +20,12 @@ function normalizeApiBase(value) {
 }
 
 function initialApiBase() {
-  const queryValue = new URLSearchParams(window.location.search).get("api");
-  if (queryValue) {
-    const normalized = normalizeApiBase(queryValue);
+  if (STARTUP_API_QUERY) {
+    const normalized = normalizeApiBase(STARTUP_API_QUERY);
     localStorage.setItem("musicToMidiApiBase", normalized);
     return normalized;
   }
-  const stored = localStorage.getItem("musicToMidiApiBase");
-  if (stored) return normalizeApiBase(stored);
+  if (STARTUP_STORED_API) return normalizeApiBase(STARTUP_STORED_API);
   if (["http:", "https:"].includes(window.location.protocol)) {
     const port = window.location.port === "5173" ? "8765" : window.location.port;
     return `${window.location.protocol}//${window.location.hostname}${port ? `:${port}` : ""}`;
@@ -34,6 +37,7 @@ const state = {
   language: localStorage.getItem("musicToMidiLanguage") || "zh_CN",
   messages: null,
   apiBase: initialApiBase(),
+  frontendUrl: window.location.origin,
   capabilities: null,
   selectedMode: "smart",
   audioFile: null,
@@ -42,6 +46,8 @@ const state = {
   submissionPending: false,
   connectionStatus: "connecting",
   connectionError: "",
+  expectedApiVersion: FRONTEND_API_VERSION,
+  heartbeatPending: false,
   progressStageSignature: "",
   guideAction: "source",
   eventSources: new Map(),
@@ -54,6 +60,20 @@ const state = {
   raf: 0,
   zoom: 1,
 };
+
+async function loadFrontendRuntimeConfig() {
+  const response = await fetch("runtime-config.json", { cache: "no-store" });
+  if (!response.ok) throw new Error(`runtime-config.json: HTTP ${response.status}`);
+  const config = await response.json();
+  if (typeof config !== "object" || config === null) throw new Error("runtime-config.json must contain an object");
+  if (config.expected_api_version !== FRONTEND_API_VERSION) {
+    throw new Error(`Frontend runtime contract mismatch: expected ${FRONTEND_API_VERSION}, configured ${config.expected_api_version || "missing"}`);
+  }
+  state.expectedApiVersion = config.expected_api_version;
+  state.frontendUrl = normalizeApiBase(config.frontend_url);
+  const configuredBackend = normalizeApiBase(config.backend_url);
+  if (!STARTUP_API_QUERY && !STARTUP_STORED_API) state.apiBase = configuredBackend;
+}
 
 const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -251,7 +271,7 @@ function scrollToWorkflowTarget(target) {
 
 function performGuideAction() {
   if (state.guideAction === "connect") {
-    $("#apiDialog").showModal();
+    openApiDialog();
   } else if (state.guideAction === "source") {
     $("#audioInput").click();
   } else {
@@ -276,17 +296,27 @@ function renderConnectionState() {
   $("#backendDot").classList.toggle("online", Boolean(online));
 
   if (online) {
-    const devices = state.capabilities.runtime.cuda_devices || [];
-    const device = devices[0] || (state.capabilities.runtime.cuda_available ? "CUDA" : t("backend.cuda_unavailable"));
-    $("#deviceName").textContent = device;
-    $("#runtimeVersion").textContent = `Torch ${state.capabilities.runtime.torch} · API ${state.capabilities.api_version}`;
-    $("#computeDevice").textContent = devices[0] ? `CUDA / ${devices[0]}` : t("backend.cuda_unavailable");
+    const runtime = state.capabilities.runtime;
+    const accelerator = String(runtime.accelerator || "").toLowerCase();
+    const acceleratorLabel = accelerator === "xpu"
+      ? "Intel XPU"
+      : accelerator === "cuda" ? "CUDA" : accelerator.toUpperCase();
+    const deviceRecords = Array.isArray(runtime.accelerator_devices) ? runtime.accelerator_devices : [];
+    const firstRecord = deviceRecords[0];
+    const deviceName = typeof firstRecord === "string" ? firstRecord : firstRecord?.name;
+    const deviceIdentity = deviceName || runtime.accelerator_device || acceleratorLabel;
+    const ready = runtime.accelerator_ready === true;
+    $("#deviceName").textContent = ready && deviceIdentity ? deviceIdentity : t("backend.accelerator_unavailable");
+    $("#runtimeVersion").textContent = `Torch ${runtime.torch} · API ${state.capabilities.api_version}`;
+    $("#computeDevice").textContent = ready && deviceIdentity
+      ? `${acceleratorLabel} / ${deviceIdentity}`
+      : t("backend.accelerator_unavailable");
     return;
   }
 
   $("#deviceName").textContent = failed ? t("backend.connect_failed") : t("backend.waiting");
   $("#runtimeVersion").textContent = failed && state.connectionError ? state.connectionError : "—";
-  $("#computeDevice").textContent = failed ? t("backend.cuda_unavailable") : t("backend.waiting");
+  $("#computeDevice").textContent = failed ? t("backend.accelerator_unavailable") : t("backend.waiting");
 }
 
 function applyLanguage({ rerender = true } = {}) {
@@ -343,7 +373,13 @@ function toast(message, kind = "info") {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${state.apiBase}${path}`, options);
+  let response;
+  try {
+    response = await fetch(`${state.apiBase}${path}`, options);
+  } catch (error) {
+    markBackendUnavailable(error);
+    throw error;
+  }
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -357,12 +393,100 @@ async function api(path, options = {}) {
 }
 function artifactUrl(artifact) { return `${state.apiBase}${artifact.download_url}`; }
 
+function assertCompatibleApiVersion(payload, source) {
+  const actual = String(payload?.api_version || "");
+  if (actual !== state.expectedApiVersion) {
+    throw new Error(t("error.api_version_mismatch", {
+      source,
+      expected: state.expectedApiVersion,
+      actual: actual || t("error.api_version_missing"),
+    }));
+  }
+}
+
+function markBackendUnavailable(error) {
+  state.capabilities = null;
+  state.connectionStatus = "unavailable";
+  state.connectionError = error instanceof Error ? error.message : String(error);
+  if (state.messages) {
+    renderConnectionState();
+    updateReadyState();
+  }
+}
+
+function endpointParts(value) {
+  const url = new URL(normalizeApiBase(value));
+  return {
+    protocol: url.protocol,
+    host: url.hostname,
+    port: url.port || (url.protocol === "https:" ? "443" : "80"),
+  };
+}
+
+function apiBaseFromDialog() {
+  const protocol = $("#apiProtocol").value;
+  const hostValue = $("#apiHost").value.trim();
+  const port = Number($("#apiPort").value);
+  if (!hostValue) throw new Error(t("dialog.host_required"));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(t("dialog.port_invalid"));
+  const host = hostValue.includes(":") && !hostValue.startsWith("[") ? `[${hostValue}]` : hostValue;
+  return normalizeApiBase(`${protocol}//${host}:${port}`);
+}
+
+function updateEffectiveApiUrl() {
+  const output = $("#effectiveApiUrl");
+  try {
+    output.textContent = apiBaseFromDialog();
+  } catch (error) {
+    output.textContent = error.message;
+  }
+}
+
+function openApiDialog() {
+  const parts = endpointParts(state.apiBase);
+  $("#frontendAddress").value = state.frontendUrl;
+  $("#apiProtocol").value = parts.protocol;
+  $("#apiHost").value = parts.host;
+  $("#apiPort").value = parts.port;
+  const result = $("#connectionTestResult");
+  result.className = "connection-test-result";
+  result.textContent = t("dialog.test_idle");
+  updateEffectiveApiUrl();
+  $("#apiDialog").showModal();
+}
+
+async function testDialogConnection() {
+  const result = $("#connectionTestResult");
+  const button = $("#testApiConnection");
+  button.disabled = true;
+  result.className = "connection-test-result";
+  result.textContent = t("dialog.testing");
+  try {
+    const base = apiBaseFromDialog();
+    const response = await fetch(`${base}/api/v1/health`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    const payload = await response.json();
+    if (payload.status !== "ok") throw new Error(t("dialog.health_invalid"));
+    assertCompatibleApiVersion(payload, "health");
+    result.className = "connection-test-result is-success";
+    result.textContent = t("dialog.test_success", { version: payload.api_version });
+  } catch (error) {
+    result.className = "connection-test-result is-error";
+    result.textContent = t("dialog.test_failed", { error: error.message });
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function connectBackend({ quiet = false } = {}) {
   state.connectionStatus = "connecting";
   state.connectionError = "";
   renderConnectionState();
   try {
     const [health, capabilities] = await Promise.all([api("/api/v1/health"), api("/api/v1/capabilities")]);
+    if (health.status !== "ok") throw new Error(t("dialog.health_invalid"));
+    assertCompatibleApiVersion(health, "health");
+    assertCompatibleApiVersion(capabilities, "capabilities");
     state.capabilities = capabilities;
     state.connectionStatus = "online";
     renderConnectionState();
@@ -373,32 +497,76 @@ async function connectBackend({ quiet = false } = {}) {
     if (activeJob && !state.currentJob) openJob(activeJob, { scroll: false });
     updateReadyState();
   } catch (error) {
-    state.capabilities = null;
-    state.connectionStatus = "unavailable";
-    state.connectionError = error.message;
-    renderConnectionState();
-    updateReadyState();
+    markBackendUnavailable(error);
     if (!quiet) toast(t("error.backend_connection", { error: error.message }), "error");
   }
 }
 
-function option(select, value, label = value) {
-  const node = document.createElement("option"); node.value = value; node.textContent = label; select.append(node);
+async function probeBackend() {
+  if (state.heartbeatPending) return;
+  state.heartbeatPending = true;
+  try {
+    const response = await fetch(`${state.apiBase}/api/v1/health`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    const health = await response.json();
+    if (health.status !== "ok") throw new Error(t("dialog.health_invalid"));
+    assertCompatibleApiVersion(health, "health");
+    if (state.connectionStatus !== "online" || !state.capabilities) {
+      await connectBackend({ quiet: true });
+    }
+  } catch (error) {
+    markBackendUnavailable(error);
+  } finally {
+    state.heartbeatPending = false;
+  }
+}
+
+function option(select, value, label = value, availability = {}) {
+  const node = document.createElement("option");
+  node.value = value;
+  node.textContent = availability.available === false ? `${label} · ${t("model.unavailable")}` : label;
+  node.disabled = availability.available === false;
+  if (availability.unavailable_reason) node.title = availability.unavailable_reason;
+  select.append(node);
+}
+function selectAvailableOption(select, preferredValues = []) {
+  const options = [...select.options];
+  const preferred = preferredValues.find((value) => options.some((item) => item.value === value && !item.disabled));
+  const target = preferred ? options.find((item) => item.value === preferred) : options.find((item) => !item.disabled);
+  if (target) select.value = target.value;
+  else select.selectedIndex = -1;
 }
 function populateControls() {
   const caps = state.capabilities;
   if (!caps) return;
   const backendLabels = { yourmt3: "YourMT3+", miros: "MIROS MusicFM", muscriptor: "MuScriptor" };
-  const backend = $("#backendSelect"); backend.innerHTML = "";
-  caps.backends.forEach((value) => option(backend, value, backendLabels[value] || value));
-  const ymt3 = $("#yourmt3Select"); ymt3.innerHTML = "";
-  caps.yourmt3_models.forEach((value) => option(ymt3, value, value.replaceAll("_", " · ")));
-  ymt3.value = "yptf_moe_multi_nops";
-  const muscriptor = $("#muscriptorSelect"); muscriptor.innerHTML = "";
-  caps.muscriptor_models.forEach((value) => option(muscriptor, value, `MuScriptor ${value[0].toUpperCase()}${value.slice(1)}`));
-  muscriptor.value = "large";
+  const backend = $("#backendSelect"); const selectedBackend = backend.value; backend.innerHTML = "";
+  caps.backends.forEach((value) => option(backend, value, backendLabels[value] || value, caps.backend_availability?.[value] || {}));
+  selectAvailableOption(backend, [selectedBackend, "yourmt3"]);
+  const ymt3 = $("#yourmt3Select"); const selectedYmt3 = ymt3.value; ymt3.innerHTML = "";
+  caps.yourmt3_models.forEach((item) => option(ymt3, item.id, item.label, item));
+  selectAvailableOption(ymt3, [selectedYmt3, "yptf_moe_multi_nops"]);
+  const muscriptor = $("#muscriptorSelect"); const selectedMuscriptor = muscriptor.value; muscriptor.innerHTML = "";
+  caps.muscriptor_models.forEach((item) => option(muscriptor, item.id, state.language === "zh_CN" ? item.label_zh : item.label_en, item));
+  selectAvailableOption(muscriptor, [selectedMuscriptor, "large"]);
+  const muscriptorProcessingChain = $("#muscriptorProcessingChainSelect");
+  const selectedMuscriptorProcessingChain = muscriptorProcessingChain.value || "official";
+  muscriptorProcessingChain.innerHTML = "";
+  caps.muscriptor_processing_chains.forEach((item) => option(
+    muscriptorProcessingChain,
+    item.id,
+    state.language === "zh_CN" ? item.label_zh : item.label_en,
+  ));
+  muscriptorProcessingChain.value = [...muscriptorProcessingChain.options].some(
+    (item) => item.value === selectedMuscriptorProcessingChain,
+  ) ? selectedMuscriptorProcessingChain : "official";
   const trackMode = $("#trackModeSelect"); trackMode.innerHTML = "";
   caps.midi_track_modes.forEach((value) => option(trackMode, value, value === "multi_track" ? t("config.track_mode.multi") : t("config.track_mode.single")));
+  const tempoMode = $("#tempoModeSelect");
+  const selectedTempoMode = tempoMode.value || "fixed_auto";
+  tempoMode.innerHTML = "";
+  caps.tempo_modes.forEach((item) => option(tempoMode, item.id, state.language === "zh_CN" ? item.label_zh : item.label_en));
+  tempoMode.value = [...tempoMode.options].some((item) => item.value === selectedTempoMode) ? selectedTempoMode : "fixed_auto";
   const limits = caps.limits;
   $("#customBpm").min = limits.custom_bpm_min;
   $("#customBpm").max = limits.custom_bpm_max;
@@ -409,14 +577,23 @@ function renderModes() {
   if (!state.capabilities) return;
   const list = $("#modeList"); list.innerHTML = "";
   const select = $("#modeSelect"); select.innerHTML = "";
+  const selectedDefinition = state.capabilities.modes.find((item) => item.id === state.selectedMode);
+  if (!isJobRunning() && selectedDefinition?.available === false) {
+    state.selectedMode = state.capabilities.modes.find((item) => item.available !== false)?.id || "";
+  }
   state.capabilities.modes.forEach((mode, index) => {
     const label = state.language === "zh_CN" ? mode.label_zh : mode.label_en;
     const option = document.createElement("option");
     option.value = mode.id;
-    option.textContent = label;
+    option.textContent = mode.available === false ? `${label} · ${t("model.unavailable")}` : label;
+    option.disabled = mode.available === false;
+    if (mode.unavailable_reason) option.title = mode.unavailable_reason;
     select.append(option);
     const button = document.createElement("button");
     button.type = "button"; button.className = `mode-button ${mode.id === state.selectedMode ? "is-active" : ""}`;
+    button.setAttribute("aria-pressed", String(mode.id === state.selectedMode));
+    button.disabled = mode.available === false;
+    if (mode.unavailable_reason) button.title = mode.unavailable_reason;
     button.dataset.mode = mode.id; button.dataset.kind = mode.kind;
     const typeLabel = t(`mode.kind.${mode.kind === "separation" ? "separation" : "midi"}`);
     button.innerHTML = `<span class="mode-index">${String(index + 1).padStart(2, "0")}</span><span class="mode-label"><strong>${escapeHtml(label)}</strong><small>${typeLabel}</small></span><i class="mode-kind"></i>`;
@@ -426,6 +603,11 @@ function renderModes() {
   select.value = state.selectedMode;
 }
 function selectMode(mode) {
+  const definition = state.capabilities?.modes.find((item) => item.id === mode);
+  if (definition?.available === false) {
+    toast(t("error.route_unavailable", { reason: definition.unavailable_reason || t("model.unavailable") }), "error");
+    return;
+  }
   if (isJobRunning()) {
     toast(t("error.route_locked"), "error");
     renderModes();
@@ -444,9 +626,16 @@ function updateConditionalControls() {
   $("#backendField").hidden = !isSmart;
   $("#yourmt3Field").hidden = !isSmart || backend !== "yourmt3";
   $("#muscriptorField").hidden = !isSmart || backend !== "muscriptor";
-  $("#trackModeField").hidden = !isSmart;
-  $("#customBpmEnabled").disabled = false;
-  $("#customBpm").disabled = !$("#customBpmEnabled").checked;
+  $("#muscriptorProcessingChainField").hidden = !(
+    (isSmart && backend === "muscriptor")
+    || ["vocal_split", "six_stem_split"].includes(state.selectedMode)
+  );
+  // The desktop fixes the MIDI layout to multi-track; the web console keeps
+  // the same contract instead of exposing a second layout the app hides.
+  $("#trackModeField").hidden = true;
+  const manualTempo = $("#tempoModeSelect").value === "fixed_manual";
+  $("#manualBpmField").hidden = !manualTempo;
+  $("#customBpm").disabled = !manualTempo;
   $("#routeDescription").textContent = t(`route.${state.selectedMode}`);
 }
 function updateStartLabel() {
@@ -454,10 +643,29 @@ function updateStartLabel() {
   const key = split ? "action.start_separation" : "action.start_conversion";
   $("#startButtonLabel").textContent = t(key);
 }
+function selectedRouteAvailability() {
+  if (!state.capabilities) return { available: false, unavailable_reason: t("action.backend_disconnected") };
+  const mode = state.capabilities.modes.find((item) => item.id === state.selectedMode);
+  if (!mode || mode.available === false) return { available: false, unavailable_reason: mode?.unavailable_reason || t("model.unavailable") };
+  if (state.selectedMode !== "smart") return { available: true, unavailable_reason: null };
+  const backend = $("#backendSelect").value;
+  const backendStatus = state.capabilities.backend_availability?.[backend];
+  if (!backend || backendStatus?.available === false) return { available: false, unavailable_reason: backendStatus?.unavailable_reason || t("model.unavailable") };
+  if (backend === "yourmt3") {
+    const selected = state.capabilities.yourmt3_models.find((item) => item.id === $("#yourmt3Select").value);
+    return selected || { available: false, unavailable_reason: t("model.unavailable") };
+  }
+  if (backend === "muscriptor") {
+    const selected = state.capabilities.muscriptor_models.find((item) => item.id === $("#muscriptorSelect").value);
+    return selected || { available: false, unavailable_reason: t("model.unavailable") };
+  }
+  return { available: true, unavailable_reason: null };
+}
 function updateReadyState() {
   const running = isJobRunning();
   const busy = running || state.submissionPending;
-  $("#startButton").disabled = !state.audioFile || !state.capabilities || busy;
+  const availability = selectedRouteAvailability();
+  $("#startButton").disabled = !state.audioFile || !state.capabilities || !availability.available || busy;
   $("#stopButton").disabled = !running;
   if (state.submissionPending) {
     $("#readyText").textContent = t("action.submitting");
@@ -465,6 +673,8 @@ function updateReadyState() {
     $("#readyText").textContent = state.currentJob.status === "queued" ? t("action.ready_queued") : t("action.ready_running");
   } else if (!state.capabilities) {
     $("#readyText").textContent = t("action.backend_disconnected");
+  } else if (!availability.available) {
+    $("#readyText").textContent = t("action.route_unavailable", { reason: availability.unavailable_reason || t("model.unavailable") });
   } else if (!state.audioFile) {
     $("#readyText").textContent = t("action.select_audio");
   } else {
@@ -494,16 +704,18 @@ function clearAudioFile() {
   $("#fileInspector").hidden = true; updateReadyState();
 }
 function buildInferenceOptions() {
-  const customEnabled = $("#customBpmEnabled").checked;
-  const bpm = customEnabled ? Number($("#customBpm").value) : null;
-  if (customEnabled && !Number.isFinite(bpm)) throw new Error(t("error.invalid_bpm"));
+  const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
+  const bpm = tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null;
+  if (tempoMode === "fixed_manual" && !Number.isFinite(bpm)) throw new Error(t("error.invalid_bpm"));
   return {
     processing_mode: state.selectedMode,
     transcription_backend: $("#backendSelect").value || "yourmt3",
     yourmt3_model: $("#yourmt3Select").value || "yptf_moe_multi_nops",
     muscriptor_model: $("#muscriptorSelect").value || "large",
+    muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official",
     muscriptor_instruments: [],
     midi_track_mode: $("#trackModeSelect").value || "multi_track",
+    tempo_mode: tempoMode,
     custom_bpm: bpm,
     use_gpu: true,
     gpu_device: 0,
@@ -596,6 +808,7 @@ function resetResult() {
   $("#progressPanel").hidden = true;
   $("#resultPanel").hidden = true; $("#mixerPanel").hidden = true;
   $("#retryJob").hidden = true;
+  $("#deleteJob").hidden = true;
   $("#resultMetrics").innerHTML = ""; $("#artifactList").innerHTML = ""; $("#trackStack").innerHTML = "";
   updateWorkflowGuide();
 }
@@ -603,8 +816,10 @@ function renderFailure(message, error = true, scroll = true) {
   $("#resultPanel").hidden = false;
   $("#resultLead").textContent = error ? t("result.failed") : t("result.cancelled");
   $("#resultMetrics").innerHTML = `<div class="metric-card"><span>${escapeHtml(t("result.status"))}</span><strong class="metric-alert">${escapeHtml(error ? t("job.status.failed") : t("job.status.cancelled"))}</strong></div>`;
-  $("#artifactList").innerHTML = `<div class="artifact-row is-log"><span class="artifact-type">LOG</span><div><strong>${escapeHtml(message)}</strong><small>${escapeHtml(t("result.failure_help"))}</small></div></div>`;
+  const help = error ? t("result.failure_help") : t("result.cancelled_help");
+  $("#artifactList").innerHTML = `<div class="artifact-row is-log"><span class="artifact-type">LOG</span><div><strong>${escapeHtml(message)}</strong><small>${escapeHtml(help)}</small></div></div>`;
   $("#retryJob").hidden = !state.currentJob || !TERMINAL_JOB_STATUSES.has(state.currentJob.status);
+  $("#deleteJob").hidden = !state.currentJob || !TERMINAL_JOB_STATUSES.has(state.currentJob.status);
   updateWorkflowGuide();
   if (scroll) $("#resultPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -619,15 +834,24 @@ function artifactLabel(kind) {
   return state.messages[state.language][key] ? t(key) : t("result.artifact.generic");
 }
 function renderArtifacts(job) {
-  $("#artifactList").innerHTML = job.artifacts.map((artifact) => `
+  const warningRows = (job.result?.quality_warnings || []).map((warning) => {
+    const knownKey = `result.warning.${warning}`;
+    const message = state.messages[state.language][knownKey]
+      ? t(knownKey)
+      : t("result.warning.unknown", { code: warning });
+    return `<div class="artifact-row is-warning"><span class="artifact-type">WARN</span><div><strong>${escapeHtml(message)}</strong><small>${escapeHtml(t("result.warning.help"))}</small></div></div>`;
+  });
+  const artifactRows = job.artifacts.map((artifact) => `
     <div class="artifact-row">
       <span class="artifact-type">${escapeHtml(artifact.name.split(".").pop().slice(0, 4).toUpperCase())}</span>
       <div><strong>${escapeHtml(artifact.name)}</strong><small>${escapeHtml(artifactLabel(artifact.kind))} · ${formatBytes(artifact.size)}</small></div>
       <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(t("result.download"))} ↓</a>
-    </div>`).join("");
+    </div>`);
+  $("#artifactList").innerHTML = [...warningRows, ...artifactRows].join("");
 }
 function renderPrimaryResult(job, { restoreTracks = true, scroll = true } = {}) {
   $("#retryJob").hidden = true;
+  $("#deleteJob").hidden = false;
   state.currentJob = job;
   const result = job.result || {};
   $("#resultPanel").hidden = false;
@@ -727,16 +951,19 @@ function renderMixer({ scroll = true } = {}) {
 }
 function createTrackRow(track) {
   const row = document.createElement("article"); row.className = "track-row"; row.dataset.trackId = track.id; row.style.setProperty("--track-color", track.color);
-  const routeOptions = [`<option value="">${escapeHtml(t("track.choose_route"))}</option>`, ...(state.capabilities?.manual_midi_routes || []).map((route) => `<option value="${escapeHtml(route.id)}" ${route.id === track.route ? "selected" : ""}>${escapeHtml(route.label)}</option>`)];
+  const routes = state.capabilities?.manual_midi_routes || [];
+  const selectedRoute = routes.find((route) => route.id === track.route);
+  const routeAvailable = Boolean(selectedRoute?.available);
+  const routeOptions = [`<option value="">${escapeHtml(t("track.choose_route"))}</option>`, ...routes.map((route) => `<option value="${escapeHtml(route.id)}" ${route.id === track.route ? "selected" : ""} ${route.available === false ? "disabled" : ""} title="${escapeHtml(route.unavailable_reason || "")}">${escapeHtml(route.available === false ? `${route.label} · ${t("model.unavailable")}` : route.label)}</option>`)];
   const terminalMidi = track.midiJob && ["succeeded", "failed", "cancelled"].includes(track.midiJob.status);
   const activeMidi = track.midiJob && !terminalMidi;
   const convertLabel = activeMidi ? t("track.stop_conversion") : track.midiJob ? t("track.retry_conversion") : t("track.start_conversion");
   row.innerHTML = `
     <div class="track-head">
       <div class="track-name"><strong>♪ ${escapeHtml(track.name)}</strong><small>${escapeHtml(track.fileName)}</small></div>
-      <button class="track-button mute" type="button">${escapeHtml(t("track.mute"))}</button>
-      <button class="track-button solo" type="button">${escapeHtml(t("track.solo"))}</button>
-      <div class="track-midi-control"><label><input class="midi-enabled" type="checkbox" ${track.midiEnabled ? "checked" : ""} ${activeMidi ? "disabled" : ""} /> ${escapeHtml(t("track.convert_to_midi"))}</label><select class="route-select" ${activeMidi ? "disabled" : ""}>${routeOptions.join("")}</select><button class="convert-button" type="button" ${track.midiEnabled && track.route ? "" : "disabled"}>${escapeHtml(convertLabel)}</button></div>
+      <button class="track-button mute ${track.muted ? "is-active" : ""}" type="button" aria-pressed="${track.muted}">${escapeHtml(t("track.mute"))}</button>
+      <button class="track-button solo ${track.solo ? "is-active" : ""}" type="button" aria-pressed="${track.solo}">${escapeHtml(t("track.solo"))}</button>
+      <div class="track-midi-control"><label><input class="midi-enabled" type="checkbox" ${track.midiEnabled ? "checked" : ""} ${activeMidi ? "disabled" : ""} /> ${escapeHtml(t("track.convert_to_midi"))}</label><select class="route-select" ${activeMidi ? "disabled" : ""}>${routeOptions.join("")}</select><button class="convert-button" type="button" ${track.midiEnabled && track.route && routeAvailable ? "" : "disabled"}>${escapeHtml(convertLabel)}</button></div>
       <button class="track-button remove-track" type="button">${escapeHtml(t("track.remove"))}</button>
     </div>
     <div class="waveform-scroll"><div class="waveform-content"><canvas></canvas><i class="playhead"></i></div></div>
@@ -746,10 +973,10 @@ function createTrackRow(track) {
       <span class="track-status ${escapeHtml(track.statusClass)}">${escapeHtml(t(track.statusKey, track.statusVars))}</span>
     </div>`;
   const mute = $(".mute", row), solo = $(".solo", row), enabled = $(".midi-enabled", row), route = $(".route-select", row), convert = $(".convert-button", row);
-  mute.addEventListener("click", () => { track.muted = !track.muted; mute.classList.toggle("is-active", track.muted); refreshActiveGains(); });
-  solo.addEventListener("click", () => { track.solo = !track.solo; solo.classList.toggle("is-active", track.solo); refreshActiveGains(); });
-  enabled.addEventListener("change", () => { track.midiEnabled = enabled.checked; convert.disabled = !(track.midiEnabled && track.route); });
-  route.addEventListener("change", () => { track.route = route.value; updateTrackStatus(track, track.route ? "track.route_ready" : "track.no_route"); convert.disabled = !(track.midiEnabled && track.route); });
+  mute.addEventListener("click", () => { track.muted = !track.muted; mute.classList.toggle("is-active", track.muted); mute.setAttribute("aria-pressed", String(track.muted)); refreshActiveGains(); });
+  solo.addEventListener("click", () => { track.solo = !track.solo; solo.classList.toggle("is-active", track.solo); solo.setAttribute("aria-pressed", String(track.solo)); refreshActiveGains(); });
+  enabled.addEventListener("change", () => { track.midiEnabled = enabled.checked; const status = routes.find((item) => item.id === track.route); convert.disabled = !(track.midiEnabled && track.route && status?.available); });
+  route.addEventListener("change", () => { track.route = route.value; const status = routes.find((item) => item.id === track.route); updateTrackStatus(track, track.route ? "track.route_ready" : "track.no_route"); convert.disabled = !(track.midiEnabled && track.route && status?.available); });
   convert.addEventListener("click", () => convertTrackToMidi(track, convert));
   $(".remove-track", row).addEventListener("click", () => removeTrack(track.id));
   const gain = $(".gain", row), offset = $(".offset", row);
@@ -817,7 +1044,8 @@ async function convertTrackToMidi(track, button) {
     return;
   }
   if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
-  const options = { route: track.route, muscriptor_instruments: [], custom_bpm: $("#customBpmEnabled").checked ? Number($("#customBpm").value) : null, use_gpu: true, gpu_device: 0, language: state.language };
+  const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
+  const options = { route: track.route, muscriptor_instruments: [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, use_gpu: true, gpu_device: 0, language: state.language };
   button.disabled = true; updateTrackStatus(track, "track.submitting", {}, "is-working");
   try {
     let job;
@@ -948,6 +1176,26 @@ async function retryCurrentJob() {
   }
 }
 
+async function deleteCurrentJob() {
+  if (!state.currentJob || !TERMINAL_JOB_STATUSES.has(state.currentJob.status)) return;
+  if (!window.confirm(t("action.delete_job_confirm"))) return;
+  const jobId = state.currentJob.id;
+  $("#deleteJob").disabled = true;
+  try {
+    await api(`/api/v1/jobs/${jobId}?cascade=true`, { method: "DELETE" });
+    state.currentJob = null;
+    $("#progressPanel").hidden = true;
+    resetResult();
+    updateReadyState();
+    await refreshJobs();
+    toast(t("action.delete_job_done"));
+  } catch (error) {
+    toast(t("error.delete_job", { error: error.message }), "error");
+  } finally {
+    $("#deleteJob").disabled = false;
+  }
+}
+
 function bindEvents() {
   $("#browseButton").addEventListener("click", () => $("#audioInput").click());
   $("#audioInput").addEventListener("change", (event) => setAudioFile(event.target.files[0]));
@@ -962,20 +1210,24 @@ function bindEvents() {
   });
   $("#modeSelect").addEventListener("change", (event) => selectMode(event.target.value));
   $("#backendSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
-  $("#customBpmEnabled").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
+  $("#tempoModeSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
   $("#customBpm").addEventListener("input", updateWorkflowGuide);
   $("#startButton").addEventListener("click", startPrimaryJob); $("#stopButton").addEventListener("click", stopCurrentJob);
   $("#guideAction").addEventListener("click", performGuideAction);
   $$('[data-guide-target]').forEach((button) => button.addEventListener("click", () => scrollToWorkflowTarget(button.dataset.guideTarget)));
   $("#refreshJobs").addEventListener("click", refreshJobs);
   $("#retryJob").addEventListener("click", retryCurrentJob);
-  $("#connectionButton").addEventListener("click", () => $("#apiDialog").showModal());
-  $("#openApiSettings").addEventListener("click", () => $("#apiDialog").showModal());
+  $("#deleteJob").addEventListener("click", deleteCurrentJob);
+  $("#connectionButton").addEventListener("click", openApiDialog);
+  $("#openApiSettings").addEventListener("click", openApiDialog);
+  ["#apiProtocol", "#apiHost", "#apiPort"].forEach((selector) => {
+    $(selector).addEventListener("input", updateEffectiveApiUrl);
+  });
+  $("#testApiConnection").addEventListener("click", testDialogConnection);
   $("#apiDialog").addEventListener("close", async () => {
     if ($("#apiDialog").returnValue !== "default") return;
-    const value = $("#apiBaseInput").value.trim(); if (!value) return;
     try {
-      state.apiBase = normalizeApiBase(value);
+      state.apiBase = apiBaseFromDialog();
     } catch (error) {
       toast(t("error.backend_connection", { error: error.message }), "error");
       return;
@@ -994,12 +1246,13 @@ function bindEvents() {
 async function initialize() {
   try {
     await loadLocaleCatalogs();
+    await loadFrontendRuntimeConfig();
     bindEvents();
     applyLanguage({ rerender: false });
-    $("#apiBaseInput").value = state.apiBase;
     $("#routeDescription").textContent = t(`route.${state.selectedMode}`);
     document.documentElement.dataset.appState = "ready";
     await connectBackend();
+    window.setInterval(probeBackend, BACKEND_HEARTBEAT_INTERVAL_MS);
   } catch (error) {
     document.documentElement.dataset.appState = "failed";
     const fatal = $("#fatalError");

@@ -43,13 +43,34 @@ def _write_source(repo: Path, *, patched: bool) -> None:
         if patched
         else download_miros_model.MIROS_INFERENCE_BATCH_OLD
     )
-    device_line = download_miros_model.MIROS_DEVICE_TARGET
-    model_return = download_miros_model.MIROS_MODEL_RETURN_TARGET
+    device_line = (
+        download_miros_model.MIROS_DEVICE_ADAPTIVE
+        if patched
+        else download_miros_model.MIROS_DEVICE_TARGET
+    )
+    model_return = (
+        download_miros_model.MIROS_MODEL_RETURN_XPU
+        if patched
+        else download_miros_model.MIROS_MODEL_RETURN_TARGET
+    )
+    checkpoint_load = (
+        download_miros_model.MIROS_CHECKPOINT_LOAD_TARGET
+        if patched
+        else download_miros_model.MIROS_CHECKPOINT_LOAD_OLD
+    )
+    helpers = (
+        download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR
+        + "\n\n\n"
+        + download_miros_model.MIROS_DEVICE_HELPERS
+        if patched
+        else download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR
+    )
     (repo / "transcribe.py").write_text(
         "\n".join(
             (
-                download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR,
+                helpers,
                 device_line,
+                checkpoint_load,
                 model_return,
                 device_line,
                 audio_segments,
@@ -115,7 +136,9 @@ def _write_adaptive_source(repo: Path) -> None:
     transcribe_path = repo / "transcribe.py"
     transcribe_text = transcribe_path.read_text(encoding="utf-8")
     transcribe_text = transcribe_text.replace(
-        download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR,
+        download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR
+        + "\n\n\n"
+        + download_miros_model.MIROS_DEVICE_HELPERS,
         download_miros_model.MIROS_PRECISION_HELPERS_ANCHOR
         + "\n\n\n"
         + download_miros_model.MIROS_PRECISION_HELPERS,
@@ -127,12 +150,7 @@ def _write_adaptive_source(repo: Path) -> None:
         1,
     )
     transcribe_text = transcribe_text.replace(
-        download_miros_model.MIROS_DEVICE_TARGET,
-        download_miros_model.MIROS_DEVICE_ADAPTIVE,
-        2,
-    )
-    transcribe_text = transcribe_text.replace(
-        download_miros_model.MIROS_MODEL_RETURN_TARGET,
+        download_miros_model.MIROS_MODEL_RETURN_XPU,
         download_miros_model.MIROS_MODEL_RETURN_ADAPTIVE,
         1,
     )
@@ -168,6 +186,79 @@ def _identity_overrides(repo: Path, fine_tuned: bytes, pretrained: bytes):
 
 
 class MirosDownloaderTests(unittest.TestCase):
+    def test_cuda_only_autocast_patch_is_upgraded_for_native_xpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "ai4m-miros"
+            _write_source(repo, patched=True)
+            transcribe_path = repo / "transcribe.py"
+            transcribe_path.write_text(
+                transcribe_path.read_text(encoding="utf-8").replace(
+                    download_miros_model.MIROS_INFERENCE_CONTEXT_TARGET,
+                    download_miros_model.MIROS_INFERENCE_CONTEXT_CUDA_ONLY,
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            previous_sha256 = miros_runtime.compute_miros_source_tree_sha256(repo)
+
+            with patch.object(
+                miros_runtime,
+                "MIROS_PRE_XPU_AUTOCAST_PATCHED_SOURCE_SHA256",
+                previous_sha256,
+            ):
+                download_miros_model._patch_miros_source(repo, None)
+
+            transcribe_text = transcribe_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                1,
+                transcribe_text.count(download_miros_model.MIROS_INFERENCE_CONTEXT_TARGET),
+            )
+            self.assertNotIn(
+                download_miros_model.MIROS_INFERENCE_CONTEXT_CUDA_ONLY,
+                transcribe_text,
+            )
+
+    def test_runtime_source_maps_mixed_cuda_checkpoint_to_cpu_before_xpu_load(self):
+        repo = Path(__file__).resolve().parents[1] / "external" / "ai4m-miros"
+        if not (repo / "transcribe.py").is_file():
+            self.skipTest("external/ai4m-miros checkout is not present in this environment")
+
+        transcribe_text = (repo / "transcribe.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            1,
+            transcribe_text.count(download_miros_model.MIROS_CHECKPOINT_LOAD_TARGET),
+        )
+        self.assertNotIn(download_miros_model.MIROS_CHECKPOINT_LOAD_OLD, transcribe_text)
+
+    def test_pre_cpu_checkpoint_patch_is_upgraded_deterministically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "ai4m-miros"
+            _write_source(repo, patched=True)
+            transcribe_path = repo / "transcribe.py"
+            transcribe_path.write_text(
+                transcribe_path.read_text(encoding="utf-8").replace(
+                    download_miros_model.MIROS_CHECKPOINT_LOAD_TARGET,
+                    download_miros_model.MIROS_CHECKPOINT_LOAD_OLD,
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            previous_sha256 = miros_runtime.compute_miros_source_tree_sha256(repo)
+
+            with patch.object(
+                miros_runtime,
+                "MIROS_PRE_CPU_CHECKPOINT_PATCHED_SOURCE_SHA256",
+                previous_sha256,
+            ):
+                download_miros_model._patch_miros_source(repo, None)
+
+            transcribe_text = transcribe_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                1,
+                transcribe_text.count(download_miros_model.MIROS_CHECKPOINT_LOAD_TARGET),
+            )
+            self.assertNotIn(download_miros_model.MIROS_CHECKPOINT_LOAD_OLD, transcribe_text)
+
     def test_all_upstream_artifact_identities_are_pinned(self):
         self.assertEqual(
             "668a0aa6357bb3f09e767c9ece378956c2ffd182",
@@ -212,7 +303,9 @@ class MirosDownloaderTests(unittest.TestCase):
             transcribe_text,
         )
         self.assertNotIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
-        self.assertEqual(2, transcribe_text.count(download_miros_model.MIROS_DEVICE_TARGET))
+        self.assertEqual(1, transcribe_text.count(download_miros_model.MIROS_DEVICE_HELPERS))
+        self.assertEqual(2, transcribe_text.count(download_miros_model.MIROS_DEVICE_ADAPTIVE))
+        self.assertIn(download_miros_model.MIROS_MODEL_RETURN_XPU, transcribe_text)
         self.assertIn(
             download_miros_model.MIROS_INFERENCE_BATCH_NEW,
             transcribe_text,
@@ -253,12 +346,13 @@ class MirosDownloaderTests(unittest.TestCase):
                 transcribe_text,
             )
             self.assertNotIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
+            self.assertEqual(1, transcribe_text.count(download_miros_model.MIROS_DEVICE_HELPERS))
             self.assertEqual(
                 2,
-                transcribe_text.count(download_miros_model.MIROS_DEVICE_TARGET),
+                transcribe_text.count(download_miros_model.MIROS_DEVICE_ADAPTIVE),
             )
             self.assertIn(
-                download_miros_model.MIROS_MODEL_RETURN_TARGET,
+                download_miros_model.MIROS_MODEL_RETURN_XPU,
                 transcribe_text,
             )
             musicfm_text = (repo / download_miros_model.MIROS_MUSICFM_REL_PATH).read_text(
@@ -292,6 +386,9 @@ class MirosDownloaderTests(unittest.TestCase):
                 transcribe_text,
             )
             self.assertNotIn(download_miros_model.MIROS_PRECISION_HELPERS, transcribe_text)
+            self.assertEqual(1, transcribe_text.count(download_miros_model.MIROS_DEVICE_HELPERS))
+            self.assertEqual(2, transcribe_text.count(download_miros_model.MIROS_DEVICE_ADAPTIVE))
+            self.assertIn(download_miros_model.MIROS_MODEL_RETURN_XPU, transcribe_text)
             self.assertIn(
                 download_miros_model.MIROS_INFERENCE_BATCH_NEW,
                 transcribe_text,

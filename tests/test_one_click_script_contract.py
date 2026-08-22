@@ -377,8 +377,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         package_init = (REPO_ROOT / "src" / "__init__.py").read_text(encoding="utf-8")
 
-        self.assertIn('version = "1.5.0"', pyproject)
-        self.assertIn('__version__ = "1.5.0"', package_init)
+        self.assertIn('version = "1.6.0"', pyproject)
+        self.assertIn('__version__ = "1.6.0"', package_init)
         self.assertNotIn("Operating System :: OS Independent", pyproject)
         self.assertIn("Operating System :: Microsoft :: Windows", pyproject)
         self.assertIn("Operating System :: POSIX :: Linux", pyproject)
@@ -502,6 +502,11 @@ class OneClickScriptContractTests(unittest.TestCase):
         main_source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
 
         self.assertIn('& "$VENV_PYTHON" -m src.utils.source_runtime', windows)
+        self.assertIn("CmdletBinding(PositionalBinding = $false)", windows)
+        self.assertIn("ValueFromRemainingArguments = $true", windows)
+        self.assertIn("[string[]]$AppArgs = @()", windows)
+        self.assertIn('& "$VENV_PYTHON" -m src.main @AppArgs', windows)
+        self.assertNotIn('& "$VENV_PYTHON" -m src.main @args', windows)
         self.assertIn('"$VENV_PYTHON" -m src.utils.source_runtime', linux)
         self.assertIn('exec "$VENV_PYTHON" -m src.main "$@"', linux)
         self.assertNotIn("exec python -m src.main", linux)

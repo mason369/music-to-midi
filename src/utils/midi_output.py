@@ -11,15 +11,19 @@ from pathlib import Path
 
 
 def unique_midi_temp_path(final_path: str | Path, purpose: str) -> Path:
-    """Return a unique, same-directory path without touching the final output."""
+    """Return a bounded unique same-directory path without touching the final output."""
+
     final = Path(final_path).resolve()
     final.parent.mkdir(parents=True, exist_ok=True)
     safe_purpose = re.sub(r"[^A-Za-z0-9_-]+", "-", purpose).strip("-")
     if not safe_purpose:
         raise ValueError("MIDI temporary-output purpose must not be empty")
-    return final.parent / (
-        f".{final.stem}.{safe_purpose}.{uuid.uuid4().hex}.tmp.mid"
-    )
+    # Do not embed final.stem. Several stages deliberately publish through an
+    # already-temporary MIDI path; repeating that stem makes the basename grow
+    # at every stage and can exceed Win32 MAX_PATH in an otherwise valid job
+    # directory. UUID uniqueness does not depend on the destination name.
+    bounded_purpose = safe_purpose[:32]
+    return final.parent / f".mtm-{bounded_purpose}-{uuid.uuid4().hex}.tmp.mid"
 
 
 def validate_midi_output(path: str | Path, backend_label: str) -> Path:
@@ -63,9 +67,7 @@ def clip_midi_to_duration(
         for event_index, message in enumerate(track):
             absolute_tick += int(message.time)
             if message.is_meta and message.type == "set_tempo":
-                tempo_events.append(
-                    (absolute_tick, track_index, event_index, int(message.tempo))
-                )
+                tempo_events.append((absolute_tick, track_index, event_index, int(message.tempo)))
     tempo_events.sort()
 
     tempo = 500_000
@@ -89,9 +91,7 @@ def clip_midi_to_duration(
         tempo = event_tempo
     if cutoff_tick is None:
         remaining = max(0.0, duration - elapsed_seconds)
-        cutoff_tick = previous_tick + floor(
-            mido.second2tick(remaining, midi.ticks_per_beat, tempo)
-        )
+        cutoff_tick = previous_tick + floor(mido.second2tick(remaining, midi.ticks_per_beat, tempo))
 
     for track in midi.tracks:
         absolute_tick = 0
@@ -99,22 +99,12 @@ def clip_midi_to_duration(
         active_notes = defaultdict(int)
         for event_index, message in enumerate(track):
             absolute_tick += int(message.time)
-            is_note_on = (
-                not message.is_meta
-                and message.type == "note_on"
-                and message.velocity > 0
-            )
-            is_note_off = (
-                not message.is_meta
-                and (
-                    message.type == "note_off"
-                    or (message.type == "note_on" and message.velocity == 0)
-                )
+            is_note_on = not message.is_meta and message.type == "note_on" and message.velocity > 0
+            is_note_off = not message.is_meta and (
+                message.type == "note_off" or (message.type == "note_on" and message.velocity == 0)
             )
             note_key = (
-                (int(message.channel), int(message.note))
-                if is_note_on or is_note_off
-                else None
+                (int(message.channel), int(message.note)) if is_note_on or is_note_off else None
             )
 
             target_tick = absolute_tick

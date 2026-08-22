@@ -50,13 +50,18 @@ class AudioSeparatorCompatTests(unittest.TestCase):
         package_module = ModuleType("audio_separator")
         package_module.separator = separator_module
 
-        with patch("src.utils.audio_separator_compat.activate_audio_separator_runtime") as activate_runtime, patch.dict(
-            "sys.modules",
-            {
-                "audio_separator": package_module,
-                "audio_separator.separator": separator_module,
-            },
-            clear=False,
+        with (
+            patch(
+                "src.utils.audio_separator_compat.activate_audio_separator_runtime"
+            ) as activate_runtime,
+            patch.dict(
+                "sys.modules",
+                {
+                    "audio_separator": package_module,
+                    "audio_separator.separator": separator_module,
+                },
+                clear=False,
+            ),
         ):
             separator_cls = get_separator_cls()
 
@@ -117,6 +122,63 @@ class AudioSeparatorCompatTests(unittest.TestCase):
                     action=lambda active_separator: active_separator,
                     logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
                 )
+
+    def test_execute_audio_separator_job_initializes_xpu_before_upstream_device_setup(self):
+        observed = {"messages": []}
+
+        class FakeLogger:
+            @staticmethod
+            def info(message, *args):
+                observed["messages"].append(message % args if args else message)
+
+        class FakeSeparator:
+            def __init__(self, output_dir):
+                self.logger = FakeLogger()
+                self.torch_device_cpu = None
+                self.torch_device = None
+                self.onnx_execution_provider = None
+                self.model_instance = None
+                self.setup_torch_device(None)
+                observed["constructor_device"] = str(self.torch_device)
+
+            def setup_torch_device(self, _system_info):
+                observed["original_setup_called"] = True
+                self.torch_device = "cpu"
+
+            def load_model(self, _model_name):
+                self.model_instance = SimpleNamespace(model_run=object())
+
+        with (
+            patch("src.utils.audio_separator_compat.ensure_accelerator_runtime_compatibility"),
+            patch("src.utils.audio_separator_compat.ensure_module_on_device") as ensure_model,
+        ):
+            separator, result, used_cpu, reason = execute_audio_separator_job(
+                FakeSeparator,
+                separator_kwargs={"output_dir": "out"},
+                model_name="xpu-model.ckpt",
+                action=lambda active_separator: str(active_separator.torch_device),
+                logger=SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+                target_device="xpu:0",
+            )
+
+        self.assertEqual(observed["constructor_device"], "xpu:0")
+        self.assertNotIn("original_setup_called", observed)
+        self.assertIn(
+            "Intel XPU is available in Torch, setting Torch device to xpu:0",
+            observed["messages"],
+        )
+        self.assertEqual(result, "xpu:0")
+        self.assertFalse(used_cpu)
+        self.assertIsNone(reason)
+        self.assertEqual(
+            separator.onnx_execution_provider,
+            [("OpenVINOExecutionProvider", {"device_type": "GPU.0"})],
+        )
+        ensure_model.assert_called_once_with(
+            separator.model_instance.model_run,
+            "xpu:0",
+            "audio-separator model",
+        )
 
 
 if __name__ == "__main__":

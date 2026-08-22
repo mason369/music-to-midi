@@ -193,3 +193,15 @@ def test_space_and_colab_share_the_single_mixer_runtime():
     # Per-track removal exists on every platform now.
     assert "fn=_remove_track" in space_source
     assert "_make_track_remove_handler" in colab_source
+
+
+def test_browser_tracks_share_one_scheduled_start_time_after_every_transport_action():
+    js = mixer.TRACK_MIXER_JS
+
+    assert "var startAt = ctx.currentTime + 0.02;" in js
+    assert "var when = startAt;" in js
+    assert "when = startAt + -local;" in js
+    assert "return startAt;" in js
+    assert js.count("this.playCtxTime = this.startSources();") == 4
+    assert "var when = ctx.currentTime;" not in js
+    assert "Math.max(this.playStartPosition, scheduledPosition)" in js

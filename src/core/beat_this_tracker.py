@@ -24,8 +24,26 @@ from typing import Callable, Iterable, Optional, Sequence
 import numpy as np
 
 from src.i18n.translator import Translator
-from src.models.data_models import BeatInfo, Config
+from src.core.telknet_beat_grid_v10 import (
+    TEMPO_FIT_ID,
+    infer_beats_per_bar as infer_telknet_beats_per_bar,
+    normalize_beat_grid,
+    normalize_downbeat_grid,
+)
+from src.core.telknet_tempo_map import build_adaptive_tempo_map
+from src.models.data_models import (
+    MAX_TEMPO_BPM,
+    MIN_TEMPO_BPM,
+    BeatInfo,
+    Config,
+    TempoMode,
+)
 from src.utils.artifact_identity import validate_file_identity
+from src.utils.gpu_utils import (
+    ensure_accelerator_runtime_compatibility,
+    ensure_module_on_device,
+    get_device,
+)
 from src.utils.runtime_paths import get_bundle_roots, get_runtime_data_dir, is_frozen_app
 
 logger = logging.getLogger(__name__)
@@ -336,44 +354,100 @@ def build_variable_tempo_map(
 def analyze_beat_this_grid(
     beats: Sequence[float],
     downbeats: Sequence[float],
+    *,
+    tempo_mode: str = TempoMode.FIXED_AUTO.value,
+    manual_bpm: float | None = None,
 ) -> BeatInfo:
-    """Convert raw Beat This marks into the application's authoritative grid."""
+    """Apply the reviewed TelkNet v10 grid and one explicit tempo mode."""
 
-    cleaned_times, removed_duplicates = remove_competing_beat_marks(beats)
-    counted = count_musical_beat_positions(cleaned_times)
-    grid = CleanBeatGrid(
-        times=counted.times,
-        positions=counted.positions,
-        interval_beat_counts=counted.interval_beat_counts,
-        removed_duplicates=removed_duplicates,
-        recovered_missing_beats=counted.recovered_missing_beats,
-    )
-    bpm, residual_rms, seconds_per_beat = fit_global_tempo(grid)
-    time_signature, accepted_downbeats = infer_time_signature(grid, downbeats)
-    tempo_map = build_variable_tempo_map(
-        grid,
-        residual_rms=residual_rms,
-        seconds_per_beat=seconds_per_beat,
-    )
+    selected_mode = str(tempo_mode or TempoMode.FIXED_AUTO.value).strip().lower()
+    if selected_mode not in {mode.value for mode in TempoMode}:
+        raise BeatThisGridError(f"Unsupported MIDI tempo mode: {selected_mode!r}")
+    try:
+        normalized = normalize_beat_grid([float(value) for value in beats])
+        if normalized.bpm is None or len(normalized.beat_times) < MIN_BEATS:
+            raise RuntimeError(
+                f"Beat This detected only {len(normalized.beat_times)} usable beats; "
+                f"at least {MIN_BEATS} are required"
+            )
+        normalized_downbeats = normalize_downbeat_grid(
+            [float(value) for value in downbeats],
+            normalized.beat_times,
+        )
+        beats_per_bar = infer_telknet_beats_per_bar(
+            normalized.beat_times,
+            normalized_downbeats.downbeat_times,
+        )
+        time_signature = (beats_per_bar, 4) if beats_per_bar is not None else None
+
+        detected_bpm = float(normalized.bpm)
+        tempo_map: list[tuple[float, float]] = []
+        strategy = "fixed_auto"
+        maximum_phase_error = 0.0
+        output_bpm = detected_bpm
+        source_bpm: float | None = None
+        if selected_mode == TempoMode.ADAPTIVE.value:
+            if normalized.fixed_tempo_reliable:
+                strategy = "fixed_reliable"
+            else:
+                adaptive = build_adaptive_tempo_map(
+                    normalized.beat_times,
+                    normalized_downbeats.downbeat_times,
+                    beats_per_bar=beats_per_bar,
+                    representative_bpm=detected_bpm,
+                )
+                tempo_map = list(adaptive.events)
+                strategy = adaptive.strategy
+                maximum_phase_error = adaptive.maximum_phase_error_beats
+                output_bpm = float(tempo_map[0][1])
+        elif selected_mode == TempoMode.FIXED_MANUAL.value:
+            if (
+                manual_bpm is None
+                or not math.isfinite(float(manual_bpm))
+                or not MIN_TEMPO_BPM <= float(manual_bpm) <= MAX_TEMPO_BPM
+            ):
+                raise RuntimeError(
+                    f"Manual MIDI BPM must be between {MIN_TEMPO_BPM:g} " f"and {MAX_TEMPO_BPM:g}"
+                )
+            output_bpm = float(manual_bpm)
+            source_bpm = detected_bpm
+            strategy = "fixed_manual"
+        elif manual_bpm is not None:
+            raise RuntimeError("manual_bpm is only valid for fixed_manual tempo mode")
+    except BeatThisGridError:
+        raise
+    except Exception as exc:
+        raise BeatThisGridError(f"TelkNet v10 beat-grid validation failed: {exc}") from exc
+
     logger.info(
-        "Beat This grid: %.3f BPM, beats=%d, downbeats=%d, meter=%s, "
-        "duplicates_removed=%d, missing_beats_recovered=%d, residual=%.1f ms, "
-        "tempo_points=%d",
-        bpm,
-        grid.times.size,
-        len(accepted_downbeats),
+        "Beat This %s: mode=%s strategy=%s detected=%.6f BPM output=%.6f BPM, "
+        "beats=%d, downbeats=%d, meter=%s, duplicates_removed=%d, "
+        "missing_beats_interpolated=%d, isolated_phase_repairs=%d, "
+        "octave_family_normalized=%s, residual=%.1f ms, tempo_points=%d, "
+        "max_phase_error=%.6f beats",
+        TEMPO_FIT_ID,
+        selected_mode,
+        strategy,
+        detected_bpm,
+        output_bpm,
+        len(normalized.beat_times),
+        len(normalized_downbeats.downbeat_times),
         time_signature,
-        grid.removed_duplicates,
-        grid.recovered_missing_beats,
-        residual_rms * 1000.0,
+        normalized.duplicate_beats_removed,
+        normalized.missing_beats_interpolated,
+        normalized.isolated_phase_outliers_repaired,
+        normalized.octave_family_normalized,
+        float(normalized.residual_seconds or 0.0) * 1000.0,
         len(tempo_map),
+        maximum_phase_error,
     )
     return BeatInfo(
-        bpm=bpm,
-        beat_times=grid.times.tolist(),
-        downbeats=accepted_downbeats or None,
+        bpm=output_bpm,
+        beat_times=list(normalized.beat_times),
+        downbeats=list(normalized_downbeats.downbeat_times) or None,
         time_signature=time_signature,
         tempo_map=tempo_map,
+        source_bpm=source_bpm,
     )
 
 
@@ -395,21 +469,12 @@ class BeatThisTracker:
         self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
 
     def _target_device(self) -> str:
-        if not bool(getattr(self.config, "use_gpu", True)):
-            return "cpu"
-        import torch
-
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "Beat This requires the configured CUDA device, but PyTorch reports no CUDA device"
-            )
-        device_index = int(getattr(self.config, "gpu_device", 0))
-        if device_index < 0 or device_index >= torch.cuda.device_count():
-            raise RuntimeError(
-                "Beat This CUDA device index is unavailable: "
-                f"requested={device_index}, count={torch.cuda.device_count()}"
-            )
-        return f"cuda:{device_index}"
+        device = get_device(
+            bool(getattr(self.config, "use_gpu", True)),
+            int(getattr(self.config, "gpu_device", 0)),
+        )
+        ensure_accelerator_runtime_compatibility(device)
+        return device
 
     def _load_tracker(self) -> object:
         device = self._target_device()
@@ -437,8 +502,42 @@ class BeatThisTracker:
             )
         except Exception as exc:
             raise RuntimeError(f"Beat This final0 model loading failed: {exc}") from exc
+        if device.startswith(("cuda", "xpu")):
+            model = getattr(self._tracker, "model", None)
+            if model is None:
+                raise RuntimeError(
+                    f"Beat This runtime did not expose its model for {device} residency validation"
+                )
+            ensure_module_on_device(model, device, "Beat This model")
         self._device = device
         return self._tracker
+
+    def track_raw(self, audio_path: str):
+        """Run final0 with a stable FP32 cuDNN path and return raw marks.
+
+        Ampere and newer NVIDIA cards can otherwise use TF32 convolutions even
+        when ``File2Beats(float16=False)`` is requested.  One borderline beat
+        in the published TelkNet corpus then moves to a neighbouring final0
+        frame.  Scope the precision change to this call and restore the prior
+        process setting so the transcription backends keep their own policy.
+        """
+
+        source = Path(audio_path)
+        if not source.is_file():
+            raise FileNotFoundError(f"Beat This input audio does not exist: {source}")
+        tracker = self._load_tracker()
+        device = str(self._device or "")
+        if not device.startswith("cuda"):
+            return tracker(str(source))  # type: ignore[operator]
+
+        import torch
+
+        previous_allow_tf32 = bool(torch.backends.cudnn.allow_tf32)
+        torch.backends.cudnn.allow_tf32 = False
+        try:
+            return tracker(str(source))  # type: ignore[operator]
+        finally:
+            torch.backends.cudnn.allow_tf32 = previous_allow_tf32
 
     def detect(
         self,
@@ -450,16 +549,21 @@ class BeatThisTracker:
             raise FileNotFoundError(f"Beat This input audio does not exist: {source}")
         if progress_callback is not None:
             progress_callback(0.0, self._translator.t("progress.loading_beat_this"))
-        tracker = self._load_tracker()
+        self._load_tracker()
         if progress_callback is not None:
             progress_callback(0.35, self._translator.t("progress.running_beat_this"))
         try:
-            beats, downbeats = tracker(str(source))  # type: ignore[operator]
+            beats, downbeats = self.track_raw(str(source))
         except Exception as exc:
             raise RuntimeError(f"Beat This final0 inference failed: {exc}") from exc
         if progress_callback is not None:
             progress_callback(0.80, self._translator.t("progress.validating_beat_grid"))
-        info = analyze_beat_this_grid(beats, downbeats)
+        info = analyze_beat_this_grid(
+            beats,
+            downbeats,
+            tempo_mode=getattr(self.config, "tempo_mode", TempoMode.FIXED_AUTO.value),
+            manual_bpm=getattr(self.config, "custom_bpm", None),
+        )
         if progress_callback is not None:
             progress_callback(
                 1.0,

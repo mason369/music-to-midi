@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,7 +120,10 @@ def test_transcribe_passes_external_aug_checkpoint_and_config(tmp_path, monkeypa
     assert audio == str(audio_path)
     temporary_output_path = Path(temporary_output)
     assert temporary_output_path.parent == output_path.parent
-    assert temporary_output_path.name.startswith(".song_piano_transkun_v2_aug.transkun-v2-aug.")
+    assert re.fullmatch(
+        r"\.mtm-transkun-v2-aug-[0-9a-f]{32}\.tmp\.mid",
+        temporary_output_path.name,
+    )
     assert not temporary_output_path.exists()
     assert checkpoint == str(transcriber.model_dir / "checkpoint.pt")
     assert config == str(transcriber.model_dir / "model.conf")
@@ -186,4 +190,4 @@ def test_transcribe_rejects_missing_output_even_when_worker_reports_ok(tmp_path,
         transcriber.transcribe(str(audio_path), str(output_path))
 
     assert output_path.read_bytes() == stale_bytes
-    assert list(tmp_path.glob(".out.transkun-v2-aug.*.tmp.mid")) == []
+    assert list(tmp_path.glob(".*.tmp.mid")) == []

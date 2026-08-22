@@ -52,7 +52,10 @@ class TestRestoredProcessingModes(unittest.TestCase):
                 result = pipeline.process("input.wav", "output")
 
                 self.assertEqual(result, f"{restored_mode}-result")
-                self.assertEqual(calls, [("input.wav", "output")])
+                self.assertEqual(
+                    calls,
+                    [(str(Path("input.wav").resolve()), "output")],
+                )
 
     def test_aria_piano_stem_preference_fails_when_backend_is_unavailable(self):
         with self.assertRaisesRegex(ValueError, "requires transcription_backend"):

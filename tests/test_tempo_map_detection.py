@@ -1,6 +1,6 @@
 """BeatInfo display and automatic Beat This tempo-map defaults."""
 
-from src.models.data_models import BeatInfo, Config
+from src.models.data_models import BeatInfo, Config, TempoMode
 
 
 def test_constant_tempo_display_is_single_value():
@@ -25,9 +25,12 @@ def test_single_point_tempo_map_is_treated_as_constant():
 
 
 def test_beat_this_variable_tempo_export_is_enabled_by_default():
-    assert Config().enable_tempo_map is True
+    config = Config()
+    assert config.tempo_mode == TempoMode.FIXED_AUTO.value
+    assert config.enable_tempo_map is False
 
 
 def test_legacy_disabled_tempo_map_config_is_normalized_to_the_only_production_chain():
-    assert Config(enable_tempo_map=False).enable_tempo_map is True
-    assert Config.from_dict({"enable_tempo_map": False}).enable_tempo_map is True
+    assert Config(enable_tempo_map=True).tempo_mode == TempoMode.ADAPTIVE.value
+    assert Config.from_dict({"enable_tempo_map": True}).tempo_mode == TempoMode.ADAPTIVE.value
+    assert Config.from_dict({"enable_tempo_map": False}).tempo_mode == TempoMode.FIXED_AUTO.value

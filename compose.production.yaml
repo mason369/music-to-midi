@@ -1,0 +1,147 @@
+name: music-to-midi
+
+x-backend-environment: &backend-environment
+  HOME: /models/home
+  HF_HOME: /models/huggingface
+  HF_HUB_CACHE: /models/huggingface/hub
+  XDG_CACHE_HOME: /models/home/.cache
+  TORCH_HOME: /models/home/.cache/torch
+  MPLCONFIGDIR: /models/home/.cache/matplotlib
+  NUMBA_CACHE_DIR: /models/home/.cache/numba
+  TMPDIR: /data/tmp
+  MUSIC_TO_MIDI_ACCELERATOR: cuda
+  MUSIC_TO_MIDI_MIROS_DIR: /models/miros
+  MUSIC_TO_MIDI_ENABLED_PROFILES: ${MUSIC_TO_MIDI_ENABLED_PROFILES:?Set explicit model profiles in .env.production}
+  MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES: "1"
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+x-backend-build: &backend-build
+  context: .
+  dockerfile: docker/backend.Dockerfile
+  args:
+    VCS_REF: ${VCS_REF:-local}
+    BUILD_VERSION: ${BUILD_VERSION:-local}
+
+x-backend-gpu: &backend-gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["${GPU_DEVICE_ID:-0}"]
+          capabilities: [gpu]
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:latest}
+    build: *backend-build
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    shm_size: ${SHM_SIZE:-2gb}
+    environment:
+      <<: *backend-environment
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set the exact HTTPS public origin in .env.production}
+      MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT: "1"
+      MUSIC_TO_MIDI_EDGE_AUTH: basic
+      MUSIC_TO_MIDI_TLS_TERMINATED_AT_EDGE: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-4294967296}
+      MAX_QUEUED_JOBS: ${MAX_QUEUED_JOBS:-4}
+      MIN_FREE_BYTES: ${MIN_FREE_BYTES:-21474836480}
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      RETENTION_MAX_JOBS: ${RETENTION_MAX_JOBS:-50}
+      RETENTION_MAX_BYTES: ${RETENTION_MAX_BYTES:-107374182400}
+    volumes:
+      - model_data:/models
+      - job_data:/data
+    expose:
+      - "8765"
+    networks:
+      - inference
+    deploy: *backend-gpu
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 5m
+
+  model-init:
+    profiles: ["tools"]
+    image: ${BACKEND_IMAGE:-ghcr.io/mason369/music-to-midi-backend:latest}
+    build: *backend-build
+    command: ["model-init"]
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    shm_size: ${SHM_SIZE:-2gb}
+    environment:
+      <<: *backend-environment
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - model_data:/models
+      - job_data:/data
+    networks:
+      - model-download
+    deploy: *backend-gpu
+
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/mason369/music-to-midi-gateway:latest}
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+      args:
+        VCS_REF: ${VCS_REF:-local}
+        BUILD_VERSION: ${BUILD_VERSION:-local}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      PUBLIC_ADDRESS: ${PUBLIC_ADDRESS:?Set the public DNS hostname in .env.production}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set the exact HTTPS public origin in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?Set the ACME contact email in .env.production}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?Set the Basic Auth username in .env.production}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?Generate the Argon2id password hash with the setup script}
+      MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-4GiB}
+    ports:
+      - "80:8080"
+      - "443:8443"
+      - "443:8443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - inference
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+
+networks:
+  edge: {}
+  model-download: {}
+  inference:
+    internal: true
+
+volumes:
+  model_data: {}
+  job_data: {}
+  caddy_data: {}
+  caddy_config: {}

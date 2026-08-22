@@ -14,6 +14,17 @@ from PyInstaller.utils.hooks import copy_metadata
 # 项目根目录
 ROOT_DIR = os.path.dirname(os.path.abspath(SPEC))
 USER_HOME = str(Path.home())
+ACCELERATOR = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "cuda").strip().lower()
+if ACCELERATOR not in {"cuda", "xpu"}:
+    raise RuntimeError(f"Unsupported portable accelerator: {ACCELERATOR!r}")
+IS_XPU = ACCELERATOR == "xpu"
+gui_name='MusicToMidi'
+backend_name='MusicToMidiBackend'
+collection_name = "MusicToMidi"
+if IS_XPU:
+    gui_name = "MusicToMidiXpu"
+    backend_name = "MusicToMidiBackendXpu"
+    collection_name = "MusicToMidi-XPU"
 
 
 def _collect_tree(source_dir, target_root):
@@ -90,6 +101,65 @@ def _require_root_vc_runtime_binaries(binaries):
         )
 
 
+XPU_REQUIRED_LIBRARY_BIN_DLLS = {
+    "common_clang64.dll",
+    "intelocl64.dll",
+    "mkl_sycl_blas.5.dll",
+    "mkl_sycl_dft.5.dll",
+    "mkl_sycl_lapack.5.dll",
+    "mkl_sycl_rng.5.dll",
+    "mkl_sycl_sparse.5.dll",
+    "opencl.dll",
+    "sycl8.dll",
+    "ur_adapter_level_zero.dll",
+    "ur_adapter_opencl.dll",
+    "ur_loader.dll",
+    "ur_win_proxy_loader.dll",
+}
+
+
+def _collect_xpu_library_bin_binaries(source_dir):
+    """Collect the complete pinned native XPU runtime, including dynamic plugins."""
+    if not source_dir or not os.path.isdir(source_dir):
+        raise FileNotFoundError(
+            f"Required PyTorch XPU Library/bin directory is missing: {source_dir}"
+        )
+    dll_paths = sorted(
+        (
+            os.path.join(source_dir, name)
+            for name in os.listdir(source_dir)
+            if name.lower().endswith(".dll")
+        ),
+        key=lambda path: os.path.basename(path).lower(),
+    )
+    available = {os.path.basename(path).lower() for path in dll_paths}
+    missing = sorted(XPU_REQUIRED_LIBRARY_BIN_DLLS - available)
+    if missing:
+        raise RuntimeError(
+            "Pinned PyTorch XPU Library/bin is missing required native runtime DLLs: "
+            + ", ".join(missing)
+        )
+    return [(path, ".") for path in dll_paths]
+
+
+def _require_xpu_library_bin_binaries(binaries, source_dir):
+    expected = {
+        name.lower()
+        for name in os.listdir(source_dir)
+        if name.lower().endswith(".dll")
+    }
+    destinations = {
+        str(entry[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        for entry in binaries
+    }
+    missing = sorted(expected - destinations)
+    if missing:
+        raise RuntimeError(
+            "PyInstaller did not collect the complete pinned XPU Library/bin DLL set: "
+            + ", ".join(missing)
+        )
+
+
 audio_separator_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR"),
     os.path.join(USER_HOME, ".music-to-midi", "models", "audio-separator"),
@@ -153,6 +223,11 @@ if torch_spec and torch_spec.origin:
     torch_lib_dir = _resolve_existing_dir(
         os.path.join(os.path.dirname(torch_spec.origin), "lib"),
     )
+xpu_library_bin_dir = None
+if IS_XPU:
+    xpu_library_bin_dir = _resolve_existing_dir(
+        os.path.join(sys.prefix, "Library", "bin"),
+    )
 
 
 def _require_ffmpeg_tools(source_dir):
@@ -208,6 +283,12 @@ datas += copy_metadata('torchlibrosa')
 datas += copy_metadata('muscriptor')
 
 hiddenimports = [
+    # The second executable in this shared portable folder runs the versioned
+    # inference API instead of importing the Qt desktop frontend.
+    'src.web_api.__main__',
+    'src.web_api.inference_process',
+    'src.web_api.server_config',
+    'uvicorn.protocols.websockets.websockets_sansio_impl',
     # Conditional source-runtime gate import in src/main.py. PyInstaller cannot
     # discover imports guarded by ``if __name__ == "__main__"`` reliably.
     'src.utils.source_runtime',
@@ -264,11 +345,31 @@ if importlib.util.find_spec("torch_directml") is not None:
 # 收集 PyTorch 完整包（含 CUDA 运行时 DLL）
 from PyInstaller.utils.hooks import collect_all
 
+
+def _exclude_submodule_prefixes(*prefixes):
+    normalized = tuple(prefix.rstrip(".") for prefix in prefixes)
+
+    def include(name):
+        return not any(
+            name == prefix or name.startswith(prefix + ".") for prefix in normalized
+        )
+
+    return include
+
 audio_sep_datas, audio_sep_binaries, audio_sep_hiddenimports = collect_all('audio_separator')
-torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
+torch_datas, torch_binaries, torch_hiddenimports = collect_all(
+    'torch',
+    filter_submodules=_exclude_submodule_prefixes('torch.testing'),
+)
 torchaudio_datas, torchaudio_binaries, torchaudio_hiddenimports = collect_all('torchaudio')
 torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all('onnxruntime')
+if IS_XPU:
+    openvino_datas, openvino_binaries, openvino_hiddenimports = collect_all('openvino')
+    datas += copy_metadata('onnxruntime-openvino')
+    datas += copy_metadata('openvino')
+else:
+    openvino_datas, openvino_binaries, openvino_hiddenimports = [], [], []
 pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 mir_eval_datas, mir_eval_binaries, mir_eval_hiddenimports = collect_all('mir_eval')
 transkun_datas, transkun_binaries, transkun_hiddenimports = collect_all('transkun')
@@ -277,7 +378,10 @@ aria_amt_datas, aria_amt_binaries, aria_amt_hiddenimports = collect_all('amt')
 bytedance_piano_datas, bytedance_piano_binaries, bytedance_piano_hiddenimports = collect_all('piano_transcription_inference')
 beat_this_datas, beat_this_binaries, beat_this_hiddenimports = collect_all('beat_this')
 torchlibrosa_datas, torchlibrosa_binaries, torchlibrosa_hiddenimports = collect_all('torchlibrosa')
-matplotlib_datas, matplotlib_binaries, matplotlib_hiddenimports = collect_all('matplotlib')
+matplotlib_datas, matplotlib_binaries, matplotlib_hiddenimports = collect_all(
+    'matplotlib',
+    filter_submodules=_exclude_submodule_prefixes('matplotlib.tests'),
+)
 wandb_datas, wandb_binaries, wandb_hiddenimports = collect_all('wandb')
 smart_open_datas, smart_open_binaries, smart_open_hiddenimports = collect_all('smart_open')
 einops_datas, einops_binaries, einops_hiddenimports = collect_all('einops')
@@ -295,6 +399,7 @@ datas += (
     + torchaudio_datas
     + torchvision_datas
     + onnxruntime_datas
+    + openvino_datas
     + pil_datas
     + mir_eval_datas
     + transkun_datas
@@ -322,6 +427,7 @@ hiddenimports += (
     + torchaudio_hiddenimports
     + torchvision_hiddenimports
     + onnxruntime_hiddenimports
+    + openvino_hiddenimports
     + pil_hiddenimports
     + mir_eval_hiddenimports
     + transkun_hiddenimports
@@ -345,11 +451,13 @@ hiddenimports += (
 )
 
 all_binaries = (
-    audio_sep_binaries
+    (_collect_xpu_library_bin_binaries(xpu_library_bin_dir) if IS_XPU else [])
+    + audio_sep_binaries
     + torch_binaries
     + torchaudio_binaries
     + torchvision_binaries
     + onnxruntime_binaries
+    + openvino_binaries
     + pil_binaries
     + mir_eval_binaries
     + transkun_binaries
@@ -371,7 +479,7 @@ all_binaries = (
     + utilities_binaries
     + torchmetrics_binaries
 )
-if torch_lib_dir:
+if torch_lib_dir and not IS_XPU:
     libomp_dll = os.path.join(torch_lib_dir, "libomp140.x86_64.dll")
     if os.path.exists(libomp_dll):
         all_binaries.append((libomp_dll, "torch/lib"))
@@ -401,6 +509,8 @@ a = Analysis(
 if os.name == "nt":
     a.binaries = _remove_conflicting_pyqt_vc_runtime_binaries(a.binaries)
     _require_root_vc_runtime_binaries(a.binaries)
+    if IS_XPU:
+        _require_xpu_library_bin_binaries(a.binaries, xpu_library_bin_dir)
 
 pyz = PYZ(a.pure)
 
@@ -409,7 +519,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='MusicToMidi',
+    name=gui_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -423,12 +533,32 @@ exe = EXE(
     icon='resources/icons/app.ico',  # 应用图标
 )
 
+backend_exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name=backend_name,
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='resources/icons/app.ico',
+)
+
 coll = COLLECT(
     exe,
+    backend_exe,
     a.binaries,
     a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='MusicToMidi',
+    name=collection_name,
 )

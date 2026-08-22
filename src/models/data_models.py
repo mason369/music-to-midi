@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 # stays within that format; 400 BPM remains the product's upper editing bound.
 MIN_MIDI_BPM = 4.0
 MAX_MIDI_BPM = 400.0
+# TelkNet's reviewed Beat This/MIDI contract deliberately uses a narrower
+# range than the generic MIDI editor.  Keep the two ranges separate: editing
+# an existing SMF can still use the full practical MIDI range, while source
+# tempo detection and the user-facing generation modes fail closed at 30-300.
+MIN_TEMPO_BPM = 30.0
+MAX_TEMPO_BPM = 300.0
 
 
 class TrackType(Enum):
@@ -192,6 +198,13 @@ class MuscriptorModel(Enum):
     LARGE = "large"
 
 
+class MuscriptorProcessingChain(Enum):
+    """MuScriptor segment-state implementation used for one transcription."""
+
+    OFFICIAL = "official"
+    TELKNET = "telknet"
+
+
 class TranscriptionBackend(Enum):
     """转写后端 stored in config/UI."""
 
@@ -209,6 +222,14 @@ class MidiTrackMode(Enum):
 
     MULTI_TRACK = "multi_track"
     SINGLE_TRACK = "single_track"
+
+
+class TempoMode(Enum):
+    """How source tempo is represented in a newly generated MIDI file."""
+
+    ADAPTIVE = "adaptive"
+    FIXED_AUTO = "fixed_auto"
+    FIXED_MANUAL = "fixed_manual"
 
 
 class YourMT3Model(Enum):
@@ -529,9 +550,11 @@ class Config:
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
-    # Beat This 自动区分恒速与变速；恒速写单一 tempo，变速写逐拍 tempo map。
-    # 保留字段用于旧配置兼容，但最佳质量默认开启。
-    enable_tempo_map: bool = True
+    # TelkNet v10 shared tempo contract.  Automatic fixed BPM is the default;
+    # adaptive and manual fixed BPM are explicit user choices.
+    tempo_mode: str = TempoMode.FIXED_AUTO.value
+    # Deprecated compatibility mirror.  Production decisions use tempo_mode.
+    enable_tempo_map: bool = False
     # 转写引擎设置
     transcription_backend: str = TranscriptionBackend.YOURMT3.value
     multi_instrument_model: str = MultiInstrumentModel.YOURMT3.value
@@ -540,11 +563,14 @@ class Config:
     midi_track_mode: str = MidiTrackMode.MULTI_TRACK.value  # multi_track / single_track
     yourmt3_model: str = YourMT3Model.YPTF_MOE_MULTI_NOPS.value
     muscriptor_model: str = MuscriptorModel.LARGE.value
+    # OFFICIAL is the product default. TELKNET keeps the explicit downstream
+    # segment-boundary continuity repair available for opt-in A/B comparison.
+    muscriptor_processing_chain: str = MuscriptorProcessingChain.OFFICIAL.value
     # Empty means official MuScriptor auto-detection. Non-empty is a hard
     # decode-time allow-list and must never be treated as a display-only hint.
     muscriptor_instruments: List[str] = field(default_factory=list)
-    # None keeps automatic beat detection. A finite value is the authoritative
-    # constant tempo written into every exported MIDI.
+    # Only FIXED_MANUAL accepts a value.  Legacy Config(custom_bpm=...) inputs
+    # are promoted to FIXED_MANUAL during validation.
     custom_bpm: Optional[float] = None
 
     # MIDI设置
@@ -570,9 +596,17 @@ class Config:
 
     def validate(self) -> None:
         """Normalize and validate mutable configuration before each processing run."""
-        # Deprecated compatibility input only: the production chain always
-        # selects constant versus variable tempo from the Beat This grid.
-        self.enable_tempo_map = True
+        raw_tempo_mode = (
+            str(
+                getattr(self, "tempo_mode", TempoMode.FIXED_AUTO.value)
+                or TempoMode.FIXED_AUTO.value
+            )
+            .strip()
+            .lower()
+        )
+        valid_tempo_modes = {mode.value for mode in TempoMode}
+        if raw_tempo_mode not in valid_tempo_modes:
+            raise ValueError(f"invalid tempo_mode: {raw_tempo_mode!r}")
         mode = str(getattr(self, "processing_mode", "") or "").strip().lower()
         valid_modes = {
             ProcessingMode.SMART.value,
@@ -646,6 +680,25 @@ class Config:
             raise ValueError(f"invalid muscriptor_model: {self.muscriptor_model!r}")
         self.muscriptor_model = normalized_muscriptor_model
 
+        valid_muscriptor_chains = {chain.value for chain in MuscriptorProcessingChain}
+        normalized_muscriptor_chain = (
+            str(
+                getattr(
+                    self,
+                    "muscriptor_processing_chain",
+                    MuscriptorProcessingChain.OFFICIAL.value,
+                )
+                or MuscriptorProcessingChain.OFFICIAL.value
+            )
+            .strip()
+            .lower()
+        )
+        if normalized_muscriptor_chain not in valid_muscriptor_chains:
+            raise ValueError(
+                "invalid muscriptor_processing_chain: " f"{self.muscriptor_processing_chain!r}"
+            )
+        self.muscriptor_processing_chain = normalized_muscriptor_chain
+
         custom_bpm = getattr(self, "custom_bpm", None)
         if custom_bpm is None or custom_bpm == "":
             self.custom_bpm = None
@@ -653,13 +706,29 @@ class Config:
             normalized_bpm = float(custom_bpm)
             if (
                 not math.isfinite(normalized_bpm)
-                or not MIN_MIDI_BPM <= normalized_bpm <= MAX_MIDI_BPM
+                or not MIN_TEMPO_BPM <= normalized_bpm <= MAX_TEMPO_BPM
             ):
                 raise ValueError(
-                    f"custom_bpm must be between {MIN_MIDI_BPM:g} and "
-                    f"{MAX_MIDI_BPM:g} BPM, got {custom_bpm!r}"
+                    f"custom_bpm must be between {MIN_TEMPO_BPM:g} and "
+                    f"{MAX_TEMPO_BPM:g} BPM, got {custom_bpm!r}"
                 )
             self.custom_bpm = normalized_bpm
+
+        # Old callers expressed manual mode solely by setting custom_bpm.
+        # Preserve that explicit intent without making the new default manual.
+        if self.custom_bpm is not None and raw_tempo_mode == TempoMode.FIXED_AUTO.value:
+            raw_tempo_mode = TempoMode.FIXED_MANUAL.value
+        elif (
+            bool(getattr(self, "enable_tempo_map", False))
+            and raw_tempo_mode == TempoMode.FIXED_AUTO.value
+        ):
+            raw_tempo_mode = TempoMode.ADAPTIVE.value
+        if raw_tempo_mode == TempoMode.FIXED_MANUAL.value and self.custom_bpm is None:
+            raise ValueError("fixed_manual tempo_mode requires custom_bpm")
+        if raw_tempo_mode != TempoMode.FIXED_MANUAL.value and self.custom_bpm is not None:
+            raise ValueError("custom_bpm is only valid for fixed_manual tempo_mode")
+        self.tempo_mode = raw_tempo_mode
+        self.enable_tempo_map = raw_tempo_mode == TempoMode.ADAPTIVE.value
 
         from src.models.muscriptor_instruments import validate_muscriptor_instruments
 
@@ -693,12 +762,14 @@ class Config:
             "multi_instrument_model": self.multi_instrument_model,
             "transcription_backend": self.transcription_backend,
             "vocal_split_merge_midi": self.vocal_split_merge_midi,
+            "tempo_mode": self.tempo_mode,
             "enable_tempo_map": self.enable_tempo_map,
             "use_precise_instruments": self.use_precise_instruments,
             "preserve_all_notes": self.preserve_all_notes,
             "midi_track_mode": self.midi_track_mode,
             "yourmt3_model": self.yourmt3_model,
             "muscriptor_model": self.muscriptor_model,
+            "muscriptor_processing_chain": self.muscriptor_processing_chain,
             "muscriptor_instruments": list(self.muscriptor_instruments),
             "custom_bpm": self.custom_bpm,
             "ticks_per_beat": self.ticks_per_beat,
@@ -716,6 +787,13 @@ class Config:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
         data = dict(data)
+        if "tempo_mode" not in data:
+            if data.get("custom_bpm") not in (None, ""):
+                data["tempo_mode"] = TempoMode.FIXED_MANUAL.value
+            elif bool(data.get("enable_tempo_map", False)):
+                data["tempo_mode"] = TempoMode.ADAPTIVE.value
+            else:
+                data["tempo_mode"] = TempoMode.FIXED_AUTO.value
         if "transcription_backend" not in data and "multi_instrument_model" in data:
             data["transcription_backend"] = data["multi_instrument_model"]
         if "multi_instrument_model" not in data:

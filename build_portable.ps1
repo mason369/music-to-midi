@@ -1,7 +1,12 @@
 param(
     [switch]$Clean,
     [string]$PythonExe = "",
-    [string]$FfmpegDir = ""
+    [string]$FfmpegDir = "",
+    [ValidateSet("cuda", "xpu")]
+    [string]$Accelerator = "cuda",
+    [string]$BuildRoot = "",
+    [string]$DistRoot = "",
+    [switch]$HardlinkAssetStaging
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +17,8 @@ $env:PYTHONIOENCODING = "utf-8"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+$Accelerator = $Accelerator.ToLowerInvariant()
+$env:MUSIC_TO_MIDI_ACCELERATOR = $Accelerator
 . (Join-Path $Root "scripts\powershell_helpers.ps1")
 
 function Resolve-Python {
@@ -21,8 +28,9 @@ function Resolve-Python {
         return (Resolve-Path $Requested).Path
     }
 
+    $venvName = if ($Accelerator -eq "xpu") { "venv-xpu" } else { "venv" }
     $candidates = @(
-        (Join-Path $Root "venv\Scripts\python.exe"),
+        (Join-Path $Root "$venvName\Scripts\python.exe"),
         (Join-Path $Root "scripts\python.exe")
     )
 
@@ -52,6 +60,46 @@ function Resolve-ExistingDir {
         }
     }
     return $null
+}
+
+function Resolve-BuildOutputRoot {
+    param(
+        [string]$Requested,
+        [string]$DefaultPath,
+        [string]$Label
+    )
+
+    $candidate = if ([string]::IsNullOrWhiteSpace($Requested)) {
+        $DefaultPath
+    } else {
+        $Requested
+    }
+    $resolved = [IO.Path]::GetFullPath($candidate)
+    $driveRoot = [IO.Path]::GetPathRoot($resolved)
+    if ($resolved.TrimEnd("\") -eq $driveRoot.TrimEnd("\")) {
+        throw "$Label must not be a drive root: $resolved"
+    }
+    if ($resolved.TrimEnd("\") -eq [IO.Path]::GetFullPath($Root).TrimEnd("\")) {
+        throw "$Label must not be the project root: $resolved"
+    }
+    return $resolved
+}
+
+function Assert-DisjointOutputRoots {
+    param(
+        [string]$First,
+        [string]$Second
+    )
+
+    $firstPath = [IO.Path]::GetFullPath($First).TrimEnd("\")
+    $secondPath = [IO.Path]::GetFullPath($Second).TrimEnd("\")
+    if (
+        $firstPath -eq $secondPath -or
+        $firstPath.StartsWith($secondPath + "\", [StringComparison]::OrdinalIgnoreCase) -or
+        $secondPath.StartsWith($firstPath + "\", [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "BuildRoot and DistRoot must be disjoint: build=$firstPath dist=$secondPath"
+    }
 }
 
 function Test-WorkingExecutable {
@@ -140,7 +188,8 @@ function Copy-Tree {
         [string]$Source,
         [string]$Destination,
         [string]$Label,
-        [switch]$Required
+        [switch]$Required,
+        [switch]$HardlinkSameVolume
     )
 
     if (-not $Source) {
@@ -153,16 +202,107 @@ function Copy-Tree {
 
     $sourcePath = [IO.Path]::GetFullPath($Source)
     $destinationPath = [IO.Path]::GetFullPath($Destination)
-    if ($sourcePath -eq $destinationPath) {
+    $sourcePrefix = $sourcePath.TrimEnd("\") + "\"
+    $destinationPrefix = $destinationPath.TrimEnd("\") + "\"
+    if (
+        $sourcePath -eq $destinationPath -or
+        $sourcePath.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        $destinationPath.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)
+    ) {
         throw "Refusing to replace $Label because source and destination are identical: $sourcePath"
     }
     if (Test-Path -LiteralPath $destinationPath) {
         Remove-Item -LiteralPath $destinationPath -Recurse -Force -ErrorAction Stop
     }
     New-Item -ItemType Directory -Force -Path $destinationPath | Out-Null
-    Copy-Item -Path (Join-Path $sourcePath "*") -Destination $destinationPath -Recurse -Force
-    Write-Host "[ok] Collected $Label -> $destinationPath"
+    $sameVolume = (
+        [IO.Path]::GetPathRoot($sourcePath) -eq
+        [IO.Path]::GetPathRoot($destinationPath)
+    )
+    if ($HardlinkSameVolume -and $sameVolume) {
+        foreach ($sourceDirectory in Get-ChildItem -LiteralPath $sourcePath -Directory -Recurse -Force) {
+            $relative = $sourceDirectory.FullName.Substring($sourcePath.Length).TrimStart("\")
+            New-Item -ItemType Directory -Force -Path (Join-Path $destinationPath $relative) | Out-Null
+        }
+        $fileCount = 0
+        $totalBytes = [int64]0
+        foreach ($sourceFile in Get-ChildItem -LiteralPath $sourcePath -File -Recurse -Force) {
+            $relative = $sourceFile.FullName.Substring($sourcePath.Length).TrimStart("\")
+            $destinationFile = Join-Path $destinationPath $relative
+            $hardlinkSource = $sourceFile
+            $visitedLinks = @{}
+            while ($hardlinkSource.LinkType -eq "SymbolicLink") {
+                $linkKey = [IO.Path]::GetFullPath($hardlinkSource.FullName).ToUpperInvariant()
+                if ($visitedLinks.ContainsKey($linkKey)) {
+                    throw "Symbolic-link cycle detected while staging ${Label}: $($sourceFile.FullName)"
+                }
+                $visitedLinks[$linkKey] = $true
+
+                $linkTargets = @($hardlinkSource.Target)
+                if (
+                    $linkTargets.Count -ne 1 -or
+                    [string]::IsNullOrWhiteSpace([string]$linkTargets[0])
+                ) {
+                    throw "Symbolic link for ${Label} does not have exactly one target: $($hardlinkSource.FullName)"
+                }
+                $linkTarget = [string]$linkTargets[0]
+                if (-not [IO.Path]::IsPathRooted($linkTarget)) {
+                    $linkTarget = Join-Path $hardlinkSource.DirectoryName $linkTarget
+                }
+                $linkTarget = [IO.Path]::GetFullPath($linkTarget)
+                if (-not (Test-Path -LiteralPath $linkTarget -PathType Leaf)) {
+                    throw "Symbolic-link target for ${Label} is missing: $linkTarget"
+                }
+                $hardlinkSource = Get-Item -LiteralPath $linkTarget -Force -ErrorAction Stop
+            }
+
+            if ($hardlinkSource.PSIsContainer) {
+                throw "Hard-link source for ${Label} is not a file: $($hardlinkSource.FullName)"
+            }
+            New-Item -ItemType HardLink -Path $destinationFile -Target $hardlinkSource.FullName -ErrorAction Stop | Out-Null
+            $fileCount += 1
+            $totalBytes += $hardlinkSource.Length
+        }
+        Write-Host "[ok] Hard-linked $Label -> $destinationPath ($fileCount files, $totalBytes logical bytes)"
+    } else {
+        Copy-Item -Path (Join-Path $sourcePath "*") -Destination $destinationPath -Recurse -Force
+        Write-Host "[ok] Copied $Label -> $destinationPath"
+    }
     return $true
+}
+
+function Assert-XpuPortableRuntimeDlls {
+    param(
+        [string]$SourceDir,
+        [string]$DistributionDir
+    )
+
+    $sourcePath = [IO.Path]::GetFullPath($SourceDir)
+    $distributionPath = [IO.Path]::GetFullPath($DistributionDir)
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) {
+        throw "Pinned XPU Library/bin directory is missing: $sourcePath"
+    }
+    if (-not (Test-Path -LiteralPath $distributionPath -PathType Container)) {
+        throw "Portable XPU distribution directory is missing: $distributionPath"
+    }
+
+    $sourceDlls = @(Get-ChildItem -LiteralPath $sourcePath -File -Filter "*.dll")
+    if ($sourceDlls.Count -eq 0) {
+        throw "Pinned XPU Library/bin directory contains no DLLs: $sourcePath"
+    }
+    $internalDir = Join-Path $distributionPath "_internal"
+    foreach ($sourceDll in $sourceDlls) {
+        $packagedDll = Join-Path $internalDir $sourceDll.Name
+        if (-not (Test-Path -LiteralPath $packagedDll -PathType Leaf)) {
+            throw "Portable XPU runtime DLL is missing: $packagedDll"
+        }
+        $sourceHash = (Get-FileHash -LiteralPath $sourceDll.FullName -Algorithm SHA256).Hash
+        $packagedHash = (Get-FileHash -LiteralPath $packagedDll -Algorithm SHA256).Hash
+        if ($sourceHash -ne $packagedHash) {
+            throw "Portable XPU runtime DLL identity mismatch: $($sourceDll.Name)"
+        }
+    }
+    Write-Host "[ok] Packaged $($sourceDlls.Count) pinned XPU Library/bin DLLs passed SHA-256 validation"
 }
 
 function Assert-SixStemAssets {
@@ -304,12 +444,29 @@ print(f"Pinned CUDA PyTorch runtime detected: packages={installed_versions}, cud
     }
 }
 
+function Assert-XpuEnabledTorchRuntime {
+    param([string]$PythonPath)
+
+    $validator = Join-Path $Root "tools\validate_accelerator_runtime.py"
+    if (-not (Test-Path -LiteralPath $validator -PathType Leaf)) {
+        throw "Accelerator runtime validator is missing: $validator"
+    }
+    & $PythonPath $validator --accelerator xpu
+    if ($LASTEXITCODE -ne 0) {
+        throw "XPU portable build requires the isolated native PyTorch 2.11.0 XPU trio and an actual OpenVINO GPU. Run install_xpu.ps1 first. IPEX, CPU fallback, CUDA wheels, and conflicting ONNX Runtime distributions are not allowed."
+    }
+}
+
 $Python = Resolve-Python -Requested $PythonExe
 Write-Host "Using Python: $Python"
-Assert-CudaEnabledTorchRuntime -PythonPath $Python
+if ($Accelerator -eq "xpu") {
+    Assert-XpuEnabledTorchRuntime -PythonPath $Python
+} else {
+    Assert-CudaEnabledTorchRuntime -PythonPath $Python
+}
 
 $TorchRuntimeRepair = Join-Path $Root "tools\repair_torch_openmp.py"
-if (Test-Path $TorchRuntimeRepair) {
+if ($Accelerator -eq "cuda" -and (Test-Path $TorchRuntimeRepair)) {
     & $Python -m pip install zstandard | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install zstandard; cannot repair torch OpenMP runtime."
@@ -320,12 +477,24 @@ if (Test-Path $TorchRuntimeRepair) {
     }
 }
 
-$BuildAssetRoot = Join-Path $Root "build\portable_assets"
+$ResolvedBuildRoot = Resolve-BuildOutputRoot `
+    -Requested $BuildRoot `
+    -DefaultPath (Join-Path $Root "build") `
+    -Label "BuildRoot"
+$ResolvedDistRoot = Resolve-BuildOutputRoot `
+    -Requested $DistRoot `
+    -DefaultPath (Join-Path $Root "dist") `
+    -Label "DistRoot"
+Assert-DisjointOutputRoots -First $ResolvedBuildRoot -Second $ResolvedDistRoot
+Write-Host "Build root: $ResolvedBuildRoot"
+Write-Host "Dist root: $ResolvedDistRoot"
+
+$BuildAssetRoot = Join-Path $ResolvedBuildRoot "portable_assets"
 $YourMt3CodeSource = Join-Path $Root "YourMT3\amt\src"
 
 if ($Clean) {
-    Remove-PathIfExists -Path (Join-Path $Root "build") -Label "build directory"
-    Remove-PathIfExists -Path (Join-Path $Root "dist") -Label "dist directory"
+    Remove-PathIfExists -Path $ResolvedBuildRoot -Label "build directory"
+    Remove-PathIfExists -Path $ResolvedDistRoot -Label "dist directory"
 }
 
 New-Item -ItemType Directory -Force -Path $BuildAssetRoot | Out-Null
@@ -444,13 +613,13 @@ Assert-PortableModelIdentities `
     -PythonPath $Python `
     -Label "portable source assets"
 Assert-SixStemAssets -ModelDir $AudioSeparatorSource -PythonPath $Python -Label "audio-separator source"
-Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" -Required | Out-Null
+Copy-Tree -Source $AudioSeparatorSource -Destination $AudioSeparatorBundle -Label "audio-separator models" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Assert-SixStemAssets -ModelDir $AudioSeparatorBundle -PythonPath $Python -Label "audio-separator bundle"
-Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required | Out-Null
-Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required | Out-Null
-Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required | Out-Null
-Copy-Tree -Source $BeatThisSource -Destination $BeatThisBundle -Label "Beat This final0 model" -Required | Out-Null
-Copy-Tree -Source $TransKunV2AugSource -Destination $TransKunV2AugBundle -Label "TransKun V2 Aug models" -Required | Out-Null
+Copy-Tree -Source $YourMt3Source -Destination $YourMt3Bundle -Label "YourMT3 models" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $AriaAmtSource -Destination $AriaAmtBundle -Label "Aria-AMT models" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $ByteDancePianoSource -Destination $ByteDancePianoBundle -Label "ByteDance Piano models" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $BeatThisSource -Destination $BeatThisBundle -Label "Beat This final0 model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $TransKunV2AugSource -Destination $TransKunV2AugBundle -Label "TransKun V2 Aug models" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 $transkunV2AugCheck = @"
 from pathlib import Path
 from src.core.transkun_v2_aug_transcriber import (
@@ -467,12 +636,12 @@ $pythonExitCode = Invoke-PythonScript -PythonExecutable $Python -Script $transku
 if ($pythonExitCode -ne 0) {
     throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
-Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required | Out-Null
-Copy-Tree -Source $MuscriptorSmallSource -Destination $MuscriptorSmallBundle -Label "MuScriptor-small model" -Required | Out-Null
-Copy-Tree -Source $MuscriptorMediumSource -Destination $MuscriptorMediumBundle -Label "MuScriptor-medium model" -Required | Out-Null
-Copy-Tree -Source $MuscriptorLargeSource -Destination $MuscriptorLargeBundle -Label "MuScriptor-large model" -Required | Out-Null
-Copy-Tree -Source $MuscriptorAssetsSource -Destination $MuscriptorAssetsBundle -Label "MuScriptor playback assets" -Required | Out-Null
-Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required | Out-Null
+Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $MuscriptorSmallSource -Destination $MuscriptorSmallBundle -Label "MuScriptor-small model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $MuscriptorMediumSource -Destination $MuscriptorMediumBundle -Label "MuScriptor-medium model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $MuscriptorLargeSource -Destination $MuscriptorLargeBundle -Label "MuScriptor-large model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $MuscriptorAssetsSource -Destination $MuscriptorAssetsBundle -Label "MuScriptor playback assets" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 $muscriptorPortableCheck = @"
 from pathlib import Path
 from src.utils.artifact_identity import validate_file_identity
@@ -571,10 +740,13 @@ $env:PYTHONPATH = if ([string]::IsNullOrWhiteSpace($OriginalPythonPath)) {
     $PyInstallerBootstrapDir + [IO.Path]::PathSeparator + $OriginalPythonPath
 }
 $env:MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR = $BuildVcRuntimeDir
+$PyInstallerWorkPath = Join-Path $ResolvedBuildRoot "pyinstaller-$Accelerator"
+$PyInstallerDistPath = $ResolvedDistRoot
 
 $PyInstallerExitCode = 0
 try {
-    & $Python -m PyInstaller --noconfirm MusicToMidi.spec
+    & $Python -m PyInstaller --noconfirm `
+        --workpath $PyInstallerWorkPath --distpath $PyInstallerDistPath MusicToMidi.spec
     $PyInstallerExitCode = $LASTEXITCODE
 } finally {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_AUDIO_SEPARATOR_DIR -ErrorAction SilentlyContinue
@@ -603,14 +775,28 @@ if ($PyInstallerExitCode -ne 0) {
     throw "PyInstaller build failed with exit code $PyInstallerExitCode."
 }
 
-$DistDir = Join-Path $Root "dist\MusicToMidi"
+$CollectionName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU" } else { "MusicToMidi" }
+$GuiExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiXpu.exe" } else { "MusicToMidi.exe" }
+$BackendExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiBackendXpu.exe" } else { "MusicToMidiBackend.exe" }
+$DistDir = Join-Path $ResolvedDistRoot $CollectionName
 if (-not (Test-Path -LiteralPath $DistDir -PathType Container)) {
     throw "PyInstaller reported success but the portable directory is missing: $DistDir"
 }
 
-$PortableExe = Join-Path $DistDir "MusicToMidi.exe"
+$PortableExe = Join-Path $DistDir $GuiExecutableName
 if (-not (Test-Path -LiteralPath $PortableExe -PathType Leaf)) {
     throw "Portable executable is missing: $PortableExe"
+}
+$PortableBackendExe = Join-Path $DistDir $BackendExecutableName
+if (-not (Test-Path -LiteralPath $PortableBackendExe -PathType Leaf)) {
+    throw "Portable backend executable is missing: $PortableBackendExe"
+}
+if ($Accelerator -eq "xpu") {
+    $XpuVenvRoot = Split-Path -Parent (Split-Path -Parent $Python)
+    $XpuLibraryBin = Join-Path $XpuVenvRoot "Library\bin"
+    Assert-XpuPortableRuntimeDlls `
+        -SourceDir $XpuLibraryBin `
+        -DistributionDir $DistDir
 }
 $GuiRuntimeSelfTest = Start-Process `
     -FilePath $PortableExe `
@@ -625,7 +811,7 @@ $GuiRuntimeSelfTest.Refresh()
 if ($GuiRuntimeSelfTest.ExitCode -ne 0) {
     throw "Portable GUI/Qt/ONNX Runtime self-test failed with exit code $($GuiRuntimeSelfTest.ExitCode)."
 }
-Write-Host "[ok] Portable GUI + Qt + ONNX Runtime CUDA load order verified"
+Write-Host "[ok] Portable GUI + Qt + ONNX Runtime $($Accelerator.ToUpperInvariant()) load order verified"
 
 $muscriptorDistCheck = @"
 from pathlib import Path
@@ -663,6 +849,22 @@ foreach ($noticeName in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {
     }
     Copy-Item -LiteralPath $noticeSource -Destination (Join-Path $DistDir $noticeName) -Force
 }
+$RoleSeparator = Join-Path $Root "scripts\separate_windows_portable_roles.ps1"
+if (-not (Test-Path -LiteralPath $RoleSeparator -PathType Leaf)) {
+    throw "Portable role separator is missing: $RoleSeparator"
+}
+& $RoleSeparator `
+    -CombinedRoot $DistDir `
+    -DistRoot $ResolvedDistRoot `
+    -Accelerator $Accelerator
+if ($LASTEXITCODE -notin @(0, $null)) {
+    throw "Portable role separation failed with exit code $LASTEXITCODE."
+}
+$AppCollectionName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-App" } else { "MusicToMidi-App" }
+$BackendCollectionName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-WebBackend" } else { "MusicToMidi-WebBackend" }
+$AppDistDir = Join-Path $ResolvedDistRoot $AppCollectionName
+$BackendDistDir = Join-Path $ResolvedDistRoot $BackendCollectionName
 Write-Host ""
-Write-Host "Portable build created: $DistDir"
-Write-Host "Distribute the entire directory instead of a single exe."
+Write-Host "Desktop App portable build created: $AppDistDir"
+Write-Host "Web backend portable build created: $BackendDistDir"
+Write-Host "Each output directory is a complete package for its role."

@@ -1,20 +1,43 @@
 """
 音频处理工具函数
 """
+
 import os
 import logging
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Any, Tuple, Optional
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def load_audio(
-    path: str,
-    sr: int = 44100,
-    mono: bool = True
-) -> Tuple[np.ndarray, int]:
+def load_audio_tensor(path: str | Path) -> Tuple[Any, int]:
+    """Decode an audio file to a channels-first float32 CPU tensor.
+
+    The pipeline converts every public input to WAV before a transcription
+    backend sees it. Reading that normalized PCM file explicitly through
+    libsndfile keeps decoding independent from torchaudio 2.11's optional
+    TorchCodec/shared-FFmpeg runtime while preserving torchaudio.load's tensor
+    shape and dtype contract. Decode failures are intentionally propagated.
+    """
+    import soundfile as sf
+    import torch
+
+    audio, sample_rate = sf.read(
+        str(path),
+        dtype="float32",
+        always_2d=True,
+    )
+    if audio.shape[0] == 0:
+        raise ValueError(f"音频文件为空或无法解码: {path}")
+    if int(sample_rate) <= 0:
+        raise ValueError(f"音频采样率无效: {path}: {sample_rate}")
+
+    channels_first = np.ascontiguousarray(audio.T)
+    return torch.from_numpy(channels_first), int(sample_rate)
+
+
+def load_audio(path: str, sr: int = 44100, mono: bool = True) -> Tuple[np.ndarray, int]:
     """
     加载音频文件并返回numpy数组
 
@@ -39,11 +62,7 @@ def load_audio(
     return y, loaded_sr
 
 
-def save_audio(
-    path: str,
-    audio: np.ndarray,
-    sr: int = 44100
-) -> None:
+def save_audio(path: str, audio: np.ndarray, sr: int = 44100) -> None:
     """
     将numpy数组保存为音频文件
 
@@ -95,11 +114,7 @@ def normalize_audio(audio: np.ndarray) -> np.ndarray:
     return audio
 
 
-def resample_audio(
-    audio: np.ndarray,
-    orig_sr: int,
-    target_sr: int
-) -> np.ndarray:
+def resample_audio(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     """
     将音频重采样到目标采样率
 

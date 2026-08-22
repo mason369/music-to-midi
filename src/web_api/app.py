@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, AsyncIterator
@@ -16,19 +17,30 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from src.core.manual_midi import MANUAL_MIDI_ROUTES
+from src.i18n.translator import Translator
+from src.model_profiles import (
+    MUSCRIPTOR_PROFILE_IDS,
+    YOURMT3_PROFILE_IDS,
+    inspect_model_profiles,
+    primary_profile_id,
+    require_profile_available,
+)
 from src.models.data_models import (
-    MAX_MIDI_BPM,
-    MIN_MIDI_BPM,
+    MAX_TEMPO_BPM,
+    MIN_TEMPO_BPM,
     MidiTrackMode,
     MultiInstrumentModel,
     MuscriptorModel,
+    MuscriptorProcessingChain,
     ProcessingMode,
+    TempoMode,
     YourMT3Model,
 )
-from src.web_api.jobs import JobManager
+from src.utils.yourmt3_downloader import YOURMT3_MODELS
+from src.web_api.jobs import InsufficientStorageError, JobManager, QueueCapacityError
 from src.web_api.schemas import InferenceOptions, JobSnapshot, ManualMidiOptions
+from src.web_contract import API_VERSION
 
-API_VERSION = "1.0"
 DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 SUPPORTED_AUDIO_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wma"}
 
@@ -65,6 +77,38 @@ def _max_upload_bytes() -> int:
     return value
 
 
+def _environment_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be one of 1/0, true/false, yes/no or on/off")
+
+
+def _deployment_capabilities() -> dict[str, object]:
+    public = _environment_flag("MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT")
+    edge_auth = os.environ.get("MUSIC_TO_MIDI_EDGE_AUTH", "").strip().lower()
+    tls_at_edge = _environment_flag("MUSIC_TO_MIDI_TLS_TERMINATED_AT_EDGE")
+    errors: list[str] = []
+    if public and edge_auth != "basic":
+        errors.append("public deployment requires MUSIC_TO_MIDI_EDGE_AUTH=basic")
+    if public and not tls_at_edge:
+        errors.append("public deployment requires TLS termination at the edge")
+    return {
+        "trust_boundary": "authenticated_single_owner" if public else "trusted_lan",
+        "authentication": edge_auth == "basic",
+        "authorization": False,
+        "tls_terminated_here": False,
+        "tls_terminated_at_edge": tls_at_edge,
+        "configuration_ready": not errors,
+        "configuration_error": "; ".join(errors) or None,
+    }
+
+
 def _parse_json_model(raw: str, model_type):
     try:
         payload = json.loads(raw)
@@ -94,7 +138,12 @@ def _safe_upload_suffix(filename: str | None) -> str:
     return suffix
 
 
-async def _write_upload(upload: UploadFile, destination: Path, max_bytes: int) -> int:
+async def _write_upload(
+    upload: UploadFile,
+    destination: Path,
+    max_bytes: int,
+    min_free_bytes: int = 0,
+) -> int:
     total = 0
     try:
         with destination.open("xb") as stream:
@@ -107,6 +156,16 @@ async def _write_upload(upload: UploadFile, destination: Path, max_bytes: int) -
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"audio upload exceeds the configured {max_bytes}-byte limit",
+                    )
+                free_bytes = shutil.disk_usage(destination.parent).free
+                if free_bytes - len(chunk) < min_free_bytes:
+                    raise HTTPException(
+                        status_code=507,
+                        detail=(
+                            "job storage free-space floor would be violated: "
+                            f"free={free_bytes}, incoming_chunk={len(chunk)}, "
+                            f"required_reserve={min_free_bytes}"
+                        ),
                     )
                 stream.write(chunk)
             stream.flush()
@@ -125,51 +184,72 @@ def _job_or_http(manager: JobManager, job_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-def _capabilities() -> dict:
-    modes = [
-        {
-            "id": ProcessingMode.SMART.value,
-            "label_zh": "多乐器 MIDI 转写",
-            "label_en": "Multi-instrument transcription",
-            "kind": "direct",
-        },
-        {
-            "id": ProcessingMode.VOCAL_SPLIT.value,
-            "label_zh": "人声 / 伴奏分离",
-            "label_en": "Vocal / accompaniment split",
-            "kind": "separation",
-        },
-        {
-            "id": ProcessingMode.SIX_STEM_SPLIT.value,
-            "label_zh": "六声部分离",
-            "label_en": "Six-stem separation",
-            "kind": "separation",
-        },
-        {
-            "id": ProcessingMode.PIANO_TRANSKUN.value,
-            "label_zh": "钢琴 · TransKun V2",
-            "label_en": "Piano · TransKun V2",
-            "kind": "direct",
-        },
-        {
-            "id": ProcessingMode.PIANO_TRANSKUN_V2_AUG.value,
-            "label_zh": "钢琴 · TransKun V2 Aug",
-            "label_en": "Piano · TransKun V2 Aug",
-            "kind": "direct",
-        },
-        {
-            "id": ProcessingMode.PIANO_ARIA_AMT.value,
-            "label_zh": "钢琴 · Aria-AMT",
-            "label_en": "Piano · Aria-AMT",
-            "kind": "direct",
-        },
-        {
-            "id": ProcessingMode.PIANO_BYTEDANCE_PEDAL.value,
-            "label_zh": "钢琴 · ByteDance 踏板",
-            "label_en": "Piano · ByteDance Pedal",
-            "kind": "direct",
-        },
+def _capabilities(
+    *,
+    max_upload_bytes: int | None = None,
+    max_queued_jobs: int = 0,
+    min_free_bytes: int = 0,
+    retention_max_bytes: int = 0,
+) -> dict:
+    profile_snapshot = inspect_model_profiles()
+    profile_statuses = {item.id: item for item in profile_snapshot.profiles}
+
+    def grouped_availability(profile_ids: tuple[str, ...]) -> dict[str, object]:
+        statuses = [profile_statuses[profile_id] for profile_id in profile_ids]
+        if any(item.available for item in statuses):
+            return {"available": True, "unavailable_reason": None}
+        enabled = [item for item in statuses if item.enabled]
+        if not enabled:
+            return {
+                "available": False,
+                "unavailable_reason": "no profile in this model family is enabled",
+            }
+        return {
+            "available": False,
+            "unavailable_reason": "; ".join(
+                f"{item.id}: {item.unavailable_reason or 'unavailable'}" for item in enabled
+            ),
+        }
+
+    backend_availability = {
+        MultiInstrumentModel.YOURMT3.value: grouped_availability(YOURMT3_PROFILE_IDS),
+        MultiInstrumentModel.MIROS.value: grouped_availability(("miros",)),
+        MultiInstrumentModel.MUSCRIPTOR.value: grouped_availability(MUSCRIPTOR_PROFILE_IDS),
+    }
+    mode_ids = [
+        (ProcessingMode.SMART.value, "direct"),
+        (ProcessingMode.VOCAL_SPLIT.value, "separation"),
+        (ProcessingMode.SIX_STEM_SPLIT.value, "separation"),
+        (ProcessingMode.PIANO_TRANSKUN.value, "direct"),
+        (ProcessingMode.PIANO_TRANSKUN_V2_AUG.value, "direct"),
+        (ProcessingMode.PIANO_ARIA_AMT.value, "direct"),
+        (ProcessingMode.PIANO_BYTEDANCE_PEDAL.value, "direct"),
     ]
+    # Labels come from the same shared i18n catalog the desktop, Space and
+    # Colab read, so every platform presents identical wording.
+    translator_zh = Translator("zh_CN")
+    translator_en = Translator("en_US")
+    modes = []
+    for mode_id, kind in mode_ids:
+        if mode_id == ProcessingMode.SMART.value:
+            availability = grouped_availability(
+                (*YOURMT3_PROFILE_IDS, "miros", *MUSCRIPTOR_PROFILE_IDS)
+            )
+        else:
+            status_item = profile_statuses[mode_id]
+            availability = {
+                "available": status_item.available,
+                "unavailable_reason": status_item.unavailable_reason,
+            }
+        modes.append(
+            {
+                "id": mode_id,
+                "label_zh": translator_zh.t(f"main.mode.{mode_id}"),
+                "label_en": translator_en.t(f"main.mode.{mode_id}"),
+                "kind": kind,
+                **availability,
+            }
+        )
     manual_labels = {
         "miros": "MIROS",
         "muscriptor": "MuScriptor Large",
@@ -182,41 +262,136 @@ def _capabilities() -> dict:
     }
     for model in YourMT3Model:
         if model is not YourMT3Model.LEGACY_MC13:
-            manual_labels[f"yourmt3:{model.value}"] = f"YourMT3+ · {model.value}"
+            manual_labels[f"yourmt3:{model.value}"] = (
+                f"YourMT3+ · {YOURMT3_MODELS[model.value]['ui_label']}"
+            )
+    runtime_error = None
+    accelerator = "unavailable"
+    accelerator_device = None
+    accelerator_devices = []
+    accelerator_ready = False
     try:
         import torch
+        from src.utils.gpu_utils import (
+            ensure_accelerator_runtime_compatibility,
+            get_accelerator_type,
+            get_device,
+            get_gpu_info,
+        )
 
         cuda_available = bool(torch.cuda.is_available())
         devices = [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())]
+        xpu = getattr(torch, "xpu", None)
+        xpu_available = bool(xpu is not None and xpu.is_available())
         torch_version = str(torch.__version__)
+        detected = get_accelerator_type()
+        requested = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "").strip().lower()
+        accelerator = requested or detected
+        if accelerator not in {"cuda", "xpu"}:
+            raise RuntimeError("完整工作流需要 CUDA 或 Intel XPU，" f"当前检测结果为 {detected!r}")
+        if requested and requested != detected:
+            raise RuntimeError(
+                "MUSIC_TO_MIDI_ACCELERATOR 与当前 PyTorch 运行时不一致: "
+                f"requested={requested}, detected={detected}"
+            )
+        accelerator_device = get_device(prefer_gpu=True, gpu_index=0)
+        ensure_accelerator_runtime_compatibility(accelerator_device)
+        accelerator_devices = get_gpu_info()
+        accelerator_ready = True
     except Exception as exc:
-        cuda_available = False
-        devices = []
-        torch_version = f"unavailable: {exc}"
+        runtime_error = str(exc)
+        if "torch_version" not in locals():
+            cuda_available = False
+            xpu_available = False
+            devices = []
+            torch_version = f"unavailable: {exc}"
     return {
         "api_version": API_VERSION,
+        "deployment": _deployment_capabilities(),
         "modes": modes,
         "backends": [model.value for model in MultiInstrumentModel],
+        "backend_availability": backend_availability,
         "yourmt3_models": [
-            model.value for model in YourMT3Model if model is not YourMT3Model.LEGACY_MC13
+            {
+                "id": model.value,
+                "label": YOURMT3_MODELS[model.value]["ui_label"],
+                "available": profile_statuses[f"yourmt3:{model.value}"].available,
+                "unavailable_reason": profile_statuses[
+                    f"yourmt3:{model.value}"
+                ].unavailable_reason,
+            }
+            for model in YourMT3Model
+            if model is not YourMT3Model.LEGACY_MC13
         ],
-        "muscriptor_models": [model.value for model in MuscriptorModel],
+        "muscriptor_models": [
+            {
+                "id": model.value,
+                "label_zh": translator_zh.t(f"main.engine.muscriptor_models.{model.value}"),
+                "label_en": translator_en.t(f"main.engine.muscriptor_models.{model.value}"),
+                "available": profile_statuses[
+                    "muscriptor" if model is MuscriptorModel.LARGE else f"muscriptor:{model.value}"
+                ].available,
+                "unavailable_reason": profile_statuses[
+                    "muscriptor" if model is MuscriptorModel.LARGE else f"muscriptor:{model.value}"
+                ].unavailable_reason,
+            }
+            for model in (MuscriptorModel.LARGE, MuscriptorModel.MEDIUM, MuscriptorModel.SMALL)
+        ],
+        "muscriptor_processing_chains": [
+            {
+                "id": chain.value,
+                "label_zh": translator_zh.t(
+                    f"main.engine.muscriptor_processing_chains.{chain.value}"
+                ),
+                "label_en": translator_en.t(
+                    f"main.engine.muscriptor_processing_chains.{chain.value}"
+                ),
+            }
+            for chain in (
+                MuscriptorProcessingChain.OFFICIAL,
+                MuscriptorProcessingChain.TELKNET,
+            )
+        ],
         "midi_track_modes": [mode.value for mode in MidiTrackMode],
+        "tempo_modes": [
+            {
+                "id": mode.value,
+                "label_zh": translator_zh.t(f"main.tempo.{mode.value}"),
+                "label_en": translator_en.t(f"main.tempo.{mode.value}"),
+            }
+            for mode in TempoMode
+        ],
         "manual_midi_routes": [
-            {"id": route, "label": manual_labels[route]} for route in MANUAL_MIDI_ROUTES
+            {
+                "id": route,
+                "label": manual_labels[route],
+                "available": profile_statuses[route].available,
+                "unavailable_reason": profile_statuses[route].unavailable_reason,
+            }
+            for route in MANUAL_MIDI_ROUTES
         ],
         "limits": {
-            "custom_bpm_min": MIN_MIDI_BPM,
-            "custom_bpm_max": MAX_MIDI_BPM,
-            "max_upload_bytes": _max_upload_bytes(),
+            "custom_bpm_min": MIN_TEMPO_BPM,
+            "custom_bpm_max": MAX_TEMPO_BPM,
+            "max_upload_bytes": max_upload_bytes or _max_upload_bytes(),
+            "max_queued_jobs": max_queued_jobs,
+            "min_free_bytes": min_free_bytes,
+            "retention_max_bytes": retention_max_bytes,
             "audio_extensions": sorted(SUPPORTED_AUDIO_SUFFIXES),
         },
         "runtime": {
             "torch": torch_version,
             "cuda_available": cuda_available,
             "cuda_devices": devices,
+            "xpu_available": xpu_available,
+            "accelerator": accelerator,
+            "accelerator_device": accelerator_device,
+            "accelerator_devices": accelerator_devices,
+            "accelerator_ready": accelerator_ready,
+            "accelerator_error": runtime_error,
             "gpu_queue_concurrency": 1,
         },
+        "model_profiles": profile_snapshot.to_dict(),
     }
 
 
@@ -226,9 +401,30 @@ def create_app(
     data_root: str | Path | None = None,
     cors_origins: list[str] | None = None,
     frontend_root: str | Path | None = None,
+    max_upload_bytes: int | None = None,
+    max_queued_jobs: int = 0,
+    min_free_bytes: int = 0,
+    retention_days: int = 30,
+    retention_max_jobs: int = 200,
+    retention_max_bytes: int = 0,
 ) -> FastAPI:
+    upload_limit = _max_upload_bytes() if max_upload_bytes is None else int(max_upload_bytes)
+    if upload_limit <= 0:
+        raise ValueError("max_upload_bytes must be positive")
     owned_manager = manager is None
-    job_manager = manager or JobManager(data_root or _default_data_root())
+    job_manager = manager or JobManager(
+        data_root or _default_data_root(),
+        retention_days=retention_days,
+        retention_max_jobs=retention_max_jobs,
+        retention_max_bytes=retention_max_bytes,
+        max_queued_jobs=max_queued_jobs,
+        min_free_bytes=min_free_bytes,
+    )
+    effective_max_queued_jobs = int(getattr(job_manager, "max_queued_jobs", max_queued_jobs))
+    effective_min_free_bytes = int(getattr(job_manager, "min_free_bytes", min_free_bytes))
+    effective_retention_max_bytes = int(
+        getattr(job_manager, "retention_max_bytes", retention_max_bytes)
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -246,6 +442,17 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.job_manager = job_manager
+
+    @app.exception_handler(QueueCapacityError)
+    async def queue_capacity_error(_request: Request, exc: QueueCapacityError) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+    @app.exception_handler(InsufficientStorageError)
+    async def insufficient_storage_error(
+        _request: Request, exc: InsufficientStorageError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=507, content={"detail": str(exc)})
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins or _default_origins(),
@@ -261,6 +468,83 @@ def create_app(
         ],
     )
 
+    def capability_snapshot() -> dict:
+        return _capabilities(
+            max_upload_bytes=upload_limit,
+            max_queued_jobs=effective_max_queued_jobs,
+            min_free_bytes=effective_min_free_bytes,
+            retention_max_bytes=effective_retention_max_bytes,
+        )
+
+    def require_public_accelerator_options(parsed: InferenceOptions | ManualMidiOptions) -> None:
+        if not _environment_flag("MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT"):
+            return
+        if not parsed.use_gpu:
+            raise HTTPException(
+                status_code=422,
+                detail="public deployment requires accelerator inference; use_gpu must be true",
+            )
+        if parsed.gpu_device != 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "public container exposes one selected NVIDIA device as gpu_device=0; "
+                    f"received gpu_device={parsed.gpu_device}"
+                ),
+            )
+
+    def require_public_runtime_ready() -> None:
+        if not _environment_flag("MUSIC_TO_MIDI_PUBLIC_DEPLOYMENT"):
+            return
+        state = job_manager.health()
+        capabilities_payload = capability_snapshot()
+        errors: list[str] = []
+        if not state["worker_alive"]:
+            errors.append("inference worker is not alive")
+        if not capabilities_payload["runtime"]["accelerator_ready"]:
+            errors.append(
+                str(
+                    capabilities_payload["runtime"]["accelerator_error"]
+                    or "accelerator runtime is unavailable"
+                )
+            )
+        if not capabilities_payload["model_profiles"]["ready"]:
+            errors.append(
+                str(
+                    capabilities_payload["model_profiles"]["readiness_error"]
+                    or "model profiles are unavailable"
+                )
+            )
+        if not capabilities_payload["deployment"]["configuration_ready"]:
+            errors.append(str(capabilities_payload["deployment"]["configuration_error"]))
+        if errors:
+            raise HTTPException(
+                status_code=503,
+                detail="public inference service is not ready: " + "; ".join(errors),
+            )
+
+    def require_primary_options(parsed: InferenceOptions) -> None:
+        require_public_accelerator_options(parsed)
+        try:
+            profile_id = primary_profile_id(
+                processing_mode=parsed.processing_mode,
+                transcription_backend=parsed.transcription_backend,
+                yourmt3_model=parsed.yourmt3_model,
+                muscriptor_model=parsed.muscriptor_model,
+            )
+            require_profile_available(profile_id, inspect_model_profiles())
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        require_public_runtime_ready()
+
+    def require_manual_options(parsed: ManualMidiOptions) -> None:
+        require_public_accelerator_options(parsed)
+        try:
+            require_profile_available(parsed.route, inspect_model_profiles())
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        require_public_runtime_ready()
+
     @app.get("/api/v1/health")
     def health() -> dict:
         state = job_manager.health()
@@ -268,9 +552,50 @@ def create_app(
             raise HTTPException(status_code=503, detail="inference worker is not alive")
         return {"status": "ok", "api_version": API_VERSION, **state}
 
+    @app.get("/api/v1/ready")
+    def ready() -> dict:
+        state = job_manager.health()
+        capabilities_payload = capability_snapshot()
+        errors: list[str] = []
+        if not state["worker_alive"]:
+            errors.append("inference worker is not alive")
+        if not capabilities_payload["runtime"]["accelerator_ready"]:
+            errors.append(
+                str(
+                    capabilities_payload["runtime"]["accelerator_error"]
+                    or "accelerator runtime is unavailable"
+                )
+            )
+        if not capabilities_payload["model_profiles"]["ready"]:
+            errors.append(
+                str(
+                    capabilities_payload["model_profiles"]["readiness_error"]
+                    or "model profiles are unavailable"
+                )
+            )
+        if not capabilities_payload["deployment"]["configuration_ready"]:
+            errors.append(str(capabilities_payload["deployment"]["configuration_error"]))
+        storage = state["storage"]
+        if storage["free_bytes"] < storage["min_free_bytes"]:
+            errors.append(
+                "job storage is below its free-space floor: "
+                f"free={storage['free_bytes']}, required={storage['min_free_bytes']}"
+            )
+        if errors:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "not_ready", "errors": errors, "api_version": API_VERSION},
+            )
+        return {
+            "status": "ready",
+            "api_version": API_VERSION,
+            "enabled_profiles": capabilities_payload["model_profiles"]["enabled_profiles"],
+            "accelerator": capabilities_payload["runtime"]["accelerator"],
+        }
+
     @app.get("/api/v1/capabilities")
     def capabilities() -> dict:
-        return _capabilities()
+        return capability_snapshot()
 
     @app.get("/api/v1/jobs", response_model=list[JobSnapshot])
     def list_jobs() -> list[dict]:
@@ -282,11 +607,13 @@ def create_app(
         options: Annotated[str, Form(...)],
     ) -> dict:
         parsed = _parse_json_model(options, InferenceOptions)
+        require_primary_options(parsed)
+        job_manager.require_submission_capacity()
         suffix = _safe_upload_suffix(audio.filename)
         job_id, job_dir = job_manager.reserve_job_dir()
         destination = job_dir / "input" / f"source{suffix}"
         try:
-            await _write_upload(audio, destination, _max_upload_bytes())
+            await _write_upload(audio, destination, upload_limit, effective_min_free_bytes)
             return job_manager.submit_reserved(
                 job_id=job_id,
                 kind="primary",
@@ -304,17 +631,20 @@ def create_app(
         options: Annotated[str, Form(...)],
     ) -> dict:
         parsed = _parse_json_model(options, ManualMidiOptions)
+        require_manual_options(parsed)
+        job_manager.require_submission_capacity()
         suffix = _safe_upload_suffix(audio.filename)
         job_id, job_dir = job_manager.reserve_job_dir()
         destination = job_dir / "input" / f"source{suffix}"
         try:
-            await _write_upload(audio, destination, _max_upload_bytes())
+            await _write_upload(audio, destination, upload_limit, effective_min_free_bytes)
             return job_manager.submit_reserved(
                 job_id=job_id,
                 kind="manual_midi",
                 source_path=destination,
                 original_filename=Path(audio.filename or destination.name).name,
                 options=parsed.model_dump(),
+                tempo_source_path=destination,
                 track_id=Path(audio.filename or "local-track").stem,
             )
         except Exception:
@@ -331,8 +661,12 @@ def create_app(
         track_id: str,
         options: ManualMidiOptions,
     ) -> dict:
+        require_manual_options(options)
+        job_manager.require_submission_capacity()
         try:
             return job_manager.submit_parent_track(job_id, track_id, options.model_dump())
+        except (QueueCapacityError, InsufficientStorageError):
+            raise
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (RuntimeError, ValueError) as exc:
@@ -353,17 +687,24 @@ def create_app(
 
     @app.post("/api/v1/jobs/{job_id}/retry", response_model=JobSnapshot, status_code=202)
     def retry_job(job_id: str) -> dict:
+        existing = _job_or_http(job_manager, job_id)
         try:
+            if existing["kind"] == "primary":
+                require_primary_options(InferenceOptions.model_validate(existing["request"]))
+            else:
+                require_manual_options(ManualMidiOptions.model_validate(existing["request"]))
             return job_manager.retry(job_id)
+        except (QueueCapacityError, InsufficientStorageError):
+            raise
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.delete("/api/v1/jobs/{job_id}", status_code=204)
-    def delete_job(job_id: str) -> Response:
+    def delete_job(job_id: str, cascade: bool = False) -> Response:
         try:
-            job_manager.delete(job_id)
+            job_manager.delete(job_id, cascade=cascade)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:

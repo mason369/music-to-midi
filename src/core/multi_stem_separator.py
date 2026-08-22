@@ -22,6 +22,7 @@ from src.utils.audio_separator_compat import (
     get_separator_cls,
     patch_separator_package_metadata,
 )
+from src.utils.gpu_utils import clear_gpu_memory
 from src.utils.runtime_paths import get_audio_separator_model_dir
 
 logger = logging.getLogger(__name__)
@@ -210,36 +211,45 @@ class SixStemSeparator:
                     0.25, self._pt("progress.loaded_model", model=BS_ROFORMER_SW_DISPLAY_NAME)
                 )
 
-        _separator, output_files, _used_cpu_fallback, _fallback_reason = (
-            execute_audio_separator_job(
-                separator_cls,
-                separator_kwargs={
-                    "output_dir": str(output_path),
-                    "model_file_dir": str(self.cache_dir),
-                    "output_format": "WAV",
-                    "mdxc_params": {
-                        "segment_size": 128,
-                        "override_model_segment_size": True,
-                        "batch_size": 1,
-                        "overlap": 8,
-                        "pitch_shift": 0,
+        active_separator = None
+        try:
+            active_separator, output_files, _used_cpu_fallback, _fallback_reason = (
+                execute_audio_separator_job(
+                    separator_cls,
+                    separator_kwargs={
+                        "output_dir": str(output_path),
+                        "model_file_dir": str(self.cache_dir),
+                        "output_format": "WAV",
+                        "mdxc_params": {
+                            "segment_size": 128,
+                            "override_model_segment_size": True,
+                            "batch_size": 1,
+                            "overlap": 8,
+                            "pitch_shift": 0,
+                        },
                     },
-                },
-                model_name=BS_ROFORMER_SW_MODEL,
-                action=lambda active_separator: active_separator.separate(audio_path),
-                logger=logger,
-                progress_callback=progress_callback,
-                fallback_progress=(0.1, self._pt("progress.cpu_retry")),
-                target_device=self.target_device,
-                prepare_separator=self._prepare_separator,
-                after_load=_after_load,
+                    model_name=BS_ROFORMER_SW_MODEL,
+                    action=lambda active: active.separate(audio_path),
+                    logger=logger,
+                    progress_callback=progress_callback,
+                    fallback_progress=(0.1, self._pt("progress.cpu_retry")),
+                    target_device=self.target_device,
+                    prepare_separator=self._prepare_separator,
+                    after_load=_after_load,
+                )
             )
-        )
-        if progress_callback:
-            progress_callback(0.85, self._pt("progress.normalizing_stem_files"))
+            if progress_callback:
+                progress_callback(0.85, self._pt("progress.normalizing_stem_files"))
 
-        normalized = self._normalize_outputs(audio_path, output_path, output_files)
+            normalized = self._normalize_outputs(audio_path, output_path, output_files)
 
-        if progress_callback:
-            progress_callback(1.0, self._pt("progress.six_stem_separation_complete"))
-        return normalized
+            if progress_callback:
+                progress_callback(1.0, self._pt("progress.six_stem_separation_complete"))
+            return normalized
+        finally:
+            # audio-separator 0.44.1 only empties CUDA/MPS caches. Drop its
+            # loaded model before the shared cleanup so the XPU caching
+            # allocator can actually release the completed job's memory.
+            active_separator = None
+            if str(self.target_device or "").strip().lower().startswith("xpu"):
+                clear_gpu_memory()

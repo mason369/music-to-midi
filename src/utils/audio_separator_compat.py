@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, TypeVar
 
 from src.utils.gpu_utils import (
+    ensure_accelerator_runtime_compatibility,
     ensure_cuda_runtime_compatibility,
+    ensure_module_on_device,
     get_device,
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
 )
 from src.utils.runtime_paths import activate_audio_separator_runtime
-
 
 logger = logging.getLogger(__name__)
 
@@ -95,23 +96,76 @@ def _force_separator_device(separator: Any, target_device: Optional[str]) -> Any
     if device == "cpu":
         return _force_separator_cpu(separator)
 
-    try:
-        import torch
+    import torch
 
-        separator.torch_device = torch.device(device)
-    except Exception:
-        separator.torch_device = device
+    ensure_accelerator_runtime_compatibility(device)
+    separator.torch_device = torch.device(device)
 
     if device.startswith("cuda"):
         separator.onnx_execution_provider = _onnx_cuda_provider(device)
+    elif device.startswith("xpu"):
+        device_id = _cuda_device_index(device)
+        separator.onnx_execution_provider = [
+            (
+                "OpenVINOExecutionProvider",
+                {"device_type": f"GPU.{device_id}"},
+            )
+        ]
     return separator
+
+
+def _separator_class_for_target_device(separator_cls: Any, target_device: Optional[str]) -> Any:
+    """Initialize audio-separator on XPU before its CUDA/MPS-only setup runs."""
+
+    device = str(target_device or "").strip().lower()
+    if not device.startswith("xpu"):
+        return separator_cls
+
+    device_id = _cuda_device_index(device)
+
+    class XpuInitializedSeparator(separator_cls):
+        def setup_torch_device(self, _system_info):
+            import torch
+
+            ensure_accelerator_runtime_compatibility(device)
+            self.torch_device_cpu = torch.device("cpu")
+            self.torch_device = torch.device(device)
+            self.onnx_execution_provider = [
+                (
+                    "OpenVINOExecutionProvider",
+                    {"device_type": f"GPU.{device_id}"},
+                )
+            ]
+            self.logger.info(
+                "Intel XPU is available in Torch, setting Torch device to %s",
+                device,
+            )
+
+    XpuInitializedSeparator.__name__ = separator_cls.__name__
+    XpuInitializedSeparator.__qualname__ = separator_cls.__qualname__
+    XpuInitializedSeparator.__module__ = separator_cls.__module__
+    return XpuInitializedSeparator
+
+
+def _validate_loaded_separator_device(separator: Any, target_device: Optional[str]) -> None:
+    device = str(target_device or "").strip().lower()
+    if not device.startswith(("cuda", "xpu")):
+        return
+    model_instance = getattr(separator, "model_instance", None)
+    model = getattr(model_instance, "model_run", None)
+    if model is None:
+        raise RuntimeError(
+            "audio-separator 已加载但未暴露 model_instance.model_run，"
+            f"无法证明模型驻留在 {device}"
+        )
+    ensure_module_on_device(model, device, "audio-separator model")
 
 
 def _parse_ensemble_preset(model_name: str) -> Optional[str]:
     spec = str(model_name or "").strip()
     if not spec.lower().startswith(_ENSEMBLE_PRESET_PREFIX):
         return None
-    preset = spec[len(_ENSEMBLE_PRESET_PREFIX):].strip()
+    preset = spec[len(_ENSEMBLE_PRESET_PREFIX) :].strip()
     return preset or None
 
 
@@ -159,6 +213,9 @@ def _resolve_cpu_fallback_reason(
     target_device: Optional[str] = None,
 ) -> Optional[str]:
     device = str(target_device or get_device(prefer_gpu=prefer_gpu))
+    if device.startswith("xpu"):
+        ensure_accelerator_runtime_compatibility(device)
+        return None
     if not device.startswith("cuda"):
         return None
 
@@ -192,8 +249,7 @@ def execute_audio_separator_job(
     if force_cpu:
         if not allow_cpu_fallback:
             raise RuntimeError(
-                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n"
-                f"{fallback_reason}"
+                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n" f"{fallback_reason}"
             )
         logger.warning(
             "Detected unsupported CUDA architecture for audio-separator; falling back to CPU.\n%s",
@@ -203,7 +259,11 @@ def execute_audio_separator_job(
             progress_callback(*fallback_progress)
 
     def _build_separator(use_cpu: bool) -> Any:
-        separator = separator_cls(
+        constructor_cls = _separator_class_for_target_device(
+            separator_cls,
+            None if use_cpu else target_device,
+        )
+        separator = constructor_cls(
             **_separator_kwargs_for_model(separator_cls, separator_kwargs, model_name)
         )
         if use_cpu:
@@ -218,6 +278,7 @@ def execute_audio_separator_job(
 
     try:
         _load_separator_model(separator, model_name)
+        _validate_loaded_separator_device(separator, target_device)
         if after_load is not None:
             after_load(separator)
         result = action(separator)
@@ -232,8 +293,7 @@ def execute_audio_separator_job(
         )
         if not allow_cpu_fallback:
             raise RuntimeError(
-                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n"
-                f"{fallback_reason}"
+                "audio-separator GPU 不兼容，已停止，未自动回退到 CPU。\n" f"{fallback_reason}"
             ) from error
 
         logger.warning(

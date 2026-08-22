@@ -9,7 +9,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QObject, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtTest import QSignalSpy
 from PyQt6.QtWidgets import (
@@ -187,6 +187,26 @@ class AudioTrackMixerTests(unittest.TestCase):
                 player_factory=harness.player_factory,
                 audio_output_factory=harness.output_factory,
             )
+
+    def test_paths_and_complete_multiline_errors_are_selectable_and_copyable(self):
+        mixer, _players, _outputs = self._mixer()
+        error = (
+            "Beat This variable-tempo grid contains implausible local BPM values\n"
+            "tempo source: original.wav\n"
+            "selected track: vocals.wav"
+        )
+
+        mixer.set_track_midi_failed("vocals", error)
+        row = mixer._backends["vocals"].row
+
+        for label in (row.path_label, row.midi_status_label, mixer.error_label):
+            flags = label.textInteractionFlags()
+            self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.assertIn("implausible local BPM values", row.midi_status_label.text())
+        self.assertIn("tempo source: original.wav", row.midi_status_label.text())
+        self.assertIn("selected track: vocals.wav", row.midi_status_label.text())
+        self.assertEqual(row.midi_status_label.toolTip(), error)
 
     def test_global_transport_seek_offset_replay_and_alignment(self):
         mixer, players, _outputs = self._mixer()

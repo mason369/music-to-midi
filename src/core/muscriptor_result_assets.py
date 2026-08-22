@@ -73,6 +73,7 @@ class MuscriptorPlaybackAssets:
     duration: float
     transcription_wav: Path
     live_transcription_wav: Path
+    original_wav: Path
     stereo_mix_wav: Path
     original_left_wav: Path
     transcription_right_wav: Path
@@ -88,6 +89,7 @@ class MuscriptorPreviewAssets:
     notes: tuple[MuscriptorRollNote, ...]
     duration: float
     transcription_wav: Path
+    original_wav: Path
     instrument_wavs: dict[str, Path]
     midi_gain_db: float
 
@@ -95,6 +97,7 @@ class MuscriptorPreviewAssets:
 @dataclass(frozen=True)
 class _LivePlaybackBuses:
     transcription_wav: Path
+    original_wav: Path
     instrument_wavs: dict[str, Path]
     midi_gain_db: float
     original_left_wav: Path | None = None
@@ -445,6 +448,7 @@ def prepare_midi_preview_assets(
         notes=normalized,
         duration=actual_duration,
         transcription_wav=live_buses.transcription_wav,
+        original_wav=live_buses.original_wav,
         instrument_wavs=live_buses.instrument_wavs,
         midi_gain_db=live_buses.midi_gain_db,
     )
@@ -744,6 +748,20 @@ def _write_live_playback_buses(
         _fade_live_bus_tail(combined * gain),
         _SAMPLE_RATE,
     )
+    original_live = output_dir / "original-live.wav"
+    sf.write(
+        original_live,
+        reference,
+        _SAMPLE_RATE,
+        subtype="PCM_16",
+    )
+    original_info = sf.info(str(original_live))
+    if original_info.frames != len(combined) or original_info.samplerate != _SAMPLE_RATE:
+        raise RuntimeError(
+            "Aligned original playback bus has an invalid transport shape: "
+            f"expected={len(combined)}@{_SAMPLE_RATE}, "
+            f"actual={original_info.frames}@{original_info.samplerate}"
+        )
     live_instruments: dict[str, Path] = {}
     for instrument, source in raw_instrument_wavs.items():
         checkpoint()
@@ -762,13 +780,14 @@ def _write_live_playback_buses(
     instrument_rights: dict[str, Path] | None = None
     if include_stereo:
         original_left, transcription_right, instrument_rights = _write_channelized_playback(
-            original_audio,
+            original_live,
             live_transcription,
             live_instruments,
             output_dir,
         )
     return _LivePlaybackBuses(
         transcription_wav=live_transcription,
+        original_wav=original_live,
         instrument_wavs=live_instruments,
         midi_gain_db=20.0 * math.log10(gain),
         original_left_wav=original_left,
@@ -880,8 +899,21 @@ def prepare_midi_playback_assets(
         silence = np.zeros(source_frames, dtype="float32")
         transcription_wav = output_dir / "transcription.wav"
         sf.write(transcription_wav, silence, _SAMPLE_RATE)
+        original_wav = output_dir / "original-live.wav"
+        original_samples = _load_reference_mono_44k(playback_reference)
+        if len(original_samples) != source_frames:
+            raise RuntimeError(
+                "Aligned original playback bus changed length while preparing empty MIDI: "
+                f"expected={source_frames}, actual={len(original_samples)}"
+            )
+        sf.write(
+            original_wav,
+            original_samples,
+            _SAMPLE_RATE,
+            subtype="PCM_16",
+        )
         original_left, transcription_right, instrument_rights = _write_channelized_playback(
-            playback_reference,
+            original_wav,
             transcription_wav,
             {},
             output_dir,
@@ -894,6 +926,7 @@ def prepare_midi_playback_assets(
             duration=duration,
             transcription_wav=transcription_wav,
             live_transcription_wav=transcription_wav,
+            original_wav=original_wav,
             stereo_mix_wav=stereo_mix,
             original_left_wav=original_left,
             transcription_right_wav=transcription_right,
@@ -977,6 +1010,7 @@ def prepare_midi_playback_assets(
             f"rendered={transport_duration}, note_end={last_note_end}"
         )
     for playback_path in (
+        live_buses.original_wav,
         live_buses.original_left_wav,
         live_buses.transcription_right_wav,
         *live_buses.instrument_wavs.values(),
@@ -999,6 +1033,7 @@ def prepare_midi_playback_assets(
         duration=transport_duration,
         transcription_wav=transcription_wav,
         live_transcription_wav=live_buses.transcription_wav,
+        original_wav=live_buses.original_wav,
         stereo_mix_wav=stereo_mix,
         original_left_wav=live_buses.original_left_wav,
         transcription_right_wav=live_buses.transcription_right_wav,

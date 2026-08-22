@@ -1,8 +1,8 @@
 import hashlib
 import inspect
 import queue
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from mido import Message, MidiFile, MidiTrack
@@ -91,7 +91,9 @@ def test_transkun_rejects_a_different_installed_package_version():
     ):
         reason = TranskunTranscriber.get_unavailable_reason()
 
-    assert "expected 2.0.1, got 2.0.2" in reason
+    assert "包版本不匹配" in reason
+    assert "需要 2.0.1" in reason
+    assert "当前 2.0.2" in reason
 
 
 def test_transkun_packaged_resources_require_exact_size_and_sha256(tmp_path):
@@ -268,4 +270,4 @@ def test_transkun_does_not_accept_a_stale_final_when_worker_writes_nothing(tmp_p
 
     assert output_path.read_bytes() == stale_bytes
     get_context.assert_called_once_with("spawn")
-    assert list(tmp_path.glob(".out.transkun.*.tmp.mid")) == []
+    assert list(tmp_path.glob(".*.tmp.mid")) == []

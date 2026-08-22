@@ -315,6 +315,10 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                     return_value="Linux",
                 ),
                 patch(
+                    "src.core.aria_amt_transcriber.get_accelerator_type",
+                    return_value="cuda",
+                ),
+                patch(
                     "src.core.aria_amt_transcriber.is_frozen_app",
                     return_value=False,
                 ),
@@ -433,10 +437,13 @@ class AriaAmtTranscriberTests(unittest.TestCase):
         waveform = torch.arange(0, 8, dtype=torch.float32).unsqueeze(0)
         with (
             patch(
-                "src.core.aria_amt_transcriber.torchaudio.load",
+                "src.core.aria_amt_transcriber.load_audio_tensor",
                 return_value=(waveform, 4),
             ),
-            patch("src.core.aria_amt_transcriber.torchaudio.io.StreamReader") as stream_reader,
+            patch(
+                "src.core.aria_amt_transcriber.torchaudio.io",
+                create=True,
+            ) as torchaudio_io,
         ):
             segments = list(
                 AriaAmtTranscriber._iter_windows_wav_segments(
@@ -447,7 +454,7 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                 )
             )
 
-        stream_reader.assert_not_called()
+        torchaudio_io.StreamReader.assert_not_called()
         self.assertTrue(segments)
         self.assertTrue(all(segment.shape[0] == 4 for segment in segments))
 
@@ -480,6 +487,10 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                 patch(
                     "src.core.aria_amt_transcriber.platform.system",
                     return_value="Linux",
+                ),
+                patch(
+                    "src.core.aria_amt_transcriber.get_accelerator_type",
+                    return_value="cuda",
                 ),
                 patch("src.core.aria_amt_transcriber.subprocess.Popen") as popen,
                 patch(

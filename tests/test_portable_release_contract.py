@@ -73,6 +73,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("collect_all('onnxruntime')", spec)
         self.assertIn("collect_all('mir_eval')", spec)
 
+    def test_pyinstaller_spec_excludes_test_only_submodule_trees(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("_exclude_submodule_prefixes", spec)
+        self.assertIn("'torch.testing'", spec)
+        self.assertIn("'matplotlib.tests'", spec)
+
     def test_pyinstaller_spec_bundles_aria_amt_package_config(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
@@ -107,7 +114,11 @@ class PortableReleaseContractTests(unittest.TestCase):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
         excludes_section = spec.split("excludes=[", 1)[1].split("],", 1)[0]
 
-        self.assertIn("collect_all('matplotlib')", spec)
+        self.assertIn(
+            "matplotlib_datas, matplotlib_binaries, matplotlib_hiddenimports = collect_all(",
+            spec,
+        )
+        self.assertIn("_exclude_submodule_prefixes('matplotlib.tests')", spec)
         self.assertIn("matplotlib_hiddenimports", spec)
         self.assertNotIn("'matplotlib'", excludes_section)
 
@@ -160,6 +171,11 @@ class PortableReleaseContractTests(unittest.TestCase):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 
         self.assertIn("'src.utils.source_runtime'", spec)
+
+    def test_pyinstaller_spec_bundles_xpu_web_inference_worker(self):
+        spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
+
+        self.assertIn("'src.web_api.inference_process'", spec)
 
     def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(
         self,
@@ -231,8 +247,15 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("-mx=5", workflow)
         self.assertIn("-md=64m", workflow)
         self.assertIn("-mmt=on", workflow)
+        self.assertIn("-twim", workflow)
+        self.assertIn("-snh", workflow)
+        self.assertIn("-v1900m", workflow)
         self.assertIn("7z t", workflow)
-        self.assertIn('"${NAME}-Portable.7z.001"', workflow)
+        self.assertIn('"${WINDOWS_SHARED_NAME}-Portable.wim.001"', workflow)
+        self.assertIn("HARDLINK_PROBE_REL", workflow)
+        self.assertIn("os.path.samefile", workflow)
+        self.assertIn('"${WINDOWS_FRONTEND_NAME}-Portable.zip"', workflow)
+        self.assertNotIn('for WINDOWS_NAME in "${WINDOWS_NAMES[@]}"', workflow)
 
     def test_release_workflow_uses_python_311_for_portable_builds(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -240,10 +263,18 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertIn("python-version: '3.11'", workflow)
         self.assertNotIn("cache: 'pip'", workflow)
 
-    def test_release_workflow_uses_portable_build_script_on_windows(self):
+    def test_release_workflow_builds_portable_backend_and_frontend_on_windows(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        web_build = (REPO_ROOT / "build_web_executables.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("pwsh -ExecutionPolicy Bypass -File .\\build_portable.ps1", workflow)
+        self.assertIn(
+            "pwsh -ExecutionPolicy Bypass -File .\\build_web_executables.ps1",
+            workflow,
+        )
+        self.assertIn('Join-Path $Root "build_portable.ps1"', web_build)
+        self.assertIn('Join-Path $ResolvedDistRoot "MusicToMidi-WebFrontend"', web_build)
+        self.assertIn('Join-Path $ResolvedDistRoot $AppName', web_build)
+        self.assertIn('Join-Path $ResolvedDistRoot $BackendName', web_build)
 
     def test_release_workflow_stages_linux_bundle_assets_before_pyinstaller(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -323,7 +354,14 @@ class PortableReleaseContractTests(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn("--self-test-no-load", workflow)
-        self.assertIn('Join-Path $env:RUNNER_TEMP "MusicToMidi-smoke"', workflow)
+        self.assertIn("Resolve-Path -LiteralPath '.\\dist\\MusicToMidi-App'", workflow)
+        self.assertIn("Resolve-Path -LiteralPath '.\\dist\\MusicToMidi-WebBackend'", workflow)
+        self.assertIn("Resolve-Path -LiteralPath '.\\dist\\MusicToMidi-WebFrontend'", workflow)
+        self.assertIn("foreach ($runtimeRoot in $runtimeRoots)", workflow)
+        self.assertNotIn(
+            "Copy-Item -LiteralPath '.\\dist\\MusicToMidi-App' -Destination",
+            workflow,
+        )
         self.assertIn('SMOKE_DIR="$(pwd)/dist/MusicToMidi"', workflow)
         self.assertIn('SMOKE_EXE="$SMOKE_DIR/MusicToMidi"', workflow)
         self.assertIn("QT_QPA_PLATFORM=offscreen", workflow)
@@ -374,18 +412,22 @@ class PortableReleaseContractTests(unittest.TestCase):
             workflow,
         )
 
-    def test_release_workflow_isolates_windows_smoke_test_and_package_rename(self):
+    def test_release_workflow_smokes_windows_roles_without_copying_large_trees(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("MusicToMidi-smoke", workflow)
-        self.assertIn("Start-Sleep -Seconds 3", workflow)
-        self.assertIn("Move-Item -LiteralPath 'dist/MusicToMidi'", workflow)
+        self.assertIn("$runtimeRoots = @(", workflow)
+        self.assertNotIn("MusicToMidi-smoke", workflow)
+        self.assertNotIn("Copy-Item -LiteralPath '.\\dist\\MusicToMidi-App'", workflow)
+        self.assertNotIn("Copy-Item -LiteralPath '.\\dist\\MusicToMidi-WebBackend'", workflow)
+        self.assertIn("Move-Item -LiteralPath 'dist/MusicToMidi-App'", workflow)
+        self.assertIn("Move-Item -LiteralPath 'dist/MusicToMidi-WebBackend'", workflow)
+        self.assertIn("Move-Item -LiteralPath 'dist/MusicToMidi-WebFrontend'", workflow)
 
     def test_release_workflow_windows_smoke_test_checks_runtime_log(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("Start-Process -FilePath (Join-Path $smokeDir 'MusicToMidi.exe')", workflow)
-        self.assertIn("$logs = Join-Path $smokeDir 'runtime\\logs'", workflow)
+        self.assertIn("Start-Process -FilePath (Join-Path $appSmokeDir 'MusicToMidi.exe')", workflow)
+        self.assertIn("$logs = Join-Path $appSmokeDir 'runtime\\logs'", workflow)
         self.assertIn("Get-ChildItem -LiteralPath $logs -File", workflow)
         self.assertIn("便携包自检通过", workflow)
 
@@ -476,11 +518,15 @@ class PortableReleaseContractTests(unittest.TestCase):
             "Hugging Face Space 和 Colab 同步七种处理模式",
         ):
             self.assertIn(expected_update, workflow)
-        self.assertIn("MusicToMidi-Windows-GPU-Portable.*", workflow)
-        self.assertIn("MusicToMidi-Linux-GPU-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Windows-GPU-Portable.wim.*", workflow)
+        self.assertIn("MusicToMidi-Windows-WebFrontend-Portable.zip", workflow)
+        self.assertNotIn("MusicToMidi-Windows-GPU-App-Portable.*", workflow)
+        self.assertNotIn("MusicToMidi-Windows-GPU-WebBackend-Portable.*", workflow)
+        self.assertIn("MusicToMidi-Linux-GPU-App-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
-        self.assertIn("同名前缀的全部分卷", workflow)
+        self.assertIn("从 \\`.wim.001\\` 解压到 NTFS", workflow)
+        self.assertIn("三个同级独立目录", workflow)
         self.assertIn("当前包含 7 种处理模式", workflow)
         self.assertNotIn("旧版 6 种处理模式", workflow)
         self.assertIn("ByteDance Pedal", workflow)
@@ -514,6 +560,41 @@ class PortableReleaseContractTests(unittest.TestCase):
             "Remove-Item -LiteralPath $destinationPath -Recurse -Force -ErrorAction Stop",
             script,
         )
+
+    def test_build_portable_supports_disjoint_roots_and_same_volume_hardlinks(self):
+        script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
+        xpu_wrapper = (REPO_ROOT / "build_portable_xpu.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        for expected in (
+            '[string]$BuildRoot = ""',
+            '[string]$DistRoot = ""',
+            "Resolve-BuildOutputRoot",
+            "Assert-DisjointOutputRoots",
+            'Join-Path $ResolvedBuildRoot "portable_assets"',
+            'Join-Path $ResolvedBuildRoot "pyinstaller-$Accelerator"',
+            "$PyInstallerDistPath = $ResolvedDistRoot",
+            "New-Item -ItemType HardLink",
+            "[IO.Path]::GetPathRoot($sourcePath)",
+            "[IO.Path]::GetPathRoot($destinationPath)",
+            "-HardlinkSameVolume:$HardlinkAssetStaging",
+        ):
+            self.assertIn(expected, script)
+        copy_tree = script.split("function Copy-Tree", 1)[1].split(
+            "function Assert-XpuPortableRuntimeDlls", 1
+        )[0]
+        self.assertNotIn("catch", copy_tree)
+        for expected in (
+            '$hardlinkSource.LinkType -eq "SymbolicLink"',
+            "$linkTargets = @($hardlinkSource.Target)",
+            "[IO.Path]::GetFullPath($linkTarget)",
+            "Symbolic-link target for ${Label} is missing",
+            "-Target $hardlinkSource.FullName -ErrorAction Stop",
+            "$totalBytes += $hardlinkSource.Length",
+        ):
+            self.assertIn(expected, copy_tree)
+        self.assertIn("-HardlinkAssetStaging", xpu_wrapper)
 
     def test_release_workflow_validates_six_stem_assets_after_sota_download(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

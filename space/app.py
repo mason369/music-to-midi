@@ -108,9 +108,10 @@ for _logger_name in ("music-to-midi-web", "src.core", "src.utils"):
             _existing_handler.__class__.__name__ == "_RobustFileHandler"
             and _handler_path == LOG_FILE
         )
-        if getattr(
-            _existing_handler, "_music_to_midi_ui_log_handler", False
-        ) or _is_legacy_ui_handler:
+        if (
+            getattr(_existing_handler, "_music_to_midi_ui_log_handler", False)
+            or _is_legacy_ui_handler
+        ):
             _startup_logger.removeHandler(_existing_handler)
             _existing_handler.close()
 
@@ -205,6 +206,28 @@ def _create_space_output_dir() -> str:
     return tempfile.mkdtemp(prefix=SPACE_REQUEST_PREFIX, dir=SPACE_OUTPUT_INSTANCE)
 
 
+def _copy_tempo_source_into_request(
+    audio_path: str | Path,
+    request_dir: str | Path,
+) -> Path:
+    """Persist the original mix beside separated stems for later BPM analysis."""
+
+    source = Path(audio_path).resolve()
+    if not source.is_file() or source.stat().st_size <= 0:
+        raise RuntimeError(f"Original tempo source is missing or empty: {source}")
+    request_root = _require_active_request_dir(request_dir)
+    destination = request_root / f"tempo-source{source.suffix.lower() or '.audio'}"
+    if destination.exists():
+        raise RuntimeError(f"Tempo source destination already exists: {destination}")
+    with source.open("rb") as source_stream, destination.open("xb") as destination_stream:
+        shutil.copyfileobj(source_stream, destination_stream, length=1024 * 1024)
+        destination_stream.flush()
+        os.fsync(destination_stream.fileno())
+    if destination.stat().st_size != source.stat().st_size:
+        raise RuntimeError("Original tempo source changed while it was copied")
+    return destination.resolve()
+
+
 def _cleanup_space_instance_at_exit() -> None:
     try:
         if SPACE_OUTPUT_INSTANCE.exists():
@@ -245,9 +268,10 @@ for _name in ("music-to-midi-web", "src.core", "src.utils"):
             _existing_handler.__class__.__name__ == "_RobustFileHandler"
             and _handler_path == LOG_FILE
         )
-        if getattr(
-            _existing_handler, "_music_to_midi_ui_log_handler", False
-        ) or _is_legacy_ui_handler:
+        if (
+            getattr(_existing_handler, "_music_to_midi_ui_log_handler", False)
+            or _is_legacy_ui_handler
+        ):
             _target_logger.removeHandler(_existing_handler)
             _existing_handler.close()
     _target_logger.addHandler(_file_handler)
@@ -339,6 +363,7 @@ from src.gui.web.muscriptor_result_runtime import (
 )
 from src.gui.web.form_values import normalize_optional_project_bpm
 from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
+from src.gui.web.brand_assets import APP_ICON_PATH, app_icon_data_uri
 from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
     build_track_mixer_html,
@@ -347,12 +372,16 @@ from src.gui.web.track_mixer_runtime import (
 from src.i18n.translator import Translator
 from src.models.data_models import (
     MAX_MIDI_BPM,
+    MAX_TEMPO_BPM,
     MIN_MIDI_BPM,
+    MIN_TEMPO_BPM,
     Config,
     MultiInstrumentModel,
     MuscriptorModel,
+    MuscriptorProcessingChain,
     ProcessingMode,
     ProcessingStage,
+    TempoMode,
     YourMT3Model,
 )
 from src.models.muscriptor_instruments import (
@@ -409,6 +438,11 @@ MODE_IDS = (
 )
 MODE_LABELS = {mode_id: st(f"main.mode.{mode_id}") for mode_id in MODE_IDS}
 MODE_CHOICES = [(MODE_LABELS[mode_id], mode_id) for mode_id in MODE_IDS]
+TEMPO_MODE_CHOICES = [
+    (st("main.tempo.adaptive"), TempoMode.ADAPTIVE.value),
+    (st("main.tempo.fixed_auto"), TempoMode.FIXED_AUTO.value),
+    (st("main.tempo.fixed_manual"), TempoMode.FIXED_MANUAL.value),
+]
 SPLIT_MODE_IDS = frozenset(
     {
         ProcessingMode.VOCAL_SPLIT.value,
@@ -432,6 +466,16 @@ MUSCRIPTOR_MODEL_CHOICES = [
     (st("main.engine.muscriptor_models.large"), MuscriptorModel.LARGE.value),
     (st("main.engine.muscriptor_models.medium"), MuscriptorModel.MEDIUM.value),
     (st("main.engine.muscriptor_models.small"), MuscriptorModel.SMALL.value),
+]
+MUSCRIPTOR_PROCESSING_CHAIN_CHOICES = [
+    (
+        st("main.engine.muscriptor_processing_chains.official"),
+        MuscriptorProcessingChain.OFFICIAL.value,
+    ),
+    (
+        st("main.engine.muscriptor_processing_chains.telknet"),
+        MuscriptorProcessingChain.TELKNET.value,
+    ),
 ]
 YOURMT3_MODEL_CHOICES = [
     (YOURMT3_MODELS[model.value]["ui_label"], model.value)
@@ -608,6 +652,7 @@ def _stream_gpu_job(gpu_fn, args, mode: str, progress):
             )
             raise exc
 
+
 _TRACK_ORDER = (
     "bass",
     "drums",
@@ -783,6 +828,15 @@ def _normalize_midi_result_state(
     )
     if audio_path != Path(expected_audio_path).resolve():
         raise RuntimeError("Linked MIDI result does not belong to its source WAV track")
+    playback_audio_path = _require_owned_request_file(
+        request_root,
+        raw_state.get("playback_audio_path", ""),
+        "Linked MIDI aligned original audio",
+    )
+    if playback_audio_path.suffix.lower() != ".wav":
+        raise RuntimeError(
+            "Linked MIDI aligned original audio must be an exact PCM WAV playback bus"
+        )
 
     def owned_file(key: str, label: str) -> str:
         return str(
@@ -887,6 +941,7 @@ def _normalize_midi_result_state(
     return {
         "kind": "midi_result",
         "audio_path": str(audio_path),
+        "playback_audio_path": str(playback_audio_path),
         "midi_path": midi_path,
         "selected_instruments": [str(item) for item in raw_state.get("selected_instruments", [])],
         "detected_instruments": [str(item) for item in raw_state.get("detected_instruments", [])],
@@ -917,6 +972,16 @@ def _normalize_track_state(track_state) -> dict:
     if mode not in SPLIT_MODE_IDS:
         raise RuntimeError(f"Track state has unsupported split mode: {mode!r}")
     request_root = _require_active_request_dir(track_state.get("request_dir", ""))
+    tempo_audio_value = track_state.get("tempo_audio_path")
+    tempo_audio_path = ""
+    if tempo_audio_value:
+        tempo_audio_path = str(
+            _require_owned_request_file(
+                request_root,
+                tempo_audio_value,
+                "Original tempo source",
+            )
+        )
     raw_tracks = track_state.get("tracks")
     if not isinstance(raw_tracks, list):
         raise RuntimeError("Space track state does not contain audio tracks")
@@ -989,6 +1054,7 @@ def _normalize_track_state(track_state) -> dict:
         "version": 2,
         "mode": mode,
         "request_dir": str(request_root),
+        "tempo_audio_path": tempo_audio_path,
         "processing_time": float(track_state.get("processing_time", 0.0)),
         "tracks": normalized_tracks,
         "active_midi_track_id": active_track_id,
@@ -996,7 +1062,11 @@ def _normalize_track_state(track_state) -> dict:
     }
 
 
-def _build_track_state(result: SeparationResult, request_dir: str | Path) -> dict:
+def _build_track_state(
+    result: SeparationResult,
+    request_dir: str | Path,
+    tempo_audio_path: str | Path,
+) -> dict:
     request_root = _require_active_request_dir(request_dir)
     result_output_dir = Path(result.output_dir).resolve()
     if result_output_dir != request_root:
@@ -1043,6 +1113,13 @@ def _build_track_state(result: SeparationResult, request_dir: str | Path) -> dic
             "version": 2,
             "mode": result.mode,
             "request_dir": str(request_root),
+            "tempo_audio_path": str(
+                _require_owned_request_file(
+                    request_root,
+                    tempo_audio_path,
+                    "Original tempo source",
+                )
+            ),
             "processing_time": result.processing_time,
             "tracks": tracks,
             "active_midi_track_id": "",
@@ -1109,6 +1186,7 @@ def _build_midi_result_state(
     return {
         "kind": "midi_result",
         "audio_path": str(Path(audio_path).resolve()),
+        "playback_audio_path": str(assets.original_wav),
         "midi_path": str(Path(result.midi_path).resolve()),
         "selected_instruments": selected,
         "detected_instruments": detected,
@@ -1448,6 +1526,8 @@ def _build_space_request_config(
     muscriptor_model,
     muscriptor_instruments=None,
     custom_bpm=None,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     *,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
@@ -1462,8 +1542,20 @@ def _build_space_request_config(
     config.multi_instrument_model = transcription_backend
     config.yourmt3_model = yourmt3_model
     config.muscriptor_model = muscriptor_model
+    config.muscriptor_processing_chain = (
+        str(muscriptor_processing_chain or MuscriptorProcessingChain.OFFICIAL.value).strip().lower()
+    )
     config.muscriptor_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
-    config.custom_bpm = normalize_optional_project_bpm(custom_bpm)
+    normalized_bpm = normalize_optional_project_bpm(custom_bpm)
+    normalized_tempo_mode = (
+        TempoMode.FIXED_MANUAL.value
+        if tempo_mode is None and normalized_bpm is not None
+        else str(tempo_mode or TempoMode.FIXED_AUTO.value).strip().lower()
+    )
+    config.tempo_mode = normalized_tempo_mode
+    config.custom_bpm = (
+        normalized_bpm if normalized_tempo_mode == TempoMode.FIXED_MANUAL.value else None
+    )
     config.vocal_split_merge_midi = bool(
         config.processing_mode == ProcessingMode.VOCAL_SPLIT.value and vocal_split_merge_midi
     )
@@ -1479,6 +1571,8 @@ def _prepare_request_models(
     muscriptor_model=MuscriptorModel.LARGE.value,
     muscriptor_instruments=None,
     custom_bpm=None,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
 ) -> None:
     """Strictly prepare only the assets selected for the current job."""
 
@@ -1489,6 +1583,8 @@ def _prepare_request_models(
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
     )
     ensure_beat_this_weights()
     if config.processing_mode == ProcessingMode.PIANO_ARIA_AMT.value:
@@ -1588,6 +1684,8 @@ def _convert_impl(
     muscriptor_model,
     muscriptor_instruments,
     custom_bpm,
+    tempo_mode,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     progress=gr.Progress(),
 ):
     """Run one direct audio-to-MIDI mode without creating a track workbench."""
@@ -1613,6 +1711,8 @@ def _convert_impl(
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
         vocal_split_merge_midi=False,
         save_separated_tracks=True,
     )
@@ -1714,6 +1814,8 @@ def _separate_impl(
     muscriptor_model,
     muscriptor_instruments,
     custom_bpm,
+    tempo_mode,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     progress=gr.Progress(),
 ):
     """Separate two or six WAV tracks and return a request-owned workbench state."""
@@ -1736,10 +1838,13 @@ def _separate_impl(
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
         vocal_split_merge_midi=False,
         save_separated_tracks=True,
     )
     output_dir = _create_space_output_dir()
+    tempo_audio_path = None
     separation = None
 
     def on_progress(p):
@@ -1752,13 +1857,14 @@ def _separate_impl(
         )
 
     try:
+        tempo_audio_path = _copy_tempo_source_into_request(audio_path, output_dir)
         separation = AudioSeparationService(
             config,
             progress_callback=on_progress,
         )
         _register_active_job(separation)
         result = separation.process(audio_path=audio_path, output_dir=output_dir)
-        track_state = _build_track_state(result, output_dir)
+        track_state = _build_track_state(result, output_dir, tempo_audio_path)
     except InterruptedError:
         logger.info("WAV separation cancelled by user")
         try:
@@ -1852,6 +1958,8 @@ def _estimate_zerogpu_duration(
     muscriptor_model="large",
     muscriptor_instruments=None,
     custom_bpm=None,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     vocal_split_merge_midi=False,
     save_separated_tracks=True,
     progress=None,
@@ -1862,7 +1970,15 @@ def _estimate_zerogpu_duration(
     daily quota or queue capacity is available.  Long songs must use Colab,
     the desktop build, or dedicated GPU hardware.
     """
-    del custom_bpm, muscriptor_instruments, vocal_split_merge_midi, save_separated_tracks, progress
+    del (
+        custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
+        muscriptor_instruments,
+        vocal_split_merge_midi,
+        save_separated_tracks,
+        progress,
+    )
     if audio_path is None:
         return 60
     if mode not in MODE_IDS:
@@ -1920,6 +2036,8 @@ if ZERO_GPU:
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1932,6 +2050,8 @@ if ZERO_GPU:
                 muscriptor_model,
                 muscriptor_instruments,
                 custom_bpm,
+                tempo_mode,
+                muscriptor_processing_chain,
                 progress=progress,
             )
         return _convert_impl(
@@ -1942,6 +2062,8 @@ if ZERO_GPU:
             muscriptor_model,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
             progress=progress,
         )
 
@@ -1955,6 +2077,8 @@ else:
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
         progress=gr.Progress(),
     ):
         _validate_gpu_runtime_for_request(mode)
@@ -1967,6 +2091,8 @@ else:
                 muscriptor_model,
                 muscriptor_instruments,
                 custom_bpm,
+                tempo_mode,
+                muscriptor_processing_chain,
                 progress=progress,
             )
         return _convert_impl(
@@ -1977,6 +2103,8 @@ else:
             muscriptor_model,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
             progress=progress,
         )
 
@@ -1989,13 +2117,15 @@ def convert_audio_to_midi(
     muscriptor_model="large",
     muscriptor_instruments=None,
     custom_bpm=None,
+    tempo_mode=TempoMode.FIXED_AUTO.value,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     progress=gr.Progress(),
 ):
     """Prepare exactly one selected primary job before requesting a GPU slot."""
     if audio_path is None:
         raise gr.Error(st("space.error.upload_required"))
     if mode not in MODE_IDS:
-        raise gr.Error(f"Unsupported processing mode: {mode!r}")
+        raise gr.Error(st("space.error.unsupported_mode", mode=repr(mode)))
     if ZERO_GPU:
         _estimate_zerogpu_duration(
             audio_path,
@@ -2005,6 +2135,8 @@ def convert_audio_to_midi(
             muscriptor_model,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
             progress=progress,
         )
     _prepare_request_models(
@@ -2014,6 +2146,8 @@ def convert_audio_to_midi(
         muscriptor_model,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
     )
     # The GPU call blocks for minutes; stream its real progress to the
     # on-page panel instead of returning only at the end.
@@ -2027,18 +2161,38 @@ def convert_audio_to_midi(
             muscriptor_model,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
         ),
         mode,
         progress,
     )
 
 
-def _manual_route_config(route: str, muscriptor_instruments=None, custom_bpm=None) -> Config:
+def _manual_route_config(
+    route: str,
+    muscriptor_instruments=None,
+    custom_bpm=None,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+) -> Config:
     if route not in MANUAL_MIDI_ROUTES:
         raise RuntimeError(f"Unsupported manual MIDI route: {route!r}")
     base_config = Config()
     base_config.language = SPACE_LANGUAGE
-    base_config.custom_bpm = normalize_optional_project_bpm(custom_bpm)
+    base_config.muscriptor_processing_chain = (
+        str(muscriptor_processing_chain or MuscriptorProcessingChain.OFFICIAL.value).strip().lower()
+    )
+    normalized_bpm = normalize_optional_project_bpm(custom_bpm)
+    normalized_tempo_mode = (
+        TempoMode.FIXED_MANUAL.value
+        if tempo_mode is None and normalized_bpm is not None
+        else str(tempo_mode or TempoMode.FIXED_AUTO.value).strip().lower()
+    )
+    base_config.tempo_mode = normalized_tempo_mode
+    base_config.custom_bpm = (
+        normalized_bpm if normalized_tempo_mode == TempoMode.FIXED_MANUAL.value else None
+    )
     return build_manual_midi_config(
         base_config,
         route,
@@ -2053,6 +2207,9 @@ def _estimate_manual_zerogpu_duration(
     route,
     muscriptor_instruments=None,
     custom_bpm=None,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+    tempo_audio_path=None,
     progress=None,
 ):
     del progress
@@ -2063,7 +2220,19 @@ def _estimate_manual_zerogpu_duration(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
+    if tempo_audio_path:
+        _require_owned_request_file(
+            request_dir,
+            tempo_audio_path,
+            "Original tempo source",
+        )
+    config = _manual_route_config(
+        str(route),
+        muscriptor_instruments,
+        custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
+    )
     return _estimate_zerogpu_duration(
         str(audio_file),
         config.processing_mode,
@@ -2072,6 +2241,8 @@ def _estimate_manual_zerogpu_duration(
         config.muscriptor_model,
         config.muscriptor_instruments,
         config.custom_bpm,
+        config.tempo_mode,
+        config.muscriptor_processing_chain,
     )
 
 
@@ -2082,6 +2253,9 @@ def _convert_manual_midi_impl(
     route,
     muscriptor_instruments,
     custom_bpm,
+    tempo_mode=None,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+    tempo_audio_path=None,
     progress=gr.Progress(),
 ):
     from src.core.pipeline import MusicToMidiPipeline
@@ -2094,7 +2268,20 @@ def _convert_manual_midi_impl(
         audio_path,
         f"Manual MIDI input {track_id}",
     )
-    config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
+    if not tempo_audio_path:
+        raise RuntimeError("Original mix is required for separated-track tempo analysis")
+    tempo_audio_file = _require_owned_request_file(
+        request_root,
+        tempo_audio_path,
+        "Original tempo source",
+    )
+    config = _manual_route_config(
+        str(route),
+        muscriptor_instruments,
+        custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
+    )
     output_dir = _require_owned_request_output_dir(
         request_root,
         manual_midi_output_dir(audio_file, str(route)),
@@ -2116,6 +2303,7 @@ def _convert_manual_midi_impl(
             audio_path=str(audio_file),
             output_dir=str(output_dir),
             progress_callback=on_progress,
+            tempo_audio_path=str(tempo_audio_file),
         )
         output_files = _validate_processing_outputs(result, config, request_root)
         if len(output_files) != 1:
@@ -2153,9 +2341,18 @@ if ZERO_GPU:
         route,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode=None,
+        muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+        tempo_audio_path=None,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
+        config = _manual_route_config(
+            str(route),
+            muscriptor_instruments,
+            custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
+        )
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
@@ -2164,6 +2361,9 @@ if ZERO_GPU:
             route,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
+            tempo_audio_path,
             progress=progress,
         )
 
@@ -2176,9 +2376,18 @@ else:
         route,
         muscriptor_instruments,
         custom_bpm,
+        tempo_mode=None,
+        muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
+        tempo_audio_path=None,
         progress=gr.Progress(),
     ):
-        config = _manual_route_config(str(route), muscriptor_instruments, custom_bpm)
+        config = _manual_route_config(
+            str(route),
+            muscriptor_instruments,
+            custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
+        )
         _validate_gpu_runtime_for_request(config.processing_mode)
         return _convert_manual_midi_impl(
             audio_path,
@@ -2187,6 +2396,9 @@ else:
             route,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
+            tempo_audio_path,
             progress=progress,
         )
 
@@ -2198,24 +2410,37 @@ def _convert_one_track(
     route,
     muscriptor_instruments,
     custom_bpm,
+    tempo_mode=TempoMode.FIXED_AUTO.value,
+    muscriptor_processing_chain=MuscriptorProcessingChain.OFFICIAL.value,
     progress=gr.Progress(),
 ):
     state = _normalize_track_state(track_state)
     if not state:
-        raise gr.Error("The separation result has expired or is unavailable")
+        raise gr.Error(st("dialogs.complete.audio_tracks.expired"))
     selected_track = next(
         (track for track in state["tracks"] if track["id"] == str(track_id)),
         None,
     )
     if selected_track is None:
-        raise gr.Error(f"Unknown audio track: {track_id!r}")
+        raise gr.Error(
+            st("dialogs.complete.audio_tracks.unknown_track", track=repr(track_id))
+        )
     if not midi_enabled:
         raise gr.Error(st("dialogs.complete.audio_tracks.manual_midi.not_selected"))
     if route not in MANUAL_MIDI_ROUTES:
         raise gr.Error(st("dialogs.complete.audio_tracks.manual_midi.model_required"))
 
     selected_instruments = validate_muscriptor_instruments(muscriptor_instruments or [])
-    config = _manual_route_config(str(route), selected_instruments, custom_bpm)
+    tempo_audio_path = state.get("tempo_audio_path")
+    if not tempo_audio_path:
+        raise gr.Error(st("dialogs.complete.audio_tracks.tempo_source_unavailable"))
+    config = _manual_route_config(
+        str(route),
+        selected_instruments,
+        custom_bpm,
+        tempo_mode,
+        muscriptor_processing_chain,
+    )
     try:
         if ZERO_GPU:
             _estimate_manual_zerogpu_duration(
@@ -2225,6 +2450,9 @@ def _convert_one_track(
                 route,
                 selected_instruments,
                 custom_bpm,
+                tempo_mode,
+                muscriptor_processing_chain,
+                tempo_audio_path,
                 progress=progress,
             )
         _prepare_request_models(
@@ -2233,6 +2461,9 @@ def _convert_one_track(
             config.yourmt3_model,
             config.muscriptor_model,
             config.muscriptor_instruments,
+            config.custom_bpm,
+            config.tempo_mode,
+            config.muscriptor_processing_chain,
         )
         midi_path, midi_result = _convert_manual_midi_on_gpu(
             selected_track["audio_path"],
@@ -2241,6 +2472,9 @@ def _convert_one_track(
             route,
             selected_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
+            tempo_audio_path,
             progress=progress,
         )
     except InterruptedError:
@@ -2340,7 +2574,7 @@ def _track_control_client_js() -> str:
 def _add_audio_tracks(uploaded_files, track_state):
     state = _normalize_track_state(track_state)
     if not state:
-        raise gr.Error("A separation result is required before adding audio tracks")
+        raise gr.Error(st("dialogs.complete.audio_tracks.add_requires_result"))
     raw_files = uploaded_files if isinstance(uploaded_files, list) else [uploaded_files]
     if not raw_files or raw_files == [None]:
         # Clearing the File component is itself a change event.  It is not an
@@ -2353,7 +2587,7 @@ def _add_audio_tracks(uploaded_files, track_state):
             raw_file if isinstance(raw_file, (str, Path)) else getattr(raw_file, "name", None)
         )
         if not raw_path:
-            raise gr.Error("An added audio upload does not expose a file path")
+            raise gr.Error(st("dialogs.complete.audio_tracks.add_missing_path"))
         source = Path(raw_path).resolve()
         if source.suffix.lower() not in _SUPPORTED_AUDIO_SUFFIXES:
             raise gr.Error(
@@ -2425,11 +2659,13 @@ def _remove_track(track_state, track_id):
     """
     state = _normalize_track_state(track_state)
     if not state:
-        raise gr.Error("The separation result has expired or is unavailable")
+        raise gr.Error(st("dialogs.complete.audio_tracks.expired"))
     target_id = str(track_id)
     remaining = [track for track in state["tracks"] if track["id"] != target_id]
     if len(remaining) == len(state["tracks"]):
-        raise gr.Error(f"Unknown audio track: {target_id!r}")
+        raise gr.Error(
+            st("dialogs.complete.audio_tracks.unknown_track", track=repr(target_id))
+        )
     updates = {**state, "tracks": remaining}
     if state.get("active_midi_track_id") == target_id:
         updates["active_midi_track_id"] = ""
@@ -2492,6 +2728,7 @@ def update_mode_controls(mode, transcription_backend):
     shows_muscriptor_instruments = (
         uses_global_backend and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value
     )
+    shows_muscriptor_processing_chain = shows_muscriptor_instruments or mode in SPLIT_MODE_IDS
     target_bpm_update = gr.update()
     return (
         update_mode_info(mode),
@@ -2499,6 +2736,7 @@ def update_mode_controls(mode, transcription_backend):
         gr.update(visible=shows_yourmt3_model),
         gr.update(visible=shows_muscriptor_instruments),
         gr.update(visible=shows_muscriptor_instruments),
+        gr.update(visible=shows_muscriptor_processing_chain),
         target_bpm_update,
         gr.update(value=_main_action_label(mode)),
         _progress_panel_html(mode, None, 0.0, ""),
@@ -2521,7 +2759,20 @@ def update_backend_controls(mode, transcription_backend):
         gr.update(
             visible=(uses_smart and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value)
         ),
+        gr.update(
+            visible=(
+                (uses_smart and transcription_backend == MultiInstrumentModel.MUSCRIPTOR.value)
+                or mode in SPLIT_MODE_IDS
+            )
+        ),
     )
+
+
+def update_tempo_controls(tempo_mode):
+    normalized = str(tempo_mode or "").strip().lower()
+    if normalized not in {mode.value for mode in TempoMode}:
+        raise RuntimeError(f"Unsupported tempo mode: {tempo_mode!r}")
+    return gr.update(visible=normalized == TempoMode.FIXED_MANUAL.value)
 
 
 CUSTOM_CSS = """
@@ -2540,6 +2791,17 @@ CUSTOM_CSS = """
     color: #e0e0e0 !important;
     font-size: 22px !important;
     margin: 0 !important;
+}
+.app-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.app-header img.app-logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    flex: 0 0 auto;
 }
 .app-header p {
     color: #8892a0 !important;
@@ -2714,7 +2976,13 @@ ZERO_GPU_NOTE = st("space.ui.zerogpu_note") if ZERO_GPU else ""
 SPACE_THEME = gr.themes.Base(
     primary_hue=gr.themes.colors.blue,
     neutral_hue=gr.themes.colors.slate,
-    font=["system-ui", "Noto Sans SC", "sans-serif"],
+    # Font objects (not plain strings) keep theme comparison crash-free
+    # when Gradio analytics are enabled.
+    font=[
+        gr.themes.Font("system-ui"),
+        gr.themes.Font("Noto Sans SC"),
+        gr.themes.Font("sans-serif"),
+    ],
 ).set(
     body_background_fill="#1a1a2e",
     body_background_fill_dark="#1a1a2e",
@@ -2764,7 +3032,12 @@ with gr.Blocks(
     edited_preview_button = gr.Button(visible=False)
 
     with gr.Group(elem_classes="app-header"):
-        gr.Markdown(f"# 🎵 {st('space.app.title')}\n{st('space.app.subtitle')}")
+        gr.Markdown(
+            f"<div class='app-title-row'>"
+            f"<img class='app-logo' src='{app_icon_data_uri()}' alt=''/>"
+            f"<div class='app-title-copy'><h1>{st('space.app.title')}</h1>"
+            f"<p>{st('space.app.subtitle')}</p></div></div>"
+        )
 
     gr.Markdown(
         f"**{st('space.ui.audio_section')}**",
@@ -2821,14 +3094,28 @@ with gr.Blocks(
             visible=False,
             elem_classes=["muscriptor-instrument-selector"],
         )
+        muscriptor_processing_chain = gr.Radio(
+            choices=MUSCRIPTOR_PROCESSING_CHAIN_CHOICES,
+            value=MuscriptorProcessingChain.OFFICIAL.value,
+            label=st("main.engine.muscriptor_processing_chain_label"),
+            info=st("main.engine.muscriptor_processing_chain_tooltip"),
+            visible=False,
+        )
+        tempo_mode = gr.Radio(
+            choices=TEMPO_MODE_CHOICES,
+            value=TempoMode.FIXED_AUTO.value,
+            label=st("main.tempo.label"),
+            info=st("main.tempo.mode_tooltip"),
+        )
         custom_bpm = gr.Number(
-            value=0.0,
-            minimum=0.0,
-            maximum=400.0,
+            value=120.0,
+            minimum=MIN_TEMPO_BPM,
+            maximum=MAX_TEMPO_BPM,
             step=0.1,
             precision=1,
-            label=st("main.tempo.label"),
+            label=st("main.tempo.fixed_manual"),
             info=st("main.tempo.custom_tooltip"),
+            visible=False,
         )
         gr.Markdown(
             f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
@@ -2869,6 +3156,7 @@ with gr.Blocks(
             yourmt3_model,
             muscriptor_model,
             muscriptor_instruments,
+            muscriptor_processing_chain,
             custom_bpm,
             convert_btn,
             progress_html,
@@ -2879,7 +3167,19 @@ with gr.Blocks(
     transcription_backend.change(
         fn=update_backend_controls,
         inputs=[mode_radio, transcription_backend],
-        outputs=[yourmt3_model, muscriptor_model, muscriptor_instruments],
+        outputs=[
+            yourmt3_model,
+            muscriptor_model,
+            muscriptor_instruments,
+            muscriptor_processing_chain,
+        ],
+        api_visibility="private",
+        queue=False,
+    )
+    tempo_mode.change(
+        fn=update_tempo_controls,
+        inputs=[tempo_mode],
+        outputs=[custom_bpm],
         api_visibility="private",
         queue=False,
     )
@@ -3127,6 +3427,8 @@ with gr.Blocks(
                             midi_route,
                             midi_instruments,
                             custom_bpm,
+                            tempo_mode,
+                            muscriptor_processing_chain,
                         ],
                         outputs=[track_state],
                         api_visibility="private",
@@ -3185,6 +3487,8 @@ with gr.Blocks(
             muscriptor_model,
             muscriptor_instruments,
             custom_bpm,
+            tempo_mode,
+            muscriptor_processing_chain,
         ],
         outputs=[file_output, status_output, track_state, progress_html],
         api_name="convert",
@@ -3241,5 +3545,6 @@ if __name__ == "__main__":
         allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],
         theme=SPACE_THEME,
         css=CUSTOM_CSS,
+        favicon_path=str(APP_ICON_PATH),
         head=mixer_head() + muscriptor_result_head(),
     )

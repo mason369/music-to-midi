@@ -146,6 +146,74 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
             "c3fa9730725bf4a762f1c14bc80cd5986eacda01b026f5a4a2525cd607876141",
         )
 
+    def test_xpu_runtime_bypasses_upstream_cuda_only_constructor(self):
+        from src.core.bytedance_piano_transcriber import (
+            _create_bytedance_transcriptor,
+        )
+
+        calls = {}
+
+        class FakeModel:
+            def load_state_dict(self, state_dict, strict):
+                calls["state_dict"] = state_dict
+                calls["strict"] = strict
+
+            def to(self, device):
+                calls["model_device"] = device
+                return self
+
+        class FakePianoTranscription:
+            def __init__(self, *_args, **_kwargs):
+                raise AssertionError("upstream constructor must not run for XPU")
+
+        fake_config = types.ModuleType("piano_transcription_inference.config")
+        fake_config.frames_per_second = 100
+        fake_config.classes_num = 88
+        fake_models = types.ModuleType("piano_transcription_inference.models")
+
+        def create_model(**kwargs):
+            calls["model_args"] = kwargs
+            return FakeModel()
+
+        fake_models.Note_pedal = create_model
+        fake_module = types.ModuleType("piano_transcription_inference")
+        fake_module.__path__ = []
+        fake_module.config = fake_config
+        fake_module.PianoTranscription = FakePianoTranscription
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "checkpoint.pth"
+            checkpoint_path.write_bytes(b"checkpoint")
+            with (
+                patch.dict(
+                    sys.modules,
+                    {
+                        "piano_transcription_inference": fake_module,
+                        "piano_transcription_inference.config": fake_config,
+                        "piano_transcription_inference.models": fake_models,
+                    },
+                ),
+                patch("torch.load", return_value={"model": {"weight": "exact"}}) as load,
+                patch("src.core.bytedance_piano_transcriber.ensure_module_on_device") as ensure,
+            ):
+                transcriptor = _create_bytedance_transcriptor(
+                    fake_module,
+                    checkpoint_path,
+                    "xpu:0",
+                )
+
+        load.assert_called_once_with(str(checkpoint_path), map_location="cpu")
+        self.assertEqual(
+            calls["model_args"],
+            {"frames_per_second": 100, "classes_num": 88},
+        )
+        self.assertEqual(calls["state_dict"], {"weight": "exact"})
+        self.assertFalse(calls["strict"])
+        self.assertEqual(calls["model_device"], "xpu:0")
+        ensure.assert_called_once_with(transcriptor.model, "xpu:0", "ByteDance Piano model")
+        self.assertEqual(transcriptor.segment_samples, 160_000)
+        self.assertEqual(transcriptor.pedal_offset_threshold, 0.2)
+
     def test_unavailable_when_inference_package_is_missing(self):
         from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
 
@@ -185,7 +253,9 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
         ):
             reason = ByteDancePianoTranscriber.get_unavailable_reason()
 
-        self.assertIn("expected 0.0.6, got 0.0.7", reason)
+        self.assertIn("包版本不匹配", reason)
+        self.assertIn("需要 0.0.6", reason)
+        self.assertIn("当前 0.0.7", reason)
 
     def test_model_availability_requires_exact_checkpoint_identity(self):
         from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
@@ -313,7 +383,10 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
             self.assertEqual(calls["audio"], [0.0, 0.1])
             temporary_output = Path(calls["midi_path"])
             self.assertEqual(temporary_output.parent.resolve(), output_path.parent.resolve())
-            self.assertTrue(temporary_output.name.startswith(".out.bytedance-piano."))
+            self.assertRegex(
+                temporary_output.name,
+                r"^\.mtm-bytedance-piano-[0-9a-f]{32}\.tmp\.mid$",
+            )
             self.assertFalse(temporary_output.exists())
 
     def test_transcribe_uses_modern_librosa_loader_instead_of_upstream_legacy_loader(self):
@@ -441,7 +514,7 @@ class ByteDancePianoTranscriberTests(unittest.TestCase):
             self.assertIn(str(output_path.resolve()), message)
             self.assertIn(str(audio_path.resolve()), message)
             self.assertEqual(output_path.read_bytes(), stale_bytes)
-            self.assertEqual(list(output_path.parent.glob(".out.bytedance-piano.*.tmp.mid")), [])
+            self.assertEqual(list(output_path.parent.glob(".*.tmp.mid")), [])
 
 
 if __name__ == "__main__":

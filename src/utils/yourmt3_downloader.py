@@ -298,7 +298,7 @@ def _path_matches_model_identity(path: Path, identity: dict) -> bool:
 
 def get_model_path(model_name: str = DEFAULT_MODEL) -> Optional[Path]:
     """
-    获取模型文件路径（智能解析）
+    按短名称、checkpoint 名称或目录名解析模型文件路径
 
     支持多种输入格式:
     1. 短名称: "yptf_moe_multi_nops" -> 查询 YOURMT3_MODELS 获取 checkpoint
@@ -496,7 +496,7 @@ def download_model(
             except ImportError:
                 logger.warning("huggingface_hub 未安装")
                 raise ImportError(
-                    "无法下载模型。请安装 huggingface_hub: pip install huggingface_hub"
+                    "无法下载模型：缺少 huggingface_hub。安装命令：pip install huggingface_hub"
                 )
 
         except Exception as e:

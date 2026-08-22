@@ -19,7 +19,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config, NoteEvent
-from src.utils.gpu_utils import clear_gpu_memory
+from src.utils.gpu_utils import (
+    clear_gpu_memory,
+    ensure_accelerator_runtime_compatibility,
+    get_device,
+)
 from src.utils.midi_output import (
     publish_midi_output,
     remove_temporary_midi,
@@ -39,7 +43,16 @@ MIROS_OLDER_PATCHED_SOURCE_SHA256 = (
 MIROS_PREVIOUS_PATCHED_SOURCE_SHA256 = (
     "a5f1f814964d4c11830197a222e227609e527ec8a3446ef167cce8d4af2b4020"
 )
-MIROS_PATCHED_SOURCE_SHA256 = "69bd2872fe62c345323b3c296e53ecc0ee0133d96e00ddaa7dd25632a39f808c"
+MIROS_PRE_XPU_PATCHED_SOURCE_SHA256 = (
+    "69bd2872fe62c345323b3c296e53ecc0ee0133d96e00ddaa7dd25632a39f808c"
+)
+MIROS_PRE_CPU_CHECKPOINT_PATCHED_SOURCE_SHA256 = (
+    "72f182f7866dda67a73ef1dedd728ee27cc6df1030e1b82bc5676794e82ebc1d"
+)
+MIROS_PRE_XPU_AUTOCAST_PATCHED_SOURCE_SHA256 = (
+    "efd7e7e79392928a50ee22cfaeb311d62746770f1d154f0df51359985b9bdcf9"
+)
+MIROS_PATCHED_SOURCE_SHA256 = "485615341749de785873c384ad5a6be5b86a8ce75ab685c7f7a6eb4d59c8fe02"
 MIROS_PRETRAINED_COMMIT = "546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c"
 MIROS_PRETRAINED_EXACT_BYTES = 1_316_802_088
 MIROS_PRETRAINED_SHA256 = "218b483a0256ddef736267425fabb166fd97008983696bb9270def464b47bded"
@@ -144,7 +157,8 @@ def get_miros_source_identity_error(repo_dir: Path | str) -> str:
         return (
             "MIROS patched source tree SHA256 mismatch: "
             f"expected {MIROS_PATCHED_SOURCE_SHA256}, got {actual_sha256}. "
-            "Only the deterministic decmod, RoPE, and bounded-inference patches are allowed."
+            "Only the deterministic decmod, RoPE, bounded-inference, device, "
+            "CPU checkpoint-load, and accelerator autocast patches are allowed."
         )
     return ""
 
@@ -176,6 +190,9 @@ def get_miros_source_preparation_error(repo_dir: Path | str) -> str:
         MIROS_UNPATCHED_SOURCE_SHA256,
         MIROS_OLDER_PATCHED_SOURCE_SHA256,
         MIROS_PREVIOUS_PATCHED_SOURCE_SHA256,
+        MIROS_PRE_XPU_PATCHED_SOURCE_SHA256,
+        MIROS_PRE_CPU_CHECKPOINT_PATCHED_SOURCE_SHA256,
+        MIROS_PRE_XPU_AUTOCAST_PATCHED_SOURCE_SHA256,
         MIROS_PATCHED_SOURCE_SHA256,
     }
     if actual_sha256 not in allowed:
@@ -317,7 +334,7 @@ class MirosTranscriber:
         if repo_dir is None:
             return (
                 "MIROS 不可用：未找到 ai4m-miros 代码目录。\n\n"
-                "请将仓库放到以下任一位置：\n"
+                "支持的代码目录位置：\n"
                 "  ai4m-miros/\n"
                 "  external/ai4m-miros/\n\n"
                 "上游仓库：\n"
@@ -329,7 +346,7 @@ class MirosTranscriber:
             return (
                 "MIROS 不可用：源码身份校验失败。\n\n"
                 f"{source_error}\n"
-                "请重新运行 download_miros_model.py 获取固定版本源码。"
+                "固定版本源码准备命令：python download_miros_model.py"
             )
 
         missing_modules = cls._missing_modules()
@@ -337,7 +354,7 @@ class MirosTranscriber:
             return (
                 "MIROS 不可用：缺少运行依赖。\n\n"
                 f"缺少模块：{', '.join(missing_modules)}\n"
-                "请先安装 requirements.txt 中的依赖，并补充 ai4m-miros 要求的环境。"
+                "依赖来源：requirements.txt 和 ai4m-miros 运行环境。"
             )
 
         weight_error = get_miros_weight_identity_error(repo_dir)
@@ -345,7 +362,7 @@ class MirosTranscriber:
             return (
                 "MIROS 不可用：模型权重身份校验失败。\n\n"
                 f"{weight_error}\n"
-                "请重新运行 download_miros_model.py 准备固定版本权重。"
+                "固定版本权重准备命令：python download_miros_model.py"
             )
 
         return ""
@@ -512,28 +529,20 @@ class MirosTranscriber:
             if events_path is not None:
                 command.extend(["--events-jsonl", str(events_path)])
             return command
-        if events_path is not None:
-            return [
-                sys.executable,
-                "-m",
-                "src.core.miros_stream_worker",
-                "--repo-dir",
-                str(entrypoint.parent),
-                "-i",
-                str(input_path),
-                "-o",
-                str(out_path),
-                "--events-jsonl",
-                str(events_path),
-            ]
-        return [
+        command = [
             sys.executable,
-            str(entrypoint),
+            "-m",
+            "src.core.miros_stream_worker",
+            "--repo-dir",
+            str(entrypoint.parent),
             "-i",
             str(input_path),
             "-o",
             str(out_path),
         ]
+        if events_path is not None:
+            command.extend(["--events-jsonl", str(events_path)])
+        return command
 
     def transcribe_to_midi(
         self,
@@ -550,6 +559,8 @@ class MirosTranscriber:
             raise RuntimeError("MIROS 不可用：未找到可执行入口")
 
         self._check_cancelled()
+        device = get_device(self.config.use_gpu, self.config.gpu_device)
+        ensure_accelerator_runtime_compatibility(device)
 
         input_path = Path(audio_path).resolve()
         out_path = Path(output_path).resolve()
@@ -599,15 +610,19 @@ class MirosTranscriber:
         if progress_callback:
             progress_callback(0.05, self._pt("progress.preparing_miros"))
 
-        logger.info("Running MIROS transcription: %s", " ".join(command))
+        logger.info("Running MIROS transcription on %s: %s", device, " ".join(command))
         process_env = dict(os.environ)
         process_env["PYTHONIOENCODING"] = "utf-8"
         process_env["PYTHONUTF8"] = "1"
-        process_env.setdefault(
-            "PYTORCH_CUDA_ALLOC_CONF",
-            "expandable_segments:True",
-        )
-        if events_path is not None and not is_frozen_app():
+        process_env["MUSIC_TO_MIDI_MIROS_DEVICE"] = device
+        if device.startswith("cuda"):
+            process_env.setdefault(
+                "PYTORCH_CUDA_ALLOC_CONF",
+                "expandable_segments:True",
+            )
+        else:
+            process_env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        if not is_frozen_app():
             project_root = str(Path(__file__).resolve().parents[2])
             existing_pythonpath = process_env.get("PYTHONPATH", "")
             process_env["PYTHONPATH"] = os.pathsep.join(

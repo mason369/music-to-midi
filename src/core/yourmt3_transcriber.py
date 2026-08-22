@@ -1,14 +1,7 @@
-"""
-YourMT3+ 转写器模块
+"""YourMT3+ 多乐器转写器。
 
-使用 YourMT3+（2025 AMT Challenge 获奖架构）进行最先进的多乐器音频转写。
-
-优势:
-- 层次化注意力 Transformer 架构
-- 混合专家 (MoE) 针对不同乐器
-- 直接多乐器转写（无需分离）
-- 精确识别 128 种 GM 乐器
-- PyTorch 原生，完美支持 GPU 加速
+加载项目固定的 YourMT3+ checkpoint，对完整混音或单条 stem 执行转写。
+本模块负责模型加载、分段推理、重叠片段去重和 GM 程序号分组。
 """
 
 import logging
@@ -20,20 +13,6 @@ import importlib
 from importlib.machinery import ModuleSpec
 from io import StringIO
 from pathlib import Path
-
-
-def _load_audio(audio_path):
-    """用 soundfile 加载音频，绕过 torchaudio 2.9+ 强制使用 torchcodec 的问题"""
-    import torch
-    import soundfile as sf
-
-    data, sr = sf.read(audio_path, dtype="float32")
-    waveform = torch.from_numpy(data)
-    if waveform.ndim == 1:
-        waveform = waveform.unsqueeze(0)
-    else:
-        waveform = waveform.T  # (samples, channels) -> (channels, samples)
-    return waveform, sr
 
 
 from typing import Any, List, Optional, Callable, Dict, Tuple, Union
@@ -59,10 +38,13 @@ from src.utils.gpu_utils import (
     get_optimal_batch_size,
     _fix_torch_dll_path,
     get_optimal_thread_count,
-    ensure_cuda_runtime_compatibility,
+    ensure_accelerator_runtime_compatibility,
+    ensure_module_on_device,
+    get_torch_dll_troubleshooting,
     rewrite_cuda_runtime_error,
 )
 from src.utils.runtime_paths import get_resource_path, get_yourmt3_source_dir
+from src.utils.audio_utils import load_audio_tensor
 from src.core.transcription_stream import model_notes_payload, snapshot_event
 
 # 在任何 import torch 之前修复 Windows 特殊路径 DLL 加载问题
@@ -195,12 +177,8 @@ def _import_torch():
         else:
             msg += (
                 "可能原因及解决方法：\n"
-                "1. 未安装 Visual C++ Redistributable 2022\n"
-                "   下载安装: https://aka.ms/vs/17/release/vc_redist.x64.exe\n"
-                "2. PyTorch 安装不完整\n"
-                "   执行: venv\\Scripts\\pip install --force-reinstall torch\n"
-                "3. libomp140.x86_64.dll 缺失\n"
-                "   重新运行 install.bat 可自动修复\n"
+                + get_torch_dll_troubleshooting(frozen=bool(getattr(sys, "frozen", False)))
+                + "\n"
             )
         msg += f"\n原始错误: {e}"
         raise RuntimeError(msg) from e
@@ -321,15 +299,7 @@ def program_to_instrument_type(program: int, is_drum: bool = False) -> Instrumen
 
 
 class YourMT3Transcriber:
-    """
-    使用 YourMT3+ 进行最先进的多乐器转写
-
-    优势:
-    - 2025 AMT Challenge 获奖架构
-    - 层次化注意力 Transformer + 混合专家 (MoE)
-    - 直接多乐器转写（可输出超过6轨道）
-    - PyTorch 原生，完美 GPU 加速
-    """
+    """YourMT3+ 模型加载与多乐器转写入口。"""
 
     # 类级别的模型缓存
     _model = None
@@ -598,6 +568,8 @@ class YourMT3Transcriber:
 
                         end = min(i + bsz, n_segments)
                         x = audio_segments[i:end]
+                        if self.device.startswith("xpu"):
+                            x = x.to(self.device)
 
                         preds = model.inference(x, None).detach().cpu().numpy()
 
@@ -696,7 +668,7 @@ class YourMT3Transcriber:
     def get_unavailable_reason(cls) -> str:
         return cls._last_unavailable_reason or (
             "YourMT3+ 不可用。\n\n"
-            "请先下载模型权重：\n"
+            "模型权重准备命令：\n"
             "  python download_sota_models.py\n\n"
             "详见 README.md 中的安装说明。"
         )
@@ -728,23 +700,22 @@ class YourMT3Transcriber:
                 if is_missing_lightning:
                     return cls._mark_unavailable(
                         "YourMT3+ 不可用：缺少 pytorch-lightning。\n"
-                        "如果你使用源码环境，请执行：pip install pytorch-lightning\n"
-                        "如果你使用打包版，请重新安装或使用修复后的安装包。"
+                        "源码环境安装命令：pip install pytorch-lightning\n"
+                        "打包版需要包含完整依赖的安装包。"
                     )
                 return cls._mark_unavailable(
                     "YourMT3+ 不可用：pytorch-lightning 导入失败，相关依赖可能未完整打包。\n"
-                    f"原始错误: {e}\n"
-                    "如果你使用源码环境，请重新安装相关依赖；"
-                    "如果你使用打包版，请使用修复后的安装包。"
+                    f"详细错误：{e}\n"
+                    "源码环境需要完整依赖；打包版需要包含完整依赖的安装包。"
                 )
 
             amt_src_path = _get_yourmt3_amt_src_path()
             if not amt_src_path:
                 return cls._mark_unavailable(
                     "YourMT3+ 不可用：未找到 YourMT3 代码目录。\n"
-                    "如果你使用打包版，请确认保留完整安装目录，不要只复制单个 exe。\n"
-                    "如果你使用源码环境，请确保 YourMT3/ 目录存在于项目根目录。",
-                    info="如需源码环境模型，请运行 python download_sota_models.py",
+                    "打包版需要完整安装目录；单独复制 EXE 不包含运行资源。\n"
+                    "源码环境的项目根目录应包含 YourMT3/。",
+                    info="源码模型准备命令：python download_sota_models.py",
                 )
             logger.debug("YourMT3 source tree available: %s", amt_src_path)
 
@@ -755,8 +726,8 @@ class YourMT3Transcriber:
                 model_path = get_model_path(selected_model)
                 if not model_path or not model_path.exists():
                     return cls._mark_unavailable(
-                        f"YourMT3+ selected checkpoint is unavailable: {selected_model}\n\n"
-                        "请先下载模型权重：\n"
+                        f"YourMT3+ checkpoint 不可用：{selected_model}\n\n"
+                        "模型权重准备命令：\n"
                         "  python download_sota_models.py\n\n"
                         "详见 README.md 中的安装说明。"
                     )
@@ -868,8 +839,7 @@ class YourMT3Transcriber:
                 _clear_yourmt3_import_state()
                 import torch
 
-                if self.device.startswith("cuda"):
-                    ensure_cuda_runtime_compatibility(self.device)
+                ensure_accelerator_runtime_compatibility(self.device)
                 from utils.task_manager import TaskManager
                 from model.ymt3 import YourMT3
                 from model.init_train import update_config
@@ -899,7 +869,7 @@ class YourMT3Transcriber:
                 if not model_path or not model_path.exists():
                     raise FileNotFoundError(
                         f"YourMT3+ 模型未找到: {model_name}\n"
-                        f"请先运行: python download_sota_models.py"
+                        "资源准备命令：python download_sota_models.py"
                     )
 
                 logger.info(f"使用 checkpoint: {model_path}")
@@ -995,6 +965,7 @@ class YourMT3Transcriber:
                     new_state_dict = {k: v for k, v in state_dict.items() if "pitchshift" not in k}
                     model.load_state_dict(new_state_dict, strict=False)
                     model.eval()
+                    ensure_module_on_device(model, self.device, "YourMT3+ model")
                     logger.info(
                         f"权重加载完成, 参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M"
                     )
@@ -1040,8 +1011,7 @@ class YourMT3Transcriber:
         返回:
             (pred_token_arr, n_segments, audio_cfg, task_manager, slice_hop, onset_threshold)
         """
-        if self.device.startswith("cuda"):
-            ensure_cuda_runtime_compatibility(self.device)
+        ensure_accelerator_runtime_compatibility(self.device)
 
         # 加载模型
         self._load_model(
@@ -1068,7 +1038,7 @@ class YourMT3Transcriber:
         import torch
         import torchaudio
 
-        waveform, sr = _load_audio(audio_path)
+        waveform, sr = load_audio_tensor(audio_path)
         logger.info(f"音频加载完成: shape={waveform.shape}, sr={sr}")
 
         # 转为单声道
@@ -1099,7 +1069,7 @@ class YourMT3Transcriber:
         if quality == "best" or ultra_quality:
             slice_hop = input_frames * 3 // 4  # 25% 重叠
             onset_threshold = 0.010  # 10ms
-            logger.info("使用极致质量模式：25% 重叠 + 10ms 去重阈值")
+            logger.info("使用固定 best 策略：25% 重叠，去重阈值 10ms")
         elif quality == "balanced":
             slice_hop = input_frames // 2  # 50% 重叠
             onset_threshold = 0.025  # 25ms
@@ -1110,9 +1080,9 @@ class YourMT3Transcriber:
             logger.info("使用快速模式：无重叠 + 50ms 去重阈值")
 
         audio_segments = slice_padded_array(audio_np, input_frames, slice_hop, pad=True)
-        audio_segments = (
-            torch.from_numpy(audio_segments.astype("float32")).to(self.device).unsqueeze(1)
-        )
+        audio_segments = torch.from_numpy(audio_segments.astype("float32")).unsqueeze(1)
+        if not self.device.startswith("xpu"):
+            audio_segments = audio_segments.to(self.device)
         n_segments = audio_segments.shape[0]
         overlap_pct = 1 - slice_hop / input_frames
         logger.info(f"音频分段数: {n_segments}, 每段帧数: {input_frames}, 重叠: {overlap_pct:.0%}")
@@ -1364,8 +1334,8 @@ class YourMT3Transcriber:
             mixed_notes = mix_notes(pred_notes_in_file)
             logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
 
-            # 使用智能去重：处理重叠分段产生的重复音符
-            logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
+            # 合并重叠分段产生的重复音符
+            logger.info(f"正在去除重叠片段重复音符 (阈值={onset_threshold*1000:.0f}ms)...")
             mixed_notes = self._deduplicate_overlapping_notes_smart(
                 mixed_notes, onset_threshold=onset_threshold, preserve_longer=True
             )
@@ -1460,7 +1430,7 @@ class YourMT3Transcriber:
         onset_threshold: float,
     ) -> list:
         """
-        公共通道解码流程：多通道 token → 合并音符 → 智能去重
+        公共通道解码流程：解码多通道 token，合并音符并去除重叠片段重复项。
 
         参数:
             pred_token_arr: 推理输出的 token 数组
@@ -1519,8 +1489,8 @@ class YourMT3Transcriber:
         mixed_notes = mix_notes(pred_notes_in_file)
         logger.info(f"通道合并完成: 共 {len(mixed_notes)} 个原始音符")
 
-        # 智能去重
-        logger.info(f"正在智能去重 (阈值={onset_threshold*1000:.0f}ms)...")
+        # 去除重叠片段重复音符
+        logger.info(f"正在去除重叠片段重复音符 (阈值={onset_threshold*1000:.0f}ms)...")
         mixed_notes = self._deduplicate_overlapping_notes_smart(
             mixed_notes, onset_threshold=onset_threshold, preserve_longer=True
         )
@@ -1743,9 +1713,11 @@ class YourMT3Transcriber:
         if progress_callback:
             progress_callback(0.30, self._pt("progress.analyzing_audio"))
 
-        # Match the official Space preprocessing exactly: torchaudio decoder,
-        # channel mean, and an unconditional functional resample call.
-        waveform, sr = torchaudio.load(uri=audio_path)
+        # Match the official Space tensor preprocessing after decoding: channel
+        # mean and an unconditional functional resample call. Public inputs are
+        # already normalized to WAV by the pipeline, so use the project's
+        # explicit PCM decoder instead of torchaudio 2.11's optional TorchCodec.
+        waveform, sr = load_audio_tensor(audio_path)
         waveform = torch.mean(waveform, dim=0).unsqueeze(0)
         target_sr = audio_cfg["sample_rate"]
         waveform = torchaudio.functional.resample(waveform, sr, target_sr)
@@ -1757,13 +1729,12 @@ class YourMT3Transcriber:
             audio_cfg["input_frames"],
             audio_cfg["input_frames"],
         )
-        audio_segments = (
-            torch.from_numpy(
-                audio_segments.astype("float32"),
-            )
-            .to(self.device)
-            .unsqueeze(1)
-        )
+        # Keep the complete song on host memory. The official inference_file
+        # implementation and the streamed path below move only the current
+        # batch to the validated CUDA/XPU device.
+        audio_segments = torch.from_numpy(
+            audio_segments.astype("float32"),
+        ).unsqueeze(1)
 
         if progress_callback:
             progress_callback(0.42, self._pt("progress.yourmt3_inference_start", batch_count=1))
@@ -1891,16 +1862,14 @@ class YourMT3Transcriber:
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Tuple[Dict[int, List[NoteEvent]], Dict[int, List[NoteEvent]]]:
         """
-        极致精度转写：按 GM 程序号分组输出
+        按 GM 程序号分组输出 YourMT3+ 转写结果。
 
-        优化策略:
-        1. 使用优化的分段策略减少边界错误
-        2. 智能去重算法处理重叠分段
-        3. 保留精确的 GM 程序号（0-127）
+        推理采用重叠分段，合并相邻分段的重复音符，并保留模型给出的
+        GM 程序号（0-127）。
 
         参数:
             audio_path: 音频文件路径
-            quality: 内部固定为最高质量策略，保留参数仅兼容旧调用
+            quality: 内部固定为 ``best``，保留参数仅兼容旧调用
             progress_callback: 进度回调
 
         返回:
@@ -1909,7 +1878,7 @@ class YourMT3Transcriber:
             - drum_notes: Dict[drum_pitch 35-81, List[NoteEvent]]
         """
         quality = FIXED_TRANSCRIPTION_QUALITY
-        logger.info(f"YourMT3+ 极致精度转写: {audio_path} (固定高质量策略)")
+        logger.info(f"YourMT3+ 转写开始: {audio_path} (quality=best)")
 
         self._check_cancelled()
 
@@ -1970,7 +1939,7 @@ class YourMT3Transcriber:
                     ),
                 )
 
-            logger.info(f"极致精度转写完成:")
+            logger.info("YourMT3+ 转写完成:")
             logger.info(f"  原始音符: {total_raw_notes}")
             logger.info(
                 f"  乐器音符: {total_instrument_notes} ({len(instrument_notes)} 种 GM 音色)"
@@ -1989,20 +1958,17 @@ class YourMT3Transcriber:
 
         except Exception as e:
             friendly_message = rewrite_cuda_runtime_error(e, self.device)
-            logger.error(f"极致精度转写失败: {friendly_message}", exc_info=True)
-            raise RuntimeError(f"极致精度转写失败: {friendly_message}") from e
+            logger.error(f"YourMT3+ 转写失败: {friendly_message}", exc_info=True)
+            raise RuntimeError(f"YourMT3+ 转写失败: {friendly_message}") from e
 
     def _deduplicate_overlapping_notes_smart(
         self, notes: list, onset_threshold: float = 0.025, preserve_longer: bool = True
     ) -> list:
         """
-        智能去重：处理重叠分段产生的重复音符
+        合并重叠分段产生的重复音符。
 
-        改进策略:
-        1. 按 (pitch, program, is_drum) 分组
-        2. 在每组内按 onset 排序
-        3. 使用动态阈值合并相近的音符
-        4. 保留持续时间更长或力度更大的音符
+        音符先按 ``(pitch, program, is_drum)`` 分组，再按 onset 排序。
+        阈值内的音符视为重复项；``preserve_longer`` 决定是否保留较长者。
 
         参数:
             notes: YourMT3 Note 对象列表
@@ -2061,7 +2027,7 @@ class YourMT3Transcriber:
             # 按 onset 排序
             group_notes.sort(key=get_onset)
 
-            # 智能去重
+            # 合并当前分组内的重复音符
             filtered = []
             i = 0
             while i < len(group_notes):
@@ -2108,7 +2074,7 @@ class YourMT3Transcriber:
 
         if dedup_count > 0:
             logger.info(
-                f"智能去重: 移除 {dedup_count} 个重复音符 (阈值: {onset_threshold*1000:.0f}ms)"
+                f"重叠片段去重: 移除 {dedup_count} 个重复音符 (阈值: {onset_threshold*1000:.0f}ms)"
             )
 
         return result
