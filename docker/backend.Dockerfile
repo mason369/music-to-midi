@@ -65,7 +65,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.txt docker/backend-constraints.txt /tmp/
 
 # The CUDA trio is installed from the exact cu128 index first. The headless API
 # deliberately omits the desktop-only PyQt and python-rtmidi packages.
@@ -77,8 +77,11 @@ RUN python -m pip install --no-cache-dir \
     && grep -vE '^[[:space:]]*(torch|torchaudio|torchvision|numpy|python-rtmidi|PyQt6|PyQt6-Qt6|PyQt6-sip|onnxruntime|onnxruntime-gpu)([[:space:]=<>!~@;\[]|$)' \
         /tmp/requirements.txt > /tmp/requirements-container.txt \
     && python -m pip install --no-cache-dir numpy==1.26.4 \
-    && python -m pip install --no-cache-dir -r /tmp/requirements-container.txt \
     && python -m pip install --no-cache-dir \
+        --constraint /tmp/backend-constraints.txt \
+        -r /tmp/requirements-container.txt \
+    && python -m pip install --no-cache-dir \
+        --constraint /tmp/backend-constraints.txt \
         beartype==0.18.5 \
         diffq-fixed==0.2.4 \
         julius==0.2.7 \
@@ -98,7 +101,10 @@ RUN python -m pip install --no-cache-dir \
     && python -m pip install --no-cache-dir \
         "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" \
         --no-deps \
-    && rm -f /tmp/requirements.txt /tmp/requirements-container.txt
+    && rm -f \
+        /tmp/backend-constraints.txt \
+        /tmp/requirements.txt \
+        /tmp/requirements-container.txt
 
 COPY pyproject.toml LICENSE README.md THIRD_PARTY_NOTICES.md ./
 COPY download_*.py ./

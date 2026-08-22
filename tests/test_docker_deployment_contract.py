@@ -21,6 +21,7 @@ def _yaml(relative: str) -> dict:
 
 def test_backend_image_is_pinned_headless_non_root_and_model_free():
     dockerfile = _read("docker/backend.Dockerfile")
+    constraints = _read("docker/backend-constraints.txt")
     dockerignore = _read(".dockerignore")
 
     assert (
@@ -34,6 +35,18 @@ def test_backend_image_is_pinned_headless_non_root_and_model_free():
     assert "--index-url https://download.pytorch.org/whl/cu128" in dockerfile
     assert "onnxruntime-gpu==1.23.2" in dockerfile
     assert "audio-separator==0.44.1 --no-deps" in dockerfile
+    for identity in (
+        "numpy==1.26.4",
+        "torch==2.7.0",
+        "torchaudio==2.7.0",
+        "torchvision==0.22.0",
+        "onnxruntime-gpu==1.23.2",
+        "audio-separator==0.44.1",
+        "transkun==2.0.1",
+        "muscriptor==0.3.0",
+    ):
+        assert identity in constraints
+    assert dockerfile.count("--constraint /tmp/backend-constraints.txt") == 2
     assert "USER 10001:10001" in dockerfile
     assert 'ENTRYPOINT ["/app/docker/backend-entrypoint.sh"]' in dockerfile
     assert "python -m src.utils.source_runtime" in dockerfile

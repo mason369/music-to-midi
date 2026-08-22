@@ -1,0 +1,11 @@
+# Core production runtime identities. Every dependency-resolving install after
+# the CUDA wheel bootstrap must use this file so transitive requirements cannot
+# silently replace the validated accelerator stack.
+numpy==1.26.4
+torch==2.7.0
+torchaudio==2.7.0
+torchvision==0.22.0
+onnxruntime-gpu==1.23.2
+audio-separator==0.44.1
+transkun==2.0.1
+muscriptor==0.3.0
