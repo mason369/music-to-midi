@@ -56,11 +56,15 @@ jobs:
       - name: Install contract-test dependencies
         run: python -m pip install --upgrade pytest pyyaml
 
-      - name: Parse PowerShell entry points
-        shell: pwsh
+      - name: Parse every PowerShell entry point with Windows PowerShell 5.1
+        shell: powershell
         run: |
           $failed = $false
-          foreach ($script in @('install.ps1', 'run.ps1', 'build_portable.ps1')) {
+          $scripts = @(git ls-files -- '*.ps1')
+          if ($LASTEXITCODE -ne 0 -or $scripts.Count -eq 0) {
+            throw 'Unable to enumerate tracked PowerShell scripts.'
+          }
+          foreach ($script in $scripts) {
             $tokens = $null
             $parseErrors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(

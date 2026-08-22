@@ -273,6 +273,20 @@ def test_selfhost_management_scripts_validate_real_gpu_models_and_readiness():
         assert "SSH" not in script
 
 
+def test_non_ascii_powershell_scripts_use_windows_powershell_safe_utf8():
+    scripts = sorted(ROOT.glob("*.ps1")) + sorted((ROOT / "scripts").glob("*.ps1"))
+    assert scripts
+
+    for path in scripts:
+        payload = path.read_bytes()
+        if any(byte >= 0x80 for byte in payload):
+            relative = path.relative_to(ROOT).as_posix()
+            assert payload.startswith(b"\xef\xbb\xbf"), (
+                f"{relative} contains non-ASCII messages and must keep its UTF-8 "
+                "BOM for Windows PowerShell 5.1"
+            )
+
+
 def test_direct_midi_assets_are_prepared_explicitly_and_resolved_offline_at_runtime():
     profiles = _read("src/model_profiles.py")
     result_assets = _read("src/core/muscriptor_result_assets.py")
