@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -70,8 +71,9 @@ def test_windows_children_use_the_real_python_process_with_venv_identity() -> No
     venv_python = r"C:\project\venv\Scripts\python.exe"
     base_python = r"C:\Python311\python.exe"
     command = [venv_python, "-m", "src.web_frontend"]
+    windows_os = SimpleNamespace(name="nt", environ=web_main.os.environ)
     with (
-        patch.object(web_main.os, "name", "nt"),
+        patch.object(web_main, "os", windows_os),
         patch.object(web_main.sys, "executable", venv_python),
         patch.object(web_main.sys, "_base_executable", base_python),
         patch.object(web_main.subprocess, "Popen") as popen,
@@ -167,8 +169,9 @@ def test_frontend_window_is_closed_when_the_host_is_interrupted(tmp_path: Path) 
     edge_process.pid = 1234
     edge_process.poll.return_value = None
 
+    windows_os = SimpleNamespace(name="nt")
     with (
-        patch.object(frontend_server.os, "name", "nt"),
+        patch.object(frontend_server, "os", windows_os),
         patch("src.web_frontend.server.subprocess.Popen", return_value=edge_process),
         patch(
             "src.web_frontend.server.subprocess.run",

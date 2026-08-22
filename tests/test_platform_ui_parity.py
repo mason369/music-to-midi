@@ -378,7 +378,7 @@ def test_quantization_grid_contract_covers_every_supported_delivery_surface():
     schemas = Path("src/web_api/schemas.py").read_text(encoding="utf-8")
     backend_dockerfile = Path("docker/backend.Dockerfile").read_text(encoding="utf-8")
     gateway_dockerfile = Path("docker/gateway.Dockerfile").read_text(encoding="utf-8")
-    instructions = Path("AGENTS.md").read_text(encoding="utf-8")
+    public_documentation = Path("docs/README.md").read_text(encoding="utf-8")
 
     assert MIDI_QUANTIZE_GRIDS == ("1/4", "1/8", "1/16", "1/32", "1/64")
     assert DEFAULT_MIDI_QUANTIZE_GRID == "1/32"
@@ -405,8 +405,9 @@ def test_quantization_grid_contract_covers_every_supported_delivery_surface():
     assert 'quantize_grid: MidiQuantizeGrid = "1/32"' in schemas
     assert "COPY src ./src" in backend_dockerfile
     assert "COPY web /srv/web" in gateway_dockerfile
-    assert "桌面版、Space、Colab、独立 Web/API、Docker 以及便携包/可执行入口" in instructions
-    assert "结果编辑器的范围默认“全部轨道”" in instructions
+    assert "Note quantization is explicit and disabled by default." in public_documentation
+    assert "their scope defaults to All tracks" in public_documentation
+    assert "standalone Web/API, including Docker deployment" in public_documentation
 
 
 def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context():
