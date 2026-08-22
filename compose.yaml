@@ -25,7 +25,7 @@ x-backend-gpu: &backend-gpu
 
 services:
   backend:
-    image: ghcr.io/mason369/music-to-midi-backend:v1.6.0
+    image: ghcr.io/mason369/music-to-midi-backend:v1.6.1
     command: ["server-selfhost"]
     init: true
     restart: unless-stopped
@@ -67,7 +67,7 @@ services:
 
   model-init:
     profiles: ["tools"]
-    image: ghcr.io/mason369/music-to-midi-backend:v1.6.0
+    image: ghcr.io/mason369/music-to-midi-backend:v1.6.1
     command: ["model-init"]
     init: true
     read_only: true
@@ -89,7 +89,7 @@ services:
     deploy: *backend-gpu
 
   gateway:
-    image: ghcr.io/mason369/music-to-midi-gateway:v1.6.0
+    image: ghcr.io/mason369/music-to-midi-gateway:v1.6.1
     restart: unless-stopped
     read_only: true
     security_opt:
