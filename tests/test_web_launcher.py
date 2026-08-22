@@ -72,10 +72,17 @@ def test_windows_children_use_the_real_python_process_with_venv_identity() -> No
     base_python = r"C:\Python311\python.exe"
     command = [venv_python, "-m", "src.web_frontend"]
     windows_os = SimpleNamespace(name="nt", environ=web_main.os.environ)
+    windows_process_group_flag = 0x00000200
     with (
         patch.object(web_main, "os", windows_os),
         patch.object(web_main.sys, "executable", venv_python),
         patch.object(web_main.sys, "_base_executable", base_python),
+        patch.object(
+            web_main.subprocess,
+            "CREATE_NEW_PROCESS_GROUP",
+            windows_process_group_flag,
+            create=True,
+        ),
         patch.object(web_main.subprocess, "Popen") as popen,
     ):
         web_main._start_process(command)
@@ -83,7 +90,7 @@ def test_windows_children_use_the_real_python_process_with_venv_identity() -> No
     assert popen.call_args.args == (command,)
     options = popen.call_args.kwargs
     assert options["executable"] == base_python
-    assert options["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+    assert options["creationflags"] == windows_process_group_flag
     assert options["env"]["__PYVENV_LAUNCHER__"] == venv_python
 
 
