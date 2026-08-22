@@ -124,13 +124,24 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("libegl1", release_workflow)
 
     def test_linux_source_ci_provides_a_real_qt_audio_output(self):
-        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+        workflows = {
+            "source": (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8"),
+            "release": (WORKFLOWS_DIR / "release.yml").read_text(encoding="utf-8"),
+        }
 
-        self.assertIn("pulseaudio", workflow)
-        self.assertIn("pulseaudio-utils", workflow)
-        self.assertIn("module-null-sink", workflow)
-        self.assertIn("sink_name=music_to_midi_ci rate=44100 channels=2", workflow)
-        self.assertIn("pactl set-default-sink music_to_midi_ci", workflow)
+        for label, workflow in workflows.items():
+            with self.subTest(workflow=label):
+                self.assertIn("pulseaudio", workflow)
+                self.assertIn("pulseaudio-utils", workflow)
+                self.assertIn("module-null-sink", workflow)
+                self.assertIn("sink_name=music_to_midi_ci rate=44100 channels=2", workflow)
+                self.assertIn("pactl set-default-sink music_to_midi_ci", workflow)
+
+        release_workflow = workflows["release"]
+        self.assertLess(
+            release_workflow.index("pactl set-default-sink music_to_midi_ci"),
+            release_workflow.index("运行便携发布回归测试"),
+        )
 
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")

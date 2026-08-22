@@ -137,8 +137,19 @@ jobs:
             libxcb-util1 \
             libgl1 \
             libegl1 \
+            pulseaudio \
+            pulseaudio-utils \
             fonts-ubuntu \
             fonts-dejavu-core
+
+      - name: 启动虚拟音频输出 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink \
+            sink_name=music_to_midi_ci rate=44100 channels=2
+          pactl set-default-sink music_to_midi_ci
+          pactl info
 
       - name: 安装 FFmpeg (Windows)
         if: runner.os == 'Windows'
