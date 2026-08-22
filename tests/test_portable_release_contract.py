@@ -276,9 +276,10 @@ class PortableReleaseContractTests(unittest.TestCase):
         web_build = (REPO_ROOT / "build_web_executables.ps1").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pwsh -ExecutionPolicy Bypass -File .\\build_web_executables.ps1",
+            "$pythonExe = Join-Path $env:pythonLocation 'python.exe'",
             workflow,
         )
+        self.assertIn("& .\\build_web_executables.ps1 -PythonExe $pythonExe", workflow)
         self.assertIn('Join-Path $Root "build_portable.ps1"', web_build)
         self.assertIn('Join-Path $ResolvedDistRoot "MusicToMidi-WebFrontend"', web_build)
         self.assertIn("Join-Path $ResolvedDistRoot $AppName", web_build)

@@ -622,7 +622,14 @@ jobs:
 
       - name: 构建桌面、独立后端与独立 Web 前端 (Windows)
         if: runner.os == 'Windows'
-        run: pwsh -ExecutionPolicy Bypass -File .\build_web_executables.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pythonExe = Join-Path $env:pythonLocation 'python.exe'
+          if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
+            throw "actions/setup-python Python 不存在：$pythonExe"
+          }
+          & .\build_web_executables.ps1 -PythonExe $pythonExe
 
       - name: 构建桌面、独立后端与独立 Web 前端 (Linux)
         if: runner.os == 'Linux'
