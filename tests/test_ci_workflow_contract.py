@@ -123,6 +123,15 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("libegl1", build_workflow)
         self.assertIn("libegl1", release_workflow)
 
+    def test_linux_source_ci_provides_a_real_qt_audio_output(self):
+        workflow = (WORKFLOWS_DIR / "build.yml").read_text(encoding="utf-8")
+
+        self.assertIn("pulseaudio", workflow)
+        self.assertIn("pulseaudio-utils", workflow)
+        self.assertIn("module-null-sink", workflow)
+        self.assertIn("sink_name=music_to_midi_ci rate=44100 channels=2", workflow)
+        self.assertIn("pactl set-default-sink music_to_midi_ci", workflow)
+
     def test_hf_sync_workflow_uses_node24_compatible_action_majors(self):
         workflow = (WORKFLOWS_DIR / "sync_to_hf.yml").read_text(encoding="utf-8")
 

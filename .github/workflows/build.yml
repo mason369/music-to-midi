@@ -111,7 +111,17 @@ jobs:
             libxkbcommon-x11-0 \
             libgl1 \
             libegl1 \
+            pulseaudio \
+            pulseaudio-utils \
             xvfb
+
+      - name: Start virtual audio output
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink \
+            sink_name=music_to_midi_ci rate=44100 channels=2
+          pactl set-default-sink music_to_midi_ci
+          pactl info
 
       - name: Install test dependencies
         run: |
