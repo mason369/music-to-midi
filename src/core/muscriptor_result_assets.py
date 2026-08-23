@@ -8,6 +8,8 @@ transcription backends as well.
 from __future__ import annotations
 
 import math
+import secrets
+import shutil
 import subprocess
 import time
 from collections import defaultdict
@@ -30,6 +32,62 @@ _PROGRAM_TO_INSTRUMENT = {
 }
 _SAMPLE_RATE = 44_100
 _LIVE_BUS_FADE_SECONDS = 0.03
+DEFAULT_MIDI_AUDIO_EXPORT_PRESET = "pcm24_48000"
+
+
+@dataclass(frozen=True)
+class MidiAudioExportPreset:
+    """One verified FluidSynth WAV export contract."""
+
+    id: str
+    bit_depth: int
+    sample_rate: int
+    fluidsynth_format: str
+    soundfile_subtype: str
+    filename_suffix: str
+
+
+MIDI_AUDIO_EXPORT_PRESETS = (
+    MidiAudioExportPreset(
+        id=DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+        bit_depth=24,
+        sample_rate=48_000,
+        fluidsynth_format="s24",
+        soundfile_subtype="PCM_24",
+        filename_suffix="24bit-48kHz",
+    ),
+    MidiAudioExportPreset(
+        id="pcm16_44100",
+        bit_depth=16,
+        sample_rate=44_100,
+        fluidsynth_format="s16",
+        soundfile_subtype="PCM_16",
+        filename_suffix="16bit-44.1kHz",
+    ),
+)
+_MIDI_AUDIO_EXPORT_PRESETS_BY_ID = {preset.id: preset for preset in MIDI_AUDIO_EXPORT_PRESETS}
+
+
+@dataclass(frozen=True)
+class MidiAudioExportResult:
+    path: Path
+    preset: MidiAudioExportPreset
+    frames: int
+    channels: int
+    peak: float
+
+
+def get_midi_audio_export_preset(preset_id: str) -> MidiAudioExportPreset:
+    """Resolve only a product-approved WAV preset; arbitrary settings are rejected."""
+
+    value = str(preset_id)
+    try:
+        return _MIDI_AUDIO_EXPORT_PRESETS_BY_ID[value]
+    except KeyError as exc:
+        supported = ", ".join(preset.id for preset in MIDI_AUDIO_EXPORT_PRESETS)
+        raise ValueError(
+            f"Unsupported MIDI audio export preset {value!r}; expected one of: {supported}"
+        ) from exc
 
 
 def _covering_frame_count(duration: float) -> int:
@@ -304,21 +362,33 @@ def _synthesize(
     midi_path: Path,
     output_path: Path,
     cancel_check=None,
+    *,
+    sample_rate: int = _SAMPLE_RATE,
+    audio_file_format: str | None = None,
 ) -> None:
+    sample_rate = int(sample_rate)
+    if not 8_000 <= sample_rate <= 96_000:
+        raise ValueError(f"FluidSynth sample rate is outside 8-96 kHz: {sample_rate}")
+    if audio_file_format is not None and audio_file_format not in {"s16", "s24"}:
+        raise ValueError(f"Unsupported FluidSynth WAV sample format: {audio_file_format!r}")
     temporary = output_path.with_name(output_path.name + ".part.wav")
     if temporary.exists():
         temporary.unlink()
-    process = subprocess.Popen(
+    command = [str(executable), "-ni"]
+    if audio_file_format is not None:
+        command.extend(["-o", f"audio.file.format={audio_file_format}"])
+    command.extend(
         [
-            str(executable),
-            "-ni",
             "-F",
             str(temporary),
             "-r",
-            str(_SAMPLE_RATE),
+            str(sample_rate),
             str(soundfont),
             str(midi_path),
-        ],
+        ]
+    )
+    process = subprocess.Popen(
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=get_fluidsynth_subprocess_env(executable),
@@ -349,6 +419,177 @@ def _synthesize(
             f"{stderr.decode(errors='replace').strip()}"
         )
     temporary.replace(output_path)
+
+
+def _write_silent_midi_audio_export(
+    output_path: Path,
+    preset: MidiAudioExportPreset,
+    duration_seconds: float,
+    *,
+    cancel_check=None,
+) -> None:
+    """Write bounded stereo silence for a deliberately empty edited MIDI."""
+
+    import numpy as np
+    import soundfile as sf
+
+    duration = float(duration_seconds)
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError(
+            "Empty MIDI audio export requires a finite positive duration: " f"{duration_seconds!r}"
+        )
+    frame_count = max(
+        1,
+        int(math.ceil(math.nextafter(duration * preset.sample_rate, -math.inf))),
+    )
+    zero_block = np.zeros((65_536, 2), dtype="float32")
+    with sf.SoundFile(
+        str(output_path),
+        mode="w",
+        samplerate=preset.sample_rate,
+        channels=2,
+        format="WAV",
+        subtype=preset.soundfile_subtype,
+    ) as destination:
+        remaining = frame_count
+        while remaining:
+            if cancel_check is not None and cancel_check():
+                raise InterruptedError("MIDI audio export cancelled")
+            block_frames = min(remaining, len(zero_block))
+            destination.write(zero_block[:block_frames])
+            remaining -= block_frames
+
+
+def _verify_midi_audio_export(
+    output_path: Path,
+    preset: MidiAudioExportPreset,
+    *,
+    expect_silence: bool,
+    cancel_check=None,
+) -> tuple[int, int, float]:
+    """Verify the format and scan the complete render before publication."""
+
+    import numpy as np
+    import soundfile as sf
+
+    info = sf.info(str(output_path))
+    if (
+        info.format != "WAV"
+        or info.subtype != preset.soundfile_subtype
+        or info.samplerate != preset.sample_rate
+        or info.channels != 2
+        or info.frames <= 0
+    ):
+        raise RuntimeError(
+            "MIDI audio export verification failed: "
+            f"expected=WAV/{preset.soundfile_subtype}/{preset.sample_rate}Hz/2ch, "
+            f"actual={info.format}/{info.subtype}/{info.samplerate}Hz/"
+            f"{info.channels}ch/{info.frames}frames"
+        )
+    peak = 0.0
+    with sf.SoundFile(str(output_path), mode="r") as source:
+        while True:
+            if cancel_check is not None and cancel_check():
+                raise InterruptedError("MIDI audio export cancelled")
+            block = source.read(65_536, dtype="float32", always_2d=True)
+            if len(block) == 0:
+                break
+            if not np.isfinite(block).all():
+                raise RuntimeError("MIDI audio export contains non-finite samples")
+            peak = max(peak, float(np.max(np.abs(block))))
+    if expect_silence:
+        if peak != 0.0:
+            raise RuntimeError(f"Empty MIDI audio export is not silent: peak={peak}")
+    elif peak <= 1e-8:
+        raise RuntimeError("FluidSynth produced a silent MIDI audio export")
+    return int(info.frames), int(info.channels), peak
+
+
+def render_midi_audio_export(
+    midi_path: str | Path,
+    destination: str | Path,
+    preset_id: str = DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+    *,
+    silence_duration_seconds: float | None = None,
+    cancel_check=None,
+) -> MidiAudioExportResult:
+    """Render, verify, and atomically publish a selected-quality SoundFont WAV."""
+
+    source_midi = Path(midi_path).resolve()
+    output_path = Path(destination).resolve()
+    preset = get_midi_audio_export_preset(preset_id)
+    if not source_midi.is_file() or source_midi.stat().st_size <= 0:
+        raise FileNotFoundError(f"MIDI audio export source is missing: {source_midi}")
+    if output_path.suffix.lower() != ".wav":
+        raise ValueError(f"MIDI audio export destination must end in .wav: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
+    staged_midi = output_path.with_name(f".m2m-{token}.mid")
+    staged_wav = output_path.with_name(f".m2m-{token}.wav")
+    staged_part = staged_wav.with_name(staged_wav.name + ".part.wav")
+    check_cancelled = cancel_check or (lambda: False)
+    active_error: BaseException | None = None
+    try:
+        if check_cancelled():
+            raise InterruptedError("MIDI audio export cancelled")
+        shutil.copy2(source_midi, staged_midi)
+        notes = read_midi_roll_notes(staged_midi)
+        expect_silence = not notes
+        if expect_silence:
+            if silence_duration_seconds is None:
+                raise ValueError("Empty MIDI audio export is missing its playback duration")
+            _write_silent_midi_audio_export(
+                staged_wav,
+                preset,
+                silence_duration_seconds,
+                cancel_check=check_cancelled,
+            )
+        else:
+            executable = get_fluidsynth_executable()
+            soundfont = validate_muscriptor_soundfont()
+            _synthesize(
+                executable,
+                soundfont,
+                staged_midi,
+                staged_wav,
+                cancel_check=check_cancelled,
+                sample_rate=preset.sample_rate,
+                audio_file_format=preset.fluidsynth_format,
+            )
+        frames, channels, peak = _verify_midi_audio_export(
+            staged_wav,
+            preset,
+            expect_silence=expect_silence,
+            cancel_check=check_cancelled,
+        )
+        if check_cancelled():
+            raise InterruptedError("MIDI audio export cancelled")
+        staged_wav.replace(output_path)
+        return MidiAudioExportResult(
+            path=output_path,
+            preset=preset,
+            frames=frames,
+            channels=channels,
+            peak=peak,
+        )
+    except BaseException as exc:
+        active_error = exc
+        raise
+    finally:
+        cleanup_errors = []
+        for temporary in (staged_part, staged_wav, staged_midi):
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_errors.append(f"{temporary}: {exc}")
+        if cleanup_errors:
+            message = "Unable to remove MIDI audio export staging files: " + "; ".join(
+                cleanup_errors
+            )
+            if active_error is not None:
+                active_error.add_note(message)
+            else:
+                raise RuntimeError(message)
 
 
 def prepare_midi_preview_assets(
