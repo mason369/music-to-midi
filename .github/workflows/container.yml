@@ -297,6 +297,7 @@ jobs:
           cp scripts/docker_selfhost.sh "$BUNDLE_DIR/scripts/docker_selfhost.sh"
           cp scripts/docker_selfhost.ps1 "$BUNDLE_DIR/scripts/docker_selfhost.ps1"
           cp docs/docker-deployment.md "$BUNDLE_DIR/README.md"
+          cp docs/docker-deployment.en.md "$BUNDLE_DIR/README_EN.md"
           cp LICENSE THIRD_PARTY_NOTICES.md "$BUNDLE_DIR/"
           chmod 0755 "$BUNDLE_DIR/scripts/docker_selfhost.sh"
 
@@ -401,7 +402,7 @@ jobs:
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "$TAG" \
-              --notes "Docker 自托管发行资产已通过公开拉取、镜像内容和网关运行验收；完整版本说明仍由主发布流程更新。"
+              --notes "该版本提供 Docker 自托管包、固定镜像 digest、环境模板、管理脚本、SBOM 和 SHA-256；安装与模型配置见发行包内 README。"
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "dist/${BUNDLE_NAME}.zip" \

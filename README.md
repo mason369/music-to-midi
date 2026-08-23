@@ -37,9 +37,9 @@
 
 浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取终态，并从响应中的 `download_url` 下载 MIDI 或分轨 WAV。失败响应包含处理错误，且不提供下载文件。
 
-Issue #9 对应的是完整 Docker 自托管发行，不是代建公网网站，也不只是一个 `docker pull`。每个正式版本会同时发布无外置模型的后端/网关镜像、digest 固定的 Compose、环境模板、Windows/Linux 管理脚本、镜像清单与 SHA-256。默认只监听 `127.0.0.1:7860`，无需域名、ACME 邮箱、登录密码或 SSH 密码；用户在 `.env` 选择模型后执行一次显式 `model-init`，常驻推理容器离线运行。完整下载、模型配置、持久化、升级/回滚和验收见 [Docker 自托管发行](docs/docker-deployment.md)。
+`v1.6.0` 已为 Issue #9 提供完整 Docker 自托管包，包括无外置模型的后端/网关镜像、digest 固定的 Compose、环境模板、Windows/Linux 管理脚本、镜像清单与 SHA-256。默认入口是 `http://127.0.0.1:7860`；模型按 `.env` 中选择的配置下载到持久卷，常驻推理容器离线运行。安装、配置、日志、备份、升级与故障排查见 [Docker 自托管指南](docs/docker-deployment.md)。
 
-上面的源码/EXE 双端口方案仍只面向受信任局域网，本身不内置认证、授权或 TLS；不要把其 `5173` 或 `8765` 直接映射到互联网。确实需要公网时，仓库另保留自动 HTTPS + Argon2id Basic Auth 的高级 Compose；它仍是“经认证的单一所有者”边界，不提供多租户、账号系统或逐任务授权。
+上面的源码/EXE 双端口方案面向受信任局域网，本身不内置认证、授权或 TLS；将 `5173` 或 `8765` 映射到互联网会形成无认证服务。公网单一所有者场景可以使用带自动 HTTPS 和 Argon2id Basic Auth 的高级 Compose；该方案不包含多租户、账号系统或逐任务授权。
 
 ## 统一界面演示
 

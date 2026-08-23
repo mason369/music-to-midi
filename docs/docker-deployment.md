@@ -1,39 +1,67 @@
-# Docker 自托管发行
+# Docker 自托管
 
-这套发行用于落实 [Issue #9](https://github.com/mason369/music-to-midi/issues/9)。交付物不是一个孤立的公开镜像，也不是由项目维护者代建公网网站，而是一套可下载、可验证、可升级和可回滚的单机自托管发行包：
+<p align="center">
+  中文 | <a href="docker-deployment.en.md">English</a>
+</p>
 
-| 交付物 | 用途 |
+[Issue #9](https://github.com/mason369/music-to-midi/issues/9) 已在 `v1.6.0` 提供 Docker 自托管发行。使用者可以在自己的 NVIDIA 主机运行当前浏览器 Web 与 API；外置模型不包含在镜像中，而是按所选路线下载到持久卷。
+
+Docker 入口使用与桌面版相同的 `MusicToMidiPipeline`、处理模式、模型路由、MIDI 生成和编辑语义。容器中提供浏览器 Web 与 API，不运行 Linux PyQt6 桌面窗口。
+
+## 快速开始
+
+### Linux
+
+```bash
+unzip MusicToMidi-Docker-vX.Y.Z.zip
+cd MusicToMidi-Docker-vX.Y.Z
+cp .env.selfhost.example .env
+# 端口、GPU 和模型配置保存在 .env
+bash scripts/docker_selfhost.sh setup
+```
+
+### Windows / Docker Desktop
+
+```powershell
+Expand-Archive .\MusicToMidi-Docker-vX.Y.Z.zip
+Set-Location .\MusicToMidi-Docker-vX.Y.Z
+Copy-Item .env.selfhost.example .env
+# 端口、GPU 和模型配置保存在 .env
+.\scripts\docker_selfhost.ps1 setup
+```
+
+安装完成后的默认地址是：
+
+```text
+http://127.0.0.1:7860
+```
+
+`setup` 会拉取固定版本镜像、检查 GPU 运行时、准备所选模型、启动服务并完成就绪验收。错误会以非零状态返回，同时保留相关诊断信息。
+
+## 运行环境
+
+| 项目 | 支持范围 |
 |---|---|
-| `music-to-midi-backend` | 当前独立 Web API、共享 `MusicToMidiPipeline`、固定 CUDA 12.8 推理环境；不包含外置模型 |
-| `music-to-midi-gateway` | 与当前仓库一致的浏览器前端、同源 API 反向代理和安全响应头 |
-| `compose.yaml` | 固定同一版本的两个镜像；正式 Release 中进一步固定到不可变 digest |
-| `.env.selfhost.example` | 端口、GPU、模型路线、容量与保留策略 |
-| `scripts/docker_selfhost.sh` / `.ps1` | 拉取、GPU 实测、模型初始化、启动、就绪验收、状态与停止 |
-| `IMAGE_DIGESTS.txt` / `RELEASE-MANIFEST.json` | 源码提交、平台、API 版本和实际镜像 digest |
-| `SHA256SUMS`、SBOM、provenance、attestation | 下载文件和镜像供应链核验 |
+| 容器平台 | `linux/amd64` |
+| GPU | NVIDIA CUDA；当前没有 CPU、AMD/ROCm、Intel XPU 或 `linux/arm64` 容器变体 |
+| 推理栈 | PyTorch `2.7.0+cu128`、CUDA runtime 12.8、ONNX Runtime GPU `1.23.2` |
+| 宿主软件 | Docker Engine 24+、Docker Compose v2.17+、NVIDIA Container Toolkit |
+| NVIDIA 驱动 | 能够运行 CUDA 12.8 容器的驱动 |
+| 作业空间 | 默认保留至少 20 GiB 空闲空间；模型卷和镜像空间另计 |
 
-模型按 Issue #9 的要求外置。用户在 `.env` 中明确选择路线后，由一次性 `model-init` 下载并严格校验到持久卷；没有选择的 checkpoint 不下载。常驻后端强制 Hugging Face/Transformers 离线并且只连接无互联网出口的内部网络，推理请求不会偷偷补模型。
+Windows 使用 Docker Desktop 的 Linux 容器与 WSL2 GPU 支持。Linux 使用 Docker Engine 和 NVIDIA Container Toolkit。
 
-Docker 提供当前浏览器 Web 与 API 能力，不在 Linux 容器中运行 PyQt6 桌面窗口。桌面版、Web、Space 和 Colab 继续共享处理流水线、模式、模型路由、MIDI 生成与编辑语义；容器镜像直接复制当前 `src/` 和 `web/`，发布测试会守护两端版本与功能契约。
-
-## 支持范围
-
-- 平台：`linux/amd64`。
-- 加速器：NVIDIA GPU，PyTorch `2.7.0+cu128`，CUDA runtime 12.8，ONNX Runtime GPU `1.23.2`。
-- 宿主机：Docker Engine 24+、Docker Compose v2.17+、NVIDIA Container Toolkit，以及兼容 CUDA 12.8 的 NVIDIA 驱动。
-- 当前不提供 CPU、AMD/ROCm、Intel XPU 或 `linux/arm64` 容器变体，也不会静默降级。
-- 镜像无外置 checkpoint；`transkun==2.0.1` 自带的默认 V2 包资源是唯一明确记录的包内模型资源。
-- 默认作业卷至少需要 20 GiB 可用空间。模型所需空间随选择的路线变化；完整 15 配置远大于默认两配置。
-
-安装前应先让 NVIDIA 官方容器测试成功；一键脚本还会在实际后端镜像中执行 `torch.cuda` 和 `CUDAExecutionProvider` 检查：
+以下命令可以单独确认宿主机的 Docker GPU 通道：
 
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```
 
-## 推荐：下载同版本自托管发行包
+显存需求会随模型、音频长度和处理模式变化，因此没有一个适用于全部 15 个配置的最低显存值。`setup` 会在下载模型前用实际后端镜像检查 PyTorch CUDA、GPU 可见性和 ONNX Runtime `CUDAExecutionProvider`。
 
-每个正式版本的 GitHub Release 都附带：
+## 下载与校验
+
+正式版本在 [GitHub Releases](https://github.com/mason369/music-to-midi/releases) 提供以下文件：
 
 ```text
 MusicToMidi-Docker-vX.Y.Z.zip
@@ -45,9 +73,23 @@ MusicToMidi-Docker-SBOM-vX.Y.Z.txt
 MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
 ```
 
-推荐下载 ZIP 或 tar.gz 以及对应 `SHA256SUMS`，先验证 SHA-256，再解压。包内 Compose 已从版本标签改写为发布流水线刚刚匿名拉取验证过的镜像 digest；以后 `latest` 移动也不会改变当前安装。
+Linux 可以这样核对 ZIP：
 
-解压后目录为：
+```bash
+sha256sum MusicToMidi-Docker-vX.Y.Z.zip
+grep 'MusicToMidi-Docker-vX.Y.Z.zip$' MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
+```
+
+Windows PowerShell 可以这样核对 ZIP：
+
+```powershell
+Get-FileHash .\MusicToMidi-Docker-vX.Y.Z.zip -Algorithm SHA256
+Select-String .\MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt -Pattern 'MusicToMidi-Docker-vX.Y.Z.zip$'
+```
+
+两处 SHA-256 值一致后，下载文件与 Release 清单对应。ZIP 与 tar.gz 内的 Compose 已固定到发布流水线匿名拉取验证过的镜像 digest，因此后续移动的 `latest` 标签不会改变这次安装。
+
+解压后的目录包含：
 
 ```text
 MusicToMidi-Docker-vX.Y.Z/
@@ -56,6 +98,7 @@ MusicToMidi-Docker-vX.Y.Z/
   scripts/docker_selfhost.sh
   scripts/docker_selfhost.ps1
   README.md
+  README_EN.md
   IMAGE_DIGESTS.txt
   RELEASE-MANIFEST.json
   LICENSE
@@ -63,52 +106,43 @@ MusicToMidi-Docker-vX.Y.Z/
   THIRD_PARTY_SBOM.txt
 ```
 
-### Linux
+## 配置
 
-```bash
-cd MusicToMidi-Docker-vX.Y.Z
-cp .env.selfhost.example .env
-# 按需修改模型配置、端口、GPU 或容量限制
-bash scripts/docker_selfhost.sh setup
+`.env.selfhost.example` 提供可直接启动的安全默认值。复制为 `.env` 后可以调整以下项目：
+
+| 变量 | 默认值 | 含义 |
+|---|---:|---|
+| `MUSIC_TO_MIDI_PORT` | `7860` | 宿主机 loopback 访问端口，范围 `1-65535` |
+| `GPU_DEVICE_ID` | `0` | 传给容器的 NVIDIA GPU 编号，编号可从 `nvidia-smi` 查看 |
+| `MUSIC_TO_MIDI_ENABLED_PROFILES` | 两个默认配置 | 逗号分隔的模型配置；空值或未知配置会使初始化停止 |
+| `MAX_UPLOAD_BYTES` | `4294967296` | API 单文件上传上限，单位为字节，默认 4 GiB |
+| `MAX_REQUEST_BODY_SIZE` | `4GiB` | 网关请求体上限；通常与 API 上传上限保持一致 |
+| `MAX_QUEUED_JOBS` | `4` | 等待中的作业上限；达到上限时返回 HTTP 429，`0` 表示不限制等待数量 |
+| `MIN_FREE_BYTES` | `21474836480` | 作业卷最小保留空间，单位为字节，默认 20 GiB；`0` 表示不保留额外空间 |
+| `RETENTION_DAYS` | `7` | 已结束作业的最长保留天数；`0` 表示不按天数清理 |
+| `RETENTION_MAX_JOBS` | `50` | 已结束作业的数量上限；`0` 表示不按数量清理 |
+| `RETENTION_MAX_BYTES` | `107374182400` | 作业数据总量上限，单位为字节，默认 100 GiB；`0` 表示不按总量清理 |
+| `SHM_SIZE` | `2gb` | 后端与模型初始化容器的共享内存大小 |
+| `LOG_LEVEL` | `info` | `critical`、`error`、`warning`、`info`、`debug` 或 `trace` |
+
+端口只映射到 `127.0.0.1`。该默认值不会把服务发布到局域网或互联网。
+
+## 模型配置
+
+`MUSIC_TO_MIDI_ENABLED_PROFILES` 使用逗号分隔的配置 ID。默认组合兼顾常用多乐器和钢琴转写，同时控制首次下载量：
+
+```dotenv
+MUSIC_TO_MIDI_ENABLED_PROFILES=yourmt3:yptf_moe_multi_nops,piano_transkun
 ```
 
-### Windows / Docker Desktop
-
-```powershell
-Set-Location MusicToMidi-Docker-vX.Y.Z
-Copy-Item .env.selfhost.example .env
-# 按需修改模型配置、端口、GPU 或容量限制
-.\scripts\docker_selfhost.ps1 setup
-```
-
-默认完成后只监听：
-
-```text
-http://127.0.0.1:7860
-```
-
-脚本不会询问公网域名、ACME 邮箱、登录密码或 SSH 密码。它依次执行：
-
-1. 验证 Docker Engine、Compose 和 Compose 配置。
-2. 拉取发行包固定的两个镜像。
-3. 在实际后端镜像与所选 GPU 上验证 PyTorch CUDA 12.8、GPU 可见性和 ONNX Runtime CUDA provider。
-4. 核对镜像真实支持的 15 个模型配置 ID。
-5. 只下载并校验 `.env` 所选模型；直接转 MIDI 路线同时准备 Beat This、MuseScore General SoundFont，并验证 FluidSynth。
-6. 启动只读、非 root、最小 capability 的后端和网关。
-7. 等待内部及浏览器入口 `/api/v1/ready`，并核对 API `2.0`、只读根文件系统、用户 `10001:10001` 与内部推理网络。
-
-任何一步失败都会返回非零并保留诊断；不会改用 CPU、另一模型、旧试听或假结果。
-
-## 模型选择
-
-`.env` 中的 `MUSIC_TO_MIDI_ENABLED_PROFILES` 是必填逗号列表。只有选择且严格就绪的配置会由 API 宣告可用：
+可用配置如下：
 
 | 配置 ID | 路线 |
 |---|---|
 | `yourmt3:ymt3_plus` | YourMT3+ YMT3+ |
 | `yourmt3:yptf_single_nops` | YourMT3+ YPTF Single (noPS) |
 | `yourmt3:yptf_multi_ps` | YourMT3+ YPTF Multi (PS) |
-| `yourmt3:yptf_moe_multi_nops` | YourMT3+ YPTF MoE Multi (noPS)，推荐默认 |
+| `yourmt3:yptf_moe_multi_nops` | YourMT3+ YPTF MoE Multi (noPS)，默认多乐器路线 |
 | `yourmt3:yptf_moe_multi_ps` | YourMT3+ YPTF MoE Multi (PS) |
 | `miros` | MIROS / MusicFM |
 | `muscriptor` | MuScriptor Large |
@@ -121,13 +155,7 @@ http://127.0.0.1:7860
 | `vocal_split` | Leap XE vocals + PolarFormer accompaniment |
 | `six_stem_split` | BS-RoFormer SW Fixed 六声部 |
 
-默认配置是兼顾功能与下载量的最小组合：
-
-```dotenv
-MUSIC_TO_MIDI_ENABLED_PROFILES=yourmt3:yptf_moe_multi_nops,piano_transkun
-```
-
-增减列表后重新执行模型初始化，再启动或重启：
+修改列表后，以下命令会补齐并校验新选择的模型，然后重新启动服务：
 
 ```bash
 bash scripts/docker_selfhost.sh models
@@ -139,7 +167,7 @@ bash scripts/docker_selfhost.sh start
 .\scripts\docker_selfhost.ps1 start
 ```
 
-MuScriptor Small/Medium/Large 是 gated 仓库。先用同一 Hugging Face 账号分别接受所选模型页条款，再只在当前终端临时提供令牌：
+MuScriptor Small、Medium 和 Large 使用 Hugging Face gated 仓库。相应账户需要接受所选模型页面的条款。令牌只在模型初始化进程中使用：
 
 ```bash
 export HF_TOKEN='...'
@@ -153,9 +181,23 @@ $env:HF_TOKEN = '...'
 Remove-Item Env:HF_TOKEN
 ```
 
-令牌不写入 `.env`，不传给常驻后端；一次性 model-init 容器退出后被删除。
+`.env` 不保存 `HF_TOKEN`，常驻后端也不会收到该令牌。模型初始化容器在任务结束后删除。
 
-## 日常管理
+## `setup` 的工作内容
+
+一次 `setup` 包含以下检查：
+
+1. Docker Engine、Compose 版本和 Compose 配置。
+2. 后端与网关镜像拉取。
+3. 实际后端镜像中的 PyTorch CUDA 12.8、GPU 可见性和 ONNX Runtime CUDA provider。
+4. 镜像支持的模型配置与 `.env` 选择的一致性。
+5. 所选模型、Beat This、MuseScore General SoundFont 和 FluidSynth 的准备与校验。
+6. 非 root、只读根文件系统和最小 capability 的后端与网关启动。
+7. 内部及浏览器入口 `/api/v1/ready`、API `2.0`、用户 `10001:10001` 和内部推理网络验收。
+
+常驻后端设置为 Hugging Face/Transformers 离线，并连接到无互联网出口的内部推理网络。运行期间缺失模型会显示为就绪失败，不会触发自动下载或切换到其他模型。
+
+## 日常管理与日志
 
 Linux：
 
@@ -175,79 +217,172 @@ Windows：
 .\scripts\docker_selfhost.ps1 start
 ```
 
-`stop` 使用普通 `docker compose down`，不会删除卷。不要把 `docker compose down -v` 当停止命令；`-v` 会删除模型、作业和 Caddy 状态。
+实时日志：
 
-四个稳定命名卷为：
-
-```text
-music-to-midi_model_data
-music-to-midi_job_data
-music-to-midi_caddy_data
-music-to-midi_caddy_config
+```bash
+docker compose --env-file .env -f compose.yaml logs --follow backend gateway
 ```
 
-其中 `model_data` 可重新下载，`job_data` 保存上传、进度、结果与编辑试听资产。重要结果仍应从 Web 下载到普通文件备份；升级前应停止写入并用宿主机现有的卷备份方案保存 `job_data`。不要在容器运行时直接修改卷内文件。
+最近 200 行日志：
+
+```bash
+docker compose --env-file .env -f compose.yaml logs --tail 200 backend gateway
+```
+
+`stop` 使用 `docker compose down`，容器停止后四个命名卷仍然保留。`docker compose down -v` 会同时删除模型、作业和 Caddy 状态，适合完整重置而不是日常停止。
+
+## 数据、备份与恢复
+
+| 命名卷 | 内容 |
+|---|---|
+| `music-to-midi_model_data` | 下载并校验后的模型与模型缓存 |
+| `music-to-midi_job_data` | 上传文件、进度、结果和编辑试听资产 |
+| `music-to-midi_caddy_data` | 网关运行状态 |
+| `music-to-midi_caddy_config` | 网关配置状态 |
+
+重要结果可以直接从 Web 下载到普通文件。升级前停止服务并备份 `music-to-midi_job_data`，可以避免升级期间继续写入。
+
+Linux 的 Docker 卷备份示例：
+
+```bash
+stamp=$(date +%Y%m%d-%H%M%S)
+docker run --rm \
+  -v music-to-midi_job_data:/source:ro \
+  -v "$PWD:/backup" \
+  alpine:3.22 \
+  tar -czf "/backup/music-to-midi-job-data-${stamp}.tar.gz" -C /source .
+```
+
+Windows PowerShell 的 Docker 卷备份示例：
+
+```powershell
+$stamp = Get-Date -Format yyyyMMdd-HHmmss
+docker run --rm `
+  -v music-to-midi_job_data:/source:ro `
+  -v "${PWD}:/backup" `
+  alpine:3.22 `
+  tar -czf "/backup/music-to-midi-job-data-$stamp.tar.gz" -C /source .
+```
+
+恢复时使用一个空的 `music-to-midi_job_data` 卷，再把备份解压到该卷。已有卷中的同名文件会被覆盖，而备份中不存在的旧文件仍会保留，因此空卷恢复的结果最明确。下面的 `docker volume create` 适用于该卷不存在的情况；同名卷已经存在时，Docker 会复用原卷：
+
+```bash
+docker volume create music-to-midi_job_data
+docker run --rm \
+  -v music-to-midi_job_data:/target \
+  -v "$PWD:/backup:ro" \
+  alpine:3.22 \
+  tar -xzf /backup/<备份文件名>.tar.gz -C /target
+```
 
 ## 升级与回滚
 
-版本标签便于识别，Release 包中的 digest 才是实际运行锁。升级按以下顺序进行：
+发行包中的镜像 digest 是实际运行版本。升级流程如下：
 
-1. 阅读新版本 Release notes，确认平台、模型许可和数据兼容说明。
-2. 保留旧发行目录、旧 `.env` 与 `IMAGE_DIGESTS.txt`，备份重要 `job_data`。
+1. 查看新版本 Release notes 中的平台、许可和数据兼容说明。
+2. 保留旧发行目录、旧 `.env` 和 `IMAGE_DIGESTS.txt`，并备份重要作业数据。
 3. 下载并校验新版本 Docker 发行包。
-4. 把旧 `.env` 复制到新目录，并与新模板逐项比较新增配置。
-5. 在新目录执行 `setup`；它会拉取新 digest、验证 GPU、补齐所选模型并通过 readiness 后才报告成功。
-6. 用至少一段真实音频验收每个启用配置，以及分离后的逐轨转换、编辑试听和下载。
+4. 把旧 `.env` 复制到新目录，与新模板比较新增配置。
+5. 在新目录运行 `setup`。
+6. 使用实际音频检查每个已启用配置、分离后的逐轨转换、编辑试听和下载。
 
-若新版本验收失败且 Release notes 未声明不可逆迁移，回到保留的旧发行目录执行 `start`，Compose 会按旧 digest 重建容器并复用原命名卷。不要删除卷来“回滚”。若未来版本引入不可逆迁移，必须按该版本说明恢复升级前备份，不能假定旧程序能读取新数据。
+如果新版本验收未通过且 Release notes 没有不可逆迁移说明，旧发行目录中的 `start` 会按旧 digest 重建容器并复用原命名卷。含不可逆迁移的版本以对应 Release notes 和升级前备份为准。
 
-## 为什么默认不需要域名、ACME 或 SSH 密码
+## 本机、远程和公网访问
 
-默认 `compose.yaml` 把网关硬绑定到宿主机 `127.0.0.1`，仅本机可访问，所以不申请公网证书，也不收集登录密码：
+默认数据路径如下：
 
 ```text
-Browser -> 127.0.0.1:7860 -> Caddy -> internal backend:8765 -> NVIDIA GPU
-                                      |-> model_data
-                                      +-> job_data
+Browser -> 127.0.0.1:7860 -> gateway -> internal backend:8765 -> NVIDIA GPU
+                                             |-> model_data
+                                             +-> job_data
 ```
 
-- 公网域名：只用于把服务公开到互联网。
-- ACME 邮箱：只用于 Caddy 自动申请/续期公开 HTTPS 证书时接收通知。
-- SSH 密码/密钥：只是用户自己登录远程服务器或建立 SSH 隧道的凭据，不属于镜像或应用配置；项目不会收集或保存。
+本机自托管不涉及以下信息：
 
-如果容器运行在远程服务器，推荐保持 loopback 绑定并由用户自己建立 SSH 隧道，例如把服务器 `127.0.0.1:7860` 转发到本机。应用发行包本身不需要知道 SSH 密码。
+- 公网域名用于互联网访问。
+- ACME 邮箱用于公开 HTTPS 证书的签发与续期通知。
+- SSH 密码或密钥属于使用者登录远程主机的凭据，应用不会读取或保存。
 
-## 高级：真正的公网单所有者部署
+远程服务器可以继续保持 loopback 绑定，并通过使用者自己的 SSH 连接转发端口：
 
-仓库另保留 `compose.production.yaml`、`.env.production.example` 与 `scripts/setup_docker_production.ps1`。只有明确要把服务公开到互联网时才使用它们。该模式要求：
+```bash
+ssh -L 7860:127.0.0.1:7860 -p <SSH端口> <用户>@<服务器>
+```
 
-- 真实公网 DNS 和可达的 80/443；
-- ACME 联系邮箱；
-- Caddy Argon2id Basic Auth；
-- HTTPS 终止与后端公共部署门禁；
-- 公网入口与内部推理网络隔离。
+隧道建立后，本机浏览器仍访问 `http://127.0.0.1:7860`。
 
-它仍是“经认证的单一所有者”服务，不是多人互不信任的 SaaS：没有账号系统、租户隔离、配额归属或逐任务授权。普通 Issue #9 使用者不需要这套公网参数。
+公开互联网部署使用仓库中的 `compose.production.yaml`、`.env.production.example` 和 `scripts/setup_docker_production.ps1`。该模式包含公网 DNS、80/443、ACME 联系邮箱、Caddy Argon2id Basic Auth、HTTPS 终止和内部推理网络隔离。它面向单一所有者服务，不包含账号系统、租户隔离、配额归属或逐任务授权。
 
-## 就绪、容量与失败语义
+## 常见问题
 
-- `/api/v1/health`：API 进程与单 GPU worker 存活。
-- `/api/v1/ready`：worker、CUDA runtime、所选模型、Beat This、SoundFont、FluidSynth 和数据盘容量全部通过。
-- 上传超过限制：HTTP 413。
-- 等待队列达到上限：HTTP 429。
-- 数据盘低于最小空闲量：HTTP 507。
-- GPU 作业单 worker 串行；队列限制是容量保护，不是横向扩容。
-- 模型下载、身份、CUDA provider、SoundFont、FluidSynth、磁盘或配置失败都会显式终止。
+### Docker 或 Compose 版本不符合要求
 
-## 发布与验收证据
+```bash
+docker version
+docker compose version
+```
 
-`.github/workflows/container.yml` 在版本标签上执行：
+`setup` 会显示检测到的版本和最低版本要求。
 
-1. 容器、许可证、自托管 Compose 和脚本静态契约测试。
-2. 构建 `linux/amd64` 后端/网关，并以非 root、只读方式做镜像级 smoke。
-3. 推送固定版本、commit SHA 与 `latest` 标签，同时生成 OCI SBOM、provenance 和 GitHub registry attestation。
-4. 在一个没有 GHCR 登录状态的新 job 中匿名拉取刚发布的版本；私有或不可拉取会让发布失败。
-5. 对实际拉取的后端检查 15 配置、最新 MIDI 量化与离线 SoundFont 入口；真实启动网关并检查动态同源配置。
-6. 把实际 digest 写入 Compose 和清单，验证 Compose、Bash/PowerShell 语法，生成 ZIP/tar.gz 与 SHA-256 后上传到同版本 Release。
+### Docker 看不到 NVIDIA GPU
 
-这些证明覆盖源码、构建、镜像内容、公开分发和无模型启动契约。GitHub 托管 runner 没有 NVIDIA GPU，因此“镜像成功构建”仍不等同于全部模型真实推理成功；正式发版还必须在兼容的 Linux NVIDIA 主机上，对所选模型执行真实音频端到端验收，并分别记录输出、模型配置与镜像 digest。
+宿主机的 `nvidia-smi` 与前面的 NVIDIA CUDA 容器测试都需要正常返回。Windows Docker Desktop 同时需要 WSL2 后端和 GPU 支持；Linux 需要 NVIDIA Container Toolkit。
+
+### `CUDAExecutionProvider` 不可用
+
+该错误表示实际后端镜像没有获得当前固定的 ONNX Runtime CUDA provider。常见原因是宿主驱动、Docker GPU runtime 或 GPU 暴露配置异常。`setup` 会在模型下载前停止并显示 provider 列表。
+
+### 端口已占用
+
+在 `.env` 中更换 `MUSIC_TO_MIDI_PORT`，然后重新执行 `start`。端口范围为 `1-65535`。
+
+### MuScriptor 返回 401 或 403
+
+Hugging Face 账户需要接受对应 Small、Medium 或 Large 模型页面的条款，并在当前终端提供具有读取权限的 `HF_TOKEN`。令牌只用于 `models` 操作。
+
+### 模型初始化中断
+
+重新执行 `models` 会再次校验所选配置；已经完整且身份匹配的资产会继续使用，缺失或不完整的资产会显示具体失败原因。
+
+### HTTP 507 或磁盘空间不足
+
+`MIN_FREE_BYTES` 是作业卷的保留空间。`status`、`verify` 和后端日志会显示当前容量状态。已下载的重要结果可以移出作业卷，保留策略也可以在 `.env` 中调整。
+
+### 服务启动但页面未就绪
+
+```bash
+bash scripts/docker_selfhost.sh verify
+docker compose --env-file .env -f compose.yaml logs --tail 200 backend gateway
+```
+
+Windows 使用同名 PowerShell `verify` 操作；Docker Compose 日志命令保持相同。
+
+## 停止、重置与移除
+
+日常停止会保留全部数据：
+
+```bash
+bash scripts/docker_selfhost.sh stop
+```
+
+完整重置会删除四个命名卷及其中的模型、作业和网关状态：
+
+```bash
+docker compose --env-file .env -f compose.yaml down -v
+```
+
+容器与卷移除后，发行目录可以作为普通文件夹删除。镜像保留在 Docker 本地缓存中，后续安装可以复用；如需释放镜像空间，可在确认没有其他容器使用后通过 Docker Desktop 或 `docker image rm` 删除 `IMAGE_DIGESTS.txt` 中列出的镜像。
+
+## 发布验证范围
+
+容器发布工作流覆盖以下项目：
+
+1. Docker、许可、Compose 和管理脚本契约测试。
+2. `linux/amd64` 后端与网关构建，以及非 root、只读根文件系统的镜像级运行检查。
+3. OCI SBOM、provenance、GitHub registry attestation 和固定版本标签。
+4. 无 GHCR 登录状态下的匿名拉取。
+5. 后端的 15 个模型配置、离线资源入口和网关动态同源配置。
+6. digest 固定 Compose、Bash/PowerShell 语法、ZIP/tar.gz 和 SHA-256。
+
+这些检查覆盖源码、镜像内容、公开分发和无模型启动契约。GitHub 托管 runner 不提供 NVIDIA GPU，因此自动化结果不代表所有模型已经在每种实体 GPU 上完成真实音频推理。首次部署时的 `setup` 会验证实际 GPU 与 provider；最终的模型质量、显存占用和长音频表现仍取决于使用者启用的配置、硬件和输入音频。

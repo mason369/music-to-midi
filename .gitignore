@@ -114,6 +114,7 @@ pasted-text*
 /docs/*
 !/docs/muscriptor-model.md
 !/docs/docker-deployment.md
+!/docs/docker-deployment.en.md
 .tmp/ai4m-miros/
 /external/ai4m-miros/
 /.tmp/

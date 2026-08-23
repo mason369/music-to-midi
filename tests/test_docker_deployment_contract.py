@@ -352,13 +352,94 @@ def test_container_workflow_publishes_amd64_images_with_supply_chain_evidence():
 
 def test_deployment_document_lists_every_supported_profile_and_real_acceptance_boundary():
     document = _read("docs/docker-deployment.md")
+    english = _read("docs/docker-deployment.en.md")
     from src.model_profiles import ALL_PROFILE_IDS
 
     for profile_id in ALL_PROFILE_IDS:
         assert f"`{profile_id}`" in document
+        assert f"`{profile_id}`" in english
     assert "`linux/amd64`" in document
-    assert "当前不提供 CPU、AMD/ROCm、Intel XPU" in document
-    assert "推理请求不会偷偷补模型" in document
-    assert "经认证的单一所有者" in document
-    assert "镜像成功构建”仍不等同于全部模型真实推理成功" in document
+    assert "当前没有 CPU、AMD/ROCm、Intel XPU" in document
+    assert "不会触发自动下载或切换到其他模型" in document
+    assert "面向单一所有者服务" in document
+    assert "自动化结果不代表所有模型已经在每种实体 GPU 上完成真实音频推理" in document
     assert "docker compose down -v" in document
+
+
+def test_public_docker_guides_cover_the_full_user_journey():
+    chinese = _read("docs/docker-deployment.md")
+    english = _read("docs/docker-deployment.en.md")
+    workflow = _read(".github/workflows/container.yml")
+
+    for variable in (
+        "MUSIC_TO_MIDI_PORT",
+        "GPU_DEVICE_ID",
+        "MUSIC_TO_MIDI_ENABLED_PROFILES",
+        "MAX_UPLOAD_BYTES",
+        "MAX_REQUEST_BODY_SIZE",
+        "MAX_QUEUED_JOBS",
+        "MIN_FREE_BYTES",
+        "RETENTION_DAYS",
+        "RETENTION_MAX_JOBS",
+        "RETENTION_MAX_BYTES",
+        "SHM_SIZE",
+        "LOG_LEVEL",
+    ):
+        assert f"`{variable}`" in chinese
+        assert f"`{variable}`" in english
+
+    for required in (
+        "sha256sum",
+        "Get-FileHash",
+        "WSL2",
+        "logs --follow",
+        "music-to-midi_job_data",
+        "ssh -L 7860:127.0.0.1:7860",
+        "## 常见问题",
+        "## 停止、重置与移除",
+    ):
+        assert required in chinese
+
+    for required in (
+        "sha256sum",
+        "Get-FileHash",
+        "WSL2",
+        "logs --follow",
+        "music-to-midi_job_data",
+        "ssh -L 7860:127.0.0.1:7860",
+        "## Troubleshooting",
+        "## Stop, reset, and removal",
+    ):
+        assert required in english
+
+    assert 'cp docs/docker-deployment.en.md "$BUNDLE_DIR/README_EN.md"' in workflow
+
+
+def test_public_docker_copy_does_not_expose_internal_release_notes():
+    public_copy = "\n".join(
+        (
+            _read("README.md"),
+            _read("docs/README_zh.md"),
+            _read("docs/README.md"),
+            _read("docs/docker-deployment.md"),
+            _read("docs/docker-deployment.en.md"),
+            _read(".env.selfhost.example"),
+            _read(".github/workflows/container.yml"),
+            _read(".github/workflows/release.yml"),
+        )
+    )
+
+    for internal_phrase in (
+        "不是一个孤立的公开镜像",
+        "推理请求不会偷偷补模型",
+        "不要把 `docker compose down -v` 当停止命令",
+        "只有明确要把服务公开到互联网时才使用",
+        "普通 Issue #9 使用者",
+        "正式发版还必须",
+        "完整版本说明仍由主发布流程更新",
+        "公网部署请使用同版本 Docker 自托管发行",
+        "Never store plaintext passwords or HF_TOKEN in this file",
+        "# Edit .env to select the port, GPU, and model profiles",
+        "# 编辑 .env，选择端口、GPU 和模型配置",
+    ):
+        assert internal_phrase not in public_copy

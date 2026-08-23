@@ -1256,9 +1256,9 @@ jobs:
           cat > "dist/${BACKEND_NAME}/使用说明.txt" <<'HEREDOC'
           音乐转 MIDI 转换器 Linux Web 后端（CUDA 12.8）
 
-          ./MusicToMidiBackend 是独立处理服务入口。首次运行会在可写运行目录生成配置；局域网使用时，请把 host、端口和 allowed_origins 设置为真实地址。
+          ./MusicToMidiBackend 是独立处理服务入口。首次运行会在可写运行目录生成配置；局域网地址由 host、端口和 allowed_origins 配置决定。
           本目录内置完整模型、CUDA 运行时、FluidSynth 与 FFmpeg，可以脱离桌面 App 目录单独复制和运行。
-          Web 服务不内置认证、授权或 TLS，只适用于受信任局域网；公网部署请使用同版本 Docker 自托管发行。
+          Web 服务不内置认证、授权或 TLS，适用范围是受信任局域网。公网单一所有者场景由同版本 Docker 高级部署提供 HTTPS 和 Basic Auth。
           HEREDOC
 
           cat > "dist/${FRONTEND_NAME}/使用说明.txt" <<'HEREDOC'
@@ -1581,7 +1581,7 @@ jobs:
           - 桌面版与独立 Web 前端同步全部处理和逐轨工作台能力；Hugging Face Space 和 Colab 同步七种处理模式、三种速度方案、默认官方处理链路、可选分段边界连续性修复链路、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
           - Windows 与 Linux GPU 完整包都保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的入口和可单独复制的完整运行环境。Windows 在 NTFS 上通过 WIM 硬链接复用相同模型/运行时文件，Linux 通过 tar hard-link metadata 复用；两端另发不含模型的轻量 WebFrontend 包。
           - Windows 与 Linux 发布烟测都会从三个独立目录真实启动，核对 API 2.0、运行时配置和 CSP；Linux 还会从最终分卷归档抽取三个角色并验证 App/WebBackend 硬链接确实被还原。Web 两端不内置认证、授权或 TLS，只适用于受信任局域网。
-          - Issue #9 同步提供完整 Docker 自托管发行：无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型由使用者显式选择并一次性初始化，常驻推理容器离线运行；默认只绑定本机，无需域名、ACME 邮箱或 SSH 凭据。
+          - Issue #9 的 Docker 自托管包包含无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型按使用者选择的配置初始化到持久卷，常驻推理容器离线运行，默认入口为本机 `127.0.0.1:7860`。
           - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
           - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；使用条件是同一账户已在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
@@ -1605,7 +1605,7 @@ jobs:
           5. 局域网 Web 按配置文件填写实际前后端地址与 CORS 来源；完整 WIM 也支持只选择 App 或 WebBackend 目录解压，7-Zip 会为该目录还原所需完整文件
           6. Linux：下载 \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` 的全部分卷，按文件名顺序合并后用 \`tar -xzf\` 解压；会得到 App、WebBackend、WebFrontend 三个同级独立目录
           7. Linux 只部署局域网前端时，可单独下载 \`MusicToMidi-Linux-WebFrontend-Portable.tar.gz\`；启动顺序同样是 GPU 主机的 WebBackend 在前、WebFrontend 在后
-          8. Docker：校验同版本 \`MusicToMidi-Docker-SHA256SUMS-${TAG}.txt\` 后解压发行包，按需修改 \`.env\` 的模型配置，再运行 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本；完整说明见包内 \`README.md\`
+          8. Docker：发行包内的 \`README.md\` 与 \`README_EN.md\` 提供校验、配置和故障排查；快速启动命令为 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本
 
           ### 说明
           - 无需安装 Python，解压即用
@@ -1671,7 +1671,7 @@ jobs:
 
           Linux publishes the same three independently movable roles in one split \`tar.gz\` plus a standalone lightweight WebFrontend archive. GNU tar preserves the App/WebBackend hard links so the shared model/runtime tree is stored once; the release job extracts role probes from the final split archive and verifies the restored hard-link identity before upload. The packaged Linux backend and frontend are also started together and checked for API 2.0, runtime configuration, and CSP parity.
 
-          The Docker asset is a complete self-host distribution rather than a lone image: its Compose file is pinned to the anonymously verified backend and gateway digests, models are selected and initialized explicitly into persistent volumes, and the long-running inference service is offline. It binds to loopback by default and includes Linux/Windows setup, verification, update, and rollback commands in its bundled README.
+          The Docker self-host package includes backend and gateway images, a Compose file pinned to anonymously verified digests, persistent model initialization, and an offline inference service. It binds to loopback by default, and its bundled Chinese and English guides cover setup, verification, backup, updates, rollback, and troubleshooting.
 
           The combined portable work is distributed under GPL-3.0 with component-specific notices. Aria-AMT remains CC BY-NC-SA 4.0; MuScriptor checkpoints remain CC BY-NC 4.0 plus their model-page conditions. See \`THIRD_PARTY_NOTICES.md\`, \`THIRD_PARTY_SBOM.txt\`, and \`FFMPEG_BUILD_AUDIT.txt\` inside the package for exact evidence and attribution.
           NOTES
