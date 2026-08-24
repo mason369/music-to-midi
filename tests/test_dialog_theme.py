@@ -79,11 +79,11 @@ def test_every_desktop_static_file_dialog_uses_the_native_system_dialog():
             ):
                 calls.append((path, node))
 
-    assert len(calls) == 7
+    assert len(calls) == 9
     for path, call in calls:
         for keyword in call.keywords:
             if keyword.arg != "options":
                 continue
-            assert "DontUseNativeDialog" not in ast.unparse(keyword.value), (
-                f"{path}:{call.lineno} must use the native system file dialog"
-            )
+            assert "DontUseNativeDialog" not in ast.unparse(
+                keyword.value
+            ), f"{path}:{call.lineno} must use the native system file dialog"

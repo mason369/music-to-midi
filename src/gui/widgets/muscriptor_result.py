@@ -50,24 +50,30 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.midi_editor import export_edited_midi
-from src.core.midi_tempo import validated_midi_time_signature
-from src.core.muscriptor_result_assets import (
-    MuscriptorPlaybackAssets,
-    MuscriptorPreviewAssets,
-    MuscriptorRollNote,
-    prepare_midi_playback_assets,
-    prepare_midi_preview_assets,
-    read_midi_roll_notes,
-)
 from src.core.midi_quantization import (
     DEFAULT_MIDI_QUANTIZE_GRID,
     DEFAULT_MIDI_QUANTIZE_SCOPE,
     MIDI_QUANTIZE_GRIDS,
     MIDI_QUANTIZE_SCOPES,
 )
-from src.i18n.translator import get_translator, t
+from src.core.midi_tempo import validated_midi_time_signature
+from src.core.muscriptor_result_assets import (
+    DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+    MidiAudioExportResult,
+    MuscriptorPlaybackAssets,
+    MuscriptorPreviewAssets,
+    MuscriptorRollNote,
+    get_midi_audio_export_preset,
+    prepare_midi_playback_assets,
+    prepare_midi_preview_assets,
+    read_midi_roll_notes,
+    render_midi_audio_export,
+)
+from src.core.sheet_music import SheetMusicExportResult
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
 from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
+from src.gui.workers.sheet_music_export_worker import SheetMusicExportWorker
+from src.i18n.translator import get_translator, t
 from src.models.data_models import MAX_MIDI_BPM, MIN_MIDI_BPM, ProcessingResult
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -1514,6 +1520,49 @@ class _EditedAssetWorker(QThread):
             self.failed.emit(self.generation, str(exc))
 
 
+class _MidiAudioExportWorker(QThread):
+    """Render one immutable MIDI snapshot to a verified WAV destination."""
+
+    succeeded = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(
+        self,
+        midi_path: str,
+        destination: str,
+        preset_id: str,
+        silence_duration_seconds: float,
+        snapshot_dir: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.midi_path = str(midi_path)
+        self.destination = str(destination)
+        self.preset_id = str(preset_id)
+        self.silence_duration_seconds = float(silence_duration_seconds)
+        self.snapshot_dir = str(snapshot_dir)
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            result = render_midi_audio_export(
+                self.midi_path,
+                self.destination,
+                self.preset_id,
+                silence_duration_seconds=self.silence_duration_seconds,
+                cancel_check=lambda: self._cancelled,
+            )
+            self.succeeded.emit(result)
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class _InstrumentRow(QFrame):
     mute_toggled = pyqtSignal(str)
     solo_toggled = pyqtSignal(str)
@@ -1605,6 +1654,8 @@ class MuscriptorResultWidget(QFrame):
         self._asset_worker: _AssetWorker | None = None
         self._preview_worker: _PreviewAssetWorker | None = None
         self._edit_asset_worker: _EditedAssetWorker | None = None
+        self._audio_export_worker: _MidiAudioExportWorker | None = None
+        self._sheet_export_worker: SheetMusicExportWorker | None = None
         self._deferred_preview: tuple[int, MuscriptorPreviewAssets] | None = None
         self._deferred_final_assets: MuscriptorPlaybackAssets | None = None
         self._deferred_editor_assets: tuple[int, MuscriptorPlaybackAssets] | None = None
@@ -1614,6 +1665,10 @@ class MuscriptorResultWidget(QFrame):
         ) = None
         self._preview_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-preview-"))
         self._edit_asset_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-editor-audio-"))
+        self._audio_export_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-wav-export-"))
+        self._audio_export_generation = 0
+        self._sheet_export_root = Path(tempfile.mkdtemp(prefix="music-to-midi-sheet-export-"))
+        self._sheet_export_generation = 0
         self._edit_asset_generation = 0
         self._edit_asset_applied_generation = 0
         self._edit_asset_pending: tuple[int, tuple[MuscriptorRollNote, ...]] | None = None
@@ -1657,6 +1712,8 @@ class MuscriptorResultWidget(QFrame):
         self._playback_engine.finished.connect(self._on_synchronized_playback_finished)
         self._playback_engine.error_occurred.connect(self._on_synchronized_playback_error)
         self._midi_path = ""
+        self._original_audio_midi_path: Path | None = None
+        self._active_audio_midi_path: Path | None = None
         self._original_edit_notes: tuple[MuscriptorRollNote, ...] = ()
         self._edited_notes: tuple[MuscriptorRollNote, ...] = ()
         self._edit_duration = 0.0
@@ -2113,13 +2170,21 @@ class MuscriptorResultWidget(QFrame):
         self.download_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.download_menu = QMenu(self.download_button)
         self.download_midi_action = self.download_menu.addAction("")
-        self.download_transcription_action = self.download_menu.addAction("")
+        self.download_sheet_music_action = self.download_menu.addAction("")
+        self.download_transcription_menu = self.download_menu.addMenu("")
+        self.download_transcription_hq_action = self.download_transcription_menu.addAction("")
+        self.download_transcription_compat_action = self.download_transcription_menu.addAction("")
         self.download_stereo_action = self.download_menu.addAction("")
-        self.download_transcription_action.setEnabled(False)
+        self.download_transcription_hq_action.setEnabled(False)
+        self.download_transcription_compat_action.setEnabled(False)
         self.download_stereo_action.setEnabled(False)
         self.download_midi_action.triggered.connect(lambda: self._save_asset("midi"))
-        self.download_transcription_action.triggered.connect(
-            lambda: self._save_asset("transcription")
+        self.download_sheet_music_action.triggered.connect(self._start_sheet_music_export)
+        self.download_transcription_hq_action.triggered.connect(
+            lambda: self._start_midi_audio_export(DEFAULT_MIDI_AUDIO_EXPORT_PRESET)
+        )
+        self.download_transcription_compat_action.triggered.connect(
+            lambda: self._start_midi_audio_export("pcm16_44100")
         )
         self.download_stereo_action.triggered.connect(lambda: self._save_asset("stereo"))
         self.download_button.setMenu(self.download_menu)
@@ -2267,6 +2332,8 @@ class MuscriptorResultWidget(QFrame):
                 output_dir / "source-tempo-playback.mid",
                 self._detected_bpm,
             )
+        self._original_audio_midi_path = Path(playback_midi_path).resolve()
+        self._active_audio_midi_path = self._original_audio_midi_path
         if self.muscriptor_groups and result.beat_info is not None:
             from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
 
@@ -2602,6 +2669,11 @@ class MuscriptorResultWidget(QFrame):
     def _apply_final_assets(self, assets: MuscriptorPlaybackAssets) -> None:
         if self._playing:
             raise RuntimeError("Cannot replace final MIDI assets during transport activity")
+        if self._original_audio_midi_path is None and self._midi_path:
+            candidate = Path(self._midi_path).resolve()
+            if candidate.is_file():
+                self._original_audio_midi_path = candidate
+                self._active_audio_midi_path = candidate
         self.roll.set_notes(assets.notes, duration=assets.duration)
         self._original_assets = assets
         self._replace_playback_assets(assets, detected_notes=assets.notes)
@@ -2638,7 +2710,7 @@ class MuscriptorResultWidget(QFrame):
         self._set_playback_duration(assets.duration)
         self.mix_slider.setEnabled(bool(self._normal_sources))
         self.stereo_checkbox.setEnabled(True)
-        self.download_transcription_action.setEnabled(True)
+        self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
         self.download_stereo_action.setEnabled(True)
         self._position_ms = min(position_ms, int(round(assets.duration * 1000.0)))
         self._playback_finished = False
@@ -2814,6 +2886,7 @@ class MuscriptorResultWidget(QFrame):
         self._edit_asset_pending = (generation, tuple(after))
         self.play_button.setEnabled(False)
         self.playback_slider.setEnabled(False)
+        self._set_midi_audio_export_enabled(False)
         self.playback_status_label.setText(t("muscriptor_result.editor_audio_rendering"))
         if self._edit_asset_worker is not None and self._edit_asset_worker.isRunning():
             self._edit_asset_worker.cancel()
@@ -2920,9 +2993,21 @@ class MuscriptorResultWidget(QFrame):
                 f"generation={generation}, current={self._edit_asset_generation}"
             )
         previous_dir = self._active_edit_asset_dir
+        if restored_original:
+            next_midi_path = self._original_audio_midi_path
+        elif output_dir is not None:
+            next_midi_path = (output_dir / "edited-source-tempo.mid").resolve()
+        else:
+            next_midi_path = None
+        if next_midi_path is None or not next_midi_path.is_file():
+            raise FileNotFoundError(
+                f"Current edited MIDI audio source is missing: {next_midi_path}"
+            )
+        self._active_audio_midi_path = next_midi_path
         self._replace_playback_assets(assets, detected_notes=self._edited_notes)
         self._edit_asset_applied_generation = generation
         self._active_edit_asset_dir = output_dir
+        self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
         self.playback_status_label.setText(
             t(
                 "muscriptor_result.final_audio_ready"
@@ -3902,8 +3987,196 @@ class MuscriptorResultWidget(QFrame):
             self._instrument_rows[instrument] = row
         self._sync_instrument_controls()
 
+    def _midi_audio_export_is_ready(self) -> bool:
+        worker = self._audio_export_worker
+        return bool(
+            self._assets is not None
+            and self._active_audio_midi_path is not None
+            and self._active_audio_midi_path.is_file()
+            and self._edit_asset_applied_generation == self._edit_asset_generation
+            and (worker is None or not worker.isRunning())
+        )
+
+    def _set_midi_audio_export_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.download_transcription_hq_action.setEnabled(value)
+        self.download_transcription_compat_action.setEnabled(value)
+
+    def _start_midi_audio_export(self, preset_id: str) -> None:
+        """Snapshot the current source-tempo MIDI and render the selected WAV."""
+
+        snapshot_dir: Path | None = None
+        worker_started = False
+        try:
+            if not self._midi_audio_export_is_ready() or self._assets is None:
+                raise RuntimeError("Current MIDI audio is not ready for export")
+            source_midi = self._active_audio_midi_path
+            if source_midi is None:
+                raise RuntimeError("Current MIDI audio source is unavailable")
+            preset = get_midi_audio_export_preset(preset_id)
+            source_name = Path(self._midi_path).stem or "transcription"
+            suggested_name = f"{source_name}_transcription_{preset.filename_suffix}.wav"
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                t("muscriptor_result.download"),
+                suggested_name,
+                "WAV (*.wav)",
+            )
+            if not destination:
+                return
+            destination_path = Path(destination)
+            if not destination_path.suffix:
+                destination_path = destination_path.with_suffix(".wav")
+            elif destination_path.suffix.lower() != ".wav":
+                raise ValueError(
+                    f"MIDI audio export destination must end in .wav: {destination_path}"
+                )
+            self._audio_export_generation += 1
+            snapshot_dir = (
+                self._audio_export_root / f"export-{self._audio_export_generation:06d}"
+            ).resolve()
+            snapshot_dir.mkdir(parents=True)
+            snapshot_midi = snapshot_dir / "current-source-tempo.mid"
+            shutil.copy2(source_midi, snapshot_midi)
+            if not snapshot_midi.is_file() or snapshot_midi.stat().st_size <= 0:
+                raise RuntimeError(f"MIDI audio export snapshot was not created: {snapshot_midi}")
+            worker = _MidiAudioExportWorker(
+                str(snapshot_midi),
+                str(destination_path),
+                preset.id,
+                self._assets.duration,
+                str(snapshot_dir),
+                self,
+            )
+            worker.succeeded.connect(self._on_midi_audio_export_succeeded)
+            worker.failed.connect(self._on_midi_audio_export_failed)
+            worker.cancelled.connect(self._on_midi_audio_export_cancelled)
+            worker.finished.connect(
+                lambda worker=worker: self._on_midi_audio_export_worker_finished(worker)
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._audio_export_worker = worker
+            self._set_midi_audio_export_enabled(False)
+            self.playback_status_label.setText(
+                t(
+                    "muscriptor_result.audio_export_rendering",
+                    bit_depth=preset.bit_depth,
+                    sample_rate=f"{preset.sample_rate:,}",
+                )
+            )
+            worker.start(QThread.Priority.LowPriority)
+            worker_started = True
+        except Exception as exc:
+            logger.exception("Unable to start MIDI audio export")
+            if not worker_started:
+                self._audio_export_worker = None
+            if snapshot_dir is not None and not worker_started and snapshot_dir.exists():
+                try:
+                    self._remove_midi_audio_export_snapshot(snapshot_dir)
+                except Exception:
+                    logger.exception(
+                        "Unable to remove failed MIDI audio export snapshot %s",
+                        snapshot_dir,
+                    )
+            self._on_midi_audio_export_failed(str(exc))
+            self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
+
+    def _on_midi_audio_export_succeeded(self, payload: object) -> None:
+        if self._shutting_down:
+            return
+        if not isinstance(payload, MidiAudioExportResult):
+            self._on_midi_audio_export_failed("Invalid MIDI audio export result")
+            return
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.audio_export_saved",
+                bit_depth=payload.preset.bit_depth,
+                sample_rate=f"{payload.preset.sample_rate:,}",
+                path=str(payload.path),
+            )
+        )
+
+    def _on_midi_audio_export_failed(self, error: str) -> None:
+        if self._shutting_down:
+            return
+        logger.error("MIDI audio export failed: %s", error)
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.audio_export_failed",
+                error=_compact_editor_error(error),
+            )
+        )
+
+    def _on_midi_audio_export_cancelled(self) -> None:
+        if not self._shutting_down:
+            self.playback_status_label.setText(t("muscriptor_result.audio_export_cancelled"))
+
+    def _on_midi_audio_export_worker_finished(
+        self,
+        worker: _MidiAudioExportWorker,
+    ) -> None:
+        if self._audio_export_worker is worker:
+            self._audio_export_worker = None
+        self._remove_midi_audio_export_snapshot(Path(worker.snapshot_dir))
+        if not self._shutting_down:
+            self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
+
+    def _remove_midi_audio_export_snapshot(self, path: Path) -> None:
+        root = self._audio_export_root.resolve()
+        candidate = Path(path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Refusing to remove MIDI audio export data outside {root}: {candidate}"
+            ) from exc
+        if candidate.exists():
+            shutil.rmtree(candidate)
+
+    def _publish_current_midi(
+        self,
+        destination: str | Path,
+        *,
+        target_bpm: float | None = None,
+    ) -> tuple[Path, float, bool]:
+        """Publish the current notes/BPM without mutating the result source MIDI."""
+
+        source = Path(self._midi_path)
+        committed_bpm = (
+            self._commit_result_tempo_edit() if target_bpm is None else float(target_bpm)
+        )
+        edited = bool(self._original_edit_notes) and (
+            self._edited_notes != self._original_edit_notes
+        )
+        if self._detected_bpm is None:
+            raise RuntimeError("Detected/reference BPM is unavailable for MIDI export")
+        if edited:
+            published_path = export_edited_midi(
+                source,
+                destination,
+                self._edited_notes,
+                reference_bpm=self._detected_bpm,
+                target_bpm=committed_bpm,
+            )
+        else:
+            published_path = _export_midi_at_project_speed(
+                source,
+                destination,
+                self._detected_bpm,
+                committed_bpm,
+            )
+        if self.muscriptor_groups:
+            from src.core.midi_tempo import repeat_tempo_events_on_note_tracks
+
+            published_path = repeat_tempo_events_on_note_tracks(
+                published_path,
+                label="MuScriptor exported MuseScore tempo metadata",
+            )
+        return Path(published_path), committed_bpm, edited
+
     def _save_asset(self, kind: str) -> None:
         target_bpm: float | None = None
+        edited = False
         if kind == "midi":
             source = Path(self._midi_path)
             target_bpm = self._commit_result_tempo_edit()
@@ -3913,10 +4186,6 @@ class MuscriptorResultWidget(QFrame):
             edit_suffix = "_edited" if edited else ""
             filter_text = "MIDI (*.mid)"
             suggested_name = f"{source.stem}{edit_suffix}_{target_bpm:.1f}BPM{source.suffix}"
-        elif kind == "transcription" and self._assets is not None:
-            source = self._assets.transcription_wav
-            filter_text = "WAV (*.wav)"
-            suggested_name = source.name
         elif kind == "stereo" and self._assets is not None:
             source = self._assets.stereo_mix_wav
             filter_text = "WAV (*.wav)"
@@ -3934,36 +4203,10 @@ class MuscriptorResultWidget(QFrame):
                 if target_bpm is None:
                     raise RuntimeError("Result BPM was not committed before MIDI download")
                 try:
-                    if edited:
-                        if self._detected_bpm is None:
-                            raise RuntimeError(
-                                "Detected/reference BPM is unavailable for edited MIDI export"
-                            )
-                        published_path = export_edited_midi(
-                            source,
-                            destination,
-                            self._edited_notes,
-                            reference_bpm=self._detected_bpm,
-                            target_bpm=target_bpm,
-                        )
-                    else:
-                        if self._detected_bpm is None:
-                            raise RuntimeError(
-                                "Detected/reference BPM is unavailable for MIDI export"
-                            )
-                        published_path = _export_midi_at_project_speed(
-                            source,
-                            destination,
-                            self._detected_bpm,
-                            target_bpm,
-                        )
-                    if self.muscriptor_groups:
-                        from src.core.midi_tempo import repeat_tempo_events_on_note_tracks
-
-                        published_path = repeat_tempo_events_on_note_tracks(
-                            published_path,
-                            label="MuScriptor exported MuseScore tempo metadata",
-                        )
+                    published_path, target_bpm, edited = self._publish_current_midi(
+                        destination,
+                        target_bpm=target_bpm,
+                    )
                 except Exception as exc:
                     self.playback_status_label.setText(
                         t(
@@ -3985,6 +4228,118 @@ class MuscriptorResultWidget(QFrame):
                 )
             else:
                 shutil.copy2(source, destination)
+
+    def _start_sheet_music_export(self) -> None:
+        """Snapshot the current edited MIDI and engrave it outside the UI thread."""
+
+        snapshot_dir: Path | None = None
+        try:
+            if self._sheet_export_worker is not None and self._sheet_export_worker.isRunning():
+                raise RuntimeError("A sheet-music export is already running")
+            target_bpm = self._commit_result_tempo_edit()
+            source = Path(self._midi_path)
+            edited = bool(self._original_edit_notes) and (
+                self._edited_notes != self._original_edit_notes
+            )
+            edit_suffix = "_edited" if edited else ""
+            suggested_name = f"{source.stem}{edit_suffix}_{target_bpm:.1f}BPM_sheet_music.zip"
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                t("muscriptor_result.download"),
+                suggested_name,
+                "ZIP (*.zip)",
+            )
+            if not destination:
+                return
+            if Path(destination).suffix.lower() != ".zip":
+                destination += ".zip"
+            self._sheet_export_generation += 1
+            snapshot_dir = (
+                self._sheet_export_root / f"export-{self._sheet_export_generation:06d}"
+            ).resolve()
+            snapshot_dir.mkdir(parents=True)
+            snapshot_midi = snapshot_dir / "current-project-tempo.mid"
+            self._publish_current_midi(snapshot_midi, target_bpm=target_bpm)
+            quantize_grid = f"1/{self._editor_grid_denominator()}"
+            worker = SheetMusicExportWorker(
+                midi_path=str(snapshot_midi),
+                destination=destination,
+                quantize_grid=quantize_grid,
+                parent=self,
+            )
+            worker.succeeded.connect(self._on_sheet_music_export_succeeded)
+            worker.failed.connect(self._on_sheet_music_export_failed)
+            worker.cancelled.connect(self._on_sheet_music_export_cancelled)
+            worker.finished.connect(
+                lambda worker=worker, path=snapshot_dir: self._on_sheet_music_worker_finished(
+                    worker, path
+                )
+            )
+            worker.finished.connect(worker.deleteLater)
+            self._sheet_export_worker = worker
+            self.download_sheet_music_action.setEnabled(False)
+            self.playback_status_label.setText(
+                t("muscriptor_result.sheet_music_rendering", grid=quantize_grid)
+            )
+            worker.start(QThread.Priority.LowPriority)
+        except Exception as exc:
+            if snapshot_dir is not None:
+                self._remove_sheet_music_snapshot(snapshot_dir)
+            logger.exception("Unable to start desktop sheet-music export")
+            self._on_sheet_music_export_failed(str(exc))
+
+    def _on_sheet_music_export_succeeded(self, payload: object) -> None:
+        if self._shutting_down:
+            return
+        if not isinstance(payload, SheetMusicExportResult):
+            self._on_sheet_music_export_failed("Invalid sheet-music export result")
+            return
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.sheet_music_saved",
+                path=str(payload.path),
+                count=len(payload.members),
+                grid=payload.quantize_grid,
+            )
+        )
+
+    def _on_sheet_music_export_failed(self, error: str) -> None:
+        if self._shutting_down:
+            return
+        logger.error("Desktop sheet-music export failed: %s", error)
+        self.playback_status_label.setText(
+            t(
+                "muscriptor_result.sheet_music_failed",
+                error=_compact_editor_error(error),
+            )
+        )
+
+    def _on_sheet_music_export_cancelled(self) -> None:
+        if not self._shutting_down:
+            self.playback_status_label.setText(t("muscriptor_result.sheet_music_cancelled"))
+
+    def _on_sheet_music_worker_finished(
+        self,
+        worker: SheetMusicExportWorker,
+        snapshot_dir: Path,
+    ) -> None:
+        if self._sheet_export_worker is worker:
+            self._sheet_export_worker = None
+        self._remove_sheet_music_snapshot(snapshot_dir)
+        if not self._shutting_down:
+            self.download_sheet_music_action.setEnabled(True)
+
+    def _remove_sheet_music_snapshot(self, path: Path) -> None:
+        root = self._sheet_export_root.resolve()
+        candidate = Path(path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Refusing to remove sheet-music data outside {root}: {candidate}"
+            ) from exc
+        if candidate.exists():
+            shutil.rmtree(candidate)
 
     def _update_play_label(self) -> None:
         standard_icon = (
@@ -4049,7 +4404,14 @@ class MuscriptorResultWidget(QFrame):
         self.instruments_title.setText(t("muscriptor_result.instruments"))
         self.download_button.setText(t("muscriptor_result.download"))
         self.download_midi_action.setText(t("muscriptor_result.export_edited_midi"))
-        self.download_transcription_action.setText(t("muscriptor_result.download_transcription"))
+        self.download_sheet_music_action.setText(t("muscriptor_result.download_sheet_music"))
+        self.download_transcription_menu.setTitle(t("muscriptor_result.download_transcription"))
+        self.download_transcription_hq_action.setText(
+            t("muscriptor_result.audio_export_pcm24_48000")
+        )
+        self.download_transcription_compat_action.setText(
+            t("muscriptor_result.audio_export_pcm16_44100")
+        )
         self.download_stereo_action.setText(t("muscriptor_result.download_stereo"))
         self.another_button.setText(
             t("muscriptor_result.close_detail")
@@ -4098,6 +4460,16 @@ class MuscriptorResultWidget(QFrame):
         if edit_asset_worker is not None and edit_asset_worker.isRunning():
             edit_asset_worker.cancel()
             edit_asset_worker.wait()
+        audio_export_worker = self._audio_export_worker
+        self._audio_export_worker = None
+        if audio_export_worker is not None and audio_export_worker.isRunning():
+            audio_export_worker.cancel()
+            audio_export_worker.wait()
+        sheet_export_worker = self._sheet_export_worker
+        self._sheet_export_worker = None
+        if sheet_export_worker is not None and sheet_export_worker.isRunning():
+            sheet_export_worker.cancel()
+            sheet_export_worker.wait()
 
         self._normal_sources.clear()
         self._stereo_playback_available = False
@@ -4117,5 +4489,23 @@ class MuscriptorResultWidget(QFrame):
                 logger.warning(
                     "Unable to remove edited MIDI audio directory %s: %s",
                     self._edit_asset_root,
+                    exc,
+                )
+        if self._audio_export_root.exists():
+            try:
+                shutil.rmtree(self._audio_export_root)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove MIDI audio export directory %s: %s",
+                    self._audio_export_root,
+                    exc,
+                )
+        if self._sheet_export_root.exists():
+            try:
+                shutil.rmtree(self._sheet_export_root)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to remove sheet-music export directory %s: %s",
+                    self._sheet_export_root,
                     exc,
                 )

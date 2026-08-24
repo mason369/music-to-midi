@@ -359,6 +359,33 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
     assert "fn=close_midi_detail" in colab
 
 
+def test_every_midi_delivery_surface_exposes_sheet_music_download():
+    desktop = Path("src/gui/widgets/muscriptor_result.py").read_text(encoding="utf-8")
+    space = _space_source()
+    colab = _colab_source()
+    shared_browser_editor = Path("src/gui/web/muscriptor_result_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    standalone_web = Path("web/app.js").read_text(encoding="utf-8")
+    web_api = Path("src/web_api/app.py").read_text(encoding="utf-8")
+
+    assert "download_sheet_music_action" in desktop
+    assert "SheetMusicExportWorker" in desktop
+    assert "_publish_current_midi" in desktop
+    for source in (space, colab):
+        assert "SheetMusicExportRegistry" in source
+        assert "render_sheet_music_export" in source
+        assert '"sheet_api": "./api/render_sheet_music_export"' in source
+        assert '"sheet_token": sheet_token' in source
+        assert 'api_name="render_sheet_music_export"' in source
+    assert "downloadSheetMusic" in shared_browser_editor
+    assert "fetchEditedMidiBytes" in shared_browser_editor
+    assert "generateSheetMusicForJob" in standalone_web
+    assert "updateTrackDownload" in standalone_web
+    assert "data-sheet-source" in standalone_web
+    assert '@app.post("/api/v1/jobs/{job_id}/sheet-music"' in web_api
+
+
 def test_quantization_grid_contract_covers_every_supported_delivery_surface():
     from src.core.midi_quantization import (
         DEFAULT_MIDI_QUANTIZE_GRID,
@@ -484,6 +511,8 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
             _request_root_for_owned_path=lambda _path: tmp_path,
             _EDITED_MIDI_PREVIEWS=preview_registry,
             EDITED_MIDI_PREVIEWS=preview_registry,
+            _SHEET_MUSIC_EXPORTS=preview_registry,
+            SHEET_MUSIC_EXPORTS=preview_registry,
         )
         state = build_state(
             result,
@@ -531,8 +560,12 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         "downbeats": [0.25, 1.25],
         "repeat_tempo_per_note_track": True,
         "preview_token": "preview-token",
+        "sheet_token": "sheet-token",
     }
-    require_file = lambda _root, path, *_args: Path(path).resolve()
+
+    def require_file(_root, path, *_args):
+        return Path(path).resolve()
+
     common_globals = {
         "Path": Path,
         "math": __import__("math"),
@@ -542,6 +575,8 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         "_require_owned_request_file": require_file,
         "_EDITED_MIDI_PREVIEWS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
         "EDITED_MIDI_PREVIEWS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
+        "_SHEET_MUSIC_EXPORTS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
+        "SHEET_MUSIC_EXPORTS": SimpleNamespace(require_matching=lambda token, **_kwargs: token),
     }
 
     space_normalize = _isolated_function(
@@ -575,6 +610,8 @@ def test_space_and_colab_normalizers_preserve_muscriptor_beat_grid_state(tmp_pat
         )
         assert state["preview_api"] == "./api/render_edited_midi_preview"
         assert state["preview_token"] == "preview-token"
+        assert state["sheet_api"] == "./api/render_sheet_music_export"
+        assert state["sheet_token"] == "sheet-token"
 
 
 def test_desktop_style_progress_panel_is_shared_by_space_and_colab():

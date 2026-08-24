@@ -12,6 +12,10 @@ from src.core.midi_quantization import (
     MIDI_QUANTIZE_GRIDS,
     MIDI_QUANTIZE_SCOPES,
 )
+from src.core.muscriptor_result_assets import (
+    DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+    MIDI_AUDIO_EXPORT_PRESETS,
+)
 from src.gui.web.track_mixer_runtime import track_file_url
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -83,6 +87,20 @@ def build_muscriptor_result_html(
         "sourceTrackName": str(state.get("source_track_name", "")),
         "previewApi": str(state.get("preview_api", "")),
         "previewToken": str(state.get("preview_token", "")),
+        "sheetApi": str(state.get("sheet_api", "")),
+        "sheetToken": str(state.get("sheet_token", "")),
+        "audioExportApi": str(state.get("audio_export_api", "")),
+        "audioExportPresets": [
+            {
+                "id": preset.id,
+                "bitDepth": preset.bit_depth,
+                "sampleRate": preset.sample_rate,
+                "subtype": preset.soundfile_subtype,
+                "label": translate(f"muscriptor_result.audio_export_{preset.id}"),
+            }
+            for preset in MIDI_AUDIO_EXPORT_PRESETS
+        ],
+        "defaultAudioExportPreset": DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
         "originalUrl": track_file_url(str(state["playback_audio_path"])),
         "instruments": instruments,
         "downloads": {
@@ -104,7 +122,16 @@ def build_muscriptor_result_html(
                 "mute",
                 "download",
                 "download_midi",
+                "download_sheet_music",
                 "download_transcription",
+                "audio_export_format",
+                "audio_export_start",
+                "audio_export_rendering",
+                "audio_export_saved",
+                "audio_export_failed",
+                "sheet_music_rendering",
+                "sheet_music_ready",
+                "sheet_music_failed",
                 "download_stereo",
                 "ready",
                 "linked_source",
@@ -212,6 +239,9 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-row.muted .msr-name { opacity:.2; }
 .msr-downloads { display:flex; flex-wrap:wrap; gap:8px; padding:12px 0 0; }
 .msr-downloads a { text-decoration:none; }
+.msr-audio-export { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.msr-audio-export label { color:#9fb3d9; font-size:12px; }
+.msr-audio-export select { color:#e0e0e0; background:#16213e; border:1px solid #3a4a6a; border-radius:4px; padding:6px 7px; }
 @media (max-width:760px) { .msr-grid { grid-template-columns:1fr; } .msr-mix { margin-left:0; } }
 """
 
@@ -864,6 +894,8 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.previewTimer = 0;
     this.originalPreview = null;
     this.downloadAnchors = {};
+    this.audioDownloadReady = true;
+    this.audioExportInFlight = false;
     this.onExternalPlayback = this.handleExternalPlayback.bind(this);
   }
   ResultSession.prototype.init = function () {
@@ -888,6 +920,29 @@ MUSCRIPTOR_RESULT_JS = r"""
       this.m.defaultQuantizeGrid = String(this.m.defaultQuantizeGrid || "");
       this.m.quantizeScopes = (this.m.quantizeScopes || []).map(String);
       this.m.defaultQuantizeScope = String(this.m.defaultQuantizeScope || "");
+      this.m.audioExportPresets = (this.m.audioExportPresets || []).map(function (preset) {
+        return {
+          id: String(preset.id),
+          bitDepth: Number(preset.bitDepth),
+          sampleRate: Number(preset.sampleRate),
+          subtype: String(preset.subtype),
+          label: String(preset.label)
+        };
+      });
+      this.m.defaultAudioExportPreset = String(this.m.defaultAudioExportPreset || "");
+      var defaultAudioExportPreset = this.m.defaultAudioExportPreset;
+      if (this.m.audioExportPresets.length !== 2
+          || this.m.audioExportPresets.filter(function (preset) {
+            return preset.id === defaultAudioExportPreset;
+          }).length !== 1
+          || this.m.audioExportPresets.some(function (preset) {
+            return !preset.id || !preset.label
+              || ![16, 24].includes(preset.bitDepth)
+              || ![44100, 48000].includes(preset.sampleRate)
+              || !["PCM_16", "PCM_24"].includes(preset.subtype);
+          })) {
+        throw new Error("Invalid MIDI audio export preset contract");
+      }
       if (!this.m.quantizeGrids.length
           || this.m.quantizeGrids.indexOf(this.m.defaultQuantizeGrid) < 0
           || this.m.quantizeGrids.some(function (grid) {
@@ -1125,20 +1180,37 @@ MUSCRIPTOR_RESULT_JS = r"""
     var editedMidi = button(strings.export_edited_midi);
     editedMidi.onclick = function () { self.downloadEditedMidi(); };
     downloads.appendChild(editedMidi);
-    [["transcription", "download_transcription"], ["stereo", "download_stereo"]].forEach(function (spec) {
-      var anchor = el("a", "msr-btn", strings[spec[1]]);
-      anchor.href = self.m.downloads[spec[0]];
-      anchor.download = "";
-      self.downloadAnchors[spec[0]] = anchor;
-      downloads.appendChild(anchor);
+    this.sheetMusicButton = button(strings.download_sheet_music);
+    this.sheetMusicButton.onclick = function () { self.downloadSheetMusic(); };
+    downloads.appendChild(this.sheetMusicButton);
+    var audioExport = el("div", "msr-audio-export");
+    var audioExportLabel = el("label", "", strings.audio_export_format);
+    this.audioExportSelect = el("select");
+    this.m.audioExportPresets.forEach(function (preset) {
+      var option = el("option", "", preset.label);
+      option.value = preset.id;
+      if (preset.id === self.m.defaultAudioExportPreset) option.selected = true;
+      self.audioExportSelect.appendChild(option);
     });
+    audioExportLabel.appendChild(this.audioExportSelect);
+    audioExport.appendChild(audioExportLabel);
+    this.downloadAudioButton = button(strings.audio_export_start);
+    this.downloadAudioButton.onclick = function () { self.downloadTranscriptionAudio(); };
+    audioExport.appendChild(this.downloadAudioButton);
+    downloads.appendChild(audioExport);
+    var stereoAnchor = el("a", "msr-btn", strings.download_stereo);
+    stereoAnchor.href = self.m.downloads.stereo;
+    stereoAnchor.download = "";
+    self.downloadAnchors.stereo = stereoAnchor;
+    downloads.appendChild(stereoAnchor);
     this.host.appendChild(downloads);
     this.resizeObserver = new ResizeObserver(function () { self.layout(); });
     this.resizeObserver.observe(scroll);
     this.layout();
   };
   ResultSession.prototype.setDownloadAudioEnabled = function (enabled) {
-    ["transcription", "stereo"].forEach(function (key) {
+    this.audioDownloadReady = Boolean(enabled);
+    ["stereo"].forEach(function (key) {
       var anchor = this.downloadAnchors[key];
       if (!anchor) return;
       if (enabled) {
@@ -1149,6 +1221,12 @@ MUSCRIPTOR_RESULT_JS = r"""
         anchor.setAttribute("aria-disabled", "true");
       }
     }, this);
+    if (this.downloadAudioButton) {
+      this.downloadAudioButton.disabled = !this.audioDownloadReady || this.audioExportInFlight;
+    }
+    if (this.audioExportSelect) {
+      this.audioExportSelect.disabled = !this.audioDownloadReady || this.audioExportInFlight;
+    }
   };
   ResultSession.prototype.syncInstrumentAvailability = function (instrumentUrls) {
     var self = this;
@@ -2335,6 +2413,111 @@ MUSCRIPTOR_RESULT_JS = r"""
       .replace("{changes}", String(this.undoStack.length));
     this.editNotice.style.display = dirty ? "inline" : "none";
   };
+  ResultSession.prototype.downloadTranscriptionAudio = function () {
+    var self = this;
+    if (!this.audioDownloadReady || this.audioExportInFlight) return;
+    if (!this.m.audioExportApi || !this.m.previewToken) {
+      this.status.textContent = this.m.strings.audio_export_failed
+        .replace("{error}", "server export context is unavailable");
+      return;
+    }
+    var presetId = String(this.audioExportSelect.value || "");
+    var preset = this.m.audioExportPresets.find(function (candidate) {
+      return candidate.id === presetId;
+    });
+    if (!preset) {
+      this.status.textContent = this.m.strings.audio_export_failed
+        .replace("{error}", "selected WAV preset is invalid");
+      return;
+    }
+    var noteSnapshot = cloneNotes(this.m.notes);
+    this.audioExportInFlight = true;
+    this.setDownloadAudioEnabled(this.audioDownloadReady);
+    this.status.textContent = this.m.strings.audio_export_rendering
+      .replace("{bit_depth}", String(preset.bitDepth))
+      .replace("{sample_rate}", preset.sampleRate.toLocaleString());
+    fetch(this.m.audioExportApi, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [JSON.stringify({
+          token: this.m.previewToken,
+          notes: noteSnapshot,
+          preset: preset.id
+        })]
+      })
+    })
+      .then(function (response) {
+        return response.text().then(function (body) {
+          if (!response.ok) throw new Error("HTTP " + response.status + " " + body);
+          var envelope = JSON.parse(body);
+          if (!envelope.data || envelope.data.length !== 1) {
+            throw new Error("MIDI audio export endpoint returned no result");
+          }
+          return typeof envelope.data[0] === "string"
+            ? JSON.parse(envelope.data[0])
+            : envelope.data[0];
+        });
+      })
+      .then(function (rendered) {
+        if (!rendered
+            || String(rendered.presetId) !== preset.id
+            || Number(rendered.bitDepth) !== preset.bitDepth
+            || Number(rendered.sampleRate) !== preset.sampleRate
+            || String(rendered.subtype) !== preset.subtype
+            || Number(rendered.channels) !== 2
+            || !Number.isFinite(Number(rendered.frames))
+            || Number(rendered.frames) <= 0
+            || !String(rendered.url || "")
+            || !String(rendered.filename || "")) {
+          throw new Error("MIDI audio export verification metadata is invalid");
+        }
+        var anchor = document.createElement("a");
+        anchor.href = String(rendered.url);
+        anchor.download = String(rendered.filename);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        self.status.textContent = self.m.strings.audio_export_saved
+          .replace("{bit_depth}", String(preset.bitDepth))
+          .replace("{sample_rate}", preset.sampleRate.toLocaleString())
+          .replace("{path}", String(rendered.filename));
+      })
+      .catch(function (error) {
+        self.status.textContent = self.m.strings.audio_export_failed
+          .replace("{error}", String(error));
+      })
+      .finally(function () {
+        self.audioExportInFlight = false;
+        self.setDownloadAudioEnabled(self.audioDownloadReady);
+      });
+  };
+  ResultSession.prototype.fetchEditedMidiBytes = function () {
+    var self = this;
+    return fetch(this.m.downloads.midi, { cache: "no-store" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status + " " + self.m.downloads.midi);
+        return response.arrayBuffer();
+      })
+      .then(function (arrayBuffer) {
+        return buildEditedSmf(
+          arrayBuffer,
+          self.m.notes,
+          self.targetBpm,
+          Number(self.m.referenceBpm),
+          Boolean(self.m.repeatTempoPerNoteTrack)
+        );
+      });
+  };
+  function bytesToBase64(bytes) {
+    var binary = "";
+    var chunkSize = 0x8000;
+    for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + chunkSize));
+    }
+    return btoa(binary);
+  }
   ResultSession.prototype.downloadEditedMidi = function () {
     var self = this;
     try {
@@ -2344,19 +2527,8 @@ MUSCRIPTOR_RESULT_JS = r"""
       return;
     }
     this.status.textContent = this.m.strings.ready;
-    fetch(this.m.downloads.midi, { cache: "no-store" })
-      .then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status + " " + self.m.downloads.midi);
-        return response.arrayBuffer();
-      })
-      .then(function (arrayBuffer) {
-        var encoded = buildEditedSmf(
-          arrayBuffer,
-          self.m.notes,
-          self.targetBpm,
-          Number(self.m.referenceBpm),
-          Boolean(self.m.repeatTempoPerNoteTrack)
-        );
+    this.fetchEditedMidiBytes()
+      .then(function (encoded) {
         var blobUrl = URL.createObjectURL(new Blob([encoded], { type: "audio/midi" }));
         var anchor = document.createElement("a");
         anchor.href = blobUrl;
@@ -2368,6 +2540,73 @@ MUSCRIPTOR_RESULT_JS = r"""
       })
       .catch(function (error) {
         self.status.textContent = self.m.strings.editor_export_failed.replace("{error}", String(error));
+      });
+  };
+  ResultSession.prototype.downloadSheetMusic = function () {
+    var self = this;
+    if (!this.m.sheetApi || !this.m.sheetToken) {
+      this.status.textContent = this.m.strings.sheet_music_failed
+        .replace("{error}", "server sheet-music context is unavailable");
+      return;
+    }
+    try {
+      this.commitBpm();
+    } catch (error) {
+      this.status.textContent = this.m.strings.sheet_music_failed
+        .replace("{error}", String(error));
+      return;
+    }
+    this.sheetMusicButton.disabled = true;
+    this.status.textContent = this.m.strings.sheet_music_rendering
+      .replace("{grid}", this.quantizeGrid);
+    this.fetchEditedMidiBytes()
+      .then(function (editedMidi) {
+        return fetch(self.m.sheetApi, {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            data: [JSON.stringify({
+              token: self.m.sheetToken,
+              midi_base64: bytesToBase64(editedMidi),
+              quantize_grid: self.quantizeGrid
+            })]
+          })
+        });
+      })
+      .then(function (response) {
+        return response.text().then(function (body) {
+          if (!response.ok) throw new Error("HTTP " + response.status + " " + body);
+          var envelope = JSON.parse(body);
+          if (!envelope.data || envelope.data.length !== 1) {
+            throw new Error("Sheet-music endpoint returned no result");
+          }
+          return typeof envelope.data[0] === "string"
+            ? JSON.parse(envelope.data[0])
+            : envelope.data[0];
+        });
+      })
+      .then(function (result) {
+        if (!result.url || !result.filename) {
+          throw new Error("Sheet-music endpoint returned an invalid download");
+        }
+        var anchor = document.createElement("a");
+        anchor.href = String(result.url);
+        anchor.download = String(result.filename);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        self.status.textContent = self.m.strings.sheet_music_ready
+          .replace("{count}", String(result.memberCount))
+          .replace("{grid}", String(result.quantizeGrid))
+          .replace("{version}", String(result.musescoreVersion));
+      })
+      .catch(function (error) {
+        self.status.textContent = self.m.strings.sheet_music_failed
+          .replace("{error}", String(error));
+      })
+      .finally(function () {
+        if (!self.disposed) self.sheetMusicButton.disabled = false;
       });
   };
   ResultSession.prototype.dispose = function () {

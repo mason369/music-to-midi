@@ -2778,10 +2778,13 @@ def test_desktop_midi_edit_immediately_disables_stale_audio_until_current_render
         assert not widget.playback_slider.isEnabled()
         assert widget._assets is original_assets
 
+        edited_output_dir = tmp_path / "generation-000001"
+        edited_output_dir.mkdir()
+        shutil.copy2(source_midi, edited_output_dir / "edited-source-tempo.mid")
         widget._apply_editor_audio_assets(
             generation,
             edited_assets,
-            output_dir=tmp_path / "generation-000001",
+            output_dir=edited_output_dir,
             restored_original=False,
         )
         app.processEvents()
@@ -2833,6 +2836,7 @@ def test_edited_midi_download_publishes_current_notes_and_exact_77_9_bpm(
     monkeypatch,
 ):
     app = QApplication.instance() or QApplication([])
+    assert QApplication.instance() is app
     source_audio = _silent_wav(tmp_path / "edited-download-source.wav", 2.0)
     source_midi = tmp_path / "edited-download-source.mid"
     midi = mido.MidiFile(type=1, ticks_per_beat=480)
@@ -3928,6 +3932,38 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert "this.quantizeGridSelect" in MUSCRIPTOR_RESULT_JS
     assert "quantizedDuration = Math.max(grid" in MUSCRIPTOR_RESULT_JS
     assert 'painter.fillText((downbeatIndex + 1) + ".1"' in MUSCRIPTOR_RESULT_JS
+
+
+def test_every_browser_midi_workbench_exposes_current_edit_sheet_export():
+    state = {
+        "audio_path": "C:/tmp/source.wav",
+        "playback_audio_path": "C:/tmp/original-live.wav",
+        "midi_path": "C:/tmp/result.mid",
+        "transcription_wav": "C:/tmp/result.wav",
+        "stereo_mix_wav": "C:/tmp/stereo.wav",
+        "instrument_wavs": {"gm:000": "C:/tmp/piano.wav"},
+        "selected_instruments": ["gm:000"],
+        "detected_instruments": ["gm:000"],
+        "notes": [],
+        "duration": 1.0,
+        "reference_bpm": 120.0,
+        "target_bpm": 120.0,
+        "time_signature": (4, 4),
+        "backend_label": "YourMT3+",
+        "sheet_api": "./api/render_sheet_music_export",
+        "sheet_token": "opaque-sheet-token",
+    }
+
+    markup = build_muscriptor_result_html(state, lambda key: key, "en_US")
+
+    assert '"sheetApi": "./api/render_sheet_music_export"' in markup
+    assert '"sheetToken": "opaque-sheet-token"' in markup
+    assert "muscriptor_result.download_sheet_music" in markup
+    assert "ResultSession.prototype.downloadSheetMusic" in MUSCRIPTOR_RESULT_JS
+    assert "fetchEditedMidiBytes" in MUSCRIPTOR_RESULT_JS
+    assert "midi_base64" in MUSCRIPTOR_RESULT_JS
+    assert "quantize_grid: self.quantizeGrid" in MUSCRIPTOR_RESULT_JS
+    assert "self.m.sheetToken" in MUSCRIPTOR_RESULT_JS
 
 
 def test_browser_midi_editor_builds_verified_smf_and_preserves_controller_events(

@@ -356,14 +356,15 @@ from src.core.manual_midi import (
 )
 from src.core.multi_stem_separator import STEM_KEYS
 from src.core.separation_service import AudioSeparationService, SeparationResult
+from src.gui.web.brand_assets import APP_ICON_PATH, app_icon_data_uri
 from src.gui.web.edited_midi_preview import EditedMidiPreviewRegistry
+from src.gui.web.form_values import normalize_optional_project_bpm
 from src.gui.web.muscriptor_result_runtime import (
     build_muscriptor_result_html,
     muscriptor_result_head,
 )
-from src.gui.web.form_values import normalize_optional_project_bpm
 from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
-from src.gui.web.brand_assets import APP_ICON_PATH, app_icon_data_uri
+from src.gui.web.sheet_music_export import SheetMusicExportRegistry
 from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
     build_track_mixer_html,
@@ -389,10 +390,10 @@ from src.models.muscriptor_instruments import (
     muscriptor_instrument_label,
     validate_muscriptor_instruments,
 )
-
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
 _EDITED_MIDI_PREVIEWS = EditedMidiPreviewRegistry()
+_SHEET_MUSIC_EXPORTS = SheetMusicExportRegistry()
 
 SPACE_LANGUAGE = os.environ.get("MUSIC_TO_MIDI_LANGUAGE", "zh_CN")
 if SPACE_LANGUAGE not in Translator.AVAILABLE_LANGUAGES:
@@ -810,6 +811,46 @@ def render_edited_midi_preview(payload_json: str) -> str:
     return json.dumps(rendered, ensure_ascii=False)
 
 
+def render_edited_midi_audio_export(payload_json: str) -> str:
+    """Render and verify the selected WAV format for current browser MIDI notes."""
+
+    started_at = time.perf_counter()
+    try:
+        rendered = _EDITED_MIDI_PREVIEWS.export_audio(payload_json)
+    except Exception as exc:
+        logger.error("Browser MIDI audio export failed: %s", exc)
+        raise gr.Error(st("muscriptor_result.audio_export_failed", error=exc)) from exc
+    logger.info(
+        "Browser MIDI audio export ready: preset=%s frames=%s channels=%s "
+        "elapsed=%.3fs digest=%s",
+        rendered["presetId"],
+        rendered["frames"],
+        rendered["channels"],
+        time.perf_counter() - started_at,
+        rendered["digest"],
+    )
+    return json.dumps(rendered, ensure_ascii=False)
+
+
+def render_sheet_music_export(payload_json: str) -> str:
+    """Engrave the browser's current edited MIDI into one request-owned ZIP."""
+
+    started_at = time.perf_counter()
+    try:
+        rendered = _SHEET_MUSIC_EXPORTS.render(payload_json)
+    except Exception as exc:
+        logger.error("Browser sheet-music export failed: %s", exc)
+        raise gr.Error(st("muscriptor_result.sheet_music_failed", error=exc)) from exc
+    logger.info(
+        "Browser sheet-music export ready: members=%s grid=%s elapsed=%.3fs digest=%s",
+        rendered["memberCount"],
+        rendered["quantizeGrid"],
+        time.perf_counter() - started_at,
+        rendered["digest"],
+    )
+    return json.dumps(rendered, ensure_ascii=False)
+
+
 def _normalize_midi_result_state(
     raw_state,
     request_root: Path,
@@ -938,6 +979,11 @@ def _normalize_midi_result_state(
         source_midi_path=midi_path,
         original_audio_path=audio_path,
     )
+    sheet_token = _SHEET_MUSIC_EXPORTS.require_matching(
+        raw_state.get("sheet_token"),
+        request_dir=request_root,
+        source_midi_path=midi_path,
+    )
     return {
         "kind": "midi_result",
         "audio_path": str(audio_path),
@@ -959,7 +1005,10 @@ def _normalize_midi_result_state(
         "backend_label": str(raw_state.get("backend_label", "")).strip(),
         "source_track_name": str(raw_state.get("source_track_name", "")).strip(),
         "preview_api": "./api/render_edited_midi_preview",
+        "audio_export_api": "./api/render_edited_midi_audio_export",
         "preview_token": preview_token,
+        "sheet_api": "./api/render_sheet_music_export",
+        "sheet_token": sheet_token,
     }
 
 
@@ -1177,6 +1226,11 @@ def _build_midi_result_state(
         original_audio_path=audio_path,
         reference_bpm=reference_bpm,
         muscriptor_groups=muscriptor_groups,
+        duration_seconds=assets.duration,
+    )
+    sheet_token = _SHEET_MUSIC_EXPORTS.register(
+        request_dir=request_root,
+        source_midi_path=result.midi_path,
     )
     bar_offset_seconds = (
         read_muscriptor_bar_offset_seconds(playback_midi_path) if muscriptor_groups else 0.0
@@ -1225,7 +1279,10 @@ def _build_midi_result_state(
         "backend_label": str(backend_label),
         "source_track_name": str(source_track_name),
         "preview_api": "./api/render_edited_midi_preview",
+        "audio_export_api": "./api/render_edited_midi_audio_export",
         "preview_token": preview_token,
+        "sheet_api": "./api/render_sheet_music_export",
+        "sheet_token": sheet_token,
     }
 
 
@@ -1476,6 +1533,15 @@ def ensure_beat_this_weights():
 
     checkpoint = download_beat_this_model(printer=logger.info)
     logger.info("Beat This final0 checkpoint ready: %s", checkpoint)
+
+
+def ensure_musescore_runtime():
+    """Prepare the exact headless score renderer before accepting requests."""
+
+    from src.utils.musescore_runtime import download_musescore_runtime
+
+    executable = download_musescore_runtime(printer=logger.info)
+    logger.info("MuseScore Studio sheet-music runtime ready: %s", executable)
 
 
 # Install the pinned code before Gradio begins accepting concurrent requests.
@@ -2422,9 +2488,7 @@ def _convert_one_track(
         None,
     )
     if selected_track is None:
-        raise gr.Error(
-            st("dialogs.complete.audio_tracks.unknown_track", track=repr(track_id))
-        )
+        raise gr.Error(st("dialogs.complete.audio_tracks.unknown_track", track=repr(track_id)))
     if not midi_enabled:
         raise gr.Error(st("dialogs.complete.audio_tracks.manual_midi.not_selected"))
     if route not in MANUAL_MIDI_ROUTES:
@@ -2663,9 +2727,7 @@ def _remove_track(track_state, track_id):
     target_id = str(track_id)
     remaining = [track for track in state["tracks"] if track["id"] != target_id]
     if len(remaining) == len(state["tracks"]):
-        raise gr.Error(
-            st("dialogs.complete.audio_tracks.unknown_track", track=repr(target_id))
-        )
+        raise gr.Error(st("dialogs.complete.audio_tracks.unknown_track", track=repr(target_id)))
     updates = {**state, "tracks": remaining}
     if state.get("active_midi_track_id") == target_id:
         updates["active_midi_track_id"] = ""
@@ -3030,6 +3092,12 @@ with gr.Blocks(
     edited_preview_request = gr.Textbox(visible=False)
     edited_preview_response = gr.Textbox(visible=False)
     edited_preview_button = gr.Button(visible=False)
+    edited_audio_export_request = gr.Textbox(visible=False)
+    edited_audio_export_response = gr.Textbox(visible=False)
+    edited_audio_export_button = gr.Button(visible=False)
+    sheet_music_request = gr.Textbox(visible=False)
+    sheet_music_response = gr.Textbox(visible=False)
+    sheet_music_button = gr.Button(visible=False)
 
     with gr.Group(elem_classes="app-header"):
         gr.Markdown(
@@ -3528,6 +3596,20 @@ with gr.Blocks(
         api_name="render_edited_midi_preview",
         queue=False,
     )
+    edited_audio_export_button.click(
+        fn=render_edited_midi_audio_export,
+        inputs=[edited_audio_export_request],
+        outputs=[edited_audio_export_response],
+        api_name="render_edited_midi_audio_export",
+        queue=False,
+    )
+    sheet_music_button.click(
+        fn=render_sheet_music_export,
+        inputs=[sheet_music_request],
+        outputs=[sheet_music_response],
+        api_name="render_sheet_music_export",
+        queue=False,
+    )
 
     gr.Markdown(
         '<div class="footer-info">'
@@ -3539,6 +3621,7 @@ with gr.Blocks(
     )
 
 if __name__ == "__main__":
+    ensure_musescore_runtime()
     configure_uvicorn_websocket_protocol()
     demo.launch(
         server_name="0.0.0.0",
