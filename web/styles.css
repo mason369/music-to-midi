@@ -362,6 +362,9 @@ main { width: 100%; margin: 0 auto; padding: 12px 14px 42px; }
 .artifact-row strong { font-size: 10px; }
 .artifact-row small { color: var(--dim); font-size: 10px; }
 .artifact-row a { padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--text); background: #2a3f5f; text-decoration: none; font-size: 11px; }
+.artifact-row .artifact-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.artifact-actions button, .track-sheet-button { padding: 6px 10px; border: 1px solid #4a78aa; border-radius: 4px; color: white; background: #2e69aa; cursor: pointer; font-size: 11px; }
+.artifact-actions button:disabled, .track-sheet-button:disabled { opacity: .55; cursor: wait; }
 .artifact-row.is-log { border-color: #7b414d; }
 .artifact-row.is-warning { border-color: #ad7b37; background: #30271b; }
 .artifact-row.is-warning .artifact-type { background: #8a622e; }
@@ -403,6 +406,7 @@ main { width: 100%; margin: 0 auto; padding: 12px 14px 42px; }
 .track-status.is-done { color: var(--signal); }
 .track-status.is-error { color: var(--danger); }
 .track-status a { color: inherit; }
+.track-sheet-button { margin-left: 2px; padding-block: 3px; font-size: 10px; }
 .mixer-footer { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-left: 11px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .mixer-footer button { align-self: stretch; padding: 0 12px; border-left: 1px solid var(--line); }
 
@@ -465,7 +469,7 @@ main { width: 100%; margin: 0 auto; padding: 12px 14px 42px; }
   .runtime-copy small { display: none; }
   .progress-heading { grid-template-columns: minmax(0, 1fr) auto; }
   .artifact-row { grid-template-columns: 35px minmax(0, 1fr); }
-  .artifact-row a { grid-column: 2; justify-self: start; }
+  .artifact-row .artifact-actions { grid-column: 2; justify-content: flex-start; }
   .mixer-heading { grid-template-columns: 1fr; gap: 8px; }
   .transport { width: 100%; }
   .transport time { min-width: 0; flex: 1; }

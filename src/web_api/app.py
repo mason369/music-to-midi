@@ -22,6 +22,7 @@ from src.core.midi_quantization import (
     DEFAULT_MIDI_QUANTIZE_SCOPE,
     MIDI_QUANTIZE_GRIDS,
 )
+from src.core.sheet_music import SheetMusicExportError
 from src.i18n.translator import Translator
 from src.model_profiles import (
     MUSCRIPTOR_PROFILE_IDS,
@@ -41,6 +42,7 @@ from src.models.data_models import (
     TempoMode,
     YourMT3Model,
 )
+from src.utils.musescore_runtime import MuseScoreRuntimeError
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 from src.web_api.jobs import InsufficientStorageError, JobManager, QueueCapacityError
 from src.web_api.schemas import InferenceOptions, JobSnapshot, ManualMidiOptions
@@ -277,6 +279,7 @@ def _capabilities(
     accelerator_ready = False
     try:
         import torch
+
         from src.utils.gpu_utils import (
             ensure_accelerator_runtime_compatibility,
             get_accelerator_type,
@@ -720,6 +723,29 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @app.post("/api/v1/jobs/{job_id}/sheet-music", response_model=JobSnapshot)
+    def generate_sheet_music(
+        job_id: str,
+        artifact_id: str | None = None,
+        quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+    ) -> dict:
+        try:
+            return job_manager.generate_sheet_music(
+                job_id,
+                artifact_id=artifact_id,
+                quantize_grid=quantize_grid,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except MuseScoreRuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except SheetMusicExportError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/v1/jobs/{job_id}/files/{artifact_id}")
     def download_artifact(job_id: str, artifact_id: str) -> FileResponse:

@@ -856,6 +856,35 @@ function artifactLabel(kind) {
   const key = `result.artifact.${kind}`;
   return state.messages[state.language][key] ? t(key) : t("result.artifact.generic");
 }
+function findSheetMusicArtifact(job, midiArtifact) {
+  const exact = job.artifacts.find((artifact) => (
+    artifact.kind === "sheet_music" && artifact.source_artifact_id === midiArtifact.id
+  ));
+  if (exact) return exact;
+  const candidates = job.artifacts.filter((artifact) => artifact.kind === "sheet_music");
+  return candidates.length === 1 ? candidates[0] : null;
+}
+function triggerArtifactDownload(artifact) {
+  const link = document.createElement("a");
+  link.href = artifactUrl(artifact);
+  link.download = artifact.name;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+async function generateSheetMusicForJob(jobId, midiArtifact) {
+  const query = new URLSearchParams({
+    artifact_id: midiArtifact.id,
+    quantize_grid: "1/32",
+  });
+  const job = await api(`/api/v1/jobs/${encodeURIComponent(jobId)}/sheet-music?${query}`, {
+    method: "POST",
+  });
+  const sheetArtifact = findSheetMusicArtifact(job, midiArtifact);
+  if (!sheetArtifact) throw new Error(t("error.sheet_music_missing"));
+  return { job, sheetArtifact };
+}
 function renderArtifacts(job) {
   const warningRows = (job.result?.quality_warnings || []).map((warning) => {
     const knownKey = `result.warning.${warning}`;
@@ -868,9 +897,35 @@ function renderArtifacts(job) {
     <div class="artifact-row">
       <span class="artifact-type">${escapeHtml(artifact.name.split(".").pop().slice(0, 4).toUpperCase())}</span>
       <div><strong>${escapeHtml(artifact.name)}</strong><small>${escapeHtml(artifactLabel(artifact.kind))} · ${formatBytes(artifact.size)}</small></div>
-      <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(t("result.download"))} ↓</a>
+      <div class="artifact-actions">
+        <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(t("result.download"))} ↓</a>
+        ${artifact.kind === "midi" ? `<button type="button" data-sheet-source="${escapeHtml(artifact.id)}">${escapeHtml(t("result.generate_sheet_music"))}</button>` : ""}
+      </div>
     </div>`);
   $("#artifactList").innerHTML = [...warningRows, ...artifactRows].join("");
+  $$('[data-sheet-source]', $("#artifactList")).forEach((button) => {
+    button.addEventListener("click", async () => {
+      const midiArtifact = job.artifacts.find((artifact) => artifact.id === button.dataset.sheetSource);
+      if (!midiArtifact) {
+        toast(t("error.sheet_music_missing"), "error");
+        return;
+      }
+      button.disabled = true;
+      button.textContent = t("result.generating_sheet_music");
+      try {
+        const generated = await generateSheetMusicForJob(job.id, midiArtifact);
+        if (state.currentJob?.id === generated.job.id) state.currentJob = generated.job;
+        renderArtifacts(generated.job);
+        triggerArtifactDownload(generated.sheetArtifact);
+        toast(t("result.sheet_music_ready"));
+        refreshJobs();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = t("result.generate_sheet_music");
+        toast(t("error.sheet_music", { error: error.message }), "error");
+      }
+    });
+  });
 }
 function renderPrimaryResult(job, { restoreTracks = true, scroll = true } = {}) {
   $("#retryJob").hidden = true;
@@ -1020,7 +1075,30 @@ function updateTrackStatus(track, key, variables = {}, className = "") {
 function updateTrackDownload(track, artifact) {
   const row = trackRow(track); if (!row) return; const status = $(".track-status", row);
   track.statusKey = "track.midi_completed"; track.statusVars = {}; track.statusClass = "is-done";
-  status.className = "track-status is-done"; status.innerHTML = `${escapeHtml(t("track.midi_completed"))} · <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(artifact.name)} ↓</a>`;
+  const sheetArtifact = track.midiJob ? findSheetMusicArtifact(track.midiJob, artifact) : null;
+  status.className = "track-status is-done";
+  status.innerHTML = `${escapeHtml(t("track.midi_completed"))} · <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(artifact.name)} ↓</a> · ${sheetArtifact
+    ? `<a href="${escapeHtml(artifactUrl(sheetArtifact))}" download>${escapeHtml(t("result.artifact.sheet_music"))} ↓</a>`
+    : `<button class="track-sheet-button" type="button">${escapeHtml(t("result.generate_sheet_music"))}</button>`}`;
+  const sheetButton = $(".track-sheet-button", status);
+  if (!sheetButton) return;
+  sheetButton.addEventListener("click", async () => {
+    sheetButton.disabled = true;
+    sheetButton.textContent = t("result.generating_sheet_music");
+    try {
+      const generated = await generateSheetMusicForJob(track.midiJob.id, artifact);
+      track.midiJob = generated.job;
+      track.midiArtifact = generated.job.artifacts.find((item) => item.id === artifact.id) || artifact;
+      updateTrackDownload(track, track.midiArtifact);
+      triggerArtifactDownload(generated.sheetArtifact);
+      toast(t("result.sheet_music_ready"));
+      refreshJobs();
+    } catch (error) {
+      sheetButton.disabled = false;
+      sheetButton.textContent = t("result.generate_sheet_music");
+      toast(t("error.sheet_music", { error: error.message }), "error");
+    }
+  });
 }
 function applyTrackJobUpdate(track, button, update) {
   track.midiJob = update;

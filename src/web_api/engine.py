@@ -39,6 +39,7 @@ class ArtifactSpec:
             ".wav": "audio/wav",
             ".json": "application/json",
             ".csv": "text/csv; charset=utf-8",
+            ".zip": "application/zip",
         }
         return explicit.get(self.path.suffix.lower()) or (
             mimetypes.guess_type(self.path.name)[0] or "application/octet-stream"

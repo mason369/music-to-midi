@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.core.midi_quantization import DEFAULT_MIDI_QUANTIZE_GRID, MIDI_QUANTIZE_GRIDS
+from src.core.sheet_music import export_sheet_music_zip
 from src.models.data_models import ProcessingProgress
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.schemas import JobStatus
@@ -51,6 +53,7 @@ class ArtifactRecord:
     relative_path: str
     track_id: str | None = None
     sha256: str = ""
+    source_artifact_id: str | None = None
 
 
 @dataclass
@@ -112,6 +115,7 @@ class JobManager:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._quarantine_cleanup_lock = threading.Lock()
+        self._sheet_music_lock = threading.Lock()
         self._jobs: dict[str, JobRecord] = {}
         self._pending: list[str] = []
         self._queue: queue.Queue[str | None] = queue.Queue()
@@ -401,6 +405,92 @@ class JobManager:
             if artifact is None:
                 raise KeyError(f"unknown artifact: {artifact_id}")
             return self._artifact_path_locked(record, artifact), artifact
+
+    def generate_sheet_music(
+        self,
+        job_id: str,
+        *,
+        artifact_id: str | None = None,
+        quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+    ) -> dict[str, Any]:
+        """Generate and publish a score ZIP for one immutable MIDI artifact."""
+
+        grid = str(quantize_grid)
+        if grid not in MIDI_QUANTIZE_GRIDS:
+            raise ValueError(f"unsupported sheet-music quantization grid: {grid!r}")
+        with self._sheet_music_lock:
+            with self._lock:
+                record = self._require_job_locked(job_id)
+                if record.status is not JobStatus.SUCCEEDED:
+                    raise RuntimeError(
+                        "sheet music is unavailable before successful MIDI completion"
+                    )
+                midi_artifacts = [
+                    artifact for artifact in record.artifacts.values() if artifact.kind == "midi"
+                ]
+                if artifact_id is not None:
+                    midi_artifacts = [
+                        artifact for artifact in midi_artifacts if artifact.id == artifact_id
+                    ]
+                if not midi_artifacts:
+                    raise KeyError(
+                        f"job has no matching MIDI artifact: {artifact_id or '<automatic>'}"
+                    )
+                if len(midi_artifacts) != 1:
+                    raise ValueError(
+                        "job has multiple MIDI artifacts; artifact_id is required for sheet music"
+                    )
+                source_artifact = midi_artifacts[0]
+                source_path = self._artifact_path_locked(record, source_artifact)
+                identity = hashlib.sha256(source_artifact.id.encode("utf-8")).hexdigest()[:12]
+                denominator = grid.split("/", 1)[1]
+                sheet_artifact_id = f"sheet_music_{identity}_{denominator}"
+                existing = record.artifacts.get(sheet_artifact_id)
+                if existing is not None:
+                    self._artifact_path_locked(record, existing)
+                    return self._snapshot_locked(record)
+                output_dir = (
+                    record.output_dir / "sheet_music" / f"{identity}-{denominator}"
+                ).resolve()
+                job_dir = self._job_dir(record.id)
+                try:
+                    output_dir.relative_to(job_dir)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"sheet-music output escaped its job directory: {output_dir}"
+                    ) from exc
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            archive_path = output_dir / f"{source_path.stem}_sheet_music_{denominator}.zip"
+            export_sheet_music_zip(
+                source_path,
+                archive_path,
+                quantize_grid=grid,
+            )
+
+            with self._condition:
+                record = self._require_job_locked(job_id)
+                if record.status is not JobStatus.SUCCEEDED:
+                    raise RuntimeError("job changed state before sheet-music artifact publication")
+                current_source = record.artifacts.get(source_artifact.id)
+                if current_source != source_artifact:
+                    raise RuntimeError(
+                        "MIDI artifact identity changed during sheet-music generation"
+                    )
+                self._artifact_path_locked(record, source_artifact)
+                artifact = self._artifact_record_locked(
+                    record,
+                    ArtifactSpec(
+                        sheet_artifact_id,
+                        "sheet_music",
+                        archive_path,
+                        track_id=source_artifact.track_id,
+                    ),
+                )
+                artifact.source_artifact_id = source_artifact.id
+                record.artifacts[artifact.id] = artifact
+                self._touch_locked(record)
+                return self._snapshot_locked(record)
 
     def delete(self, job_id: str, *, cascade: bool = False) -> None:
         with self._condition:
@@ -732,6 +822,7 @@ class JobManager:
                 "size": artifact.size,
                 "track_id": artifact.track_id,
                 "sha256": artifact.sha256,
+                "source_artifact_id": artifact.source_artifact_id,
                 "download_url": f"/api/v1/jobs/{record.id}/files/{artifact.id}",
             }
             for artifact in record.artifacts.values()

@@ -221,6 +221,7 @@ class ArtifactSnapshot(BaseModel):
     media_type: str
     size: int
     track_id: str | None = None
+    source_artifact_id: str | None = None
     sha256: str
     download_url: str
 

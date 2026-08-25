@@ -154,6 +154,89 @@ def post_audio(client: TestClient, mode: str = "smart"):
     )
 
 
+def test_sheet_music_endpoint_publishes_one_source_linked_cached_zip(
+    tmp_path: Path,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_export(source, destination, *, quantize_grid):
+        calls.append((Path(source), Path(destination), quantize_grid))
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"PK\x03\x04verified sheet archive")
+
+    monkeypatch.setattr(jobs_module, "export_sheet_music_zip", fake_export)
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine())
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            created = post_audio(client)
+            assert created.status_code == 202
+            job_id = created.json()["id"]
+            terminal = wait_for_terminal(manager, job_id)
+            assert terminal["status"] == "succeeded"
+
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/sheet-music",
+                params={"artifact_id": "midi", "quantize_grid": "1/32"},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            sheet = next(item for item in payload["artifacts"] if item["kind"] == "sheet_music")
+            assert sheet["source_artifact_id"] == "midi"
+            assert sheet["track_id"] is None
+            assert sheet["name"] == "result_sheet_music_32.zip"
+            assert sheet["media_type"] == "application/zip"
+            assert client.get(sheet["download_url"]).content == b"PK\x03\x04verified sheet archive"
+
+            cached = client.post(
+                f"/api/v1/jobs/{job_id}/sheet-music",
+                params={"artifact_id": "midi", "quantize_grid": "1/32"},
+            )
+            assert cached.status_code == 200
+            assert len(calls) == 1
+    finally:
+        manager.close()
+
+
+def test_sheet_music_endpoint_exposes_missing_runtime_and_bad_requests(
+    tmp_path: Path,
+    monkeypatch,
+):
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine())
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            created = post_audio(client)
+            job_id = created.json()["id"]
+            assert wait_for_terminal(manager, job_id)["status"] == "succeeded"
+
+            invalid_grid = client.post(
+                f"/api/v1/jobs/{job_id}/sheet-music",
+                params={"artifact_id": "midi", "quantize_grid": "1/128"},
+            )
+            assert invalid_grid.status_code == 422
+            assert "unsupported sheet-music quantization grid" in invalid_grid.text
+
+            def missing_runtime(*_args, **_kwargs):
+                raise app_module.MuseScoreRuntimeError("MuseScore Studio is missing")
+
+            monkeypatch.setattr(jobs_module, "export_sheet_music_zip", missing_runtime)
+            unavailable = client.post(
+                f"/api/v1/jobs/{job_id}/sheet-music",
+                params={"artifact_id": "midi"},
+            )
+            assert unavailable.status_code == 503
+            assert "MuseScore Studio is missing" in unavailable.text
+
+            split = post_audio(client, "vocal_split")
+            split_job_id = split.json()["id"]
+            assert wait_for_terminal(manager, split_job_id)["status"] == "succeeded"
+            no_midi = client.post(f"/api/v1/jobs/{split_job_id}/sheet-music")
+            assert no_midi.status_code == 404
+            assert "no matching MIDI artifact" in no_midi.text
+    finally:
+        manager.close()
+
+
 def test_capabilities_publish_all_current_modes_and_manual_routes(tmp_path):
     manager = JobManager(tmp_path, engine=FakeInferenceEngine())
     try:
