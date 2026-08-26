@@ -75,6 +75,7 @@
 | MuScriptor 乐器约束 | 空选时由模型检测乐器；非空选择会传入官方 `instruments` 与 `prelude_forcing` 接口，生成阶段屏蔽未选 token，并校验事件流和最终 MIDI。越界结果不会发布。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。默认不量化模型事件；只有用户显式执行量化时才吸附到所选网格。 |
 | 音符量化 | 默认关闭。桌面、Space、Colab 的结果编辑器提供 `1/4`、`1/8`、`1/16`、`1/32`、`1/64` 网格，范围默认“全部轨道”并可切换为“所选音符”；切换范围或网格不会改音符，点击“量化”才同时吸附目标音符的起点和时值。独立 Web/API（含 Docker）固定量化输出 MIDI 的全部轨道，勾选后在 MIDI 写出后严格执行一次，并校验 tempo、拍号、控制器等非音符事件的绝对 tick 未变。 |
+| 乐谱导出 | 每个已生成的真实 MIDI（包括分离后逐轨转换结果）都可显式生成乐谱 ZIP。系统只量化私有副本，不修改原 MIDI；ZIP 包含量化 MIDI、MusicXML、总谱 PDF、逐乐器分谱 PDF，以及 MuseScore 识别为 4–9 弦乐器时的 Tab PDF。桌面、Space、Colab 使用结果编辑器当前网格，独立 Web/API 固定使用默认 `1/32`。MuseScore Studio 4 缺失或制谱失败会直接报错。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |
 | 试听与 DAW | MuScriptor 工作台以 MIDI 合成轨为主时钟，同步 MIDI、原音和乐器分轨，并校正超过 80 ms 的漂移。DAW 导入时需启用 tempo map；MuseScore 3/4 可能重新跟拍未量化演奏并改写乐谱页显示 BPM，但不会改变文件中已经校验的 tempo。 |
 | 输入与入口 | 支持 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A`；非 WAV 通过 FFmpeg 转为 44.1 kHz PCM WAV。桌面版、Space 与 Colab 提供相同的七种处理模式。 |
@@ -100,11 +101,11 @@
 
 | 位置 | 已同步内容 | 说明 |
 |------|------------|------|
-| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance，并严格验证默认 TransKun 2.0.1 包及其内置 V2 资源 | 固定来源模型按已知大小/SHA256 或明确的源码/运行时身份校验；任一必需资源失败时立即停止。 |
+| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4 | 固定来源模型和运行时按已知大小/SHA256 或明确身份校验；任一必需资源失败时立即停止。 |
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | 启动前检查加速器实际执行、Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源或 CPU 回退当作可运行状态。 |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | 安装隔离的 NVIDIA PyTorch 2.7 或 Intel XPU PyTorch 2.11、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | NVIDIA 使用 `venv` + CUDA 12.8；Windows Intel 使用 `venv-xpu` + 原生 PyTorch XPU + OpenVINO GPU。两套互斥运行时不混装；`audio-separator` 使用 `--no-deps`。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
-| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal 和 MIROS | 发布条件是 29 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
+| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与 MuseScore Studio | 发布条件是 30 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
 | `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台的完整路线均与桌面版同步。 |
 
 ## 处理模式
@@ -156,7 +157,7 @@ song_vocals.wav
 song_other.wav
 ```
 
-实际文件数量取决于所选模式和用户主动执行的逐轨转换。人声分离主流程产生规范的 `<歌曲名>_vocals.wav` 与 `<歌曲名>_accompaniment.wav`；六声部流程的成功结果包含六条真实 WAV。任一分离输出缺失时流程会报告失败；MIDI 按用户开始转换的音轨单独生成。
+实际文件数量取决于所选模式和用户主动执行的逐轨转换。人声分离主流程产生规范的 `<歌曲名>_vocals.wav` 与 `<歌曲名>_accompaniment.wav`；六声部流程的成功结果包含六条真实 WAV。任一分离输出缺失时流程会报告失败；MIDI 按用户开始转换的音轨单独生成。乐谱不会在转写时自动阻塞生成；用户对任一 MIDI 点击“生成并下载乐谱”后，才创建与该 MIDI 对应的 ZIP。
 
 ## 后端说明
 
@@ -217,11 +218,12 @@ Windows 结果工作台还需要固定 FluidSynth 2.5.6；安装脚本会准备�
 
 ```bash
 python download_fluidsynth_runtime.py
+python download_musescore_runtime.py
 ```
 
 界面和官方公开演示保持同一功能语义：可搜索的标签多选与清除、空选自动检测、
 实时转写进度/音符、以 MIDI 为主时钟的可拖动播放进度条、钢琴卷帘、默认全部轨道的量化范围与五档显式量化网格、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
-逐乐器静音/独奏，以及 MIDI、合成 WAV、原音左声道/MIDI 右声道立体声下载。
+逐乐器静音/独奏，以及 MIDI、乐谱 ZIP、合成 WAV、原音左声道/MIDI 右声道立体声下载。
 这些控制连接真实后端资产：逐乐器播放来自最终 MIDI 经官方 MuseScore General
 SoundFont 与 FluidSynth 合成，不是无效按钮或 UI 模拟。
 
@@ -738,7 +740,7 @@ Intel XPU 没有可直接等同 NVIDIA `sm_XX` 的项目级兼容版本号。该
 
 AMD/ROCm 当前不能完成七模式：当前固定的分离器执行契约只验收 NVIDIA `CUDAExecutionProvider` 或 Intel `OpenVINOExecutionProvider/GPU.0`，不提供 AMD 对应的严格 GPU provider。安装脚本会明确停止，不会静默改用 CPU。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 29 项第三方组件：25 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：26 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -782,6 +784,7 @@ python download_miros_model.py
 ~/.cache/music_ai_models/aria_amt
 ~/.cache/music_ai_models/bytedance_piano
 ~/.cache/music_ai_models/fluidsynth/2.5.6
+~/.cache/music_ai_models/musescore/4.7.4
 ${HF_HOME:-~/.cache/huggingface}/hub  # MuScriptor 三档与 MuseScore SoundFont
 external/ai4m-miros
 ```
@@ -852,7 +855,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 29 项闭集清单为 25 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
+当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 26 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
 
 Windows CUDA 完整三包构建（桌面 App、Web 后端、Web 前端）：
 

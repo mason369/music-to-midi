@@ -11,7 +11,7 @@ LABEL org.opencontainers.image.title="Music to MIDI backend" \
       org.opencontainers.image.source="https://github.com/mason369/music-to-midi" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${BUILD_VERSION}" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -24,6 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     MUSIC_TO_MIDI_ACCELERATOR=cuda \
     MUSIC_TO_MIDI_MIROS_DIR=/models/miros \
+    MUSIC_TO_MIDI_MUSESCORE=/opt/musescore/AppRun \
     HOME=/models/home \
     HF_HOME=/models/huggingface \
     HF_HUB_CACHE=/models/huggingface/hub \
@@ -44,6 +45,9 @@ RUN apt-get update \
         ffmpeg \
         fluidsynth \
         git \
+        libasound2 \
+        libegl1 \
+        libfontconfig1 \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
@@ -112,6 +116,17 @@ COPY src ./src
 COPY YourMT3 ./YourMT3
 COPY tools/generate_third_party_sbom.py ./tools/generate_third_party_sbom.py
 COPY docker/backend-entrypoint.sh docker/healthcheck.py ./docker/
+
+# The download_musescore_runtime.py entry point delegates to this same pinned,
+# hash-verified runtime preparation function. It is a renderer, not a checkpoint.
+RUN python -c "from src.utils.musescore_runtime import download_musescore_runtime; print(download_musescore_runtime())" \
+    && mkdir -p /opt \
+    && mv /models/home/.cache/music_ai_models/musescore/4.7.4 /opt/musescore \
+    && python - <<'PY'
+from src.utils.musescore_runtime import validate_pinned_musescore_distribution
+
+print("MuseScore Studio:", validate_pinned_musescore_distribution())
+PY
 
 # These gates are build-time identity checks only. GPU execution and every
 # selected checkpoint are checked again by the runtime readiness endpoint.

@@ -343,6 +343,11 @@ def _patch_valid_runtime_identities(monkeypatch, *, accelerator="cuda"):
         "is_model_available",
         lambda _self: True,
     )
+    monkeypatch.setattr(
+        validator.musescore,
+        "validate_pinned_musescore_distribution",
+        lambda: Path("/verified/MuseScore4.exe"),
+    )
     return versions
 
 
@@ -357,6 +362,7 @@ def test_runtime_validator_accepts_exact_pinned_packages_and_sources(monkeypatch
     assert identities["aria-amt-source"] == validator.aria_amt.ARIA_AMT_SOURCE_REVISION
     assert identities["piano-transcription-inference"] == "0.0.6"
     assert identities["transkun"] == "2.0.1"
+    assert identities["musescore-studio"] == validator.musescore.MUSESCORE_VERSION
 
 
 def test_runtime_validator_accepts_exact_xpu_openvino_distribution(monkeypatch):
@@ -438,6 +444,18 @@ def test_runtime_validator_rejects_wrong_transkun_packaged_resources(monkeypatch
     )
 
     with pytest.raises(RuntimeError, match="TransKun packaged V2 resources failed"):
+        validator.validate_portable_runtime_identities()
+
+
+def test_runtime_validator_rejects_invalid_musescore_distribution(monkeypatch):
+    _patch_valid_runtime_identities(monkeypatch)
+    monkeypatch.setattr(
+        validator.musescore,
+        "validate_pinned_musescore_distribution",
+        lambda: (_ for _ in ()).throw(RuntimeError("MuseScore license mismatch")),
+    )
+
+    with pytest.raises(RuntimeError, match="MuseScore license mismatch"):
         validator.validate_portable_runtime_identities()
 
 

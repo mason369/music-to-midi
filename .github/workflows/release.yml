@@ -70,6 +70,7 @@ jobs:
             muscriptor_medium_checkpoint
             muscriptor_large_checkpoint
             musescore_general_soundfont
+            musescore_studio
             fluidsynth_runtime
             pytorch_cuda_runtime
             onnxruntime_gpu
@@ -137,6 +138,8 @@ jobs:
             libxcb-util1 \
             libgl1 \
             libegl1 \
+            libasound2 \
+            libfontconfig1 \
             pulseaudio \
             pulseaudio-utils \
             fonts-ubuntu \
@@ -432,6 +435,7 @@ jobs:
           echo "=== Download and verify the complete seven-mode asset set, including gated MuScriptor Small/Medium/Large and the official playback SoundFont ==="
           python download_sota_models.py
           python download_fluidsynth_runtime.py
+          python download_musescore_runtime.py
 
           echo "=== Verify Leap XE 90-band vocals assets ==="
           python download_vocal_model.py
@@ -472,6 +476,7 @@ jobs:
           from src.utils.muscriptor_downloader import get_cached_muscriptor_paths
           from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
           from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+          from src.utils.musescore_runtime import validate_pinned_musescore_distribution
 
           for model_size in ("small", "medium", "large"):
               weights, config = get_cached_muscriptor_paths(
@@ -482,6 +487,7 @@ jobs:
               print(f"{model_size}: {config}")
           print(download_muscriptor_soundfont(printer=lambda _message: None))
           print(get_fluidsynth_executable())
+          print(validate_pinned_musescore_distribution())
           PY
           python - <<'PY'
           from src.core.miros_transcriber import MirosTranscriber
@@ -517,6 +523,8 @@ jobs:
           cp -a "$HOME/.music-to-midi/models/beat_this" "$BUILD_ASSET_ROOT/beat_this"
 
           cp -a "$HOME/.cache/music_ai_models/transkun_v2_aug" "$BUILD_ASSET_ROOT/transkun_v2_aug"
+
+          cp -a "$HOME/.cache/music_ai_models/musescore/4.7.4" "$BUILD_ASSET_ROOT/musescore"
 
           cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
 
@@ -617,6 +625,7 @@ jobs:
           echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR=$BUILD_ASSET_ROOT/muscriptor_large" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR=$BUILD_ASSET_ROOT/muscriptor_assets" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR=$BUILD_ASSET_ROOT/fluidsynth" >> "$GITHUB_ENV"
+          echo "MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR=$BUILD_ASSET_ROOT/musescore" >> "$GITHUB_ENV"
           echo "MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR=$BUILD_ASSET_ROOT/ffmpeg" >> "$GITHUB_ENV"
 
       - name: 生成第三方 SBOM

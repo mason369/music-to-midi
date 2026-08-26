@@ -24,6 +24,7 @@ on:
       - 'download_bytedance_piano_model.py'
       - 'download_muscriptor_model.py'
       - 'download_fluidsynth_runtime.py'
+      - 'download_musescore_runtime.py'
       - 'packages.txt'
       - 'pyproject.toml'
       - 'LICENSE'
@@ -69,6 +70,7 @@ jobs:
           cp download_bytedance_piano_model.py "$WORK/"
           cp download_muscriptor_model.py "$WORK/"
           cp download_fluidsynth_runtime.py "$WORK/"
+          cp download_musescore_runtime.py "$WORK/"
           cp packages.txt          "$WORK/"
           cp pyproject.toml        "$WORK/"
           cp LICENSE               "$WORK/"

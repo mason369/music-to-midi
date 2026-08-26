@@ -49,6 +49,7 @@ PORTABLE_COMPONENT: muscriptor_small_checkpoint | bundle=models/muscriptor_small
 PORTABLE_COMPONENT: muscriptor_medium_checkpoint | bundle=models/muscriptor_medium | artifact=model.safetensors+config.json | revision=f32236969308476e01fd3aae67357de5feb05a2d | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: muscriptor_large_checkpoint | bundle=models/muscriptor_large | artifact=model.safetensors+config.json | revision=8809fdfbed2affa7ade94a7059e746e3880720e7 | license=CC-BY-NC-4.0+model-specific-conditions | status=VERIFIED
 PORTABLE_COMPONENT: musescore_general_soundfont | bundle=models/muscriptor_assets | artifact=MuseScore_General.sf2 | revision=7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: musescore_studio | bundle=resources/musescore | artifact=official-Windows-MSI-or-Linux-AppImage-extracted+LICENSE.txt | revision=4.7.4.260706075 | license=GPL-3.0-only | status=VERIFIED
 PORTABLE_COMPONENT: fluidsynth_runtime | bundle=resources/fluidsynth | artifact=official-Windows-binary-or-Ubuntu-binary+runtime-libraries | revision=2.5.6-or-Ubuntu-22.04-package-recorded-at-build | license=LGPL-2.1-or-later | status=VERIFIED
 PORTABLE_COMPONENT: pytorch_cuda_runtime | bundle=python+native-runtime | artifact=torch:2.7.0+torchaudio:2.7.0+torchvision:0.22.0+CUDA | revision=cu128 | license=BSD-3-Clause-and-NVIDIA-CUDA-EULA | status=VERIFIED
 PORTABLE_COMPONENT: onnxruntime_gpu | bundle=python/onnxruntime | artifact=source+native-runtime | revision=1.23.2 | license=MIT | status=VERIFIED
@@ -107,6 +108,19 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
   LGPL-2.1-or-later. Windows portable archives use the pinned official binary archive;
   Linux portable archives carry the Ubuntu 22.04 executable and its resolved shared
   libraries. Space/Colab and source installs use the system package.
+- Score renderer: [MuseScore Studio 4.7.4](https://github.com/musescore/MuseScore/tree/v4.7.4),
+  build `260706075`, licensed under GPL version 3. Portable and container builds
+  redistribute the unmodified official runtime so that a quantized copy of each MIDI
+  can be engraved as MusicXML, full-score PDF, per-part PDF, and eligible fretted-part
+  tablature PDF. The Windows MSI is fixed at 127,807,488 bytes / SHA-256
+  `64fe70e5cb9ffe159d047d1e88db567bd101f60d36b0de28feb674716929a378`; the Linux
+  x86_64 AppImage is fixed at 192,231,928 bytes / SHA-256
+  `9233ed1b87d3e6b45722278f3c286dcd41e83da778bd0f80a1dd04949696ad93`.
+  Its exact upstream `LICENSE.txt` (36,493 bytes / SHA-256
+  `73e75f61f0dfce4fd83ad1f3f45d1d6f9ea8cdfd21a92d7a9216d47e5b3bbb88`) is bundled
+  beside the runtime. Equivalent corresponding source is available from the linked
+  v4.7.4 source tag and source archive at no charge. MuseScore is invoked as a
+  separate command-line program; generated scores are user output, not bundled code.
 
 ### YourMT3+ source and five selectable checkpoints
 

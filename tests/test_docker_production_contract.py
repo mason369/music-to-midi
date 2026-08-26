@@ -4,14 +4,11 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _compose() -> dict:
-    return yaml.safe_load(
-        (REPO_ROOT / "compose.production.yaml").read_text(encoding="utf-8")
-    )
+    return yaml.safe_load((REPO_ROOT / "compose.production.yaml").read_text(encoding="utf-8"))
 
 
 def test_model_initializer_has_download_egress_without_runtime_network_access():
@@ -51,3 +48,13 @@ def test_production_containers_keep_runtime_assets_out_of_the_image_context():
         "model_data:/models",
         "job_data:/data",
     ]
+
+
+def test_backend_image_bakes_verified_musescore_outside_the_model_volume():
+    backend = (REPO_ROOT / "docker" / "backend.Dockerfile").read_text(encoding="utf-8")
+
+    assert "from src.utils.musescore_runtime import download_musescore_runtime" in backend
+    assert "MUSIC_TO_MIDI_MUSESCORE=/opt/musescore/AppRun" in backend
+    assert "mv /models/home/.cache/music_ai_models/musescore/4.7.4 /opt/musescore" in backend
+    assert "validate_pinned_musescore_distribution" in backend
+    assert 'org.opencontainers.image.licenses="GPL-3.0-only"' in backend

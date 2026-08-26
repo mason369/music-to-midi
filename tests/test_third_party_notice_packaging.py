@@ -30,6 +30,27 @@ def test_notice_is_in_pyinstaller_space_and_portable_release_outputs():
     assert "actions/upload-artifact" not in build
 
 
+def test_musescore_runtime_is_pinned_staged_and_license_recorded():
+    notice = _read("THIRD_PARTY_NOTICES.md")
+    spec = _read("MusicToMidi.spec")
+    portable = _read("build_portable.ps1")
+    release = _read(".github/workflows/release.yml")
+    sync = _read(".github/workflows/sync_to_hf.yml")
+    docker = _read("docker/backend.Dockerfile")
+
+    assert "PORTABLE_COMPONENT: musescore_studio" in notice
+    assert "4.7.4.260706075" in notice
+    assert "GPL-3.0-only" in notice
+    assert "9233ed1b87d3e6b45722278f3c286dcd41e83da778bd0f80a1dd04949696ad93" in notice
+    assert "MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR" in spec
+    assert "resources/musescore" in spec
+    assert "download_musescore_runtime.py" in portable
+    assert "MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR" in portable
+    assert "download_musescore_runtime.py" in release
+    assert "cp download_musescore_runtime.py" in sync
+    assert "download_musescore_runtime.py" in docker
+
+
 def test_notice_covers_every_bundled_model_family_with_pinned_provenance():
     notice = _read("THIRD_PARTY_NOTICES.md")
 
@@ -90,6 +111,7 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         "muscriptor_medium_checkpoint",
         "muscriptor_large_checkpoint",
         "musescore_general_soundfont",
+        "musescore_studio",
         "fluidsynth_runtime",
         "pytorch_cuda_runtime",
         "onnxruntime_gpu",

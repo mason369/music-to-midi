@@ -1,1 +1,6 @@
 fluidsynth
+libasound2
+libegl1
+libfontconfig1
+libgl1
+libglib2.0-0

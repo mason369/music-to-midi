@@ -212,6 +212,11 @@ fluidsynth_dir = _resolve_existing_dir(
     os.path.join(USER_HOME, ".cache", "music_ai_models", "fluidsynth", "2.5.6"),
     os.path.join(ROOT_DIR, "build", "portable_assets", "fluidsynth"),
 )
+musescore_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "musescore", "4.7.4"),
+    os.path.join(ROOT_DIR, "build", "portable_assets", "musescore"),
+)
 ffmpeg_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR"),
     os.path.join(ROOT_DIR, "tools", "ffmpeg"),
@@ -246,7 +251,22 @@ def _require_ffmpeg_tools(source_dir):
             )
 
 
+def _require_musescore_tree(source_dir):
+    if not source_dir:
+        raise FileNotFoundError("Required MuseScore Studio bundle directory is missing")
+    executable = (
+        os.path.join(source_dir, "bin", "MuseScore4.exe")
+        if os.name == "nt"
+        else os.path.join(source_dir, "AppRun")
+    )
+    license_path = os.path.join(source_dir, "LICENSE.txt")
+    for label, path in (("executable", executable), ("GPL license", license_path)):
+        if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+            raise FileNotFoundError(f"Required MuseScore Studio {label} is missing: {path}")
+
+
 _require_ffmpeg_tools(ffmpeg_dir)
+_require_musescore_tree(musescore_dir)
 
 datas = [
     # 翻译文件
@@ -272,6 +292,7 @@ datas += _collect_tree(muscriptor_medium_models_dir, "models/muscriptor_medium")
 datas += _collect_tree(muscriptor_large_models_dir, "models/muscriptor_large")
 datas += _collect_tree(muscriptor_assets_dir, "models/muscriptor_assets")
 datas += _collect_tree(fluidsynth_dir, "resources/fluidsynth")
+datas += _collect_tree(musescore_dir, "resources/musescore")
 datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')

@@ -26,6 +26,7 @@ from src.utils.muscriptor_downloader import (
     preflight_muscriptor_download_access,
 )
 from src.utils.muscriptor_soundfont_downloader import download_muscriptor_soundfont
+from src.utils.musescore_runtime import download_musescore_runtime
 from src.utils.yourmt3_downloader import (
     OFFICIAL_YOURMT3_MODEL_KEYS,
     YOURMT3_MODELS,
@@ -176,6 +177,10 @@ def download_sota_models() -> dict[str, object]:
     fluidsynth_executable = download_fluidsynth_windows()
     print(f"ready: {fluidsynth_executable}")
 
+    print("\nPreparing pinned MuseScore Studio 4 sheet-music runtime...")
+    musescore_executable = download_musescore_runtime()
+    print(f"ready: {musescore_executable}")
+
     return {
         "transkun": transkun_runtime,
         "beat_this": {
@@ -212,6 +217,7 @@ def download_sota_models() -> dict[str, object]:
             "config": muscriptor_models[MuscriptorModel.LARGE.value]["config"],
             "soundfont": muscriptor_soundfont,
             "fluidsynth": fluidsynth_executable,
+            "musescore": musescore_executable,
         },
         # Deprecated compatibility keys retained for aggregate-downloader callers.
         "vocal_rvc": {

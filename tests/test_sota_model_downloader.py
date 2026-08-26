@@ -60,6 +60,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         }
         soundfont_result = Path("/tmp/muscriptor-assets/MuseScore_General.sf2")
         fluidsynth_result = Path("/tmp/fluidsynth/bin/fluidsynth")
+        musescore_result = Path("/tmp/musescore/bin/MuseScore4.exe")
 
         with (
             mock.patch.object(
@@ -131,6 +132,11 @@ class SotaModelDownloaderTests(unittest.TestCase):
                 "download_fluidsynth_windows",
                 return_value=fluidsynth_result,
             ) as fluidsynth_mock,
+            mock.patch.object(
+                download_sota_models,
+                "download_musescore_runtime",
+                return_value=musescore_result,
+            ) as musescore_mock,
         ):
             result = download_sota_models.download_sota_models()
 
@@ -151,6 +157,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         )
         soundfont_mock.assert_called_once_with()
         fluidsynth_mock.assert_called_once_with()
+        musescore_mock.assert_called_once_with()
         self.assertEqual(result["transkun"], transkun_result)
         self.assertEqual(result["beat_this"]["checkpoint"], beat_this_result)
         self.assertEqual(result["yourmt3"], yourmt3_result)
@@ -187,6 +194,7 @@ class SotaModelDownloaderTests(unittest.TestCase):
         )
         self.assertEqual(result["muscriptor"]["soundfont"], soundfont_result)
         self.assertEqual(result["muscriptor"]["fluidsynth"], fluidsynth_result)
+        self.assertEqual(result["muscriptor"]["musescore"], musescore_result)
 
     def test_default_transkun_validation_rejects_unavailable_or_wrong_package(self):
         reason = "Transkun package version mismatch: expected 2.0.1, got 2.0.0"

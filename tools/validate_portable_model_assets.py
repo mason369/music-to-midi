@@ -26,6 +26,7 @@ import src.core.beat_this_tracker as beat_this  # noqa: E402
 import src.core.bytedance_piano_transcriber as bytedance_piano  # noqa: E402
 import src.core.miros_transcriber as miros  # noqa: E402
 import src.core.transkun_transcriber as transkun  # noqa: E402
+import src.utils.musescore_runtime as musescore  # noqa: E402
 import src.utils.yourmt3_downloader as yourmt3  # noqa: E402
 import src.utils.yourmt3_source_identity as yourmt3_source  # noqa: E402
 from src.utils.artifact_identity import validate_file_identity  # noqa: E402
@@ -254,6 +255,7 @@ def validate_portable_runtime_identities() -> dict[str, str]:
         raise RuntimeError(
             "TransKun packaged V2 resources failed exact size/SHA-256 identity validation"
         )
+    musescore.validate_pinned_musescore_distribution()
 
     identities = {
         "audio-separator": audio_separator_version,
@@ -262,6 +264,7 @@ def validate_portable_runtime_identities() -> dict[str, str]:
         "aria-amt-source": aria_amt.ARIA_AMT_SOURCE_REVISION,
         "piano-transcription-inference": (bytedance_piano.BYTEDANCE_PIANO_PACKAGE_VERSION),
         "transkun": transkun.TRANSKUN_PACKAGE_VERSION,
+        "musescore-studio": musescore.MUSESCORE_VERSION,
     }
     if openvino_version is not None:
         identities["openvino"] = openvino_version

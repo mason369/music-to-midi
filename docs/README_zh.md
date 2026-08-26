@@ -32,7 +32,7 @@
 
 打包版的启动顺序是 WebBackend 包中的 `MusicToMidiBackend.exe`，随后是 WebFrontend 包中的 `MusicToMidiFrontend.exe`。同机使用默认配置即可；局域网使用时，两个 EXE 旁边首次运行生成的 `MusicToMidiBackend.json` 和 `MusicToMidiFrontend.json` 保存网络配置，重启后由其他电脑访问前端地址。其他电脑只需要浏览器，不需要安装任何包。后端健康检查为 `http://<后端地址>:8765/api/v1/health`，API 文档为 `http://<后端地址>:8765/docs`。
 
-浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取真实终态，并从响应中的 `download_url` 下载 MIDI 或分轨 WAV。前后端核对 API 2.0，浏览器以 5 秒心跳更新真实在线状态；后端默认保留 30 天、最多 200 条终态任务，删除任务及相关文件前会再次确认。桌面、Web、Space 与 Colab 一次只运行一个加速器任务，其他任务会等待。失败会返回明确错误，不会用简化算法或静默回退伪装成功。
+浏览器前端通过 multipart 作业接口提交音频，查询 `GET /api/v1/jobs/<job-id>` 获取真实终态，并从响应中的 `download_url` 下载 MIDI、乐谱 ZIP 或分轨 WAV。`POST /api/v1/jobs/<job-id>/sheet-music` 为一个明确的 MIDI 制品生成对应乐谱。前后端核对 API 2.0，浏览器以 5 秒心跳更新真实在线状态；后端默认保留 30 天、最多 200 条终态任务，删除任务及相关文件前会再次确认。桌面、Web、Space 与 Colab 一次只运行一个加速器任务，其他任务会等待。失败会返回明确错误，不会用简化算法或静默回退伪装成功。
 
 独立 Web 版本面向受信任局域网，不内置认证、授权或 TLS；直接暴露到互联网会形成无认证服务。完整的配置 JSON、防火墙命令、连通性验证、停止方式和前后端分机部署说明见 [web/README.md](../web/README.md)。
 
@@ -66,6 +66,7 @@
 | 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 PolarFormer 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
 | 钢琴转写 | `PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 和 `PIANO_BYTEDANCE_PEDAL` 分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。 |
 | MuScriptor 乐器约束 | 空选时由模型检测乐器；非空选择会传入官方 `instruments` 与 `prelude_forcing` 接口，生成阶段屏蔽未选 token，并校验事件流和最终 MIDI。越界结果不会发布。 |
+| 乐谱导出 | 每个真实 MIDI 结果（包括分离后逐轨转换）都可显式生成独立 ZIP；只对私有副本量化，不修改原 MIDI。ZIP 含量化 MIDI、MusicXML、总谱、逐乐器分谱及符合 4–9 弦识别条件的 Tab PDF。桌面、Space、Colab 使用当前编辑器网格，独立 Web/API 使用 `1/32`；MuseScore Studio 4 缺失或失败会直接报错。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。模型事件映射到音乐网格，但不做量化。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |
 | 试听与 DAW | MuScriptor 工作台以 MIDI 合成轨为主时钟，同步 MIDI、原音和乐器分轨，并校正超过 80 ms 的漂移。DAW 导入时需启用 tempo map；MuseScore 3/4 可能重新跟拍未量化演奏并改写乐谱页显示 BPM，但不会改变文件中已经校验的 tempo。 |
@@ -135,7 +136,7 @@ song_other.wav
 
 ### YourMT3+
 
-YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont 与 FluidSynth，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
+YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
 
 需要满足：
 
@@ -610,7 +611,7 @@ Intel XPU 的本地 Web 后端会为每个 GPU 作业启动一个全新的处理
 
 AMD/ROCm 当前不能完成七模式：当前固定的分离器执行契约只验收 NVIDIA `CUDAExecutionProvider` 或 Intel `OpenVINOExecutionProvider/GPU.0`，没有 AMD 对应的严格 GPU provider。安装脚本会明确停止，不会静默改用 CPU。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 29 项第三方组件：25 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：26 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -630,7 +631,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont 与 FluidSynth，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
+当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
 
 ### 5. 准备分离与钢琴模型
 
@@ -724,7 +725,7 @@ Space 失败请求会立即删除请求目录；成功结果保留给 Gradio 下
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 29 项闭集清单为 25 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
+当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 26 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
 
 Windows CUDA 桌面 App、Web 后端、Web 前端三包：
 

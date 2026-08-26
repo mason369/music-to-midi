@@ -642,6 +642,18 @@ $FluidSynthSource = Resolve-ExistingDir @(
     $env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR,
     ($fluidsynthSourceText | Select-Object -Last 1)
 )
+if (-not [string]::IsNullOrWhiteSpace($env:MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR)) {
+    $MuseScoreSource = Resolve-ExistingDir @($env:MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR)
+    if (-not $MuseScoreSource) {
+        throw "Explicit MuseScore Studio runtime directory is missing: $env:MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR"
+    }
+} else {
+    $musescoreSourceText = & $Python -c "from src.utils.musescore_runtime import validate_pinned_musescore_distribution; path = validate_pinned_musescore_distribution(); print(path.parent.parent)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pinned MuseScore Studio runtime is unavailable or incomplete. Run download_musescore_runtime.py."
+    }
+    $MuseScoreSource = Resolve-ExistingDir @(($musescoreSourceText | Select-Object -Last 1))
+}
 
 $ResolvedFfmpegDir = Resolve-FFmpegBinDir @(
     $FfmpegDir,
@@ -670,6 +682,7 @@ $MuscriptorMediumBundle = Join-Path $BuildAssetRoot "muscriptor_medium"
 $MuscriptorLargeBundle = Join-Path $BuildAssetRoot "muscriptor_large"
 $MuscriptorAssetsBundle = Join-Path $BuildAssetRoot "muscriptor_assets"
 $FluidSynthBundle = Join-Path $BuildAssetRoot "fluidsynth"
+$MuseScoreBundle = Join-Path $BuildAssetRoot "musescore"
 $FfmpegBundle = Join-Path $BuildAssetRoot "ffmpeg"
 
 Assert-PortableModelIdentities `
@@ -718,6 +731,7 @@ Copy-RequiredFileAsset `
     -Label "MuScriptor playback SoundFont" `
     -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $FluidSynthSource -Destination $FluidSynthBundle -Label "FluidSynth runtime" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $MuseScoreSource -Destination $MuseScoreBundle -Label "MuseScore Studio runtime" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 $muscriptorPortableCheck = @"
 from pathlib import Path
 from src.utils.artifact_identity import validate_file_identity
@@ -753,6 +767,11 @@ if ($pythonExitCode -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Staged FluidSynth runtime failed to execute."
 }
+$musescoreBundleCheck = & $Python -c "from src.utils.musescore_runtime import validate_pinned_musescore_distribution; print(validate_pinned_musescore_distribution(r'$MuseScoreBundle\bin\MuseScore4.exe'))"
+if ($LASTEXITCODE -ne 0) {
+    throw "Staged MuseScore Studio runtime failed exact version/license validation."
+}
+Write-Host ($musescoreBundleCheck | Select-Object -Last 1)
 Assert-PortableModelIdentities `
     -AudioSeparatorDir $AudioSeparatorBundle `
     -YourMt3Dir $YourMt3Bundle `
@@ -796,6 +815,7 @@ $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR = $MuscriptorLargeBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR = $MuscriptorLargeBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR = $MuscriptorAssetsBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR = $FluidSynthBundle
+$env:MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR = $MuseScoreBundle
 $env:MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR = $FfmpegBundle
 $PyInstallerBootstrapDir = Join-Path $Root "tools\pyinstaller_bootstrap"
 $PyInstallerBootstrap = Join-Path $PyInstallerBootstrapDir "sitecustomize.py"
@@ -838,6 +858,7 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_ASSETS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FLUIDSYNTH_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_FFMPEG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUILD_VC_RUNTIME_DIR -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($OriginalPythonPath)) {
@@ -906,6 +927,7 @@ if (Test-Path -LiteralPath $GuiPackageRuntimeRoot) {
 $muscriptorDistCheck = @"
 from pathlib import Path
 from src.utils.artifact_identity import validate_file_identity
+from src.utils.musescore_runtime import validate_pinned_musescore_distribution
 from src.core.beat_this_tracker import (
     BEAT_THIS_CHECKPOINT_NAME,
     validate_beat_this_checkpoint,
@@ -926,10 +948,14 @@ validate_beat_this_checkpoint(
     Path(r'$DistDir') / '_internal' / 'models' / 'beat_this' / BEAT_THIS_CHECKPOINT_NAME
 )
 print('Packaged Beat This final0 asset verified')
+validate_pinned_musescore_distribution(
+    Path(r'$DistDir') / '_internal' / 'resources' / 'musescore' / 'bin' / 'MuseScore4.exe'
+)
+print('Packaged MuseScore Studio runtime verified')
 "@
 $pythonExitCode = Invoke-PythonScript -PythonExecutable $Python -Script $muscriptorDistCheck
 if ($pythonExitCode -ne 0) {
-    throw "Packaged MuScriptor Small/Medium/Large assets failed exact identity validation."
+    throw "Packaged MuScriptor/Beat This/MuseScore assets failed exact identity validation."
 }
 
 foreach ($noticeName in @("LICENSE", "THIRD_PARTY_NOTICES.md")) {

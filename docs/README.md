@@ -12,6 +12,8 @@ Every one of the seven modes and every per-track conversion uses Beat This `fina
 
 Note quantization is explicit and disabled by default. The desktop, Space, and Colab result editors expose `1/4`, `1/8`, `1/16`, `1/32`, and `1/64`; their scope defaults to All tracks and can be changed to Selected notes. Changing either selector does not alter notes until Quantize is pressed. The standalone Web/API, including Docker deployment, exposes the same grids behind an all-tracks Quantize notes checkbox. That post-write pass snaps paired note starts and durations once while verifying that tempo, meter, controller, and other non-note events retain their absolute ticks.
 
+Every completed MIDI, including an explicitly converted separation stem, can generate its own score ZIP. Engraving quantizes a private copy and never changes the published MIDI. The ZIP contains that copied MIDI, MusicXML, a full-score PDF, per-part PDFs, and tablature PDFs when MuseScore identifies a supported 4–9 string part. Desktop, Space, and Colab use the editor's current grid; standalone Web/API uses `1/32`. MuseScore Studio 4 is required and failures remain visible.
+
 The Standard MIDI tempo, meter, and every non-tempo event are verified after publication. Correct interpretation in a DAW depends on tempo-map import being enabled. MuseScore 3/4 may classify an unquantized performance MIDI as human performance, run its own beat tracker, and replace the tempo shown on the notation page. That displayed value is produced by MuseScore's MIDI importer; the project does not quantize or move model notes merely to force a notation application to display the file tempo.
 
 ## Standalone Web API And Browser Frontend
@@ -34,7 +36,7 @@ The entry point detects the server computer's primary LAN IPv4 address, starts W
 
 For packaged use, the startup order is `MusicToMidiBackend.exe` from WebBackend followed by `MusicToMidiFrontend.exe` from WebFrontend. Defaults work on one computer. For LAN use, `MusicToMidiBackend.json` and `MusicToMidiFrontend.json`, created next to their executables on first launch, hold the network settings used after restart. Client computers need only a browser. The health endpoint is `http://<backend-address>:8765/api/v1/health`; OpenAPI documentation is at `http://<backend-address>:8765/docs`.
 
-The browser submits multipart jobs, polls `GET /api/v1/jobs/<job-id>` for the real terminal state, and downloads MIDI or separated WAV files through the returned `download_url` values. Frontend and backend verify API 2.0 compatibility, a five-second heartbeat keeps the connection indicator current, terminal jobs default to a 30-day/200-record retention policy, and deleting a job and its related files requires confirmation. Desktop, Web, Space, and Colab run one accelerator task at a time while other tasks wait. Failures remain visible; no reduced-quality algorithm or silent fallback is used.
+The browser submits multipart jobs, polls `GET /api/v1/jobs/<job-id>` for the real terminal state, and downloads MIDI, score ZIP, or separated WAV files through the returned `download_url` values. `POST /api/v1/jobs/<job-id>/sheet-music` generates the ZIP for one explicit MIDI artifact. Frontend and backend verify API 2.0 compatibility, a five-second heartbeat keeps the connection indicator current, terminal jobs default to a 30-day/200-record retention policy, and deleting a job and its related files requires confirmation. Desktop, Web, Space, and Colab run one accelerator task at a time while other tasks wait. Failures remain visible; no reduced-quality algorithm or silent fallback is used.
 
 The standalone Web deployment is intentionally limited to a trusted LAN and does not include authentication, authorization, or TLS. Exposing ports `5173` or `8765` to the Internet would publish an unauthenticated service. See [web/README.md](../web/README.md) for complete JSON examples, scoped firewall commands, connectivity checks, shutdown instructions, and split-host deployment.
 
@@ -74,6 +76,7 @@ The application supports turning a vocal line, piano recording, full mix, or sep
 | Piano | `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` use TransKun default V2, the official V2 Aug checkpoint, Aria-AMT, or ByteDance's pedal-aware model. |
 | MuScriptor selection | An empty instrument list enables model detection. A selection is passed to the official `instruments` and `prelude_forcing` path, masks unselected tokens during generation, and is checked against streamed events and final MIDI. |
 | MIDI content | YourMT3+ and MIROS retain their official writer results. MuScriptor uses its official events and writer, followed by selected-instrument validation. The project adds no quantization, de-duplication, short-note filtering, velocity smoothing, polyphony limiting, or local `NoteEvent` regeneration. |
+| Sheet music | Every real MIDI result exposes an explicit score ZIP action. Only a copied MIDI is quantized for engraving; MusicXML, full-score PDF, per-part PDFs, and eligible tablature PDFs are returned without altering the original MIDI. |
 | Input and interfaces | `MP3`, `WAV`, `FLAC`, `OGG`, and `M4A` are accepted; FFmpeg converts non-WAV input to 44.1 kHz PCM WAV. Desktop, Space, and Colab expose the same seven modes. |
 
 ## Interface Matrix
@@ -97,11 +100,11 @@ Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; and FluidSynth, while strictly validating the default TransKun 2.0.1 package and bundled V2 resources | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
+| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; FluidSynth; and pinned MuseScore Studio 4.7.4 | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | Checks actual accelerator execution, all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources and CPU fallback are reported explicitly. |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | Installs an isolated NVIDIA PyTorch 2.7 or Intel XPU PyTorch 2.11 runtime, NumPy 1.26, audio-separator 0.44.1, the identity-verified official MuScriptor v0.3.0 runtime, and every required model/runtime asset | NVIDIA uses `venv` + CUDA 12.8; Windows Intel uses `venv-xpu` + native PyTorch XPU + OpenVINO GPU. Mixed runtimes are rejected. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging checks only | They produce no portable package; empty directories and fake models fail bundle validation. |
-| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, and runtime asset | The 29-component gate currently records 25 `VERIFIED` and four explicitly documented `OWNER_ACCEPTED` items. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
+| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, engraving, and runtime asset | The 30-component gate currently records 26 `VERIFIED` and four explicitly documented `OWNER_ACCEPTED` items. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
 | `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large / Medium / Small; the per-track menu contains 13 routes in total. |
 
 ## Processing Modes
@@ -159,7 +162,7 @@ The exact files depend on the selected mode and the per-track conversions the us
 
 ### YourMT3+
 
-YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, and FluidSynth, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
 
 The source runtime depends on:
 
@@ -567,7 +570,7 @@ The local Intel XPU Web backend starts a fresh processing process for every GPU 
 
 AMD/ROCm cannot currently run the complete seven-mode surface: the fixed separator contracts validate either NVIDIA `CUDAExecutionProvider` or Intel `OpenVINOExecutionProvider/GPU.0`, with no strict AMD GPU provider. The installer stops explicitly instead of silently switching to CPU.
 
-`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 29 third-party components: 25 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
+`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 30 third-party components: 26 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 
@@ -587,7 +590,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, and FluidSynth, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
+The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
 
 ### 5. Prepare Separation and Piano Models
 
