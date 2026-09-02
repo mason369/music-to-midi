@@ -11,7 +11,9 @@ import math
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
+import zipfile
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -75,6 +77,23 @@ class MidiAudioExportResult:
     frames: int
     channels: int
     peak: float
+
+
+@dataclass(frozen=True)
+class MidiStemAudioExportMember:
+    instrument: str
+    archive_name: str
+    frames: int
+    channels: int
+    peak: float
+
+
+@dataclass(frozen=True)
+class MidiStemAudioExportResult:
+    path: Path
+    preset: MidiAudioExportPreset
+    frames: int
+    members: tuple[MidiStemAudioExportMember, ...]
 
 
 def get_midi_audio_export_preset(preset_id: str) -> MidiAudioExportPreset:
@@ -590,6 +609,200 @@ def render_midi_audio_export(
                 active_error.add_note(message)
             else:
                 raise RuntimeError(message)
+
+
+def _copy_wav_with_frame_padding(
+    source_path: Path,
+    destination_path: Path,
+    target_frames: int,
+    preset: MidiAudioExportPreset,
+    *,
+    cancel_check=None,
+) -> None:
+    """Copy one verified stereo WAV and append exact digital silence."""
+
+    import numpy as np
+    import soundfile as sf
+
+    source_info = sf.info(str(source_path))
+    if source_info.frames > target_frames:
+        raise RuntimeError(
+            "Stem WAV exceeds its alignment boundary: "
+            f"source={source_info.frames}, target={target_frames}"
+        )
+    zero_block = np.zeros((65_536, 2), dtype="float32")
+    with (
+        sf.SoundFile(str(source_path), mode="r") as source,
+        sf.SoundFile(
+            str(destination_path),
+            mode="w",
+            samplerate=preset.sample_rate,
+            channels=2,
+            format="WAV",
+            subtype=preset.soundfile_subtype,
+        ) as destination,
+    ):
+        copied = 0
+        while True:
+            if cancel_check is not None and cancel_check():
+                raise InterruptedError("MIDI stem audio export cancelled")
+            block = source.read(65_536, dtype="float32", always_2d=True)
+            if len(block) == 0:
+                break
+            destination.write(block)
+            copied += len(block)
+        remaining = target_frames - copied
+        while remaining:
+            if cancel_check is not None and cancel_check():
+                raise InterruptedError("MIDI stem audio export cancelled")
+            block_frames = min(remaining, len(zero_block))
+            destination.write(zero_block[:block_frames])
+            remaining -= block_frames
+
+
+def render_midi_stem_audio_export(
+    midi_path: str | Path,
+    destination: str | Path,
+    preset_id: str = DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+    *,
+    muscriptor_groups: bool = False,
+    minimum_duration_seconds: float | None = None,
+    cancel_check=None,
+) -> MidiStemAudioExportResult:
+    """Render every detected instrument to aligned WAV files in one ZIP."""
+
+    source_midi = Path(midi_path).resolve()
+    output_path = Path(destination).resolve()
+    preset = get_midi_audio_export_preset(preset_id)
+    if not source_midi.is_file() or source_midi.stat().st_size <= 0:
+        raise FileNotFoundError(f"MIDI stem audio export source is missing: {source_midi}")
+    if output_path.suffix.lower() != ".zip":
+        raise ValueError(f"MIDI stem audio export destination must end in .zip: {output_path}")
+    notes = read_midi_roll_notes(source_midi, muscriptor_groups=muscriptor_groups)
+    if not notes:
+        raise ValueError("MIDI stem audio export requires at least one completed note")
+
+    grouped: dict[str, list[MuscriptorRollNote]] = {}
+    for note in notes:
+        grouped.setdefault(note.instrument, []).append(note)
+    minimum_frames = 0
+    if minimum_duration_seconds is not None:
+        duration = float(minimum_duration_seconds)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError(
+                "MIDI stem audio export duration must be finite and positive: "
+                f"{minimum_duration_seconds!r}"
+            )
+        minimum_frames = max(
+            1,
+            int(math.ceil(math.nextafter(duration * preset.sample_rate, -math.inf))),
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    check_cancelled = cancel_check or (lambda: False)
+    token = secrets.token_hex(8)
+    staged_zip = output_path.with_name(f".m2m-stems-{token}.zip")
+    active_error: BaseException | None = None
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".m2m-stems-{token}-",
+            dir=output_path.parent,
+        ) as temporary_dir:
+            temporary_root = Path(temporary_dir)
+            raw_renders: list[tuple[str, Path, MidiAudioExportResult]] = []
+            for index, (instrument, instrument_notes) in enumerate(grouped.items(), start=1):
+                if check_cancelled():
+                    raise InterruptedError("MIDI stem audio export cancelled")
+                asset_name = f"{index:02d}_{_safe_asset_name(instrument)}"
+                instrument_midi = temporary_root / f"{asset_name}.mid"
+                raw_wav = temporary_root / f"{asset_name}.raw.wav"
+                _write_instrument_midi(instrument_notes, instrument_midi)
+                rendered = render_midi_audio_export(
+                    instrument_midi,
+                    raw_wav,
+                    preset.id,
+                    cancel_check=check_cancelled,
+                )
+                raw_renders.append((instrument, raw_wav, rendered))
+
+            target_frames = max(
+                minimum_frames,
+                max(rendered.frames for _instrument, _path, rendered in raw_renders),
+            )
+            members: list[MidiStemAudioExportMember] = []
+            aligned_paths: list[tuple[str, Path]] = []
+            for index, (instrument, raw_wav, _rendered) in enumerate(raw_renders, start=1):
+                archive_name = (
+                    f"{index:02d}_{_safe_asset_name(instrument)}_" f"{preset.filename_suffix}.wav"
+                )
+                aligned_wav = temporary_root / archive_name
+                _copy_wav_with_frame_padding(
+                    raw_wav,
+                    aligned_wav,
+                    target_frames,
+                    preset,
+                    cancel_check=check_cancelled,
+                )
+                frames, channels, peak = _verify_midi_audio_export(
+                    aligned_wav,
+                    preset,
+                    expect_silence=False,
+                    cancel_check=check_cancelled,
+                )
+                if frames != target_frames:
+                    raise RuntimeError(
+                        "MIDI stem audio export alignment verification failed: "
+                        f"instrument={instrument}, expected={target_frames}, actual={frames}"
+                    )
+                members.append(
+                    MidiStemAudioExportMember(
+                        instrument=instrument,
+                        archive_name=archive_name,
+                        frames=frames,
+                        channels=channels,
+                        peak=peak,
+                    )
+                )
+                aligned_paths.append((archive_name, aligned_wav))
+
+            if check_cancelled():
+                raise InterruptedError("MIDI stem audio export cancelled")
+            with zipfile.ZipFile(staged_zip, mode="w", compression=zipfile.ZIP_STORED) as archive:
+                for archive_name, aligned_wav in aligned_paths:
+                    archive.write(aligned_wav, arcname=archive_name)
+            expected_names = [member.archive_name for member in members]
+            with zipfile.ZipFile(staged_zip, mode="r") as archive:
+                actual_names = archive.namelist()
+                if actual_names != expected_names:
+                    raise RuntimeError(
+                        "MIDI stem ZIP member verification failed: "
+                        f"expected={expected_names!r}, actual={actual_names!r}"
+                    )
+                if archive.testzip() is not None or any(
+                    archive.getinfo(name).file_size <= 44 for name in expected_names
+                ):
+                    raise RuntimeError("MIDI stem ZIP integrity verification failed")
+            if check_cancelled():
+                raise InterruptedError("MIDI stem audio export cancelled")
+            staged_zip.replace(output_path)
+            return MidiStemAudioExportResult(
+                path=output_path,
+                preset=preset,
+                frames=target_frames,
+                members=tuple(members),
+            )
+    except BaseException as exc:
+        active_error = exc
+        raise
+    finally:
+        try:
+            staged_zip.unlink(missing_ok=True)
+        except OSError as exc:
+            message = f"Unable to remove MIDI stem ZIP staging file {staged_zip}: {exc}"
+            if active_error is not None:
+                active_error.add_note(message)
+            else:
+                raise RuntimeError(message) from exc
 
 
 def prepare_midi_preview_assets(

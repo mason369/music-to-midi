@@ -192,3 +192,87 @@ def test_browser_audio_export_uses_current_notes_selected_preset_and_cache(
     invalid = json.dumps({"token": token, "notes": [_note_payload()], "preset": "pcm32_192000"})
     with pytest.raises(ValueError, match="Unsupported MIDI audio export preset"):
         registry.export_audio(invalid)
+
+
+def test_browser_stem_export_uses_current_notes_context_and_cache(
+    tmp_path: Path,
+    monkeypatch,
+):
+    request_dir = tmp_path / "request-test"
+    request_dir.mkdir()
+    source_midi = request_dir / "source.mid"
+    source_audio = request_dir / "source.wav"
+    source_midi.write_bytes(b"MThd-source")
+    source_audio.write_bytes(b"RIFF-source")
+    calls = []
+
+    def fake_export(source, destination, notes, *, reference_bpm, target_bpm):
+        destination = Path(destination)
+        destination.write_bytes(b"MThd-current-notes")
+        calls.append(("midi", Path(source), tuple(notes), reference_bpm, target_bpm))
+        return destination
+
+    def fake_stem_render(
+        midi_path,
+        destination,
+        preset_id,
+        *,
+        muscriptor_groups,
+        minimum_duration_seconds,
+    ):
+        preset = edited_midi_preview.get_midi_audio_export_preset(preset_id)
+        destination = Path(destination)
+        destination.write_bytes(b"PK-verified")
+        calls.append(
+            (
+                "stems",
+                Path(midi_path),
+                destination,
+                preset_id,
+                muscriptor_groups,
+                minimum_duration_seconds,
+            )
+        )
+        member = SimpleNamespace(
+            instrument="acoustic_piano",
+            archive_name="01_acoustic_piano_24bit-48kHz.wav",
+            frames=120_000,
+            channels=2,
+            peak=0.25,
+        )
+        return SimpleNamespace(
+            path=destination,
+            preset=preset,
+            frames=120_000,
+            members=(member,),
+        )
+
+    monkeypatch.setattr(edited_midi_preview, "export_edited_midi", fake_export)
+    monkeypatch.setattr(
+        edited_midi_preview,
+        "render_midi_stem_audio_export",
+        fake_stem_render,
+    )
+    registry = EditedMidiPreviewRegistry()
+    token = registry.register(
+        request_dir=request_dir,
+        source_midi_path=source_midi,
+        original_audio_path=source_audio,
+        reference_bpm=117.9,
+        muscriptor_groups=True,
+        duration_seconds=2.5,
+    )
+    payload = json.dumps({"token": token, "notes": [_note_payload()], "preset": "pcm24_48000"})
+
+    first = registry.export_stems(payload)
+    second = registry.export_stems(payload)
+
+    assert first == second
+    assert [call[0] for call in calls] == ["midi", "stems"]
+    assert calls[1][3:] == ("pcm24_48000", True, 2.5)
+    assert first["memberCount"] == 1
+    assert first["frames"] == 120_000
+    assert first["members"][0]["frames"] == 120_000
+    assert first["subtype"] == "PCM_24"
+    assert "midi-stems" in first["url"]
+    assert first["filename"] == "instrument-stems-24bit-48kHz.zip"

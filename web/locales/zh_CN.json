@@ -73,6 +73,8 @@
   "config.yourmt3": "YourMT3+ 模型模式",
   "config.yourmt3_help": "提供五种公开 checkpoint",
   "config.muscriptor_help": "固定的 Large / Medium / Small 公开权重",
+  "config.muscriptor_instruments": "预期乐器（硬约束）",
+  "config.muscriptor_instruments_help": "标准分轨文件名会自动预填可移除的候选；留空时由模型自动识别。",
   "config.muscriptor_chain": "MuScriptor 分段处理链路",
   "config.muscriptor_chain_help": "官方处理链路保持 v0.3.0 的原始分段方式；连续性修复链路会衔接跨分段延音，减少边界处的断音或粘连",
   "config.track_layout": "MIDI 轨道结构",

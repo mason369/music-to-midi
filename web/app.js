@@ -59,7 +59,49 @@ const state = {
   playStartedAt: 0,
   raf: 0,
   zoom: 1,
+  autoMuscriptorInstruments: [],
 };
+
+function selectedValues(select) {
+  return [...select.selectedOptions].map((optionNode) => optionNode.value);
+}
+
+function setSelectedValues(select, values) {
+  const selected = new Set(values || []);
+  [...select.options].forEach((optionNode) => { optionNode.selected = selected.has(optionNode.value); });
+}
+
+function inferMuscriptorInstruments(filename) {
+  const stem = String(filename || "").replace(/\.[^.]+$/, "").trim().toLowerCase();
+  const normalized = stem.replace(/[\s.\-]+/g, "_").replace(/^_+|_+$/g, "");
+  const known = (state.capabilities?.muscriptor_instruments || [])
+    .map((item) => item.id).sort((a, b) => b.length - a.length);
+  const exact = known.find(
+    (instrument) => normalized === instrument || normalized.endsWith(`_${instrument}`),
+  );
+  if (exact) return [exact];
+  const token = normalized.split("_").pop() || "";
+  const aliases = {
+    guitar: ["acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"],
+    guitars: ["acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"],
+    bass: ["acoustic_bass", "electric_bass"], basses: ["acoustic_bass", "electric_bass"],
+    piano: ["acoustic_piano", "electric_piano"], keys: ["acoustic_piano", "electric_piano"], keyboards: ["acoustic_piano", "electric_piano"],
+    vocal: ["voice"], vocals: ["voice"], voice: ["voice"],
+    drum: ["drums"], drums: ["drums"],
+  };
+  return aliases[normalized] || aliases[token] || [];
+}
+
+function isMuscriptorRoute(route) {
+  return route === "muscriptor" || String(route || "").startsWith("muscriptor:");
+}
+
+function instrumentOptions(selected = []) {
+  const selectedSet = new Set(selected);
+  return (state.capabilities?.muscriptor_instruments || []).map((item) => (
+    `<option value="${escapeHtml(item.id)}" ${selectedSet.has(item.id) ? "selected" : ""}>${escapeHtml(state.language === "zh_CN" ? item.label_zh : item.label_en)}</option>`
+  )).join("");
+}
 
 async function loadFrontendRuntimeConfig() {
   const response = await fetch("runtime-config.json", { cache: "no-store" });
@@ -549,6 +591,9 @@ function populateControls() {
   const muscriptor = $("#muscriptorSelect"); const selectedMuscriptor = muscriptor.value; muscriptor.innerHTML = "";
   caps.muscriptor_models.forEach((item) => option(muscriptor, item.id, state.language === "zh_CN" ? item.label_zh : item.label_en, item));
   selectAvailableOption(muscriptor, [selectedMuscriptor, "large"]);
+  const instrumentSelect = $("#muscriptorInstrumentsSelect");
+  const selectedInstruments = selectedValues(instrumentSelect);
+  instrumentSelect.innerHTML = instrumentOptions(selectedInstruments);
   const muscriptorProcessingChain = $("#muscriptorProcessingChainSelect");
   const selectedMuscriptorProcessingChain = muscriptorProcessingChain.value || "official";
   muscriptorProcessingChain.innerHTML = "";
@@ -644,6 +689,7 @@ function updateConditionalControls() {
   $("#backendField").hidden = !isSmart;
   $("#yourmt3Field").hidden = !isSmart || backend !== "yourmt3";
   $("#muscriptorField").hidden = !isSmart || backend !== "muscriptor";
+  $("#muscriptorInstrumentsField").hidden = !isSmart || backend !== "muscriptor";
   $("#muscriptorProcessingChainField").hidden = !(
     (isSmart && backend === "muscriptor")
     || ["vocal_split", "six_stem_split"].includes(state.selectedMode)
@@ -712,6 +758,19 @@ function setAudioFile(file) {
   prepareNewRequest();
   if (state.sourceObjectUrl) URL.revokeObjectURL(state.sourceObjectUrl);
   state.audioFile = file; state.sourceObjectUrl = URL.createObjectURL(file);
+  const instrumentSelect = $("#muscriptorInstrumentsSelect");
+  const currentInstruments = selectedValues(instrumentSelect);
+  const mayReplaceAuto = currentInstruments.length === state.autoMuscriptorInstruments.length
+    && currentInstruments.every(
+      (value, index) => value === state.autoMuscriptorInstruments[index],
+    );
+  if (!currentInstruments.length || mayReplaceAuto) {
+    const inferred = inferMuscriptorInstruments(file.name);
+    setSelectedValues(instrumentSelect, inferred);
+    state.autoMuscriptorInstruments = inferred;
+  } else {
+    state.autoMuscriptorInstruments = [];
+  }
   $("#fileInspector").hidden = false;
   $("#fileName").textContent = file.name;
   $("#fileMeta").textContent = `${formatBytes(file.size)} · ${file.type || suffix.slice(1).toUpperCase()}`;
@@ -734,7 +793,7 @@ function buildInferenceOptions() {
     yourmt3_model: $("#yourmt3Select").value || "yptf_moe_multi_nops",
     muscriptor_model: $("#muscriptorSelect").value || "large",
     muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official",
-    muscriptor_instruments: [],
+    muscriptor_instruments: selectedValues($("#muscriptorInstrumentsSelect")),
     midi_track_mode: $("#trackModeSelect").value || "multi_track",
     tempo_mode: tempoMode,
     custom_bpm: bpm,
@@ -964,6 +1023,8 @@ async function buildServerTracks(job) {
       if (!child) return;
       track.midiJob = child;
       track.route = child.request?.route || child.result?.route || "";
+      track.muscriptorInstruments = child.request?.muscriptor_instruments
+        || track.muscriptorInstruments;
       track.midiEnabled = Boolean(track.route);
       if (child.status === "succeeded") {
         track.midiArtifact = child.artifacts.find((artifact) => artifact.kind === "midi") || null;
@@ -986,11 +1047,14 @@ async function buildServerTracks(job) {
   redrawWaveforms();
 }
 function makeTrack(values) {
+  const inferredInstruments = inferMuscriptorInstruments(
+    values.name || values.fileName || values.localFile?.name || "",
+  );
   return {
     id: values.id || `local-${crypto.randomUUID()}`, name: values.name || t("track.local"), color: values.color || TRACK_COLORS[state.tracks.length % TRACK_COLORS.length],
     audioUrl: values.audioUrl || "", localFile: values.localFile || null, fileName: values.fileName || values.localFile?.name || "audio",
     parentJobId: values.parentJobId || null, serverTrackId: values.serverTrackId || null, buffer: null, loading: false,
-    muted: false, solo: false, gainDb: 0, offset: 0, midiEnabled: false, route: "", statusKey: "track.no_route", statusVars: {}, statusClass: "", midiJob: null, midiArtifact: null,
+    muted: false, solo: false, gainDb: 0, offset: 0, midiEnabled: false, route: "", muscriptorInstruments: values.muscriptorInstruments || inferredInstruments, statusKey: "track.no_route", statusVars: {}, statusClass: "", midiJob: null, midiArtifact: null,
   };
 }
 async function ensureAudioContext() {
@@ -1036,6 +1100,7 @@ function createTrackRow(track) {
   const terminalMidi = track.midiJob && ["succeeded", "failed", "cancelled"].includes(track.midiJob.status);
   const activeMidi = track.midiJob && !terminalMidi;
   const convertLabel = activeMidi ? t("track.stop_conversion") : track.midiJob ? t("track.retry_conversion") : t("track.start_conversion");
+  const showsInstrumentConstraint = isMuscriptorRoute(track.route);
   row.innerHTML = `
     <div class="track-head">
       <div class="track-name"><strong>♪ ${escapeHtml(track.name)}</strong><small>${escapeHtml(track.fileName)}</small></div>
@@ -1044,17 +1109,19 @@ function createTrackRow(track) {
       <div class="track-midi-control"><label><input class="midi-enabled" type="checkbox" ${track.midiEnabled ? "checked" : ""} ${activeMidi ? "disabled" : ""} /> ${escapeHtml(t("track.convert_to_midi"))}</label><select class="route-select" ${activeMidi ? "disabled" : ""}>${routeOptions.join("")}</select><button class="convert-button" type="button" ${track.midiEnabled && track.route && routeAvailable ? "" : "disabled"}>${escapeHtml(convertLabel)}</button></div>
       <button class="track-button remove-track" type="button">${escapeHtml(t("track.remove"))}</button>
     </div>
+    <label class="track-instrument-constraint" ${showsInstrumentConstraint ? "" : "hidden"}><span>${escapeHtml(t("config.muscriptor_instruments"))}</span><select class="track-muscriptor-instruments" multiple ${activeMidi ? "disabled" : ""}>${instrumentOptions(track.muscriptorInstruments)}</select><small>${escapeHtml(t("config.muscriptor_instruments_help"))}</small></label>
     <div class="waveform-scroll"><div class="waveform-content"><canvas></canvas><i class="playhead"></i></div></div>
     <div class="track-controls">
       <label><span>${escapeHtml(t("track.volume"))}</span><input class="gain" type="range" min="-60" max="0" step="0.5" value="${track.gainDb}" /><output>${track.gainDb.toFixed(1)} dB</output></label>
       <label><span>${escapeHtml(t("track.offset"))}</span><input class="offset" type="range" min="-10" max="10" step="0.01" value="${track.offset}" /><output>${track.offset >= 0 ? "+" : ""}${track.offset.toFixed(2)}s</output></label>
       <span class="track-status ${escapeHtml(track.statusClass)}">${escapeHtml(t(track.statusKey, track.statusVars))}</span>
     </div>`;
-  const mute = $(".mute", row), solo = $(".solo", row), enabled = $(".midi-enabled", row), route = $(".route-select", row), convert = $(".convert-button", row);
+  const mute = $(".mute", row), solo = $(".solo", row), enabled = $(".midi-enabled", row), route = $(".route-select", row), convert = $(".convert-button", row), instrumentSelect = $(".track-muscriptor-instruments", row), instrumentConstraint = $(".track-instrument-constraint", row);
   mute.addEventListener("click", () => { track.muted = !track.muted; mute.classList.toggle("is-active", track.muted); mute.setAttribute("aria-pressed", String(track.muted)); refreshActiveGains(); });
   solo.addEventListener("click", () => { track.solo = !track.solo; solo.classList.toggle("is-active", track.solo); solo.setAttribute("aria-pressed", String(track.solo)); refreshActiveGains(); });
   enabled.addEventListener("change", () => { track.midiEnabled = enabled.checked; const status = routes.find((item) => item.id === track.route); convert.disabled = !(track.midiEnabled && track.route && status?.available); });
-  route.addEventListener("change", () => { track.route = route.value; const status = routes.find((item) => item.id === track.route); updateTrackStatus(track, track.route ? "track.route_ready" : "track.no_route"); convert.disabled = !(track.midiEnabled && track.route && status?.available); });
+  route.addEventListener("change", () => { track.route = route.value; instrumentConstraint.hidden = !isMuscriptorRoute(track.route); const status = routes.find((item) => item.id === track.route); updateTrackStatus(track, track.route ? "track.route_ready" : "track.no_route"); convert.disabled = !(track.midiEnabled && track.route && status?.available); });
+  instrumentSelect.addEventListener("change", () => { track.muscriptorInstruments = selectedValues(instrumentSelect); });
   convert.addEventListener("click", () => convertTrackToMidi(track, convert));
   $(".remove-track", row).addEventListener("click", () => removeTrack(track.id));
   const gain = $(".gain", row), offset = $(".offset", row);
@@ -1146,7 +1213,7 @@ async function convertTrackToMidi(track, button) {
   }
   if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
   const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
-  const options = { route: track.route, muscriptor_instruments: [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, quantize_notes: $("#quantizeNotes").checked, quantize_grid: $("#quantizeGridSelect").value, use_gpu: true, gpu_device: 0, language: state.language };
+  const options = { route: track.route, muscriptor_instruments: isMuscriptorRoute(track.route) ? track.muscriptorInstruments : [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, quantize_notes: $("#quantizeNotes").checked, quantize_grid: $("#quantizeGridSelect").value, use_gpu: true, gpu_device: 0, language: state.language };
   button.disabled = true; updateTrackStatus(track, "track.submitting", {}, "is-working");
   try {
     let job;
@@ -1311,6 +1378,7 @@ function bindEvents() {
   });
   $("#modeSelect").addEventListener("change", (event) => selectMode(event.target.value));
   $("#backendSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
+  $("#muscriptorInstrumentsSelect").addEventListener("change", () => { state.autoMuscriptorInstruments = []; });
   $("#tempoModeSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
   $("#customBpm").addEventListener("input", updateWorkflowGuide);
   $("#quantizeNotes").addEventListener("change", updateConditionalControls);

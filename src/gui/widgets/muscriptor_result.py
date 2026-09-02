@@ -60,6 +60,7 @@ from src.core.midi_tempo import validated_midi_time_signature
 from src.core.muscriptor_result_assets import (
     DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
     MidiAudioExportResult,
+    MidiStemAudioExportResult,
     MuscriptorPlaybackAssets,
     MuscriptorPreviewAssets,
     MuscriptorRollNote,
@@ -68,6 +69,7 @@ from src.core.muscriptor_result_assets import (
     prepare_midi_preview_assets,
     read_midi_roll_notes,
     render_midi_audio_export,
+    render_midi_stem_audio_export,
 )
 from src.core.sheet_music import SheetMusicExportResult
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
@@ -1521,7 +1523,7 @@ class _EditedAssetWorker(QThread):
 
 
 class _MidiAudioExportWorker(QThread):
-    """Render one immutable MIDI snapshot to a verified WAV destination."""
+    """Render one immutable MIDI snapshot to a verified WAV or stem ZIP."""
 
     succeeded = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -1534,6 +1536,8 @@ class _MidiAudioExportWorker(QThread):
         preset_id: str,
         silence_duration_seconds: float,
         snapshot_dir: str,
+        stem_archive: bool,
+        muscriptor_groups: bool,
         parent=None,
     ):
         super().__init__(parent)
@@ -1542,6 +1546,8 @@ class _MidiAudioExportWorker(QThread):
         self.preset_id = str(preset_id)
         self.silence_duration_seconds = float(silence_duration_seconds)
         self.snapshot_dir = str(snapshot_dir)
+        self.stem_archive = bool(stem_archive)
+        self.muscriptor_groups = bool(muscriptor_groups)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -1549,13 +1555,23 @@ class _MidiAudioExportWorker(QThread):
 
     def run(self) -> None:
         try:
-            result = render_midi_audio_export(
-                self.midi_path,
-                self.destination,
-                self.preset_id,
-                silence_duration_seconds=self.silence_duration_seconds,
-                cancel_check=lambda: self._cancelled,
-            )
+            if self.stem_archive:
+                result = render_midi_stem_audio_export(
+                    self.midi_path,
+                    self.destination,
+                    self.preset_id,
+                    muscriptor_groups=self.muscriptor_groups,
+                    minimum_duration_seconds=self.silence_duration_seconds,
+                    cancel_check=lambda: self._cancelled,
+                )
+            else:
+                result = render_midi_audio_export(
+                    self.midi_path,
+                    self.destination,
+                    self.preset_id,
+                    silence_duration_seconds=self.silence_duration_seconds,
+                    cancel_check=lambda: self._cancelled,
+                )
             self.succeeded.emit(result)
         except InterruptedError:
             self.cancelled.emit()
@@ -1564,6 +1580,7 @@ class _MidiAudioExportWorker(QThread):
 
 
 class _InstrumentRow(QFrame):
+    activated = pyqtSignal(str)
     mute_toggled = pyqtSignal(str)
     solo_toggled = pyqtSignal(str)
 
@@ -1596,7 +1613,20 @@ class _InstrumentRow(QFrame):
         self.mute_button.clicked.connect(lambda: self.mute_toggled.emit(self.instrument))
         layout.addWidget(self.mute_button)
         self.set_muted(False)
+        self.set_active(False)
         self.update_translations()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.detected and event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self.instrument)
+        super().mousePressEvent(event)
+
+    def set_active(self, active: bool) -> None:
+        self.setStyleSheet(
+            "QFrame { background: #203a61; border: 1px solid #4a9eff; " "border-radius: 4px; }"
+            if active
+            else "QFrame { background: transparent; border: 1px solid transparent; }"
+        )
 
     def set_muted(self, muted: bool) -> None:
         self.mute_button.setChecked(muted)
@@ -1655,6 +1685,7 @@ class MuscriptorResultWidget(QFrame):
         self._preview_worker: _PreviewAssetWorker | None = None
         self._edit_asset_worker: _EditedAssetWorker | None = None
         self._audio_export_worker: _MidiAudioExportWorker | None = None
+        self._audio_export_is_stem = False
         self._sheet_export_worker: SheetMusicExportWorker | None = None
         self._deferred_preview: tuple[int, MuscriptorPreviewAssets] | None = None
         self._deferred_final_assets: MuscriptorPlaybackAssets | None = None
@@ -2174,9 +2205,14 @@ class MuscriptorResultWidget(QFrame):
         self.download_transcription_menu = self.download_menu.addMenu("")
         self.download_transcription_hq_action = self.download_transcription_menu.addAction("")
         self.download_transcription_compat_action = self.download_transcription_menu.addAction("")
+        self.download_stems_menu = self.download_menu.addMenu("")
+        self.download_stems_hq_action = self.download_stems_menu.addAction("")
+        self.download_stems_compat_action = self.download_stems_menu.addAction("")
         self.download_stereo_action = self.download_menu.addAction("")
         self.download_transcription_hq_action.setEnabled(False)
         self.download_transcription_compat_action.setEnabled(False)
+        self.download_stems_hq_action.setEnabled(False)
+        self.download_stems_compat_action.setEnabled(False)
         self.download_stereo_action.setEnabled(False)
         self.download_midi_action.triggered.connect(lambda: self._save_asset("midi"))
         self.download_sheet_music_action.triggered.connect(self._start_sheet_music_export)
@@ -2185,6 +2221,15 @@ class MuscriptorResultWidget(QFrame):
         )
         self.download_transcription_compat_action.triggered.connect(
             lambda: self._start_midi_audio_export("pcm16_44100")
+        )
+        self.download_stems_hq_action.triggered.connect(
+            lambda: self._start_midi_audio_export(
+                DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
+                stem_archive=True,
+            )
+        )
+        self.download_stems_compat_action.triggered.connect(
+            lambda: self._start_midi_audio_export("pcm16_44100", stem_archive=True)
         )
         self.download_stereo_action.triggered.connect(lambda: self._save_asset("stereo"))
         self.download_button.setMenu(self.download_menu)
@@ -2821,6 +2866,7 @@ class MuscriptorResultWidget(QFrame):
                 self.edit_velocity_spin.setValue(int(selected.velocity))
         finally:
             self._syncing_editor_controls = False
+        self._sync_instrument_controls()
         self._sync_editor_controls()
 
     def _record_editor_commit(
@@ -3370,6 +3416,7 @@ class MuscriptorResultWidget(QFrame):
         if not instrument:
             return
         self._active_edit_instrument = instrument
+        self._sync_instrument_controls()
         selected_indices = self.roll.selected_indices
         if not selected_indices:
             self._sync_editor_controls()
@@ -3932,6 +3979,7 @@ class MuscriptorResultWidget(QFrame):
         )
 
     def _toggle_mute(self, instrument: str) -> None:
+        self._activate_editor_instrument(instrument)
         self._soloed = None
         if instrument in self._muted:
             self._muted.remove(instrument)
@@ -3940,6 +3988,7 @@ class MuscriptorResultWidget(QFrame):
         self._sync_instrument_controls()
 
     def _toggle_solo(self, instrument: str) -> None:
+        self._activate_editor_instrument(instrument)
         if self._soloed == instrument:
             self._soloed = None
             self._muted.clear()
@@ -3953,8 +4002,22 @@ class MuscriptorResultWidget(QFrame):
             muted = instrument in self._muted
             row.set_muted(muted)
             row.set_soloed(self._soloed == instrument)
+            row.set_active(instrument == self._active_edit_instrument)
             self.roll.set_instrument_muted(instrument, muted)
         self._apply_mix()
+
+    def _activate_editor_instrument(self, instrument: str) -> None:
+        if instrument not in self._detected:
+            return
+        self._active_edit_instrument = instrument
+        self._syncing_editor_controls = True
+        try:
+            index = self.edit_instrument_combo.findData(instrument)
+            if index >= 0:
+                self.edit_instrument_combo.setCurrentIndex(index)
+        finally:
+            self._syncing_editor_controls = False
+        self._sync_instrument_controls()
 
     def _clear_instrument_rows(self) -> None:
         while self.instrument_rows_layout.count():
@@ -3981,6 +4044,7 @@ class MuscriptorResultWidget(QFrame):
                 color=_INSTRUMENT_COLORS[index % len(_INSTRUMENT_COLORS)],
                 parent=self,
             )
+            row.activated.connect(self._activate_editor_instrument)
             row.mute_toggled.connect(self._toggle_mute)
             row.solo_toggled.connect(self._toggle_solo)
             self.instrument_rows_layout.addWidget(row)
@@ -4001,10 +4065,13 @@ class MuscriptorResultWidget(QFrame):
         value = bool(enabled)
         self.download_transcription_hq_action.setEnabled(value)
         self.download_transcription_compat_action.setEnabled(value)
+        self.download_stems_hq_action.setEnabled(value)
+        self.download_stems_compat_action.setEnabled(value)
 
-    def _start_midi_audio_export(self, preset_id: str) -> None:
-        """Snapshot the current source-tempo MIDI and render the selected WAV."""
+    def _start_midi_audio_export(self, preset_id: str, *, stem_archive: bool = False) -> None:
+        """Snapshot current source-tempo MIDI and render a mix or aligned stems."""
 
+        self._audio_export_is_stem = bool(stem_archive)
         snapshot_dir: Path | None = None
         worker_started = False
         try:
@@ -4015,21 +4082,24 @@ class MuscriptorResultWidget(QFrame):
                 raise RuntimeError("Current MIDI audio source is unavailable")
             preset = get_midi_audio_export_preset(preset_id)
             source_name = Path(self._midi_path).stem or "transcription"
-            suggested_name = f"{source_name}_transcription_{preset.filename_suffix}.wav"
+            suffix = ".zip" if stem_archive else ".wav"
+            descriptor = "instrument-stems" if stem_archive else "transcription"
+            suggested_name = f"{source_name}_{descriptor}_{preset.filename_suffix}{suffix}"
             destination, _selected_filter = QFileDialog.getSaveFileName(
                 self,
                 t("muscriptor_result.download"),
                 suggested_name,
-                "WAV (*.wav)",
+                "ZIP (*.zip)" if stem_archive else "WAV (*.wav)",
             )
             if not destination:
+                self._audio_export_is_stem = False
                 return
             destination_path = Path(destination)
             if not destination_path.suffix:
-                destination_path = destination_path.with_suffix(".wav")
-            elif destination_path.suffix.lower() != ".wav":
+                destination_path = destination_path.with_suffix(suffix)
+            elif destination_path.suffix.lower() != suffix:
                 raise ValueError(
-                    f"MIDI audio export destination must end in .wav: {destination_path}"
+                    f"MIDI audio export destination must end in {suffix}: {destination_path}"
                 )
             self._audio_export_generation += 1
             snapshot_dir = (
@@ -4046,6 +4116,8 @@ class MuscriptorResultWidget(QFrame):
                 preset.id,
                 self._assets.duration,
                 str(snapshot_dir),
+                stem_archive,
+                self.muscriptor_groups,
                 self,
             )
             worker.succeeded.connect(self._on_midi_audio_export_succeeded)
@@ -4059,7 +4131,11 @@ class MuscriptorResultWidget(QFrame):
             self._set_midi_audio_export_enabled(False)
             self.playback_status_label.setText(
                 t(
-                    "muscriptor_result.audio_export_rendering",
+                    (
+                        "muscriptor_result.stem_audio_export_rendering"
+                        if stem_archive
+                        else "muscriptor_result.audio_export_rendering"
+                    ),
                     bit_depth=preset.bit_depth,
                     sample_rate=f"{preset.sample_rate:,}",
                 )
@@ -4079,10 +4155,22 @@ class MuscriptorResultWidget(QFrame):
                         snapshot_dir,
                     )
             self._on_midi_audio_export_failed(str(exc))
+            self._audio_export_is_stem = False
             self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
 
     def _on_midi_audio_export_succeeded(self, payload: object) -> None:
         if self._shutting_down:
+            return
+        if isinstance(payload, MidiStemAudioExportResult):
+            self.playback_status_label.setText(
+                t(
+                    "muscriptor_result.stem_audio_export_saved",
+                    count=len(payload.members),
+                    bit_depth=payload.preset.bit_depth,
+                    sample_rate=f"{payload.preset.sample_rate:,}",
+                    path=str(payload.path),
+                )
+            )
             return
         if not isinstance(payload, MidiAudioExportResult):
             self._on_midi_audio_export_failed("Invalid MIDI audio export result")
@@ -4102,14 +4190,23 @@ class MuscriptorResultWidget(QFrame):
         logger.error("MIDI audio export failed: %s", error)
         self.playback_status_label.setText(
             t(
-                "muscriptor_result.audio_export_failed",
+                (
+                    "muscriptor_result.stem_audio_export_failed"
+                    if self._audio_export_is_stem
+                    else "muscriptor_result.audio_export_failed"
+                ),
                 error=_compact_editor_error(error),
             )
         )
 
     def _on_midi_audio_export_cancelled(self) -> None:
         if not self._shutting_down:
-            self.playback_status_label.setText(t("muscriptor_result.audio_export_cancelled"))
+            key = (
+                "muscriptor_result.stem_audio_export_cancelled"
+                if self._audio_export_is_stem
+                else "muscriptor_result.audio_export_cancelled"
+            )
+            self.playback_status_label.setText(t(key))
 
     def _on_midi_audio_export_worker_finished(
         self,
@@ -4117,6 +4214,7 @@ class MuscriptorResultWidget(QFrame):
     ) -> None:
         if self._audio_export_worker is worker:
             self._audio_export_worker = None
+        self._audio_export_is_stem = False
         self._remove_midi_audio_export_snapshot(Path(worker.snapshot_dir))
         if not self._shutting_down:
             self._set_midi_audio_export_enabled(self._midi_audio_export_is_ready())
@@ -4412,6 +4510,9 @@ class MuscriptorResultWidget(QFrame):
         self.download_transcription_compat_action.setText(
             t("muscriptor_result.audio_export_pcm16_44100")
         )
+        self.download_stems_menu.setTitle(t("muscriptor_result.download_stems"))
+        self.download_stems_hq_action.setText(t("muscriptor_result.audio_export_pcm24_48000"))
+        self.download_stems_compat_action.setText(t("muscriptor_result.audio_export_pcm16_44100"))
         self.download_stereo_action.setText(t("muscriptor_result.download_stereo"))
         self.another_button.setText(
             t("muscriptor_result.close_detail")

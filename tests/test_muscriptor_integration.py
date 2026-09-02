@@ -72,7 +72,10 @@ from src.models.data_models import (
     MuscriptorProcessingChain,
     ProcessingResult,
 )
-from src.models.muscriptor_instruments import muscriptor_instrument_label
+from src.models.muscriptor_instruments import (
+    infer_muscriptor_instruments_from_stem_name,
+    muscriptor_instrument_label,
+)
 from src.utils import muscriptor_downloader
 
 
@@ -198,6 +201,72 @@ def test_muscriptor_checkpoint_hash_is_reused_only_while_snapshot_is_unchanged(
 def test_muscriptor_organ_label_uses_the_musical_instrument_term():
     assert muscriptor_instrument_label("organ", "zh_CN") == "风琴"
     assert muscriptor_instrument_label("organ", "en_US") == "organ"
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        (
+            "陌上踏青_guitar.wav",
+            [
+                "acoustic_guitar",
+                "clean_electric_guitar",
+                "distorted_electric_guitar",
+            ],
+        ),
+        ("song_bass.wav", ["acoustic_bass", "electric_bass"]),
+        ("vocals.wav", ["voice"]),
+        ("mix_clean_electric_guitar.flac", ["clean_electric_guitar"]),
+        ("guitar solo demo.wav", []),
+        ("accompaniment.wav", []),
+    ],
+)
+def test_standard_stem_names_infer_visible_muscriptor_hard_constraints(
+    filename: str,
+    expected: list[str],
+):
+    assert infer_muscriptor_instruments_from_stem_name(filename) == expected
+
+
+def test_solo_and_instrument_row_keep_active_editor_instrument_synchronized(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    audio = _silent_wav(tmp_path / "source.wav")
+    notes = (
+        MuscriptorRollNote("acoustic_guitar", 60, 90, 0.0, 0.5, 24, False, 0, 0),
+        MuscriptorRollNote(
+            "clean_electric_guitar",
+            64,
+            90,
+            0.5,
+            1.0,
+            26,
+            False,
+            1,
+            1,
+        ),
+    )
+    widget = MuscriptorResultWidget(str(audio), [])
+    try:
+        widget.set_bpm_context(120.0, 120.0)
+        widget._detected = ["acoustic_guitar", "clean_electric_guitar"]
+        widget.roll.set_notes(notes, duration=1.0)
+        widget._begin_editor_session(notes, 1.0)
+        widget._rebuild_instrument_rows()
+        widget.roll.set_selected_index(0)
+        before = widget._edited_notes
+
+        widget._toggle_solo("clean_electric_guitar")
+        app.processEvents()
+
+        assert widget._active_edit_instrument == "clean_electric_guitar"
+        assert widget.edit_instrument_combo.currentData() == "clean_electric_guitar"
+        assert widget._soloed == "clean_electric_guitar"
+        assert widget._muted == {"acoustic_guitar"}
+        assert "#4a9eff" in widget._instrument_rows["clean_electric_guitar"].styleSheet()
+        assert widget._edited_notes == before
+    finally:
+        widget.shutdown()
+        widget.deleteLater()
 
 
 def test_manual_route_owns_constraint_and_other_routes_clear_stale_selection():

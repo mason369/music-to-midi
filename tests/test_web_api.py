@@ -264,6 +264,17 @@ def test_capabilities_publish_all_current_modes_and_manual_routes(tmp_path):
                 "piano_bytedance_pedal",
             }
             assert len(payload["manual_midi_routes"]) == 13
+            assert len(payload["muscriptor_instruments"]) == 35
+            clean_guitar = next(
+                item
+                for item in payload["muscriptor_instruments"]
+                if item["id"] == "clean_electric_guitar"
+            )
+            assert clean_guitar == {
+                "id": "clean_electric_guitar",
+                "label_zh": "干净的电吉他",
+                "label_en": "clean electric guitar",
+            }
             assert [item["id"] for item in payload["tempo_modes"]] == [
                 "adaptive",
                 "fixed_auto",

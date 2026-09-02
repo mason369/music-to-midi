@@ -42,6 +42,10 @@ from src.models.data_models import (
     TempoMode,
     YourMT3Model,
 )
+from src.models.muscriptor_instruments import (
+    MUSCRIPTOR_INSTRUMENTS,
+    muscriptor_instrument_label,
+)
 from src.utils.musescore_runtime import MuseScoreRuntimeError
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 from src.web_api.jobs import InsufficientStorageError, JobManager, QueueCapacityError
@@ -342,6 +346,14 @@ def _capabilities(
                 ].unavailable_reason,
             }
             for model in (MuscriptorModel.LARGE, MuscriptorModel.MEDIUM, MuscriptorModel.SMALL)
+        ],
+        "muscriptor_instruments": [
+            {
+                "id": instrument,
+                "label_zh": muscriptor_instrument_label(instrument, "zh_CN"),
+                "label_en": muscriptor_instrument_label(instrument, "en_US"),
+            }
+            for instrument in MUSCRIPTOR_INSTRUMENTS
         ],
         "muscriptor_processing_chains": [
             {

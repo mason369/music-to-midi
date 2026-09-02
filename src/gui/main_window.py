@@ -69,6 +69,7 @@ from src.models.data_models import (
     ProcessingStage,
     TempoMode,
 )
+from src.models.muscriptor_instruments import infer_muscriptor_instruments_from_stem_name
 from src.utils.gpu_utils import get_memory_info
 
 logger = logging.getLogger(__name__)
@@ -1508,6 +1509,14 @@ class MainWindow(QMainWindow):
             return
         self._clear_completed_result()
         self.current_file = file_path
+        inferred = infer_muscriptor_instruments_from_stem_name(file_path)
+        current = self.track_panel.get_muscriptor_instruments()
+        previous_auto = getattr(self, "_auto_muscriptor_instruments", None)
+        if not current or (previous_auto is not None and current == previous_auto):
+            self.track_panel.set_muscriptor_instruments(inferred)
+            self._auto_muscriptor_instruments = list(inferred)
+        else:
+            self._auto_muscriptor_instruments = None
         self.start_btn.setEnabled(True)
         self.status_label.setText(f"{t('status.ready')} - {Path(file_path).name}")
         logger.info(f"已选择文件: {file_path}")

@@ -57,6 +57,7 @@ from src.gui.widgets.muscriptor_instrument_selector import MuscriptorInstrumentS
 from src.gui.widgets.wheel_safe_controls import NoWheelComboBox, NoWheelSlider
 from src.gui.workers.audio_export_worker import AudioExportItem, AudioExportWorker
 from src.i18n.translator import t
+from src.models.muscriptor_instruments import infer_muscriptor_instruments_from_stem_name
 from src.utils.yourmt3_downloader import YOURMT3_MODELS
 
 logger = logging.getLogger(__name__)
@@ -286,6 +287,10 @@ class _AudioTrackRow(QFrame):
         self.muscriptor_instrument_selector.setObjectName(
             f"audioTrack_{safe_name}_muscriptorInstruments"
         )
+        inferred_instruments = infer_muscriptor_instruments_from_stem_name(track_name)
+        if not inferred_instruments:
+            inferred_instruments = infer_muscriptor_instruments_from_stem_name(path)
+        self.muscriptor_instrument_selector.set_selected_instruments(inferred_instruments)
         self.muscriptor_instrument_selector.hide()
         layout.addWidget(self.muscriptor_instrument_selector)
 

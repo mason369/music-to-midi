@@ -73,6 +73,8 @@
   "config.yourmt3": "YourMT3+ model",
   "config.yourmt3_help": "Five public checkpoints are available",
   "config.muscriptor_help": "Pinned Large / Medium / Small public weights",
+  "config.muscriptor_instruments": "Expected instruments (hard constraint)",
+  "config.muscriptor_instruments_help": "Standard stem names prefill removable candidates; leave empty for model auto-detection.",
   "config.muscriptor_chain": "MuScriptor segment processing",
   "config.muscriptor_chain_help": "The official path keeps v0.3.0 segment behavior; the continuity-fix path joins sustained notes across segments to reduce boundary cuts or overlaps",
   "config.track_layout": "MIDI track structure",

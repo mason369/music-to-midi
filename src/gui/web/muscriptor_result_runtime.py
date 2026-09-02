@@ -90,6 +90,7 @@ def build_muscriptor_result_html(
         "sheetApi": str(state.get("sheet_api", "")),
         "sheetToken": str(state.get("sheet_token", "")),
         "audioExportApi": str(state.get("audio_export_api", "")),
+        "audioStemExportApi": str(state.get("audio_stem_export_api", "")),
         "audioExportPresets": [
             {
                 "id": preset.id,
@@ -129,6 +130,10 @@ def build_muscriptor_result_html(
                 "audio_export_rendering",
                 "audio_export_saved",
                 "audio_export_failed",
+                "stem_audio_export_start",
+                "stem_audio_export_rendering",
+                "stem_audio_export_saved",
+                "stem_audio_export_failed",
                 "sheet_music_rendering",
                 "sheet_music_ready",
                 "sheet_music_failed",
@@ -234,6 +239,7 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-row { display:flex; align-items:center; gap:8px; padding:6px 4px; }
 .msr-row .msr-btn { min-width:32px; padding:5px 8px; }
 .msr-row.undetected { opacity:.38; text-decoration:line-through; }
+.msr-row.active-instrument { background:#203a61; border:1px solid #4a9eff; border-radius:4px; }
 .msr-swatch { width:11px; height:11px; }
 .msr-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .msr-row.muted .msr-name { opacity:.2; }
@@ -1171,6 +1177,11 @@ MUSCRIPTOR_RESULT_JS = r"""
         instrument.soloButton = solo;
         instrument.muteButton = mute;
       }
+      row.onclick = function (event) {
+        if (instrument.detected && !event.target.closest("button")) {
+          self.activateInstrument(instrument.id);
+        }
+      };
       aside.appendChild(row);
     });
     grid.appendChild(aside);
@@ -1197,6 +1208,9 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.downloadAudioButton = button(strings.audio_export_start);
     this.downloadAudioButton.onclick = function () { self.downloadTranscriptionAudio(); };
     audioExport.appendChild(this.downloadAudioButton);
+    this.downloadStemAudioButton = button(strings.stem_audio_export_start);
+    this.downloadStemAudioButton.onclick = function () { self.downloadStemAudio(); };
+    audioExport.appendChild(this.downloadStemAudioButton);
     downloads.appendChild(audioExport);
     var stereoAnchor = el("a", "msr-btn", strings.download_stereo);
     stereoAnchor.href = self.m.downloads.stereo;
@@ -1223,6 +1237,9 @@ MUSCRIPTOR_RESULT_JS = r"""
     }, this);
     if (this.downloadAudioButton) {
       this.downloadAudioButton.disabled = !this.audioDownloadReady || this.audioExportInFlight;
+    }
+    if (this.downloadStemAudioButton) {
+      this.downloadStemAudioButton.disabled = !this.audioDownloadReady || this.audioExportInFlight;
     }
     if (this.audioExportSelect) {
       this.audioExportSelect.disabled = !this.audioDownloadReady || this.audioExportInFlight;
@@ -1648,11 +1665,13 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
   };
   ResultSession.prototype.toggleMute = function (id) {
+    this.activateInstrument(id);
     this.solo = null;
     if (this.muted.has(id)) this.muted.delete(id); else this.muted.add(id);
     this.syncRows();
   };
   ResultSession.prototype.toggleSolo = function (id) {
+    this.activateInstrument(id);
     if (this.solo === id) {
       this.solo = null;
       this.muted.clear();
@@ -1671,6 +1690,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.m.instruments.forEach(function (instrument) {
       if (!instrument.detected) return;
       var muted = self.muted.has(instrument.id);
+      instrument.row.classList.toggle("active-instrument", self.activeInstrument === instrument.id);
       instrument.row.classList.toggle("muted", muted);
       instrument.soloButton.classList.toggle("active", self.solo === instrument.id);
       instrument.muteButton.classList.toggle("active", muted);
@@ -1678,6 +1698,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
     this.applyMix();
     this.drawStatic();
+  };
+  ResultSession.prototype.activateInstrument = function (instrument) {
+    this.activeInstrument = instrument;
+    if (this.instrumentSelect) this.instrumentSelect.value = instrument;
+    this.syncRows();
+    this.syncEditor();
   };
   ResultSession.prototype.tick = function () {
     if (!this.playing) return;
@@ -1919,8 +1945,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     ) ? Number(primary) : (this.selectedIndices.size ? Math.min.apply(null, Array.from(this.selectedIndices)) : null);
     if (this.selectedIndex !== null) {
       var note = this.m.notes[this.selectedIndex];
-      this.activeInstrument = note.instrument;
-      this.instrumentSelect.value = note.instrument;
+      this.activateInstrument(note.instrument);
       this.velocityInput.value = String(note.velocity);
     }
     this.syncEditor();
@@ -2321,6 +2346,7 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.changeInstrument = function (instrument) {
     this.activeInstrument = instrument;
+    this.syncRows();
     if (!this.editing || !this.selectedIndices.size) {
       this.syncEditor();
       return;
@@ -2486,6 +2512,96 @@ MUSCRIPTOR_RESULT_JS = r"""
       })
       .catch(function (error) {
         self.status.textContent = self.m.strings.audio_export_failed
+          .replace("{error}", String(error));
+      })
+      .finally(function () {
+        self.audioExportInFlight = false;
+        self.setDownloadAudioEnabled(self.audioDownloadReady);
+      });
+  };
+  ResultSession.prototype.downloadStemAudio = function () {
+    var self = this;
+    if (!this.audioDownloadReady || this.audioExportInFlight) return;
+    if (!this.m.audioStemExportApi || !this.m.previewToken) {
+      this.status.textContent = this.m.strings.stem_audio_export_failed
+        .replace("{error}", "server stem export context is unavailable");
+      return;
+    }
+    var presetId = String(this.audioExportSelect.value || "");
+    var preset = this.m.audioExportPresets.find(function (candidate) {
+      return candidate.id === presetId;
+    });
+    if (!preset) {
+      this.status.textContent = this.m.strings.stem_audio_export_failed
+        .replace("{error}", "selected WAV preset is invalid");
+      return;
+    }
+    this.audioExportInFlight = true;
+    this.setDownloadAudioEnabled(this.audioDownloadReady);
+    this.status.textContent = this.m.strings.stem_audio_export_rendering
+      .replace("{bit_depth}", String(preset.bitDepth))
+      .replace("{sample_rate}", preset.sampleRate.toLocaleString());
+    fetch(this.m.audioStemExportApi, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [JSON.stringify({
+          token: this.m.previewToken,
+          notes: cloneNotes(this.m.notes),
+          preset: preset.id
+        })]
+      })
+    })
+      .then(function (response) {
+        return response.text().then(function (body) {
+          if (!response.ok) throw new Error("HTTP " + response.status + " " + body);
+          var envelope = JSON.parse(body);
+          if (!envelope.data || envelope.data.length !== 1) {
+            throw new Error("MIDI stem export endpoint returned no result");
+          }
+          return typeof envelope.data[0] === "string"
+            ? JSON.parse(envelope.data[0])
+            : envelope.data[0];
+        });
+      })
+      .then(function (rendered) {
+        var frames = Number(rendered && rendered.frames);
+        var members = rendered && rendered.members;
+        if (!rendered
+            || String(rendered.presetId) !== preset.id
+            || Number(rendered.bitDepth) !== preset.bitDepth
+            || Number(rendered.sampleRate) !== preset.sampleRate
+            || String(rendered.subtype) !== preset.subtype
+            || !Number.isFinite(frames)
+            || frames <= 0
+            || !Array.isArray(members)
+            || members.length < 1
+            || Number(rendered.memberCount) !== members.length
+            || members.some(function (member) {
+              return Number(member.frames) !== frames
+                || Number(member.channels) !== 2
+                || !String(member.instrument || "")
+                || !String(member.filename || "");
+            })
+            || !String(rendered.url || "")
+            || !String(rendered.filename || "")) {
+          throw new Error("MIDI stem export verification metadata is invalid");
+        }
+        var anchor = document.createElement("a");
+        anchor.href = String(rendered.url);
+        anchor.download = String(rendered.filename);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        self.status.textContent = self.m.strings.stem_audio_export_saved
+          .replace("{count}", String(members.length))
+          .replace("{bit_depth}", String(preset.bitDepth))
+          .replace("{sample_rate}", preset.sampleRate.toLocaleString())
+          .replace("{path}", String(rendered.filename));
+      })
+      .catch(function (error) {
+        self.status.textContent = self.m.strings.stem_audio_export_failed
           .replace("{error}", String(error));
       })
       .finally(function () {

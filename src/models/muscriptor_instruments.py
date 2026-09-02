@@ -7,7 +7,9 @@ are localized here; only the canonical identifiers are ever sent to the model.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
+from pathlib import Path
 
 MUSCRIPTOR_INSTRUMENTS: tuple[str, ...] = (
     "acoustic_piano",
@@ -125,6 +127,49 @@ MUSCRIPTOR_ZH_LABELS: dict[str, str] = {
     "synth_pad": "合成铺底",
     "drums": "鼓组",
 }
+
+
+_STEM_INSTRUMENT_HINTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("guitar", "guitars"),
+        (
+            "acoustic_guitar",
+            "clean_electric_guitar",
+            "distorted_electric_guitar",
+        ),
+    ),
+    (("bass", "basses"), ("acoustic_bass", "electric_bass")),
+    (("piano", "keyboards", "keys"), ("acoustic_piano", "electric_piano")),
+    (("vocal", "vocals", "voice"), ("voice",)),
+    (("drum", "drums"), ("drums",)),
+)
+
+
+def infer_muscriptor_instruments_from_stem_name(value: str | Path | None) -> list[str]:
+    """Infer a visible hard constraint from an unambiguous standard stem name.
+
+    Only an exact canonical name, an exact standard stem name, or the final
+    underscore-delimited suffix is considered.  Ordinary song-title words are
+    deliberately ignored so this helper cannot silently narrow a full mix.
+    """
+
+    if value is None:
+        return []
+    name = Path(str(value)).stem.strip().lower()
+    normalized = re.sub(r"[\s.\-]+", "_", name).strip("_")
+    if not normalized:
+        return []
+
+    canonical = sorted(MUSCRIPTOR_INSTRUMENTS, key=len, reverse=True)
+    for instrument in canonical:
+        if normalized == instrument or normalized.endswith(f"_{instrument}"):
+            return [instrument]
+
+    final_token = normalized.rsplit("_", 1)[-1]
+    for aliases, instruments in _STEM_INSTRUMENT_HINTS:
+        if normalized in aliases or final_token in aliases:
+            return list(instruments)
+    return []
 
 
 def validate_muscriptor_instruments(values: Iterable[str] | None) -> list[str]:

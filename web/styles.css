@@ -238,6 +238,9 @@ main { width: 100%; margin: 0 auto; padding: 12px 14px 42px; }
   cursor: pointer;
 }
 .configuration-grid { display: grid; gap: 6px; padding: 10px; }
+select[multiple] { min-height: 7.2rem; }
+.track-instrument-constraint { display: grid; gap: .35rem; margin: .5rem 0; }
+.track-instrument-constraint[hidden] { display: none; }
 .field {
   min-width: 0;
   min-height: 40px;

@@ -1,6 +1,8 @@
 import html
+import io
 import json
 import re
+import zipfile
 from pathlib import Path
 
 import mido
@@ -15,6 +17,7 @@ from src.core.muscriptor_result_assets import (
     MIDI_AUDIO_EXPORT_PRESETS,
     get_midi_audio_export_preset,
     render_midi_audio_export,
+    render_midi_stem_audio_export,
 )
 from src.gui.web.muscriptor_result_runtime import (
     MUSCRIPTOR_RESULT_JS,
@@ -34,6 +37,76 @@ def _write_test_midi(path: Path, *, with_note: bool = True) -> Path:
     midi.tracks.append(track)
     midi.save(path)
     return path
+
+
+def _write_two_instrument_midi(path: Path) -> Path:
+    midi = mido.MidiFile(type=1, ticks_per_beat=480)
+    for program, pitch in ((0, 60), (26, 64)):
+        track = mido.MidiTrack()
+        track.append(mido.Message("program_change", channel=0, program=program, time=0))
+        track.append(mido.Message("note_on", channel=0, note=pitch, velocity=90, time=0))
+        track.append(mido.Message("note_off", channel=0, note=pitch, velocity=0, time=480))
+        midi.tracks.append(track)
+    midi.save(path)
+    return path
+
+
+def test_midi_stem_audio_export_publishes_verified_aligned_wavs_in_one_zip(
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = _write_two_instrument_midi(tmp_path / "source.mid")
+    destination = tmp_path / "instrument-stems.zip"
+    executable = tmp_path / "fluidsynth.exe"
+    soundfont = tmp_path / "MuseScore_General.sf2"
+    executable.write_bytes(b"runtime")
+    soundfont.write_bytes(b"soundfont")
+    monkeypatch.setattr(muscriptor_result_assets, "get_fluidsynth_executable", lambda: executable)
+    monkeypatch.setattr(
+        muscriptor_result_assets,
+        "validate_muscriptor_soundfont",
+        lambda: soundfont,
+    )
+    rendered_lengths = iter((1_000, 1_500))
+
+    def fake_synthesize(
+        _executable,
+        _soundfont,
+        _midi_path,
+        output_path,
+        cancel_check=None,
+        *,
+        sample_rate,
+        audio_file_format,
+    ):
+        assert cancel_check is not None and not cancel_check()
+        assert (sample_rate, audio_file_format) == (48_000, "s24")
+        frames = next(rendered_lengths)
+        tone = np.full((frames, 2), 0.1, dtype=np.float32)
+        sf.write(output_path, tone, sample_rate, subtype="PCM_24")
+
+    monkeypatch.setattr(muscriptor_result_assets, "_synthesize", fake_synthesize)
+
+    result = render_midi_stem_audio_export(
+        source,
+        destination,
+        minimum_duration_seconds=0.05,
+    )
+
+    assert result.path == destination.resolve()
+    assert result.frames == 2_400
+    assert [member.instrument for member in result.members] == ["gm:000", "gm:026"]
+    assert all(member.frames == 2_400 and member.channels == 2 for member in result.members)
+    with zipfile.ZipFile(destination) as archive:
+        assert archive.testzip() is None
+        assert archive.namelist() == [member.archive_name for member in result.members]
+        for member in result.members:
+            with sf.SoundFile(io.BytesIO(archive.read(member.archive_name))) as wav:
+                assert wav.frames == 2_400
+                assert wav.channels == 2
+                assert wav.samplerate == 48_000
+                assert wav.subtype == "PCM_24"
+    assert not list(tmp_path.glob(".m2m-stems-*"))
 
 
 @pytest.mark.parametrize(
@@ -273,6 +346,7 @@ def test_browser_workbench_exposes_default_recommended_wav_export_contract():
         "target_bpm": 120.0,
         "preview_api": "./api/render_edited_midi_preview",
         "audio_export_api": "./api/render_edited_midi_audio_export",
+        "audio_stem_export_api": "./api/render_edited_midi_stem_export",
         "preview_token": "opaque-token",
     }
     markup = build_muscriptor_result_html(state, lambda key: key, "zh_CN")
@@ -280,6 +354,7 @@ def test_browser_workbench_exposes_default_recommended_wav_export_contract():
     manifest = json.loads(html.unescape(encoded))
 
     assert manifest["audioExportApi"] == "./api/render_edited_midi_audio_export"
+    assert manifest["audioStemExportApi"] == "./api/render_edited_midi_stem_export"
     assert manifest["defaultAudioExportPreset"] == "pcm24_48000"
     assert manifest["audioExportPresets"] == [
         {
@@ -292,7 +367,9 @@ def test_browser_workbench_exposes_default_recommended_wav_export_contract():
         for preset in MIDI_AUDIO_EXPORT_PRESETS
     ]
     assert "ResultSession.prototype.downloadTranscriptionAudio" in MUSCRIPTOR_RESULT_JS
+    assert "ResultSession.prototype.downloadStemAudio" in MUSCRIPTOR_RESULT_JS
     assert "MIDI audio export verification metadata is invalid" in MUSCRIPTOR_RESULT_JS
+    assert "MIDI stem export verification metadata is invalid" in MUSCRIPTOR_RESULT_JS
 
 
 def test_space_colab_and_shared_runtime_expose_the_same_audio_export_endpoint():
@@ -305,8 +382,11 @@ def test_space_colab_and_shared_runtime_expose_the_same_audio_export_endpoint():
     )
     for source in (space_source, colab_source):
         assert "def render_edited_midi_audio_export" in source
+        assert "def render_edited_midi_stem_export" in source
         assert 'api_name="render_edited_midi_audio_export"' in source
+        assert 'api_name="render_edited_midi_stem_export"' in source
         assert '"audio_export_api": "./api/render_edited_midi_audio_export"' in source
+        assert '"audio_stem_export_api": "./api/render_edited_midi_stem_export"' in source
         assert "duration_seconds=assets.duration" in source
 
 

@@ -387,6 +387,7 @@ from src.models.data_models import (
 )
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_INSTRUMENTS,
+    infer_muscriptor_instruments_from_stem_name,
     muscriptor_instrument_label,
     validate_muscriptor_instruments,
 )
@@ -832,6 +833,27 @@ def render_edited_midi_audio_export(payload_json: str) -> str:
     return json.dumps(rendered, ensure_ascii=False)
 
 
+def render_edited_midi_stem_export(payload_json: str) -> str:
+    """Render aligned per-instrument WAVs for current browser MIDI notes."""
+
+    started_at = time.perf_counter()
+    try:
+        rendered = _EDITED_MIDI_PREVIEWS.export_stems(payload_json)
+    except Exception as exc:
+        logger.error("Browser MIDI stem audio export failed: %s", exc)
+        raise gr.Error(st("muscriptor_result.stem_audio_export_failed", error=exc)) from exc
+    logger.info(
+        "Browser MIDI stem audio export ready: preset=%s members=%s frames=%s "
+        "elapsed=%.3fs digest=%s",
+        rendered["presetId"],
+        rendered["memberCount"],
+        rendered["frames"],
+        time.perf_counter() - started_at,
+        rendered["digest"],
+    )
+    return json.dumps(rendered, ensure_ascii=False)
+
+
 def render_sheet_music_export(payload_json: str) -> str:
     """Engrave the browser's current edited MIDI into one request-owned ZIP."""
 
@@ -1006,6 +1028,7 @@ def _normalize_midi_result_state(
         "source_track_name": str(raw_state.get("source_track_name", "")).strip(),
         "preview_api": "./api/render_edited_midi_preview",
         "audio_export_api": "./api/render_edited_midi_audio_export",
+        "audio_stem_export_api": "./api/render_edited_midi_stem_export",
         "preview_token": preview_token,
         "sheet_api": "./api/render_sheet_music_export",
         "sheet_token": sheet_token,
@@ -1151,7 +1174,7 @@ def _build_track_state(
                 "color": _TRACK_COLORS[index % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
-                "muscriptor_instruments": [],
+                "muscriptor_instruments": infer_muscriptor_instruments_from_stem_name(track_name),
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -1280,6 +1303,7 @@ def _build_midi_result_state(
         "source_track_name": str(source_track_name),
         "preview_api": "./api/render_edited_midi_preview",
         "audio_export_api": "./api/render_edited_midi_audio_export",
+        "audio_stem_export_api": "./api/render_edited_midi_stem_export",
         "preview_token": preview_token,
         "sheet_api": "./api/render_sheet_music_export",
         "sheet_token": sheet_token,
@@ -2706,7 +2730,7 @@ def _add_audio_tracks(uploaded_files, track_state):
                 "color": _TRACK_COLORS[(len(tracks)) % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
-                "muscriptor_instruments": [],
+                "muscriptor_instruments": infer_muscriptor_instruments_from_stem_name(safe_stem),
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -2835,6 +2859,15 @@ def update_tempo_controls(tempo_mode):
     if normalized not in {mode.value for mode in TempoMode}:
         raise RuntimeError(f"Unsupported tempo mode: {tempo_mode!r}")
     return gr.update(visible=normalized == TempoMode.FIXED_MANUAL.value)
+
+
+def suggest_muscriptor_instruments(audio_path, current_instruments):
+    """Prefill a removable hard constraint for an unambiguous stem upload."""
+
+    current = validate_muscriptor_instruments(current_instruments or [])
+    if current:
+        return gr.update()
+    return gr.update(value=infer_muscriptor_instruments_from_stem_name(audio_path))
 
 
 CUSTOM_CSS = """
@@ -3095,6 +3128,9 @@ with gr.Blocks(
     edited_audio_export_request = gr.Textbox(visible=False)
     edited_audio_export_response = gr.Textbox(visible=False)
     edited_audio_export_button = gr.Button(visible=False)
+    edited_stem_export_request = gr.Textbox(visible=False)
+    edited_stem_export_response = gr.Textbox(visible=False)
+    edited_stem_export_button = gr.Button(visible=False)
     sheet_music_request = gr.Textbox(visible=False)
     sheet_music_response = gr.Textbox(visible=False)
     sheet_music_button = gr.Button(visible=False)
@@ -3248,6 +3284,13 @@ with gr.Blocks(
         fn=update_tempo_controls,
         inputs=[tempo_mode],
         outputs=[custom_bpm],
+        api_visibility="private",
+        queue=False,
+    )
+    audio_input.change(
+        fn=suggest_muscriptor_instruments,
+        inputs=[audio_input, muscriptor_instruments],
+        outputs=[muscriptor_instruments],
         api_visibility="private",
         queue=False,
     )
@@ -3601,6 +3644,13 @@ with gr.Blocks(
         inputs=[edited_audio_export_request],
         outputs=[edited_audio_export_response],
         api_name="render_edited_midi_audio_export",
+        queue=False,
+    )
+    edited_stem_export_button.click(
+        fn=render_edited_midi_stem_export,
+        inputs=[edited_stem_export_request],
+        outputs=[edited_stem_export_response],
+        api_name="render_edited_midi_stem_export",
         queue=False,
     )
     sheet_music_button.click(
