@@ -63,6 +63,11 @@
     "settings": "设置"
   },
   "main": {
+    "workspace": {
+      "setup": "转换设置",
+      "result": "结果工作台"
+    },
+    "tempo_evidence_notice": "自动节拍尚不能确认恒速，检测 BPM 为估计值。单独分轨建议从原曲分离后逐轨转写，共享原曲速度。",
     "dropzone": {
       "title": "拖拽音频文件到此处，或点击选择",
       "subtitle": "支持 MP3, WAV, FLAC, OGG, M4A",
@@ -71,7 +76,7 @@
     "mode": {
       "label": "处理模式",
       "smart": "多乐器 MIDI 转写",
-      "smart_tooltip": "YourMT3+、MIROS 或 MuScriptor-large 可把完整音频转为多乐器 MIDI",
+      "smart_tooltip": "YourMT3+、MIROS 或 MuScriptor 可将完整混音转换为多乐器 MIDI",
       "vocal_split": "人声/伴奏分离（按轨转 MIDI）",
       "vocal_split_tooltip": "Leap XE 提取人声、PolarFormer 提取伴奏并生成两条 WAV；完成后每条波形均可选择多乐器或钢琴模型转 MIDI",
       "six_stem_split": "六声部分离（按轨转 MIDI）",
@@ -129,20 +134,20 @@
       "muscriptor_midi": "MuScriptor",
       "muscriptor_tooltip": "提供 Large、Medium 和 Small 三档，可自动识别乐器或按所选乐器限制输出。",
       "muscriptor_model_label": "MuScriptor 模型大小",
-      "muscriptor_processing_chain_label": "MuScriptor 分段处理链路",
-      "muscriptor_processing_chain_tooltip": "这个选项与速度方案互不影响。官方处理链路保持 MuScriptor v0.3.0 的原始分段方式；连续性修复链路会衔接跨分段延音，减少边界处的断音或粘连。",
+      "muscriptor_processing_chain_label": "MuScriptor 分段衔接",
+      "muscriptor_processing_chain_tooltip": "标准：使用模型原有的分段方式。跨段延音衔接：连接跨越分段边界的持续音符。速度由“速度方案”单独设置。",
       "muscriptor_processing_chains": {
-        "telknet": "分段边界连续性修复链路",
-        "official": "官方处理链路（默认）"
+        "telknet": "跨段延音衔接",
+        "official": "标准（默认）"
       },
       "muscriptor_models": {
         "large": "Large（1.4B，质量优先）",
         "medium": "Medium（307M，速度/质量平衡）",
-        "small": "Small（103M，最快/最低显存）"
+        "small": "Small（103M，轻量）"
       },
       "muscriptor_general_hint": "乐器列表为空时自动识别；所选乐器会限制输出范围。",
       "muscriptor_instruments_title": "这首歌里用了哪些乐器？",
-      "muscriptor_instruments_desc": "标准分轨文件名会自动预填可移除的候选。列表为空时自动识别；所选乐器会硬性限制输出范围。",
+      "muscriptor_instruments_desc": "留空自动识别；选中后只输出这些乐器。按文件名建议的乐器可修改。",
       "muscriptor_instruments_clear": "清除",
       "muscriptor_instruments_placeholder": "添加乐器…",
       "yourmt3_model_label": "YourMT3+ 模型模式",
@@ -155,8 +160,8 @@
       "adaptive": "跟随原曲速度变化",
       "fixed_auto": "自动检测唯一 BPM（推荐）",
       "fixed_manual": "手动设置唯一 BPM",
-      "mode_tooltip": "节拍证据统一由 Beat This final0 检测；速度发布由所选方案决定。跟随原曲：生成经相位约束的 Tempo Map，可靠拍号下优先按小节对齐，并过滤逐拍抖动及半速/双速误判。自动：写入检测到的唯一全局 BPM。手动：仍用同一拍网格保留音乐 tick，输出速度使用指定 BPM。",
-      "custom_tooltip": "手动 BPM 范围为 30–300 BPM。生成的 MIDI 使用这一个速度，并保留检测 BPM 建立的音乐 tick；播放速度按手动 BPM ÷ 检测 BPM 变化，不会量化、过滤或重建模型音符。"
+      "mode_tooltip": "自动：使用检测到的固定 BPM。跟随原曲：根据检测结果还原原曲的速度变化。手动：使用你设置的 BPM。",
+      "custom_tooltip": "可设置 30–300 BPM。提高 BPM 会加快试听和导出 MIDI 的播放速度、缩短时长。"
     },
     "tracks": {
       "title": "处理设置"
@@ -192,6 +197,8 @@
     "processing": "处理中...",
     "cancelled": "处理已取消",
     "cancelling": "正在取消，等待当前推理安全停止…",
+    "closing": "正在关闭，等待后台任务结束…",
+    "device_detection_failed": "设备检测失败",
     "complete": "完成",
     "error": "错误",
     "gpu": "GPU",
@@ -255,7 +262,7 @@
       "openMergedFile": "打开合并MIDI",
       "audio_tracks": {
         "title": "多轨音频时间线",
-        "subtitle": "查看并同步试听各音轨波形，也可添加本地音轨并逐轨转 MIDI。鼠标滚轮用于滚动页面；模型、缩放、时间和音量均通过对应控件调整。",
+        "subtitle": "同步试听、调整音轨，也可添加音频并逐轨转 MIDI。",
         "play": "播放全部",
         "pause": "暂停全部",
         "replay": "从头重播",
@@ -337,10 +344,10 @@
           "models": {
             "yourmt3": "YourMT3+（多乐器）",
             "miros": "MIROS (MusicFM)（多乐器）",
-            "muscriptor": "MuScriptor-large（多乐器，支持乐器硬约束）",
+            "muscriptor": "MuScriptor Large（多乐器）",
             "muscriptor_large": "MuScriptor Large（多乐器，质量优先）",
             "muscriptor_medium": "MuScriptor Medium（多乐器，速度/质量平衡）",
-            "muscriptor_small": "MuScriptor Small（多乐器，最快/最低显存）",
+            "muscriptor_small": "MuScriptor Small（多乐器，轻量）",
             "piano_transkun": "TransKun V2（钢琴）",
             "piano_transkun_v2_aug": "TransKun V2 Aug（钢琴）",
             "piano_aria_amt": "Aria-AMT（钢琴）",
@@ -427,7 +434,7 @@
       "accompaniment_midi": "伴奏 MIDI",
       "vocal_midi": "人声 MIDI",
       "midi_file": "MIDI 文件",
-      "output_retention": "下载文件在 {hours:g} 小时后进入过期清理；失败任务会立即清理，实例正常退出时会清理本实例结果。"
+      "output_retention": "文件保存约 {hours:g} 小时，请及时下载。服务关闭时可能提前删除；失败任务的输出会立即删除。"
     }
   },
   "progress": {
@@ -437,7 +444,7 @@
     "running_beat_this": "正在使用 Beat This 检测拍点和下拍...",
     "validating_beat_grid": "正在整理节拍网格...",
     "beat_this_complete": "Beat This 节拍检测完成：{bpm} BPM",
-    "custom_bpm": "手动唯一 BPM 已设置为 {bpm}；导出 MIDI 将保留检测 BPM 的音乐 tick 并真实变速",
+    "custom_bpm": "工程 BPM 已设为 {bpm}",
     "finding_beats": "正在查找节拍位置...",
     "detecting_downbeats": "正在检测下拍...",
     "loading_aria_amt": "正在加载 Aria-AMT...",
@@ -465,10 +472,10 @@
     "found_instruments_notes": "发现 {instrument_count} 种乐器，共 {note_count} 个音符",
     "processing_results": "正在处理结果...",
     "found_notes": "发现 {note_count} 个音符",
-    "preparing_precise_transcription": "正在准备精确转写...",
+    "preparing_precise_transcription": "正在准备转写…",
     "preparing_best_transcription": "正在准备 YourMT3+ 转写...",
-    "parsing_precise_instruments": "正在解析精确乐器...",
-    "found_precise_instruments_notes": "发现 {instrument_count} 种精确乐器，共 {note_count} 个音符",
+    "parsing_precise_instruments": "正在识别乐器…",
+    "found_precise_instruments_notes": "识别到 {instrument_count} 种乐器，共 {note_count} 个音符",
     "found_instruments_drums": "发现 {instrument_count} 种乐器 + {drum_count} 种鼓音色",
     "preparing_miros": "正在准备 MIROS...",
     "running_miros": "正在使用 MIROS 转写...",
@@ -521,9 +528,16 @@
     "complete_elapsed": "处理完成，耗时 {seconds} 秒"
   },
   "muscriptor_result": {
-    "playback_progress_tooltip": "MIDI 主时钟播放进度；拖动会同时定位 MIDI 和原音频",
-    "export_bpm_tooltip": "下载所得 MIDI 的工程 BPM；标准 SMF 第 0 轨会写入目标 tempo 和检测拍号，事件保持在检测 BPM 的音乐 tick 上，因此文件时长按工程 BPM ÷ 检测 BPM 变化，音符不做量化。DAW 导入时需启用“导入速度图/Tempo Map”。MuseScore 3/4 会对未量化的人类演奏重新跟拍并可能覆盖乐谱显示 BPM；该显示值由 MuseScore 导入器生成，不代表文件 tempo 未生效",
-    "playback_speed_label": "播放速度",
+    "playback_progress_tooltip": "播放进度；拖动可同时定位 MIDI 和原音频",
+    "export_bpm_tooltip": "设置试听和导出 MIDI 的 BPM。提高 BPM 会加快播放、缩短时长。导入 DAW 时启用速度图（Tempo Map）。",
+    "tempo_unset": "BPM 未设置 · 等待检测结果",
+    "tempo_detected": "检测 BPM {bpm}",
+    "project_bpm": "工程 BPM",
+    "project_tempo": "工程速度",
+    "editor_commands": "音符编辑",
+    "editor_input_invalid": "输入无效，未应用修改：{error}",
+    "editor_properties": "音符属性与视图",
+    "playback_speed_label": "工程倍速",
     "playback_speed_tooltip": "当前工程 BPM 对应的播放倍率（工程 BPM ÷ 检测 BPM）。修改该倍率会反向更新工程 BPM，并同步影响原音/MIDI 试听和下载 MIDI；音符内容保持不变",
     "streaming": "MuScriptor 正在流式生成钢琴卷帘…",
     "progress_waiting": "等待首个转写分片…",
@@ -556,7 +570,7 @@
     "instruments": "乐器",
     "not_detected": "未检测到",
     "solo": "独奏（静音其他乐器）",
-    "mute": "在 MIDI 合成总线上静音",
+    "mute": "静音此乐器",
     "download": "下载",
     "midi_saved": "MIDI 已按 {bpm} BPM 保存：{path}",
     "edited_midi_saved": "编辑后的 MIDI 已按 {bpm} BPM 保存：{path}",
@@ -585,11 +599,11 @@
     "editor_view_zoom": "视图缩放",
     "editor_view_zoom_tooltip": "放大或缩小钢琴卷帘中的音符宽度；1× 为默认大小，也可用 Ctrl/Alt + 滚轮缩放",
     "editor_summary": "{count} 个音符 · {changes} 步编辑",
-    "editor_audio_notice": "MIDI 音符已修改，正在准备与当前编辑完全一致的 SoundFont 试听。",
-    "editor_audio_rendering": "正在重新生成编辑后的 SoundFont 试听；旧音频已停用。",
+    "editor_audio_notice": "音符已修改，正在更新试听音频。",
+    "editor_audio_rendering": "正在更新试听音频，暂时无法播放。",
     "editor_audio_rendering_progress": "正在重新生成编辑后的 SoundFont 试听：{progress}% · {message}",
     "editor_audio_ready": "编辑后的 MIDI 与 SoundFont 试听已同步，可以播放。",
-    "editor_audio_failed": "编辑后的 SoundFont 试听生成失败；旧音频仍处于停用状态：{error}",
+    "editor_audio_failed": "试听音频更新失败，暂时无法播放：{error}",
     "editor_export_failed": "编辑后的 MIDI 导出失败：{error}",
     "export_edited_midi": "导出可编辑 MIDI",
     "download_midi": "MIDI 文件",
@@ -604,28 +618,50 @@
     "audio_export_pcm24_48000": "24-bit / 48 kHz（推荐）",
     "audio_export_pcm16_44100": "16-bit / 44.1 kHz（兼容）",
     "audio_export_start": "生成并下载 WAV",
-    "audio_export_rendering": "正在以 {bit_depth}-bit / {sample_rate} Hz 重新合成并校验 WAV…",
-    "audio_export_saved": "{bit_depth}-bit / {sample_rate} Hz WAV 已通过校验并保存：{path}",
+    "audio_export_rendering": "正在生成 {bit_depth}-bit / {sample_rate} Hz WAV…",
+    "audio_export_saved": "已保存 {bit_depth}-bit / {sample_rate} Hz WAV：{path}",
     "audio_export_failed": "转写合成 WAV 失败：{error}",
-    "audio_export_cancelled": "转写合成 WAV 已取消，未发布不完整文件。",
+    "audio_export_cancelled": "WAV 导出已取消",
     "download_stems": "下载分乐器 WAV（ZIP）",
     "stem_audio_export_start": "生成并下载分乐器 WAV",
-    "stem_audio_export_rendering": "正在以 {bit_depth}-bit / {sample_rate} Hz 逐乐器重新合成、对齐并校验 WAV…",
-    "stem_audio_export_saved": "{count} 条分乐器 WAV 已统一帧长并通过校验（{bit_depth}-bit / {sample_rate} Hz）：{path}",
+    "stem_audio_export_rendering": "正在生成 {bit_depth}-bit / {sample_rate} Hz 分乐器 WAV…",
+    "stem_audio_export_saved": "已保存 {count} 条分乐器 WAV（{bit_depth}-bit / {sample_rate} Hz）：{path}",
     "stem_audio_export_failed": "分乐器 WAV 导出失败：{error}",
-    "stem_audio_export_cancelled": "分乐器 WAV 导出已取消，未发布不完整压缩包。",
+    "stem_audio_export_cancelled": "分乐器 WAV 导出已取消",
     "download_stereo": "原音左声道 + MIDI 右声道 WAV",
     "another": "转写另一首",
     "linked_source": "MIDI 详情 · 来源音频：{track} · 模型：{backend}",
     "close_detail": "关闭 MIDI 详情",
-    "zoom_help": "Ctrl/Alt + 滚轮缩放，Shift + 滚轮左右滚动"
+    "zoom_help": "Ctrl/Alt + 滚轮缩放，Shift + 滚轮左右滚动",
+    "errors": {
+      "audio_settings": "WAV 导出设置无效。",
+      "quantize_grid": "量化网格无效。",
+      "quantize_scope": "量化范围无效。",
+      "meter": "MIDI 拍号无效。",
+      "beats": "节拍数据无效，无法显示拍线。",
+      "bpm": "BPM 无效，请检查速度设置。",
+      "midi": "MIDI 数据无效或不完整。",
+      "notes": "MIDI 音符数据无效。",
+      "verification": "MIDI 文件校验失败。",
+      "unsupported": "此 MIDI 数据类型暂不支持。",
+      "preview": "试听音频尚未加载完成。",
+      "render_service": "试听服务不可用，无法更新音频。",
+      "export_service": "导出服务不可用。",
+      "sheet_service": "乐谱服务不可用。",
+      "response": "服务未返回有效的导出结果。",
+      "zoom": "缩放比例无效。",
+      "velocity": "音符力度无效。",
+      "http": "音频或结果文件读取失败。"
+    },
+    "error_details": "诊断信息：{error}",
+    "open_failed": "无法打开 MIDI 结果。"
   },
   "transcription_result": {
     "streaming": "{backend} 正在生成可播放的 MIDI 分片…",
     "chunks": "{backend} 分片 {completed}/{total}",
     "manual_title": "{track} · {backend}",
     "failed": "转写失败：{error}",
-    "cancelled": "转写已取消；未完成的分片不会作为 MIDI 输出"
+    "cancelled": "转写已取消，未生成完整 MIDI"
   },
   "theme": {
     "light": "浅色",

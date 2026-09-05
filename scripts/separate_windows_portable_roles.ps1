@@ -124,6 +124,7 @@ $appName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-App" } else { "MusicTo
 $backendName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-WebBackend" } else { "MusicToMidi-WebBackend" }
 $guiExecutable = if ($Accelerator -eq "xpu") { "MusicToMidiXpu.exe" } else { "MusicToMidi.exe" }
 $backendExecutable = if ($Accelerator -eq "xpu") { "MusicToMidiBackendXpu.exe" } else { "MusicToMidiBackend.exe" }
+$cliExecutable = if ($Accelerator -eq "xpu") { "MusicToMidiCLIXpu.exe" } else { "MusicToMidiCLI.exe" }
 $allowedNames = @($collectionName, $appName, $backendName)
 
 $resolvedCombinedRoot = Assert-DirectChildPath `
@@ -157,6 +158,15 @@ Remove-Item -LiteralPath (Join-Path $appRoot $backendExecutable) -Force
 Remove-Item -LiteralPath (Join-Path $backendRoot $guiExecutable) -Force
 Assert-PortableRole -Root $appRoot -RequiredExecutable $guiExecutable -ForbiddenExecutable $backendExecutable
 Assert-PortableRole -Root $backendRoot -RequiredExecutable $backendExecutable -ForbiddenExecutable $guiExecutable
+foreach ($roleRoot in @($appRoot, $backendRoot)) {
+    $cliPath = Join-Path $roleRoot $cliExecutable
+    if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
+        throw "Portable role is missing its native CLI executable: $cliPath"
+    }
+    if ((Get-Item -LiteralPath $cliPath).Length -le 0) {
+        throw "Portable native CLI executable is empty: $cliPath"
+    }
+}
 Remove-Item -LiteralPath $appIncompleteMarker -Force
 Remove-Item -LiteralPath $backendIncompleteMarker -Force
 if (

@@ -8,6 +8,7 @@ const LOCALE_FILES = {
 
 const FRONTEND_API_VERSION = "2.0";
 const BACKEND_HEARTBEAT_INTERVAL_MS = 5000;
+const TESTED_STEM_EXPORT_METADATA = /_\d{2}_[0-9a-f]{8}$/;
 
 const TRACK_COLORS = ["#c89b55", "#50b7a3", "#be7058", "#8298b7", "#9b7aa5", "#8faf69", "#c77988", "#6ca2ad"];
 const STARTUP_API_QUERY = new URLSearchParams(window.location.search).get("api");
@@ -36,7 +37,7 @@ function initialApiBase() {
 const state = {
   language: localStorage.getItem("musicToMidiLanguage") || "zh_CN",
   messages: null,
-  apiBase: initialApiBase(),
+  apiBase: "",
   frontendUrl: window.location.origin,
   capabilities: null,
   selectedMode: "smart",
@@ -74,13 +75,14 @@ function setSelectedValues(select, values) {
 function inferMuscriptorInstruments(filename) {
   const stem = String(filename || "").replace(/\.[^.]+$/, "").trim().toLowerCase();
   const normalized = stem.replace(/[\s.\-]+/g, "_").replace(/^_+|_+$/g, "");
+  const candidate = normalized.replace(TESTED_STEM_EXPORT_METADATA, "");
   const known = (state.capabilities?.muscriptor_instruments || [])
     .map((item) => item.id).sort((a, b) => b.length - a.length);
   const exact = known.find(
-    (instrument) => normalized === instrument || normalized.endsWith(`_${instrument}`),
+    (instrument) => candidate === instrument || candidate.endsWith(`_${instrument}`),
   );
   if (exact) return [exact];
-  const token = normalized.split("_").pop() || "";
+  const token = candidate.split("_").pop() || "";
   const aliases = {
     guitar: ["acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"],
     guitars: ["acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"],
@@ -89,7 +91,7 @@ function inferMuscriptorInstruments(filename) {
     vocal: ["voice"], vocals: ["voice"], voice: ["voice"],
     drum: ["drums"], drums: ["drums"],
   };
-  return aliases[normalized] || aliases[token] || [];
+  return aliases[candidate] || aliases[token] || [];
 }
 
 function isMuscriptorRoute(route) {
@@ -107,9 +109,9 @@ async function loadFrontendRuntimeConfig() {
   const response = await fetch("runtime-config.json", { cache: "no-store" });
   if (!response.ok) throw new Error(`runtime-config.json: HTTP ${response.status}`);
   const config = await response.json();
-  if (typeof config !== "object" || config === null) throw new Error("runtime-config.json must contain an object");
+  if (typeof config !== "object" || config === null) throw new Error(t("error.runtime_config", { error: "runtime-config.json: expected a JSON object" }));
   if (config.expected_api_version !== FRONTEND_API_VERSION) {
-    throw new Error(`Frontend runtime contract mismatch: expected ${FRONTEND_API_VERSION}, configured ${config.expected_api_version || "missing"}`);
+    throw new Error(t("error.api_version_mismatch", { source: "runtime-config.json", expected: FRONTEND_API_VERSION, actual: config.expected_api_version || t("error.api_version_missing") }));
   }
   state.expectedApiVersion = config.expected_api_version;
   state.frontendUrl = normalizeApiBase(config.frontend_url);
@@ -621,7 +623,7 @@ function populateControls() {
       || quantization.scopes.length !== 1
       || quantization.scopes[0] !== "all_tracks"
       || quantization.default_scope !== "all_tracks") {
-    throw new Error("Backend capabilities contain an invalid MIDI quantization contract");
+    throw new Error(`${t("error.quantize_config")} (Invalid MIDI quantization-grid contract)`);
   }
   const quantizeGrid = $("#quantizeGridSelect");
   const selectedQuantizeGrid = quantizeGrid.value || quantization.default_grid;
@@ -756,6 +758,8 @@ function setAudioFile(file) {
   const supported = state.capabilities?.limits?.audio_extensions || [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".wma"];
   if (!supported.includes(suffix)) { toast(t("error.unsupported_format", { suffix }), "error"); return; }
   prepareNewRequest();
+  setWorkspacePage("setup");
+  $("#resultPageTab").disabled = true;
   if (state.sourceObjectUrl) URL.revokeObjectURL(state.sourceObjectUrl);
   state.audioFile = file; state.sourceObjectUrl = URL.createObjectURL(file);
   const instrumentSelect = $("#muscriptorInstrumentsSelect");
@@ -826,6 +830,7 @@ async function startPrimaryJob() {
   }
 }
 function showProgress(job, { scroll = true } = {}) {
+  if (scroll) setWorkspacePage("result");
   $("#progressPanel").hidden = false; $("#jobId").textContent = job.id; updateProgress(job);
   if (scroll) $("#progressPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -895,6 +900,7 @@ function resetResult() {
   updateWorkflowGuide();
 }
 function renderFailure(message, error = true, scroll = true) {
+  if (scroll) setWorkspacePage("result");
   $("#resultPanel").hidden = false;
   $("#resultLead").textContent = error ? t("result.failed") : t("result.cancelled");
   $("#resultMetrics").innerHTML = `<div class="metric-card"><span>${escapeHtml(t("result.status"))}</span><strong class="metric-alert">${escapeHtml(error ? t("job.status.failed") : t("job.status.cancelled"))}</strong></div>`;
@@ -987,12 +993,16 @@ function renderArtifacts(job) {
   });
 }
 function renderPrimaryResult(job, { restoreTracks = true, scroll = true } = {}) {
+  if (scroll) setWorkspacePage("result");
   $("#retryJob").hidden = true;
   $("#deleteJob").hidden = false;
   state.currentJob = job;
   const result = job.result || {};
   $("#resultPanel").hidden = false;
   $("#resultLead").textContent = result.manual_midi_required ? t("result.separation_completed") : t("result.completed");
+  if (result.beat?.fixed_tempo_reliable === false) {
+    $("#resultLead").textContent += " " + t("result.tempo_evidence_notice");
+  }
   const metrics = [];
   metrics.push(metric(t("result.metric.mode"), modeLabel(result.mode || state.selectedMode)));
   metrics.push(metric(t("result.metric.elapsed"), t("result.seconds", { value: Number(result.processing_time || 0).toFixed(1) })));
@@ -1364,7 +1374,31 @@ async function deleteCurrentJob() {
   }
 }
 
+function setWorkspacePage(page) {
+  if (!["setup", "result"].includes(page)) throw new Error(`Unknown workspace page: ${page}`);
+  const result = page === "result";
+  $("#setupWorkspacePage").hidden = result;
+  $("#resultWorkspacePage").hidden = !result;
+  if (result) $("#resultPageTab").disabled = false;
+  ["setup", "result"].forEach((name) => {
+    const tab = $(`#${name}PageTab`);
+    tab.setAttribute("aria-selected", String(name === page));
+    tab.tabIndex = name === page ? 0 : -1;
+  });
+}
+
 function bindEvents() {
+  ["setup", "result"].forEach((page) => {
+    const tab = $(`#${page}PageTab`);
+    tab.addEventListener("click", () => setWorkspacePage(page));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const target = event.key === "Home" ? "setup" : event.key === "End" ? "result" : page === "setup" ? "result" : "setup";
+      const other = $(`#${target}PageTab`);
+      if (!other.disabled) { setWorkspacePage(target); other.focus(); }
+    });
+  });
   $("#browseButton").addEventListener("click", () => $("#audioInput").click());
   $("#audioInput").addEventListener("change", (event) => setAudioFile(event.target.files[0]));
   $("#clearFile").addEventListener("click", (event) => { event.stopPropagation(); clearAudioFile(); });
@@ -1415,20 +1449,27 @@ function bindEvents() {
 }
 
 async function initialize() {
+  let stage = "language";
+  const startupMessages = window.MUSIC_TO_MIDI_STARTUP_MESSAGES;
   try {
     await loadLocaleCatalogs();
+    stage = "config";
+    state.apiBase = initialApiBase();
     await loadFrontendRuntimeConfig();
+    stage = "interface";
     bindEvents();
     applyLanguage({ rerender: false });
     $("#routeDescription").textContent = t(`route.${state.selectedMode}`);
     document.documentElement.dataset.appState = "ready";
+    stage = "connection";
     await connectBackend();
     window.setInterval(probeBackend, BACKEND_HEARTBEAT_INTERVAL_MS);
   } catch (error) {
     document.documentElement.dataset.appState = "failed";
     const fatal = $("#fatalError");
     fatal.hidden = false;
-    fatal.textContent = `Locale initialization failed: ${error.message}`;
+    const language = state.language === "en_US" ? "en_US" : "zh_CN";
+    fatal.textContent = `${startupMessages[language][stage]}: ${error.message}`;
     throw error;
   }
 }

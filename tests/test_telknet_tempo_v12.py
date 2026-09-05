@@ -1,4 +1,4 @@
-"""Acceptance contracts ported from the reviewed TelkNet v10 tempo chain."""
+"""Acceptance contracts ported from the reviewed TelkNet v12 tempo chain."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 
 from src.core.beat_this_tracker import analyze_beat_this_grid
-from src.core.telknet_beat_grid_v10 import (
+from src.core.telknet_beat_grid_v12 import (
     MAX_FIXED_TEMPO_PHASE_ERROR_BEATS,
+    MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS,
+    TEMPO_FIT_ID,
     normalize_beat_grid,
 )
 from src.core.telknet_tempo_map import (
@@ -26,6 +28,11 @@ def _timeline(periods, *, start: float = 0.2) -> list[float]:
     for period in periods:
         times.append(times[-1] + float(period))
     return times
+
+
+def test_tempo_contract_uses_the_reviewed_telknet_v12_identity():
+    assert TEMPO_FIT_ID == "beat-this-final0-origin-l2-minimax-40ms-grid-v12"
+    assert MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS == pytest.approx(0.040)
 
 
 def test_fixed_auto_is_the_default_single_tempo_export_contract():
@@ -70,6 +77,19 @@ def test_adaptive_mode_keeps_a_real_sustained_section_change():
     assert tempo_map_max_phase_error(info.beat_times, info.tempo_map) <= (
         MAX_VARIABLE_TEMPO_PHASE_ERROR_BEATS + 1e-8
     )
+
+
+def test_adaptive_mode_keeps_telknet_representative_bpm_separate_from_first_section():
+    beats = _timeline([0.6] * 32 + [0.8] * 64)
+
+    info = analyze_beat_this_grid(
+        beats,
+        beats[::4],
+        tempo_mode=TempoMode.ADAPTIVE.value,
+    )
+
+    assert info.bpm == pytest.approx(75.0)
+    assert info.tempo_map[0][1] == pytest.approx(100.0)
 
 
 def test_bar_aligned_map_folds_sustained_half_and_double_time_labels():
@@ -125,7 +145,7 @@ def test_phase_bounded_map_clamps_real_300_bpm_detector_roundoff():
 
 
 def test_phase_bounded_map_still_rejects_a_real_above_300_bpm_segment():
-    beats = [0.0, 60.0 / 300.000001]
+    beats = [0.0, 60.0 / 300.001]
 
     with pytest.raises(
         BeatThisTempoMapError,
@@ -152,7 +172,7 @@ def test_long_song_adaptive_map_has_a_hard_one_sixteenth_beat_phase_bound():
     )
 
 
-def test_v10_repairs_one_isolated_phase_zigzag_but_not_a_tempo_section():
+def test_v12_repairs_one_isolated_phase_zigzag_but_not_a_tempo_section():
     isolated = [index * 0.5 for index in range(128)]
     isolated[64] += 0.16
     repaired = normalize_beat_grid(isolated)
@@ -167,7 +187,7 @@ def test_v10_repairs_one_isolated_phase_zigzag_but_not_a_tempo_section():
     assert variable.fixed_tempo_reliable is False
 
 
-def test_v10_recovers_sub_frame_bpm_without_long_song_phase_drift():
+def test_v12_recovers_sub_frame_bpm_without_long_song_phase_drift():
     true_bpm = 121.99149363221414
     beats = np.round(0.28 + np.arange(476) * (60.0 / true_bpm), 2).tolist()
 
@@ -183,10 +203,53 @@ def test_v10_recovers_sub_frame_bpm_without_long_song_phase_drift():
     assert maximum_phase_error <= MAX_FIXED_TEMPO_PHASE_ERROR_BEATS
 
 
-def test_v10_does_not_flatten_a_real_tempo_change_into_one_bpm():
+def test_v12_does_not_flatten_a_real_tempo_change_into_one_bpm():
     beats = _timeline([0.60] * 32 + [0.50] * 32, start=0.0)
 
     grid = normalize_beat_grid(beats)
 
     assert grid.fixed_tempo_reliable is False
     assert grid.tempo_warning is not None
+
+
+def test_v12_uses_the_physical_40_ms_gate_for_fixed_tempo_publication():
+    def phase_modulated_beats(amplitude: float) -> list[float]:
+        return [
+            index * 0.65 + amplitude * np.sin(2.0 * np.pi * index / 334) for index in range(335)
+        ]
+
+    accepted = normalize_beat_grid(phase_modulated_beats(0.035))
+    rejected = normalize_beat_grid(phase_modulated_beats(0.040))
+
+    accepted_error = max(
+        abs((timestamp - accepted.beat_times[0]) - ordinal * 60.0 / accepted.bpm)
+        for ordinal, timestamp in enumerate(accepted.beat_times)
+    )
+    rejected_error = max(
+        abs((timestamp - rejected.beat_times[0]) - ordinal * 60.0 / rejected.bpm)
+        for ordinal, timestamp in enumerate(rejected.beat_times)
+    )
+
+    assert accepted.fixed_tempo_reliable is True
+    assert accepted_error <= MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS
+    assert rejected.fixed_tempo_reliable is False
+    assert rejected_error > MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS
+    assert "40 ms publication gate" in rejected.tempo_warning
+
+
+@pytest.mark.parametrize(
+    ("beats", "representative_bpm", "expected_bpm"),
+    [
+        ([0.0, 0.2, 0.4], 272.7272727272741, 300.0),
+        ([0.0, 2.0, 4.0], 30.000000000000004, 30.0),
+    ],
+)
+def test_phase_bounded_map_canonicalizes_both_reviewed_tempo_boundaries(
+    beats: list[float],
+    representative_bpm: float,
+    expected_bpm: float,
+):
+    assert _tempo_map_from_beat_times(
+        beats,
+        representative_bpm=representative_bpm,
+    ) == ((0.0, expected_bpm),)

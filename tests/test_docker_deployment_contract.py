@@ -19,6 +19,18 @@ def _yaml(relative: str) -> dict:
     return payload
 
 
+def test_noble_system_dependencies_select_concrete_t64_packages():
+    dockerfile = _read("docker/backend.Dockerfile")
+    assert "ubuntu24.04@sha256:" in dockerfile
+    install = re.search(r"apt-get install -y --no-install-recommends(.*?)&&", dockerfile, re.S)
+    assert install is not None
+    packages = set(install.group(1).replace("\\", " ").split())
+    # Noble's virtual ALSA name has multiple providers and cannot be installed
+    # unattended. Both t64 libraries must be named explicitly for this base OS.
+    assert {"libasound2t64", "libglib2.0-0t64"} <= packages
+    assert not {"libasound2", "libglib2.0-0"} & packages
+
+
 def test_quantization_controls_and_backend_are_baked_into_both_docker_images():
     backend = _read("docker/backend.Dockerfile")
     gateway = _read("docker/gateway.Dockerfile")

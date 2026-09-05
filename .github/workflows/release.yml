@@ -701,8 +701,10 @@ jobs:
           mv "$FRONTEND_SOURCE" "$FRONTEND_ROOT"
 
           test -x "$APP_ROOT/MusicToMidi"
+          test -x "$APP_ROOT/MusicToMidiCLI"
           test ! -e "$APP_ROOT/MusicToMidiBackend"
           test -x "$BACKEND_ROOT/MusicToMidiBackend"
+          test -x "$BACKEND_ROOT/MusicToMidiCLI"
           test ! -e "$BACKEND_ROOT/MusicToMidi"
           test -x "$FRONTEND_ROOT/MusicToMidiFrontend"
           test -d "$APP_ROOT/_internal"
@@ -754,6 +756,17 @@ jobs:
           }
           $SelfTestTimeoutSeconds = 900
           $selfTestExe = Join-Path $appSmokeDir 'MusicToMidi.exe'
+          $appCliExe = Join-Path $appSmokeDir 'MusicToMidiCLI.exe'
+          $backendCliExe = Join-Path $backendSmokeDir 'MusicToMidiCLI.exe'
+          foreach ($cliExe in @($appCliExe, $backendCliExe)) {
+            if (-not (Test-Path -LiteralPath $cliExe -PathType Leaf)) {
+              throw "Portable role is missing the native CLI executable: $cliExe"
+            }
+            $routeContract = & $cliExe routes --json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $routeContract.count -ne 13 -or $routeContract.routes.Count -ne 13) {
+              throw "Packaged native CLI route smoke failed: $cliExe"
+            }
+          }
           $proc = Start-Process -FilePath $selfTestExe -ArgumentList '--self-test-no-load' -WindowStyle Hidden -PassThru
           if (-not $proc.WaitForExit($SelfTestTimeoutSeconds * 1000)) {
             try {
@@ -899,13 +912,26 @@ jobs:
           SMOKE_EXE="$APP_SMOKE_DIR/MusicToMidi"
           BACKEND_EXE="$BACKEND_SMOKE_DIR/MusicToMidiBackend"
           FRONTEND_EXE="$FRONTEND_SMOKE_DIR/MusicToMidiFrontend"
+          APP_CLI_EXE="$APP_SMOKE_DIR/MusicToMidiCLI"
+          BACKEND_CLI_EXE="$BACKEND_SMOKE_DIR/MusicToMidiCLI"
           RUNTIME_ROOTS=(
             "$APP_SMOKE_DIR/runtime"
             "$BACKEND_SMOKE_DIR/runtime"
             "$FRONTEND_SMOKE_DIR/runtime"
           )
           export QT_QPA_PLATFORM=offscreen
-          chmod +x "$SMOKE_EXE" "$BACKEND_EXE" "$FRONTEND_EXE"
+          chmod +x "$SMOKE_EXE" "$BACKEND_EXE" "$FRONTEND_EXE" "$APP_CLI_EXE" "$BACKEND_CLI_EXE"
+          for cli_exe in "$APP_CLI_EXE" "$BACKEND_CLI_EXE"; do
+            CLI_ROUTES_JSON="$($cli_exe routes --json)"
+            python - "$CLI_ROUTES_JSON" <<'PY'
+          import json
+          import sys
+
+          payload = json.loads(sys.argv[1])
+          if payload.get("count") != 13 or len(payload.get("routes", [])) != 13:
+              raise SystemExit(f"packaged native CLI route contract mismatch: {payload!r}")
+          PY
+          done
           PACKAGE_TEST_TIMEOUT_SECONDS=120
           PACKAGE_TEST_OUTPUT="${RUNNER_TEMP:-/tmp}/music-to-midi-package-test-output.log"
           SELF_TEST_TIMEOUT_SECONDS=900
@@ -1180,6 +1206,7 @@ jobs:
           音乐转 MIDI 转换器 Windows 桌面 App（CUDA 12.8）
 
           MusicToMidi.exe 是桌面 App 入口。完整模型、FluidSynth 和 FFmpeg 已内置；运行环境需要兼容的 NVIDIA GPU 和驱动。
+          MusicToMidiCLI.exe 是本地命令行入口；可直接运行 MusicToMidiCLI.exe song.wav，或使用 MusicToMidiCLI.exe batch D:\Audio --recursive -o D:\MidiOutput。
           本目录提供桌面 App 入口及其完整运行环境；WebBackend 与 WebFrontend 位于完整 Windows 包的同级独立目录。
           在 NTFS 上从完整 WIM 包一起解压时，App 与 WebBackend 的相同模型/运行时文件使用硬链接复用物理空间；复制本目录到另一台电脑时会成为完整独立文件，不依赖原电脑上的其他目录。
 
@@ -1189,6 +1216,7 @@ jobs:
           音乐转 MIDI 转换器 Windows Web 后端（CUDA 12.8）
 
           MusicToMidiBackend.exe 是处理服务入口。首次运行会在 EXE 旁生成 MusicToMidiBackend.json。
+          同目录的 MusicToMidiCLI.exe 可执行本机单文件或目录批处理，并与后端共用同一套模型与推理语义。
           同机默认监听 127.0.0.1:8765；局域网使用时，host 使用服务电脑的实际局域网 IPv4，allowed_origins 使用 Web 前端的实际来源。
           本目录拥有独立后端入口及运行环境；从完整 WIM 包一起解压到 NTFS 时，与桌面 App 相同的模型/运行时文件以硬链接复用。可以把整个 WebBackend 目录单独复制到另一台 GPU 电脑，复制后不依赖 App 目录。
           此包适用于受信任局域网，不内置认证、授权或 TLS，也不具备互联网部署所需的身份保护。
@@ -1223,7 +1251,9 @@ jobs:
           cp LICENSE THIRD_PARTY_NOTICES.md "dist/${FRONTEND_NAME}/"
           chmod +x \
             "dist/${APP_NAME}/MusicToMidi" \
+            "dist/${APP_NAME}/MusicToMidiCLI" \
             "dist/${BACKEND_NAME}/MusicToMidiBackend" \
+            "dist/${BACKEND_NAME}/MusicToMidiCLI" \
             "dist/${FRONTEND_NAME}/MusicToMidiFrontend"
 
           test ! -e "dist/${APP_NAME}/MusicToMidiBackend"
@@ -1235,6 +1265,8 @@ jobs:
 
           使用方法：
             运行 ./MusicToMidi 即可启动。完整模型、FluidSynth 和 FFmpeg 已内置，无需安装 Python 或 CUDA Toolkit。
+            命令行单文件：./MusicToMidiCLI song.wav
+            命令行批量：./MusicToMidiCLI batch /data/audio --recursive -o /data/midi
 
           本目录是可独立复制的完整桌面 App；WebBackend 与 WebFrontend 位于统一 Linux GPU 包的同级独立目录。
           需要与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡和驱动；不兼容时会显式报错，不生成 CPU 版。
@@ -1266,6 +1298,7 @@ jobs:
           音乐转 MIDI 转换器 Linux Web 后端（CUDA 12.8）
 
           ./MusicToMidiBackend 是独立处理服务入口。首次运行会在可写运行目录生成配置；局域网地址由 host、端口和 allowed_origins 配置决定。
+          同目录的 ./MusicToMidiCLI 提供本机单文件或目录批处理，并与后端共用同一套模型与推理语义。
           本目录内置完整模型、CUDA 运行时、FluidSynth 与 FFmpeg，可以脱离桌面 App 目录单独复制和运行。
           Web 服务不内置认证、授权或 TLS，适用范围是受信任局域网。公网单一所有者场景由同版本 Docker 高级部署提供 HTTPS 和 Basic Auth。
           HEREDOC
@@ -1589,6 +1622,7 @@ jobs:
           #### 平台、文档与发布
           - 桌面版与独立 Web 前端同步全部处理和逐轨工作台能力；Hugging Face Space 和 Colab 同步七种处理模式、三种速度方案、默认官方处理链路、可选分段边界连续性修复链路、MuScriptor 乐器约束、逐轨转换入口和中英文文案。
           - Windows 与 Linux GPU 完整包都保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的入口和可单独复制的完整运行环境。Windows 在 NTFS 上通过 WIM 硬链接复用相同模型/运行时文件，Linux 通过 tar hard-link metadata 复用；两端另发不含模型的轻量 WebFrontend 包。
+          - App 与 WebBackend 目录都内置原生 CLI：支持单文件、多文件、目录递归批处理、SHA-256 清单断点续跑、JSON Lines、明确失败终态和 13 条显式逐轨 MIDI 路线；分离模式仍先只交付 WAV，不会自动转换全部 stem。
           - Windows 与 Linux 发布烟测都会从三个独立目录真实启动，核对 API 2.0、运行时配置和 CSP；Linux 还会从最终分卷归档抽取三个角色并验证 App/WebBackend 硬链接确实被还原。Web 两端不内置认证、授权或 TLS，只适用于受信任局域网。
           - Issue #9 的 Docker 自托管包包含无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型按使用者选择的配置初始化到持久卷，常驻推理容器离线运行，默认入口为本机 `127.0.0.1:7860`。
           - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
@@ -1610,9 +1644,9 @@ jobs:
           1. Windows App 或 WebBackend：下载 \`MusicToMidi-Windows-GPU-Portable.wim.*\` 的全部分卷，用 7-Zip 从 \`.wim.001\` 解压到 NTFS；会得到 App、WebBackend、WebFrontend 三个同级独立目录
           2. 只部署局域网前端的其他电脑：仅下载并复制 \`MusicToMidi-Windows-WebFrontend-Portable.zip\`，不需要模型、CUDA 或 Python
           3. 三个目录可以分别复制到其他电脑；复制 App 或 WebBackend 目录时，Windows 会把其中的硬链接内容复制成完整独立文件，不依赖原目录
-          4. 桌面 App：从 App 目录运行 \`MusicToMidi.exe\`；Web：先在 GPU 电脑从 WebBackend 目录运行 \`MusicToMidiBackend.exe\`，再在任意受信任局域网电脑运行 \`MusicToMidiFrontend.exe\`
+          4. 桌面 App：从 App 目录运行 \`MusicToMidi.exe\`；CLI：运行 \`MusicToMidiCLI.exe song.wav\` 或 \`MusicToMidiCLI.exe batch D:\\Audio --recursive -o D:\\MidiOutput\`；Web：先在 GPU 电脑从 WebBackend 目录运行 \`MusicToMidiBackend.exe\`，再在任意受信任局域网电脑运行 \`MusicToMidiFrontend.exe\`
           5. 局域网 Web 按配置文件填写实际前后端地址与 CORS 来源；完整 WIM 也支持只选择 App 或 WebBackend 目录解压，7-Zip 会为该目录还原所需完整文件
-          6. Linux：下载 \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` 的全部分卷，按文件名顺序合并后用 \`tar -xzf\` 解压；会得到 App、WebBackend、WebFrontend 三个同级独立目录
+          6. Linux：下载 \`MusicToMidi-Linux-GPU-Portable.tar.gz.part*\` 的全部分卷，按文件名顺序合并后用 \`tar -xzf\` 解压；会得到 App、WebBackend、WebFrontend 三个同级独立目录；CLI 用法为 \`./MusicToMidiCLI song.wav\` 或 \`./MusicToMidiCLI batch /data/audio --recursive -o /data/midi\`
           7. Linux 只部署局域网前端时，可单独下载 \`MusicToMidi-Linux-WebFrontend-Portable.tar.gz\`；启动顺序同样是 GPU 主机的 WebBackend 在前、WebFrontend 在后
           8. Docker：发行包内的 \`README.md\` 与 \`README_EN.md\` 提供校验、配置和故障排查；快速启动命令为 \`bash scripts/docker_selfhost.sh setup\` 或 PowerShell 同名脚本
 
@@ -1665,6 +1699,10 @@ jobs:
           - MuScriptor repositories are gated. Source availability requires an account that has accepted the license on all three Hugging Face model pages and authenticated with \`hf auth login\` or a private \`HF_TOKEN\`; anonymous fully automatic download is not available.
           - PolarFormer now exclusively uses the official \`bs_polarformer_fp16.onnx\` asset. Retired FP32 files and selection paths are rejected.
 
+          #### Native CLI and batch processing
+          - App and WebBackend packages both include \`MusicToMidiCLI\`. It supports direct files, multiple files, recursive directories, SHA-256 manifest resume, JSON Lines, explicit terminal failures, and all 13 per-track MIDI routes.
+          - Separation modes still produce WAV tracks first. The CLI requires an explicit \`track-to-midi --route ...\` command for selected tracks and never auto-transcribes every stem.
+
           #### Portable downloads
           | File | Platform | Inference | Notes |
           |------|----------|-----------|-------|
@@ -1677,6 +1715,8 @@ jobs:
           The Windows package consists of every \`MusicToMidi-Windows-GPU-Portable.wim.*\` volume, with \`.wim.001\` as the 7-Zip entry point. Extracting to NTFS restores the shared hard links, so App and WebBackend remain visibly separate and independently copyable without storing duplicate model/runtime files on the GPU host. Extracting only one of those directories materializes every file required by that role. Portable GPU roles include the validated model set, MuseScore General SoundFont, FluidSynth, FFmpeg, third-party notices, SBOM, and FFmpeg build audit. Python and a separate CUDA Toolkit are not required; a compatible NVIDIA driver and GPU are part of the runtime requirements.
 
           Windows publishes one hard-link-preserving WIM for the three separate role directories plus a standalone lightweight WebFrontend ZIP for remote LAN clients. On a LAN client, the complete WebFrontend directory connects to \`MusicToMidiBackend.exe\` on the GPU host through the configured LAN addresses and CORS origin; the backend starts before \`MusicToMidiFrontend.exe\`. This deployment does not include authentication, authorization, or TLS, so its intended environment is a trusted LAN rather than the Internet.
+
+          Run \`MusicToMidiCLI.exe song.wav\` for the simplest Windows conversion, or \`MusicToMidiCLI.exe batch D:\\Audio --recursive -o D:\\MidiOutput\` for a directory. On Linux, use the equivalent \`./MusicToMidiCLI\` commands.
 
           Linux publishes the same three independently movable roles in one split \`tar.gz\` plus a standalone lightweight WebFrontend archive. GNU tar preserves the App/WebBackend hard links so the shared model/runtime tree is stored once; the release job extracts role probes from the final split archive and verifies the restored hard-link identity before upload. The packaged Linux backend and frontend are also started together and checked for API 2.0, runtime configuration, and CSP parity.
 

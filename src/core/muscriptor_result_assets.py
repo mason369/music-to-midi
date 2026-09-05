@@ -28,6 +28,7 @@ from src.utils.fluidsynth_runtime import (
     get_fluidsynth_subprocess_env,
 )
 from src.utils.muscriptor_soundfont_downloader import validate_muscriptor_soundfont
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 
 _PROGRAM_TO_INSTRUMENT = {
     program: instrument for instrument, program in MUSCRIPTOR_REPRESENTATIVE_PROGRAMS.items()
@@ -411,6 +412,7 @@ def _synthesize(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=get_fluidsynth_subprocess_env(executable),
+        **hidden_subprocess_kwargs(),
     )
     started = time.monotonic()
     while process.poll() is None:

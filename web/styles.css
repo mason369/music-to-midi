@@ -43,6 +43,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 button:disabled { cursor: not-allowed; opacity: .42; }
 [hidden] { display: none !important; }
 
+.workspace-pages { display: flex; gap: 6px; border-bottom: 1px solid var(--line); margin: 8px 0 16px; }
+.workspace-pages button { flex: 1; padding: 10px 12px; background: transparent; border: 0; border-bottom: 3px solid transparent; color: var(--muted); }
+.workspace-pages button[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); background: var(--panel-deep); }
+.workspace-pages button:not(:disabled):hover { background: var(--panel-hover); }
+#setupWorkspacePage, #resultWorkspacePage { display: grid; gap: 14px; min-width: 0; }
+
 .topbar {
   position: sticky;
   z-index: 40;
@@ -291,10 +297,10 @@ select[multiple] { min-height: 7.2rem; }
   margin-top: 10px;
   padding: 10px;
 }
-.action-state { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
-.action-state > span { color: var(--dim); font-size: 11px; }
-.action-state strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.action-buttons { display: flex; align-items: center; gap: 12px; }
+.action-state { min-width: 0; max-width: 100%; display: flex; align-items: baseline; justify-content: center; gap: 8px; }
+.action-state > span { flex: 0 0 auto; color: var(--dim); font-size: 11px; }
+.action-state strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.action-buttons { max-width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
 .stop-button { min-width: 96px; color: #e0e0e0; background: #2a3f5f; }
 .stop-button:hover:not(:disabled) { background: #36517a; }
 .start-button { min-width: 200px; min-height: 42px; color: white; background: var(--blue); font-weight: 700; }
@@ -466,8 +472,7 @@ select[multiple] { min-height: 7.2rem; }
   .upload-panel { min-height: 230px; border-radius: 9px; }
   .field { grid-template-columns: 1fr; }
   .field small { grid-column: 1; }
-  .action-deck { grid-template-columns: 1fr 1fr; }
-  .action-state { grid-column: 1 / 3; }
+  .action-state { flex-direction: column; align-items: center; gap: 3px; text-align: center; }
   .stop-button, .start-button { min-width: 0; }
   .runtime-copy small { display: none; }
   .progress-heading { grid-template-columns: minmax(0, 1fr) auto; }

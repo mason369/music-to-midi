@@ -66,7 +66,7 @@ class AudioSeparatorCompatTests(unittest.TestCase):
             separator_cls = get_separator_cls()
 
         activate_runtime.assert_called_once()
-        self.assertIs(separator_cls, separator_module.Separator)
+        self.assertTrue(issubclass(separator_cls, separator_module.Separator))
 
     def test_execute_audio_separator_job_loads_ensemble_with_preset_constructor_kwarg(self):
         seen = {}

@@ -449,11 +449,11 @@ def test_telknet_claims_state_asset_baseline_reuse_and_project_extensions():
     ):
         assert overclaim not in combined
 
-    assert "YourMT3/MIROS“官方 writer 后只补 tempo" in combined
-    assert "52be6fec179be492f5229ba149545ac2833b284a" in combined
-    assert "没有证据证明该 `dev` 已部署线上" in combined
-    assert "Both separation workflows likewise deliver WAV first" in combined
-    assert "MIDI is explicitly triggered" in combined
+    assert "YourMT3+ 和 MIROS 保留官方 writer 的音符输出，并补充速度信息" in combined
+    assert "对齐依据是经授权核验的私有" not in combined
+    assert "两个分离模式先输出 WAV" in combined
+    assert "Both separation workflows deliver WAV tracks first" in combined
+    assert "start conversion on each track to generate MIDI" in combined
 
 
 def test_zfturbo_reference_has_complete_mit_notice():

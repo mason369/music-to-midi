@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from src.model_profile_runtime_probe import MODEL_PROFILE_RUNTIME_PROBE_SWITCH
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 
 ENABLED_PROFILES_ENV = "MUSIC_TO_MIDI_ENABLED_PROFILES"
 REQUIRE_ENABLED_PROFILES_ENV = "MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES"
@@ -187,6 +188,7 @@ def _audio_separator_runtime_unavailable_reason(profile_id: str) -> str | None:
             errors="replace",
             timeout=45,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return f"{profile_id} native runtime probe exceeded 45 seconds"

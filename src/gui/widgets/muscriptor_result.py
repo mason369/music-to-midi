@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PyQt6.QtCore import (
+    QEvent,
     QLineF,
     QPointF,
     QRectF,
@@ -27,9 +28,9 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
     QAbstractSlider,
+    QBoxLayout,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -40,7 +41,6 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QSplitter,
     QStyle,
     QStyleOptionSlider,
@@ -72,8 +72,14 @@ from src.core.muscriptor_result_assets import (
     render_midi_stem_audio_export,
 )
 from src.core.sheet_music import SheetMusicExportResult
+from src.gui.layouts import FlowLayout
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
-from src.gui.widgets.wheel_safe_controls import NoWheelComboBox
+from src.gui.widgets.wheel_safe_controls import (
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSlider,
+    NoWheelSpinBox,
+)
 from src.gui.workers.sheet_music_export_worker import SheetMusicExportWorker
 from src.i18n.translator import get_translator, t
 from src.models.data_models import MAX_MIDI_BPM, MIN_MIDI_BPM, ProcessingResult
@@ -391,6 +397,7 @@ class _PianoRollCanvas(QWidget):
         super().__init__(parent)
         self._notes: tuple[MuscriptorRollNote, ...] = ()
         self._notes_by_start: tuple[MuscriptorRollNote, ...] = ()
+        self._note_indices_by_start: tuple[int, ...] = ()
         self._note_starts: tuple[float, ...] = ()
         self._note_prefix_max_ends: tuple[float, ...] = ()
         self._duration = 10.0
@@ -445,7 +452,8 @@ class _PianoRollCanvas(QWidget):
                     "Piano roll contains an invalid note interval: "
                     f"start={note.start}, end={note.end}"
                 )
-        notes_by_start = tuple(sorted(normalized, key=lambda note: note.start))
+        indices_by_start = tuple(sorted(range(len(normalized)), key=lambda i: normalized[i].start))
+        notes_by_start = tuple(normalized[i] for i in indices_by_start)
         note_starts = tuple(note.start for note in notes_by_start)
         prefix_max_ends: list[float] = []
         max_end = 0.0
@@ -478,6 +486,7 @@ class _PianoRollCanvas(QWidget):
         # payload cannot leave half-applied roll state behind.
         self._notes = normalized
         self._notes_by_start = notes_by_start
+        self._note_indices_by_start = indices_by_start
         self._note_starts = note_starts
         self._note_prefix_max_ends = tuple(prefix_max_ends)
         self._colors = colors
@@ -751,7 +760,7 @@ class _PianoRollCanvas(QWidget):
         if next_tile * _ROLL_TILE_WIDTH < self.width():
             self._static_tile(next_tile)
 
-        for index in self.selected_indices:
+        for index in self._visible_selected_indices(logical_left, logical_right):
             selected = self._notes[index]
             if not 21 <= selected.pitch <= 108:
                 continue
@@ -788,6 +797,25 @@ class _PianoRollCanvas(QWidget):
         playhead_pen.setCosmetic(True)
         painter.setPen(playhead_pen)
         painter.drawLine(QLineF(playhead_x, 0.0, playhead_x, float(self.height())))
+
+    def _visible_selected_indices(
+        self, logical_left: float, logical_right: float
+    ) -> tuple[int, ...]:
+        """Cull paint work, not selection; retain long and duplicate note identities."""
+        if not self._selected_indices:
+            return ()
+        # Include the minimum-width rectangle and cosmetic outline at edges.
+        start = max(0.0, (logical_left - self._keyboard_width - 3) / self._pixels_per_second)
+        end = max(start, (logical_right - self._keyboard_width + 3) / self._pixels_per_second)
+        first = bisect_left(self._note_prefix_max_ends, start)
+        last = bisect_right(self._note_starts, end)
+        return tuple(
+            sorted(
+                index
+                for index in self._note_indices_by_start[first:last]
+                if index in self._selected_indices and self._notes[index].end >= start
+            )
+        )
 
     def _static_tile(self, tile_index: int) -> QPixmap:
         device_ratio = max(1.0, self.devicePixelRatioF())
@@ -1594,9 +1622,12 @@ class _InstrumentRow(QFrame):
         swatch = QLabel("■")
         swatch.setStyleSheet(f"color: {color if detected else '#4b5157'};")
         self.name_label = QLabel()
+        self.name_label.setWordWrap(True)
+        self.name_label.setMinimumWidth(0)
         layout.addWidget(swatch)
         layout.addWidget(self.name_label, 1)
         self.not_detected_label = QLabel()
+        self.not_detected_label.setWordWrap(True)
         self.not_detected_label.setStyleSheet("color: #626b73; font-style: italic;")
         self.not_detected_label.setVisible(not detected)
         layout.addWidget(self.not_detected_label)
@@ -1653,11 +1684,52 @@ class _InstrumentRow(QFrame):
         self.mute_button.setToolTip(t("muscriptor_result.mute"))
 
 
+class _WrappingControlsPanel(QWidget):
+    """Expose wrapped height to QSplitter without preventing explicit collapse."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._wrapped_height = 0
+
+    def set_wrapped_height(self, height: int) -> None:
+        if height != self._wrapped_height:
+            self._wrapped_height = height
+            self.updateGeometry()
+
+    def minimumSizeHint(self):  # noqa: N802 - Qt API
+        hint = super().minimumSizeHint()
+        hint.setHeight(max(hint.height(), self._wrapped_height))
+        return hint
+
+    def sizeHint(self):  # noqa: N802 - Qt API
+        # QWidget's default preferred size uses an unconstrained label width.
+        # QSplitter must receive the actual wrapped height at this viewport,
+        # otherwise short status labels inflate the whole scrollable result.
+        hint = super().sizeHint()
+        if self._wrapped_height > 0:
+            hint.setHeight(self._wrapped_height)
+        return hint
+
+
+def _labeled_control(label: QLabel, control: QWidget) -> QWidget:
+    """Keep each caption attached to its field when a toolbar wraps."""
+    field = QWidget()
+    row = QVBoxLayout(field)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(3)
+    label.setStyleSheet("font-size: 11px; color: #93abc9;")
+    row.addWidget(label)
+    row.addWidget(control)
+    label.setBuddy(control)
+    return field
+
+
 class MuscriptorResultWidget(QFrame):
     """One inline result surface whose controls all affect real playback."""
 
     transcribe_another_requested = pyqtSignal()
     playing_changed = pyqtSignal(bool)
+    tempo_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -1694,11 +1766,17 @@ class MuscriptorResultWidget(QFrame):
         self._preview_pending: (
             tuple[int, tuple[MuscriptorRollNote, ...], float, int, int] | None
         ) = None
-        self._preview_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-preview-"))
-        self._edit_asset_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-editor-audio-"))
-        self._audio_export_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-wav-export-"))
+        self._preview_root = Path(tempfile.mkdtemp(prefix="music-to-midi-midi-preview-")).resolve()
+        self._edit_asset_root = Path(
+            tempfile.mkdtemp(prefix="music-to-midi-midi-editor-audio-")
+        ).resolve()
+        self._audio_export_root = Path(
+            tempfile.mkdtemp(prefix="music-to-midi-midi-wav-export-")
+        ).resolve()
         self._audio_export_generation = 0
-        self._sheet_export_root = Path(tempfile.mkdtemp(prefix="music-to-midi-sheet-export-"))
+        self._sheet_export_root = Path(
+            tempfile.mkdtemp(prefix="music-to-midi-sheet-export-")
+        ).resolve()
         self._sheet_export_generation = 0
         self._edit_asset_generation = 0
         self._edit_asset_applied_generation = 0
@@ -1802,7 +1880,7 @@ class MuscriptorResultWidget(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        self.result_controls_panel = QWidget()
+        self.result_controls_panel = _WrappingControlsPanel()
         result_controls = QVBoxLayout(self.result_controls_panel)
         result_controls.setContentsMargins(0, 0, 0, 0)
         result_controls.setSpacing(8)
@@ -1838,6 +1916,7 @@ class MuscriptorResultWidget(QFrame):
         result_controls.addWidget(self.progress_bar)
 
         self.progress_label = QLabel()
+        self.progress_label.setWordWrap(True)
         self.progress_label.setStyleSheet("color: #8da4c9;")
         result_controls.addWidget(self.progress_label)
 
@@ -1855,7 +1934,15 @@ class MuscriptorResultWidget(QFrame):
         self.playback_status_label.setStyleSheet("color: #73a7ff;")
         result_controls.addWidget(self.playback_status_label)
 
-        controls = QHBoxLayout()
+        controls = FlowLayout(horizontal_spacing=8, vertical_spacing=6)
+        tempo_controls = FlowLayout(horizontal_spacing=8, vertical_spacing=6)
+        self.tempo_status_label = QLabel()
+        self.tempo_status_label.setObjectName("resultTempoStatus")
+        self.tempo_status_label.setStyleSheet("color: #86b5dd; padding: 4px 0;")
+        tempo_controls.addWidget(self.tempo_status_label)
+        self.bpm_label = QLabel()
+        self.bpm_label.hide()
+        tempo_controls.addWidget(self.bpm_label)
         self.play_button = QPushButton()
         self.play_button.setEnabled(False)
         self.play_button.clicked.connect(self._toggle_playback)
@@ -1869,7 +1956,7 @@ class MuscriptorResultWidget(QFrame):
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
         controls.addWidget(self.clock_label)
-        self.bpm_spin = QDoubleSpinBox()
+        self.bpm_spin = NoWheelDoubleSpinBox()
         self.bpm_spin.setRange(MIN_MIDI_BPM, MAX_MIDI_BPM)
         self.bpm_spin.setDecimals(1)
         self.bpm_spin.setSingleStep(0.1)
@@ -1884,11 +1971,11 @@ class MuscriptorResultWidget(QFrame):
         )
         self.bpm_spin.valueChanged.connect(self._on_result_bpm_changed)
         self.bpm_spin.hide()
-        controls.addWidget(self.bpm_spin)
+        tempo_controls.addWidget(self.bpm_spin)
         self.speed_label = QLabel()
         self.speed_label.hide()
-        controls.addWidget(self.speed_label)
-        self.speed_spin = QDoubleSpinBox()
+        tempo_controls.addWidget(self.speed_label)
+        self.speed_spin = NoWheelDoubleSpinBox()
         self.speed_spin.setRange(0.05, 20.0)
         self.speed_spin.setDecimals(3)
         self.speed_spin.setSingleStep(0.05)
@@ -1905,11 +1992,10 @@ class MuscriptorResultWidget(QFrame):
         )
         self.speed_spin.valueChanged.connect(self._on_result_speed_changed)
         self.speed_spin.hide()
-        controls.addWidget(self.speed_spin)
-        controls.addStretch(1)
+        tempo_controls.addWidget(self.speed_spin)
         self.original_label = QLabel()
         controls.addWidget(self.original_label)
-        self.mix_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mix_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.mix_slider.setRange(0, 100)
         self.mix_slider.setValue(75)
         self.mix_slider.setFixedWidth(150)
@@ -1922,6 +2008,7 @@ class MuscriptorResultWidget(QFrame):
         self.stereo_checkbox.setEnabled(False)
         self.stereo_checkbox.toggled.connect(self._apply_mix)
         controls.addWidget(self.stereo_checkbox)
+        result_controls.addLayout(tempo_controls)
         result_controls.addLayout(controls)
 
         transport = QHBoxLayout()
@@ -1963,12 +2050,10 @@ class MuscriptorResultWidget(QFrame):
         editor = QVBoxLayout(self.editor_panel)
         editor.setContentsMargins(0, 0, 0, 0)
         editor.setSpacing(5)
-        primary_commands = QHBoxLayout()
-        primary_commands.setSpacing(6)
-        secondary_commands = QHBoxLayout()
-        secondary_commands.setSpacing(6)
-        editor_fields = QHBoxLayout()
-        editor_fields.setSpacing(6)
+        primary_commands = FlowLayout(horizontal_spacing=6, vertical_spacing=5)
+        secondary_commands = primary_commands
+        quantize_commands = FlowLayout(horizontal_spacing=8, vertical_spacing=6)
+        editor_fields = quantize_commands
         self.edit_toggle = QToolButton()
         self.edit_toggle.setCheckable(True)
         self.edit_toggle.setEnabled(False)
@@ -1994,7 +2079,6 @@ class MuscriptorResultWidget(QFrame):
         self.edit_reset_button.setEnabled(False)
         self.edit_reset_button.clicked.connect(self._reset_editor_notes)
         primary_commands.addWidget(self.edit_reset_button)
-        primary_commands.addStretch()
         self.edit_select_all_button = QPushButton()
         self.edit_select_all_button.setEnabled(False)
         self.edit_select_all_button.clicked.connect(self._select_all_editor_notes)
@@ -2018,10 +2102,7 @@ class MuscriptorResultWidget(QFrame):
         self.edit_quantize_button = QPushButton()
         self.edit_quantize_button.setEnabled(False)
         self.edit_quantize_button.clicked.connect(self._quantize_selected_editor_notes)
-        secondary_commands.addWidget(self.edit_quantize_button)
-        secondary_commands.addSpacing(8)
         self.edit_quantize_scope_label = QLabel()
-        secondary_commands.addWidget(self.edit_quantize_scope_label)
         self.edit_quantize_scope_combo = NoWheelComboBox()
         for scope in MIDI_QUANTIZE_SCOPES:
             self.edit_quantize_scope_combo.addItem("", scope)
@@ -2037,9 +2118,10 @@ class MuscriptorResultWidget(QFrame):
         self.edit_quantize_scope_combo.currentIndexChanged.connect(
             self._on_editor_quantize_scope_changed
         )
-        secondary_commands.addWidget(self.edit_quantize_scope_combo)
+        quantize_commands.addWidget(
+            _labeled_control(self.edit_quantize_scope_label, self.edit_quantize_scope_combo)
+        )
         self.edit_quantize_grid_label = QLabel()
-        secondary_commands.addWidget(self.edit_quantize_grid_label)
         self.edit_quantize_grid_combo = NoWheelComboBox()
         for label, denominator in _EDITOR_QUANTIZE_GRIDS:
             self.edit_quantize_grid_combo.addItem(label, denominator)
@@ -2055,8 +2137,11 @@ class MuscriptorResultWidget(QFrame):
         self.edit_quantize_grid_combo.currentIndexChanged.connect(
             self._on_editor_quantize_grid_changed
         )
-        secondary_commands.addWidget(self.edit_quantize_grid_combo)
-        secondary_commands.addStretch()
+        quantize_commands.addWidget(
+            _labeled_control(self.edit_quantize_grid_label, self.edit_quantize_grid_combo)
+        )
+        quantize_commands.addWidget(_labeled_control(QLabel(" "), self.edit_quantize_button))
+        self.edit_quantize_button.setObjectName("applyQuantization")
         for command_button in (
             self.edit_toggle,
             self.edit_add_button,
@@ -2077,25 +2162,26 @@ class MuscriptorResultWidget(QFrame):
             )
             command_button.setMinimumHeight(34)
         self.edit_instrument_label = QLabel()
-        editor_fields.addWidget(self.edit_instrument_label)
-        self.edit_instrument_combo = QComboBox()
-        self.edit_instrument_combo.setMinimumWidth(220)
+        self.edit_instrument_combo = NoWheelComboBox()
+        self.edit_instrument_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.edit_instrument_combo.setMinimumContentsLength(12)
         self.edit_instrument_combo.setEnabled(False)
         self.edit_instrument_combo.currentIndexChanged.connect(self._on_editor_instrument_changed)
-        editor_fields.addWidget(self.edit_instrument_combo)
-        editor_fields.addSpacing(8)
+        editor_fields.addWidget(
+            _labeled_control(self.edit_instrument_label, self.edit_instrument_combo)
+        )
         self.edit_velocity_label = QLabel()
-        editor_fields.addWidget(self.edit_velocity_label)
-        self.edit_velocity_spin = QSpinBox()
+        self.edit_velocity_spin = NoWheelSpinBox()
+        self.edit_velocity_spin.setKeyboardTracking(False)
         self.edit_velocity_spin.setRange(1, 127)
         self.edit_velocity_spin.setValue(100)
         self.edit_velocity_spin.setEnabled(False)
         self.edit_velocity_spin.valueChanged.connect(self._on_editor_velocity_changed)
-        editor_fields.addWidget(self.edit_velocity_spin)
-        editor_fields.addSpacing(8)
+        editor_fields.addWidget(_labeled_control(self.edit_velocity_label, self.edit_velocity_spin))
         self.roll_zoom_label = QLabel()
-        editor_fields.addWidget(self.roll_zoom_label)
-        self.roll_zoom_spin = QDoubleSpinBox()
+        self.roll_zoom_spin = NoWheelDoubleSpinBox()
         self.roll_zoom_spin.setRange(
             _ROLL_MIN_PIXELS_PER_SECOND / _ROLL_BASE_PIXELS_PER_SECOND,
             _ROLL_MAX_PIXELS_PER_SECOND / _ROLL_BASE_PIXELS_PER_SECOND,
@@ -2110,27 +2196,51 @@ class MuscriptorResultWidget(QFrame):
             "font-family: Consolas; color: #c8d3e6; background: #16213e; "
             "border: 1px solid #3a4a6a; border-radius: 4px; padding: 4px 7px;"
         )
-        editor_fields.addWidget(self.roll_zoom_spin)
+        editor_fields.addWidget(_labeled_control(self.roll_zoom_label, self.roll_zoom_spin))
         self.edit_summary_label = QLabel()
         self.edit_summary_label.setStyleSheet(
             "color: #9bb4d5; background: #15263f; border: 1px solid #304b6c; "
             "border-radius: 5px; padding: 5px 9px;"
         )
-        self.edit_summary_label.setWordWrap(False)
+        self.edit_summary_label.setWordWrap(True)
         self.edit_summary_label.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
-            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
         )
         self.edit_summary_label.setMinimumHeight(32)
-        editor_fields.addWidget(self.edit_summary_label)
-        editor_fields.addStretch()
         editor.addLayout(primary_commands)
-        editor.addLayout(secondary_commands)
-        editor.addLayout(editor_fields)
+        editor.addLayout(quantize_commands)
+        editor.addWidget(self.edit_summary_label)
         result_controls.addWidget(self.editor_panel)
+        for control in (
+            self.play_button,
+            self.clock_label,
+            self.bpm_spin,
+            self.speed_spin,
+            self.edit_quantize_scope_combo,
+            self.edit_quantize_grid_combo,
+            self.edit_instrument_combo,
+            self.edit_velocity_spin,
+            self.roll_zoom_spin,
+        ):
+            control.setFixedHeight(36)
+        self.editor_panel.setStyleSheet(
+            self.editor_panel.styleSheet()
+            + "QWidget#midiEditorToolbar { background: #132139; border: 1px solid #304968;"
+            " border-radius: 7px; }"
+            "QWidget#midiEditorToolbar QLabel { color: #93abc9; border: none; background: transparent; }"
+            "QWidget#midiEditorToolbar QComboBox, QWidget#midiEditorToolbar QAbstractSpinBox {"
+            " color: #d7e6f8; background: #172941; border: 1px solid #3b5577; border-radius: 5px;"
+            " padding: 0 7px; }"
+            "QWidget#midiEditorToolbar QPushButton#applyQuantization:enabled {"
+            " background: #21486b; border-color: #4789ad; color: #c8edff; }"
+        )
+        editor.setContentsMargins(8, 8, 8, 8)
+        editor.setSpacing(8)
 
         self.roll_panel = QWidget()
-        content = QHBoxLayout(self.roll_panel)
+        content = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.roll_panel)
+        self._roll_content_layout = content
         content.setContentsMargins(0, 0, 0, 0)
         self.roll_scroll = _PianoRollScrollArea()
         self.roll_scroll.setWidgetResizable(False)
@@ -2163,9 +2273,11 @@ class MuscriptorResultWidget(QFrame):
             "QFrame#muscriptorInstrumentPanel { background: #16213e; "
             "border: 1px solid #365f8d; border-radius: 6px; }"
         )
-        instrument_panel.setMinimumWidth(240)
+        self.instrument_panel = instrument_panel
+        instrument_panel.setMinimumWidth(0)
         instrument_layout = QVBoxLayout(instrument_panel)
         self.instruments_title = QLabel()
+        self.instruments_title.setWordWrap(True)
         self.instruments_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #dbeaff;")
         instrument_layout.addWidget(self.instruments_title)
         self.instrument_rows_layout = QVBoxLayout()
@@ -2190,13 +2302,14 @@ class MuscriptorResultWidget(QFrame):
         self.result_splitter.setCollapsible(1, False)
         self.result_splitter.setStretchFactor(0, 0)
         self.result_splitter.setStretchFactor(1, 1)
-        self.result_splitter.setSizes(
-            [max(240, self.result_controls_panel.sizeHint().height()), 465]
-        )
+        # A positive request is clamped to the controls' minimum size by Qt.
+        # Do not retain the pre-layout preferred height: it overestimates
+        # wrapped labels and leaves blank space above the piano roll.
+        self.result_splitter.setSizes([1, 465])
         self.result_splitter.handle(1).setToolTip(t("muscriptor_result.editor_resize_hint"))
         root.addWidget(self.result_splitter, 1)
 
-        outputs = QHBoxLayout()
+        outputs = FlowLayout(horizontal_spacing=8, vertical_spacing=6)
         self.download_button = QToolButton()
         self.download_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.download_menu = QMenu(self.download_button)
@@ -2234,7 +2347,6 @@ class MuscriptorResultWidget(QFrame):
         self.download_stereo_action.triggered.connect(lambda: self._save_asset("stereo"))
         self.download_button.setMenu(self.download_menu)
         outputs.addWidget(self.download_button)
-        outputs.addStretch()
         self.another_button = QPushButton()
         self.another_button.clicked.connect(self.transcribe_another_requested)
         outputs.addWidget(self.another_button)
@@ -2249,6 +2361,34 @@ class MuscriptorResultWidget(QFrame):
         self.status_label.setText(t("transcription_result.streaming", backend=self.backend_label))
         self.progress_label.setText(t("muscriptor_result.progress_waiting"))
         self.playback_status_label.setText(t("muscriptor_result.preview_waiting"))
+        self.result_controls_panel.installEventFilter(self)
+        self._sync_responsive_layout()
+
+    def _sync_responsive_layout(self) -> None:
+        """Keep every control reachable; reflow instead of clipping a wide row."""
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if self.width() < 720
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self._roll_content_layout.direction() != direction:
+            self._roll_content_layout.setDirection(direction)
+        margins = self.layout().contentsMargins()
+        available = max(1, self.width() - margins.left() - margins.right())
+        controls = self.result_controls_panel.layout()
+        required_height = controls.totalHeightForWidth(available)
+        if required_height >= 0:
+            self.result_controls_panel.set_wrapped_height(required_height)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if hasattr(self, "result_splitter"):
+            self._sync_responsive_layout()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        if watched is self.result_controls_panel and event.type() == QEvent.Type.LayoutRequest:
+            self._sync_responsive_layout()
+        return super().eventFilter(watched, event)
 
     @property
     def midi_path(self) -> str:
@@ -2901,6 +3041,17 @@ class MuscriptorResultWidget(QFrame):
     ) -> None:
         before = self._edited_notes
         after = tuple(snapshot)
+        if before == after:
+            # Selection is independent of note content. A no-op must not rebuild
+            # the pitch index / paint cache or enqueue identical audio.
+            selection = (
+                selected_indices
+                if selected_indices is not None
+                else (() if selected_index is None else (selected_index,))
+            )
+            self.roll.set_selected_indices(selection, primary=selected_index)
+            self._sync_editor_controls()
+            return
         self.roll.set_notes(
             after,
             duration=self._edit_duration,
@@ -3039,6 +3190,8 @@ class MuscriptorResultWidget(QFrame):
                 f"generation={generation}, current={self._edit_asset_generation}"
             )
         previous_dir = self._active_edit_asset_dir
+        if output_dir is not None:
+            output_dir = Path(output_dir).resolve()
         if restored_original:
             next_midi_path = self._original_audio_midi_path
         elif output_dir is not None:
@@ -3110,6 +3263,18 @@ class MuscriptorResultWidget(QFrame):
             raise RuntimeError(
                 f"Refusing to remove edited MIDI assets outside {root}: {candidate}"
             ) from exc
+        if candidate == root:
+            raise RuntimeError(f"Refusing to remove the editor asset root: {root}")
+        # A finished render may still be waiting for playback to stop. It is
+        # owned until applied or superseded, not disposable worker scratch.
+        protected = set()
+        if self._active_edit_asset_dir is not None:
+            protected.add(self._active_edit_asset_dir.resolve())
+        if self._deferred_editor_assets is not None:
+            generation, _assets = self._deferred_editor_assets
+            protected.add((root / f"generation-{generation:06d}").resolve())
+        if candidate in protected:
+            return
         if not candidate.exists():
             return
         try:
@@ -3270,11 +3435,9 @@ class MuscriptorResultWidget(QFrame):
             quantized_duration = min(self._edit_duration, quantized_duration)
             start = round(note.start / grid) * grid
             start = max(0.0, min(self._edit_duration - quantized_duration, start))
-            updated[index] = replace(
-                note,
-                start=start,
-                end=start + quantized_duration,
-            )
+            end = start + quantized_duration
+            if note.start != start or note.end != end:
+                updated[index] = replace(note, start=start, end=end)
         self._apply_editor_snapshot(
             updated,
             selected_index=self.roll.selected_index,
@@ -3584,15 +3747,23 @@ class MuscriptorResultWidget(QFrame):
         self.bpm_spin.setValue(target)
         del bpm_blocker
         speed_blocker = QSignalBlocker(self.speed_spin)
-        self.speed_spin.setRange(MIN_MIDI_BPM / source, MAX_MIDI_BPM / source)
+        # QDoubleSpinBox rounds its bounds to its displayed precision. Round
+        # inward so clicking an endpoint cannot create an out-of-range BPM.
+        precision = 10 ** self.speed_spin.decimals()
+        self.speed_spin.setRange(
+            math.ceil(MIN_MIDI_BPM / source * precision) / precision,
+            math.floor(MAX_MIDI_BPM / source * precision) / precision,
+        )
         self.speed_spin.setValue(target / source)
         del speed_blocker
         self.bpm_spin.show()
+        self.bpm_label.show()
         self.speed_label.show()
         self.speed_spin.show()
         self.roll.set_grid_seconds(self._editor_grid_seconds())
         self.roll.set_daw_grid(source, self._time_signature)
         self._apply_result_playback_rate()
+        self._refresh_tempo_display()
 
     def _result_playback_rate(self) -> float:
         if self._detected_bpm is not None:
@@ -3627,6 +3798,7 @@ class MuscriptorResultWidget(QFrame):
         del speed_blocker
         self.roll.set_grid_seconds(self._editor_grid_seconds())
         self._apply_result_playback_rate()
+        self._refresh_tempo_display()
 
     def _on_result_speed_changed(self, speed: float) -> None:
         if self._detected_bpm is None:
@@ -3649,6 +3821,16 @@ class MuscriptorResultWidget(QFrame):
         del speed_blocker
         self.roll.set_grid_seconds(self._editor_grid_seconds())
         self._apply_result_playback_rate()
+        self._refresh_tempo_display()
+
+    def _refresh_tempo_display(self) -> None:
+        """No numeric placeholder: only report a validated tempo context."""
+        self.tempo_status_label.setText(
+            t("muscriptor_result.tempo_unset")
+            if self._detected_bpm is None
+            else t("muscriptor_result.tempo_detected", bpm=f"{self._detected_bpm:.1f}")
+        )
+        self.tempo_changed.emit()
 
     def _commit_result_tempo_edit(self) -> float:
         """Commit the project BPM used by both export and linked audition."""
@@ -4464,6 +4646,8 @@ class MuscriptorResultWidget(QFrame):
         self.follow_checkbox.setText(t("muscriptor_result.follow"))
         self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
         self.bpm_spin.setToolTip(t("muscriptor_result.export_bpm_tooltip"))
+        self.bpm_label.setText(t("muscriptor_result.project_tempo"))
+        self._refresh_tempo_display()
         self.speed_label.setText(t("muscriptor_result.playback_speed_label"))
         self.speed_spin.setToolTip(t("muscriptor_result.playback_speed_tooltip"))
         self.edit_toggle.setText(t("muscriptor_result.editor_toggle"))

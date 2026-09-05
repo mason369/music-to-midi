@@ -5,11 +5,13 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 MIN_TEMPO_BPM = 30.0
 MAX_TEMPO_BPM = 300.0
-TEMPO_BOUNDARY_ABS_TOLERANCE = 1e-9
+MIN_BEAT_PERIOD_SECONDS = 60.0 / MAX_TEMPO_BPM
+MAX_BEAT_PERIOD_SECONDS = 60.0 / MIN_TEMPO_BPM
+PERIOD_BOUNDARY_TOLERANCE_SECONDS = 1e-9
 MIN_TEMPO_CHANGE_RATIO = 0.03
 MIN_TEMPO_CHANGE_BPM = 2.0
 MIN_SUSTAINED_ANCHORS = 2
@@ -18,6 +20,50 @@ MAX_VARIABLE_TEMPO_PHASE_ERROR_BEATS = 1.0 / 16.0
 
 class BeatThisTempoMapError(RuntimeError):
     """Normalized beat evidence cannot produce a safe MIDI tempo map."""
+
+
+def _canonical_beat_period_seconds(
+    value: Any,
+    *,
+    error_message: str,
+) -> float:
+    """Validate a detector-derived period and clamp only float-boundary noise."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
+        raise BeatThisTempoMapError(error_message)
+    period = float(value)
+    if (
+        period < MIN_BEAT_PERIOD_SECONDS - PERIOD_BOUNDARY_TOLERANCE_SECONDS
+        or period > MAX_BEAT_PERIOD_SECONDS + PERIOD_BOUNDARY_TOLERANCE_SECONDS
+    ):
+        raise BeatThisTempoMapError(error_message)
+    return min(MAX_BEAT_PERIOD_SECONDS, max(MIN_BEAT_PERIOD_SECONDS, period))
+
+
+def _canonical_derived_tempo_bpm(
+    value: Any,
+    *,
+    error_message: str,
+) -> float:
+    """Canonicalize a computed BPM under the same period contract as the producer."""
+
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
+        raise BeatThisTempoMapError(error_message)
+    period = _canonical_beat_period_seconds(
+        60.0 / float(value),
+        error_message=error_message,
+    )
+    return 60.0 / period
 
 
 def _validated_timeline(
@@ -170,9 +216,10 @@ def _tempo_map_from_downbeats(
         interval = current - previous
         represented_bars = max(1, round(interval / reference_bar_seconds))
         represented_beats = float(represented_bars * beats_per_bar)
-        bpm = 60.0 * represented_beats / interval
-        if not MIN_TEMPO_BPM <= bpm <= MAX_TEMPO_BPM:
-            raise BeatThisTempoMapError("Beat This final0 returned an out-of-range downbeat tempo")
+        bpm = _canonical_derived_tempo_bpm(
+            60.0 * represented_beats / interval,
+            error_message="Beat This final0 returned an out-of-range downbeat tempo",
+        )
         starts.append(previous)
         raw_bpms.append(bpm)
         weights.append(represented_beats)
@@ -212,13 +259,10 @@ def _tempo_map_from_beat_times(
         label="beat timeline",
         minimum_count=2,
     )
-    if (
-        isinstance(representative_bpm, bool)
-        or not isinstance(representative_bpm, (int, float))
-        or not math.isfinite(float(representative_bpm))
-        or not MIN_TEMPO_BPM <= float(representative_bpm) <= MAX_TEMPO_BPM
-    ):
-        raise BeatThisTempoMapError("Beat This final0 returned an invalid representative tempo")
+    representative_bpm = _canonical_derived_tempo_bpm(
+        representative_bpm,
+        error_message="Beat This final0 returned an invalid representative tempo",
+    )
 
     anchors = {0, len(normalized) - 1}
     pending = [(0, len(normalized) - 1)]
@@ -249,18 +293,10 @@ def _tempo_map_from_beat_times(
     events: list[tuple[float, float]] = []
     for event_index, (start, end) in enumerate(zip(ordered, ordered[1:])):
         elapsed = normalized[end] - normalized[start]
-        bpm = 60.0 * (end - start) / elapsed
-        if (
-            bpm < MIN_TEMPO_BPM - TEMPO_BOUNDARY_ABS_TOLERANCE
-            or bpm > MAX_TEMPO_BPM + TEMPO_BOUNDARY_ABS_TOLERANCE
-        ):
-            raise BeatThisTempoMapError(
-                "Beat This final0 returned an out-of-range phase-bounded tempo"
-            )
-        # Beat timestamps are decimal detector frames represented as binary
-        # floats.  Accept only machine-rounding noise at the reviewed limits,
-        # then serialize the exact 30/300 BPM boundary value.
-        bpm = min(MAX_TEMPO_BPM, max(MIN_TEMPO_BPM, bpm))
+        bpm = _canonical_derived_tempo_bpm(
+            60.0 * (end - start) / elapsed,
+            error_message=("Beat This final0 returned an out-of-range phase-bounded tempo"),
+        )
         events.append((0.0 if event_index == 0 else normalized[start], bpm))
     return tuple(events)
 
@@ -335,27 +371,12 @@ def build_adaptive_tempo_map(
     beats_per_bar: int | None,
     representative_bpm: float,
 ) -> AdaptiveTempoMap:
-    """Prefer a bar-aligned stable map only when it keeps the v10 phase bound.
+    """Build the exact TelkNet v12 adaptive map from accepted beat times.
 
-    Reliable meter first gets the sectioned downbeat treatment described by
-    the product UI. If that candidate cannot keep every accepted Beat This
-    beat within 1/16 beat, the exact v10 phase-bounded beat segmentation is
-    selected and reported explicitly as its strategy.
+    ``downbeat_times`` and ``beats_per_bar`` remain in the public project API
+    because they are still used for meter metadata. TelkNet's current
+    MuScriptor consumer does not use them to choose the adaptive tempo events.
     """
-
-    if beats_per_bar is not None and len(downbeat_times) >= 3:
-        bar_events = _tempo_map_from_downbeats(
-            downbeat_times,
-            beats_per_bar=beats_per_bar,
-            representative_bpm=representative_bpm,
-        )
-        bar_error = _tempo_map_max_phase_error(beat_times, bar_events)
-        if bar_error <= MAX_VARIABLE_TEMPO_PHASE_ERROR_BEATS + 1e-8:
-            return AdaptiveTempoMap(
-                events=bar_events,
-                strategy="bar_aligned_phase_validated",
-                maximum_phase_error_beats=bar_error,
-            )
 
     events = _tempo_map_from_beat_times(
         beat_times,

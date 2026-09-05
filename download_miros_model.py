@@ -32,6 +32,10 @@ MIROS_PRETRAINED_EXACT_BYTES = miros_runtime.MIROS_PRETRAINED_EXACT_BYTES
 MIROS_PRETRAINED_SHA256 = miros_runtime.MIROS_PRETRAINED_SHA256
 MIROS_FINETUNED_EXACT_BYTES = miros_runtime.MIROS_FINETUNED_EXACT_BYTES
 MIROS_FINETUNED_SHA256 = miros_runtime.MIROS_FINETUNED_SHA256
+MIROS_CONFORMER_CONFIG_URL = (
+    "https://huggingface.co/facebook/wav2vec2-conformer-rope-large-960h-ft/resolve/"
+    f"{miros_runtime.MIROS_CONFORMER_CONFIG_COMMIT}/config.json"
+)
 MIROS_MIRROR_DIR_ENV = "MUSIC_TO_MIDI_MIROS_MIRROR_DIR"
 MIROS_DECMOD_REL_PATH = Path("model/decmod.py")
 MIROS_ROPE_REL_PATH = Path("model/RoPE/RoPE.py")
@@ -977,6 +981,17 @@ def prepare_miros_model(
     )
 
     _require_source_identity(repo)
+    # The pinned upstream passes this relative repository ID to from_pretrained.
+    # A verified local directory uses Transformers' normal local-file loading,
+    # without changing upstream code or depending on the user's Hub cache.
+    _download_http_file(
+        MIROS_CONFORMER_CONFIG_URL,
+        repo / miros_runtime.MIROS_CONFORMER_CONFIG_REL_PATH,
+        miros_runtime.MIROS_CONFORMER_CONFIG_EXACT_BYTES,
+        miros_runtime.MIROS_CONFORMER_CONFIG_SHA256,
+        printer,
+        "MIROS Conformer 配置文件",
+    )
     weight_error = miros_runtime.get_miros_weight_identity_error(repo)
     if weight_error:
         raise RuntimeError(f"MIROS preparation failed: {weight_error}")

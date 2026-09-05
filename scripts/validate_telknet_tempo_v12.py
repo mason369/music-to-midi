@@ -1,4 +1,4 @@
-"""Replay the published TelkNet v10 real-song tempo acceptance table.
+"""Replay the reviewed TelkNet v12 real-song tempo regression set.
 
 The validator runs the pinned local Beat This final0 checkpoint four times per
 source by default, proves byte-identical raw timestamp arrays, applies this
@@ -27,7 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.beat_this_tracker import BeatThisTracker, analyze_beat_this_grid
-from src.core.telknet_beat_grid_v10 import normalize_beat_grid
+from src.core.telknet_beat_grid_v12 import normalize_beat_grid
 from src.core.telknet_tempo_map import tempo_map_max_phase_error
 from src.models.data_models import Config, TempoMode
 from src.utils.runtime_paths import get_ffmpeg_executable
@@ -99,7 +99,15 @@ SONGS = (
         0.3430360957242655,
     ),
     BenchmarkSong(
-        17, "July - 바람에 쓰는 편지", None, 87.010441, None, 1, 0, 0.04311079916237759, "july"
+        17,
+        "July - 바람에 쓰는 편지",
+        None,
+        87.010441,
+        None,
+        1,
+        0,
+        0.04311079916237759,
+        "july",
     ),
     BenchmarkSong(
         18,
@@ -112,9 +120,25 @@ SONGS = (
         0.05265789473685345,
     ),
     BenchmarkSong(
-        19, "Refrain - Aimer", "Refrain - Aimer.mp3", 78.102252, None, 1, 1, 0.23205731661599316
+        19,
+        "Refrain - Aimer",
+        "Refrain - Aimer.mp3",
+        78.102252,
+        None,
+        1,
+        1,
+        0.23205731661599316,
     ),
-    BenchmarkSong(20, "群青", "群青.mp3", 135.021212, None, 1, 10, 0.10829817158935384),
+    BenchmarkSong(
+        20,
+        "群青",
+        "群青.mp3",
+        135.021212,
+        None,
+        1,
+        10,
+        0.10829817158935384,
+    ),
     BenchmarkSong(
         21,
         "だから僕は音楽を辞めた",
@@ -126,7 +150,16 @@ SONGS = (
         0.05674567048384915,
         "telknet",
     ),
-    BenchmarkSong(22, "群青钢琴", "群青钢琴.mp3", 140.003118, None, 1, 4, 0.08640523424855928),
+    BenchmarkSong(
+        22,
+        "群青钢琴",
+        "群青钢琴.mp3",
+        140.003118,
+        None,
+        1,
+        4,
+        0.08640523424855928,
+    ),
     BenchmarkSong(
         23,
         "Moon Halo",
@@ -137,7 +170,16 @@ SONGS = (
         7,
         0.29206735664538996,
     ),
-    BenchmarkSong(24, "群青缩混", "群青缩混.mp3", 135.024465, None, 1, 26, 0.334581559262233),
+    BenchmarkSong(
+        24,
+        "群青缩混",
+        "群青缩混.mp3",
+        135.024465,
+        None,
+        1,
+        26,
+        0.334581559262233,
+    ),
 )
 
 

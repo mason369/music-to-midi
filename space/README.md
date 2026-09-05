@@ -71,7 +71,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 | MuScriptor Large / Medium / Small | [`MuScriptor/muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large)、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium)、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) 的固定 revision；推理源码固定为官方 [`v0.3.0`](https://github.com/muscriptor/muscriptor/tree/d73147e75e5b9b0c0a79ebe154587db4fd603e0c) | `SMART` 和逐轨多乐器转写；使用官方 5 秒窗口与 prelude forcing；Beat This 网格驱动 onset 校正、tempo 和小节相位，tempo 复制到每个音符轨；空选时自动识别，非空选择成为生成约束 | 三个权重仓库均 gated、CC BY-NC 4.0；逐项网页授权和具备读取权限的 `HF_TOKEN` 是运行条件。授权、节拍信息或运行时身份校验失败时任务终止 |
 | MuScriptor 播放资源 | [`MuScriptor/assets`](https://huggingface.co/MuScriptor/assets/tree/7755beb2da7cb1d3c663ff4a9ad0d0e99437f78f)；FluidSynth `2.5.6` | 把 MIDI 及其乐器分轨合成为可试听预览 | 资源仓库声明 MIT；FluidSynth 为 LGPL-2.1-or-later。FluidSynth 合成失败时返回错误 |
 | YourMT3+ 五个 checkpoint | [`mimbres/YourMT3`](https://huggingface.co/mimbres/YourMT3/tree/5e66c1ea173a8186e0d20432b841d3180cc015b5) @ `5e66c1ea173a8186e0d20432b841d3180cc015b5` | 默认多乐器路线及五个逐轨选择项 | 固定 Space revision 声明 Apache-2.0；启动时使用该 revision 与项目的受控兼容补丁 |
-| MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目仅保留完整归属与维护者责任记录，不声称额外许可 |
+| MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目保留完整归属与维护者责任记录；这些记录不构成上游许可授予 |
 | Leap XE vocals | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 vocals WAV | 上游未声明许可；完整边界见第三方声明 |
 | PolarFormer accompaniment | [`bgkb/bs_polarformer`](https://huggingface.co/bgkb/bs_polarformer/tree/9158719ee2173edd480a735764627526506fe4af) | `VOCAL_SPLIT` 的 accompaniment WAV | 上游模型卡声明 MIT |
 | BS-RoFormer SW Fixed | [`noblebarkrr/mvsepless_resources`](https://huggingface.co/noblebarkrr/mvsepless_resources/tree/370198fbb6997e3f5774778254698794e7b1267d) | `SIX_STEM_SPLIT` 的六条 WAV | 上游未声明许可；分离质量使用 SDR 类指标，与 MIDI F1 分开记录 |
@@ -90,12 +90,12 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 | 音源分离 | Leap XE 90-band 与 PolarFormer 生成 vocals、accompaniment 两条 WAV；`BS-Rofo-SW-Fixed.ckpt` 生成 bass、drums、guitar、piano、vocals、other 六条 WAV。 |
 | 逐轨 MIDI | 每条波形音轨都可试听、下载或添加本地音频。勾选“转 MIDI”、从 13 个模型中选择一个，再点击该行“开始转换”；一次只处理该音轨。 |
 | 钢琴模式 | 四个钢琴模式直接生成一个 MIDI；ByteDance Pedal 保留延音踏板 CC64。 |
-| BPM 与试听 | 默认自动检测唯一 BPM；也可跟随原曲速度变化，或手动设置 30–300 BPM。模型事件先按检测 BPM 映射到音乐 tick，再按工程 BPM 播放，不做量化、过滤或音符重建。 |
+| BPM 与试听 | 默认自动检测唯一 BPM；也可跟随原曲速度变化，或手动设置 30–300 BPM。模型事件先按检测 BPM 映射到音乐 tick，再按工程 BPM 播放。默认不量化；在结果编辑器点击“量化”后，按所选范围和网格调整音符。 |
 | 任务边界 | 每个请求的文件位于独立目录；过期、越界或空文件会使任务失败。主任务与逐轨任务按提交顺序使用同一 GPU 处理通道。 |
 
-## 与 TelkNet 公开工具的对齐边界
+## 人声与伴奏分离
 
-`VOCAL_SPLIT` 采用 TelkNet 公开网站展示的模型与输入输出契约：Leap XE 90-band 和 PolarFormer 都读取原混音，分别生成 vocals 与 accompaniment。核验时的公开网站还展示 YourMT3+ / MIROS、六声部逐 stem MIDI 和 TransKun V2 Aug，而网站链接的公开 GitHub `master` 尚未包含这些完整契约。核验范围不含 TelkNet 服务端私有源码，因此“对齐”只指公开的模型与输入输出行为，不覆盖代码、运行环境或结果文件的逐位一致性。
+`VOCAL_SPLIT` 使用 Leap XE 90-band 和 PolarFormer 分别从原混音生成 vocals 与 accompaniment。两条 WAV 可独立试听、下载，并在音轨工作台选择模型转为 MIDI。
 
 ## MuScriptor Large 公开评价
 
@@ -108,8 +108,8 @@ MuScriptor Small / Medium / Large 是三个独立选项。所选档位失败、�
 ## 输出行为
 
 - `SMART` 输出一个所选后端生成的 MIDI。
-- `VOCAL_SPLIT` 生成两条经过校验的 WAV；每条音轨的 MIDI 转换单独进行。
-- `SIX_STEM_SPLIT` 生成六条经过校验的 WAV；每条音轨的 MIDI 转换单独进行。
+- `VOCAL_SPLIT` 生成两条 WAV；每条音轨的 MIDI 转换单独进行。
+- `SIX_STEM_SPLIT` 生成六条 WAV；每条音轨的 MIDI 转换单独进行。
 - 分离完成后，用户可以对任意一条分离或新增音轨选择十三条路线之一，并点击该行“开始转换”生成一个独立 MIDI。未勾选、未选择模型或仅改变选项都不会转换。
 - 四个钢琴模式各直接输出一个固定后端 MIDI，不创建音轨面板。
 

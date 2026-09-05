@@ -15,17 +15,27 @@ MusicToMidi Windows Universal 便携包
 - MusicToMidi-WebBackend：Web 推理后端。
 - MusicToMidi-WebFrontend：可独立复制到局域网其他电脑的 Web 前端。
 
-App 与 WebBackend 的顶层 EXE 会自动选择运行环境：
+App、CLI 与 WebBackend 的顶层 EXE 会自动选择运行环境：
 
 - 检测到 NVIDIA GPU 时选择 CUDA。
 - 未检测到 NVIDIA、但检测到 Intel Arc GPU 时选择 XPU。
 - 同时存在 NVIDIA 与 Intel Arc 时固定优先 CUDA。
 - 可以用 MUSIC_TO_MIDI_ACCELERATOR=cuda 或 xpu 显式指定。
-- 选择后的运行环境若启动失败，会原样返回失败；不会改用另一个 GPU 或 CPU 掩盖问题。
+- 选择后的运行环境若启动失败，会原样返回失败；任务停止。
 
 CUDA 与 XPU 位于各自的 runtimes 子目录，原生 DLL 不会混装。模型、固定源码、SoundFont、FluidSynth 与 FFmpeg 在 NTFS/WIM 中通过硬链接复用，因此只占一份物理空间；单独复制 App 或 WebBackend 目录时仍会得到该角色所需的完整文件。
 
-三、局域网分开部署
+三、命令行与批处理
+
+- App 或 WebBackend 目录都提供 MusicToMidiCLI.exe。
+- 最简单用法：MusicToMidiCLI.exe D:\Audio\song.wav
+- 目录批处理：MusicToMidiCLI.exe batch D:\Audio --recursive -o D:\MidiOutput
+- 查看全部模式和参数：MusicToMidiCLI.exe convert --help
+- 查看 13 条逐轨路线：MusicToMidiCLI.exe routes
+- 分离模式只先输出 WAV；对选中的音轨显式运行 track-to-midi，不会自动转换全部 stem。
+- 每个输入使用独立输出目录和 SHA-256 清单；成功项只有在源文件、参数和全部产物校验一致时才断点跳过。任何失败都会显示根因并返回非零退出码。
+
+四、局域网分开部署
 
 - 在有 NVIDIA 或受验证 Intel Arc GPU 的电脑运行 MusicToMidi-WebBackend\MusicToMidiBackend.exe。
 - 其他电脑只需解压独立的 WebFrontend ZIP，运行 MusicToMidi-WebFrontend\MusicToMidiFrontend.exe，并把 backend_url 设置为 GPU 电脑的实际局域网地址。

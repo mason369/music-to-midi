@@ -43,6 +43,17 @@ TRANSKUN_CONF_SIZE = 782
 TRANSKUN_CONF_SHA256 = "d3d989214eb148230ee5df476d994dcde6af595904d3f968f1221d2e3bea5ac6"
 
 
+def _disable_inference_gradient_checkpointing(model) -> int:
+    """Disable TransKun's training-only recomputation path during inference."""
+
+    disabled = 0
+    for module in model.modules():
+        if bool(getattr(module, "useGradientCheckpoint", False)):
+            module.useGradientCheckpoint = False
+            disabled += 1
+    return disabled
+
+
 def _transkun_worker(
     audio_path: str,
     output_path: str,
@@ -76,6 +87,11 @@ def _transkun_worker(
             raise RuntimeError("TransKun checkpoint 缺少 state_dict")
         model.load_state_dict(state_dict, strict=True)
         model.eval()
+        disabled_checkpoint_modules = _disable_inference_gradient_checkpointing(model)
+        logger.debug(
+            "Disabled gradient checkpointing for %d TransKun inference modules",
+            disabled_checkpoint_modules,
+        )
         ensure_module_on_device(model, device, "TransKun model")
 
         fs, audio = readAudio(str(audio_path))
@@ -317,8 +333,7 @@ class TranskunTranscriber:
             return preferred
         if preferred != "cpu":
             raise RuntimeError(
-                "TransKun 当前仅支持 CPU、CUDA 或 Intel XPU，"
-                f"检测到不受支持的设备 {preferred}。"
+                "TransKun 当前仅支持 CPU、CUDA 或 Intel XPU，" f"检测到不受支持的设备 {preferred}。"
             )
         return "cpu"
 

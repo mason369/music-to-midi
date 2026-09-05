@@ -64,20 +64,22 @@ def test_project_bpm_contract_is_shared_by_desktop_space_and_colab():
     assert zh["main"]["tempo"]["label"] == "速度方案"
     assert en["main"]["tempo"]["label"] == "Tempo mode"
     for catalog in (zh, en):
-        assert "Beat This final0" in catalog["main"]["tempo"]["mode_tooltip"]
+        assert "BPM" in catalog["main"]["tempo"]["mode_tooltip"]
+        assert "Beat This final0" not in catalog["main"]["tempo"]["mode_tooltip"]
     assert web_zh["config.tempo_mode"] == "速度方案"
     assert web_en["config.tempo_mode"] == "Tempo mode"
     for catalog in (web_zh, web_en):
-        assert "Beat This final0" in catalog["config.tempo_help"]
+        assert "BPM" in catalog["config.tempo_help"]
+        assert "Beat This final0" not in catalog["config.tempo_help"]
     assert zh["main"]["tempo"]["fixed_auto"] == "自动检测唯一 BPM（推荐）"
     assert en["main"]["tempo"]["fixed_auto"] == "Auto-detect one BPM (recommended)"
     assert "30–300 BPM" in zh["main"]["tempo"]["custom_tooltip"]
-    assert "播放速度按手动 BPM ÷ 检测 BPM 变化" in zh["main"]["tempo"]["custom_tooltip"]
+    assert "提高 BPM 会加快" in zh["main"]["tempo"]["custom_tooltip"]
     assert (
-        "preserves the musical ticks established at the detected BPM"
+        "A higher BPM speeds up playback"
         in en["main"]["tempo"]["custom_tooltip"]
     )
-    assert "manual BPM ÷ detected BPM" in en["main"]["tempo"]["custom_tooltip"]
+    assert "shortening the duration" in en["main"]["tempo"]["custom_tooltip"]
 
 
 def test_space_and_colab_retain_original_mix_for_separated_track_tempo_analysis():
@@ -453,6 +455,7 @@ def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context()
 
 def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeypatch):
     from src.core import midi_tempo, muscriptor_result_assets
+    from src.models.data_models import BeatInfo
 
     playback_midi = tmp_path / "source-tempo-playback.mid"
     monkeypatch.setattr(
@@ -493,12 +496,14 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
     result = SimpleNamespace(
         midi_path=str(tmp_path / "result.mid"),
         selected_instruments=["acoustic_piano"],
-        beat_info=SimpleNamespace(
+        beat_info=BeatInfo(
             bpm=120.0,
             source_bpm=None,
             beat_times=[0.0, 0.5, 1.0],
             downbeats=[0.0, 1.0],
             time_signature=(3, 4),
+            fixed_tempo_reliable=False,
+            tempo_warning="Observed beat grid is uncertain",
         ),
     )
 
@@ -525,6 +530,8 @@ def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeyp
         assert state["downbeats"] == [0.25, 1.25]
         assert state["time_signature"] == (3, 4)
         assert state["repeat_tempo_per_note_track"] is True
+        assert state["fixed_tempo_reliable"] is False
+        assert state["tempo_warning"] == "Observed beat grid is uncertain"
         assert state["playback_audio_path"] == str(assets.original_wav)
         assert state["preview_api"] == "./api/render_edited_midi_preview"
         assert state["preview_token"] == "preview-token"

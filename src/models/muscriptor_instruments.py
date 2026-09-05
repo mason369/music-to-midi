@@ -144,6 +144,12 @@ _STEM_INSTRUMENT_HINTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("drum", "drums"), ("drums",)),
 )
 
+# XLANCE-MSR's tested stem exporter appends a two-digit track ordinal and an
+# eight-hex-character job id (for example ``guitar-04-01a0613f``). Strip only
+# that observed metadata shape; accepting arbitrary trailing words or numbers
+# would turn ordinary song titles into unintended hard inference constraints.
+_TESTED_STEM_EXPORT_METADATA = re.compile(r"_\d{2}_[0-9a-f]{8}$")
+
 
 def infer_muscriptor_instruments_from_stem_name(value: str | Path | None) -> list[str]:
     """Infer a visible hard constraint from an unambiguous standard stem name.
@@ -160,14 +166,15 @@ def infer_muscriptor_instruments_from_stem_name(value: str | Path | None) -> lis
     if not normalized:
         return []
 
+    candidate = _TESTED_STEM_EXPORT_METADATA.sub("", normalized)
     canonical = sorted(MUSCRIPTOR_INSTRUMENTS, key=len, reverse=True)
     for instrument in canonical:
-        if normalized == instrument or normalized.endswith(f"_{instrument}"):
+        if candidate == instrument or candidate.endswith(f"_{instrument}"):
             return [instrument]
 
-    final_token = normalized.rsplit("_", 1)[-1]
+    final_token = candidate.rsplit("_", 1)[-1]
     for aliases, instruments in _STEM_INSTRUMENT_HINTS:
-        if normalized in aliases or final_token in aliases:
+        if candidate in aliases or final_token in aliases:
             return list(instruments)
     return []
 

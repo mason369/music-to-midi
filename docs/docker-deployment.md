@@ -38,6 +38,28 @@ http://127.0.0.1:7860
 
 `setup` 会拉取固定版本镜像、检查 GPU 运行时、准备所选模型、启动服务并完成就绪验收。错误会以非零状态返回，同时保留相关诊断信息。
 
+## 容器内原生 CLI 批处理
+
+后端镜像也包含与便携包相同的原生 CLI。推荐用一次性 Compose 容器挂载输入和输出目录；它与常驻 Web 后端通过共享模型卷中的跨进程 GPU 锁协调，不会并发占用同一块 GPU：
+
+```bash
+docker compose run --rm \
+  -v /absolute/audio:/input:ro \
+  -v /absolute/midi:/output \
+  backend cli batch /input --recursive -o /output
+```
+
+Windows Docker Desktop 使用 PowerShell 时，将两个宿主路径改为绝对 Windows 路径：
+
+```powershell
+docker compose run --rm `
+  -v "D:\Audio:/input:ro" `
+  -v "D:\MidiOutput:/output" `
+  backend cli batch /input --recursive -o /output
+```
+
+容器入口会先严格验证已启用模型，再执行 CLI。输入、模型或运行时错误会非零退出，不会改用 CPU 或其它模型。`backend cli routes --json` 可查看 13 条显式逐轨路线。
+
 ## 运行环境
 
 | 项目 | 支持范围 |

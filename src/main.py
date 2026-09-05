@@ -23,6 +23,13 @@ def _is_web_api_runtime() -> bool:
     )
 
 
+def _is_cli_runtime() -> bool:
+    return "--cli" in sys.argv or (
+        getattr(sys, "frozen", False)
+        and Path(sys.executable).stem.casefold() in {"musictomidicli", "musictomidiclixpu"}
+    )
+
+
 _IS_WEB_API_RUNTIME = _is_web_api_runtime()
 
 if __name__ == "__main__":
@@ -479,6 +486,11 @@ def _run_miros_worker(argv=None) -> int:
 def main():
     """主入口函数"""
     multiprocessing.freeze_support()
+    if "--self-test-gui-conversion" in sys.argv:
+        from src.gui_conversion_probe import run_gui_conversion_probe
+
+        probe_index = sys.argv.index("--self-test-gui-conversion")
+        sys.exit(run_gui_conversion_probe(sys.argv[probe_index + 1 :]))
     from src.model_profile_runtime_probe import (
         MODEL_PROFILE_RUNTIME_PROBE_SWITCH,
         run_model_profile_runtime_probe,
@@ -515,6 +527,14 @@ def main():
             os._exit(exit_code)
             return
         sys.exit(exit_code)
+    if _is_cli_runtime():
+        cli_arguments = list(sys.argv[1:])
+        if "--cli" in cli_arguments:
+            cli_arguments.remove("--cli")
+        setup_chinese_environment()
+        from src.cli.app import main as run_cli
+
+        sys.exit(run_cli(cli_arguments))
     if _is_web_api_runtime():
         backend_arguments = list(sys.argv[1:])
         if "--web-api" in backend_arguments:
@@ -532,7 +552,7 @@ def main():
         print(
             f"{t('cli.usage')}: python -m src.main [--self-test] [--self-test-no-load] "
             "[--self-test-miros] [--self-test-gui-package] "
-            "[--self-test-gui-runtime] [--web-api ...]\n"
+            "[--self-test-gui-runtime] [--cli ...] [--web-api ...]\n"
             "\n"
             f"{t('cli.options')}:\n"
             f"  -h, --help          {t('cli.help')}\n"
@@ -542,6 +562,7 @@ def main():
             "  --self-test-gui-package  Validate packaged Qt + accelerator providers "
             "without device execution\n"
             "  --self-test-gui-runtime  Validate Qt + CUDA/OpenVINO accelerator runtime\n"
+            "  --cli              Run the native file and batch conversion CLI\n"
             "  --web-api           Run the standalone inference HTTP service\n"
             f"  --miros-worker      {t('cli.miros_worker')}"
         )
@@ -576,6 +597,10 @@ def main():
     logger = setup_logger(log_dir=str(get_logs_dir()), level=logging.DEBUG)
 
     try:
+        from src.utils.crash_diagnostics import install_native_fault_log
+
+        fault_log = install_native_fault_log(get_logs_dir())
+        logger.info("原生故障调用栈日志: %s", fault_log)
         _prepare_torch_runtime_before_pyqt()
     except Exception:
         logger.critical(

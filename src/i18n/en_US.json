@@ -63,6 +63,11 @@
     "settings": "Settings"
   },
   "main": {
+    "workspace": {
+      "setup": "Setup",
+      "result": "Results"
+    },
+    "tempo_evidence_notice": "A fixed beat grid could not be confirmed; the detected BPM is an estimate. For isolated stems, split the original mix and convert each track to share the original tempo.",
     "dropzone": {
       "title": "Drop audio file here, or click to select",
       "subtitle": "Supports MP3, WAV, FLAC, OGG, M4A",
@@ -71,7 +76,7 @@
     "mode": {
       "label": "Processing Mode",
       "smart": "Multi-Instrument MIDI",
-      "smart_tooltip": "Full-mix multi-instrument MIDI with YourMT3+, MIROS, or MuScriptor-large",
+      "smart_tooltip": "Convert a full mix to multi-instrument MIDI with YourMT3+, MIROS, or MuScriptor",
       "vocal_split": "Vocal/Accompaniment Split (Per-Track MIDI)",
       "vocal_split_tooltip": "Leap XE extracts vocals and PolarFormer extracts accompaniment into two WAV files; each waveform can then use a multi-instrument or piano model",
       "six_stem_split": "Six-Stem Split (Per-Track MIDI)",
@@ -129,20 +134,20 @@
       "muscriptor_midi": "MuScriptor",
       "muscriptor_tooltip": "Large, Medium, and Small are available with automatic detection or output limited to selected instruments.",
       "muscriptor_model_label": "MuScriptor model size",
-      "muscriptor_processing_chain_label": "MuScriptor segment processing",
-      "muscriptor_processing_chain_tooltip": "This option is independent of the tempo mode. The official path keeps MuScriptor v0.3.0 segment behavior; the continuity-fix path joins sustained notes across segments to reduce boundary cuts or overlaps.",
+      "muscriptor_processing_chain_label": "MuScriptor segment handling",
+      "muscriptor_processing_chain_tooltip": "Standard uses the model’s original segment handling. Sustain across segments joins sustained notes across segment boundaries. Tempo is set separately.",
       "muscriptor_processing_chains": {
-        "telknet": "Segment-boundary continuity fix path",
-        "official": "Official processing path (default)"
+        "telknet": "Sustain across segments",
+        "official": "Standard (default)"
       },
       "muscriptor_models": {
         "large": "Large (1.4B, quality first)",
         "medium": "Medium (307M, balanced)",
-        "small": "Small (103M, fastest/lowest VRAM)"
+        "small": "Small (103M, lightweight)"
       },
       "muscriptor_general_hint": "An empty instrument list enables automatic detection; a selection limits the output to those instruments.",
       "muscriptor_instruments_title": "What instruments are there in this track?",
-      "muscriptor_instruments_desc": "Standard stem names prefill removable candidates. An empty list enables auto-detection; a selection hard-limits the output to those instruments.",
+      "muscriptor_instruments_desc": "Leave empty for automatic detection, or select the instruments to include. Suggestions based on the filename can be changed.",
       "muscriptor_instruments_clear": "Clear",
       "muscriptor_instruments_placeholder": "Add an instrument…",
       "yourmt3_model_label": "YourMT3+ Model Mode",
@@ -155,8 +160,8 @@
       "adaptive": "Follow source tempo changes",
       "fixed_auto": "Auto-detect one BPM (recommended)",
       "fixed_manual": "Set one BPM manually",
-      "mode_tooltip": "Beat evidence is detected by Beat This final0; tempo publication is controlled by the selected mode. Follow source: write a phase-bounded Tempo Map, prefer bar-aligned changes when meter evidence is reliable, and reject beat jitter plus half/double-time errors. Auto: write the one detected global BPM. Manual: keep musical ticks from the same beat grid and use the selected output BPM.",
-      "custom_tooltip": "Manual BPM accepts 30–300 BPM. The MIDI uses that one tempo and preserves the musical ticks established at the detected BPM, so playback speed changes by manual BPM ÷ detected BPM; notes are not quantized, filtered, or reconstructed."
+      "mode_tooltip": "Auto uses the detected constant BPM. Follow source uses detected tempo changes. Manual uses the BPM you set.",
+      "custom_tooltip": "Set a BPM from 30 to 300. A higher BPM speeds up playback and the exported MIDI, shortening the duration."
     },
     "tracks": {
       "title": "Processing Settings"
@@ -192,6 +197,8 @@
     "processing": "Processing...",
     "cancelled": "Processing cancelled",
     "cancelling": "Cancelling; waiting for the current inference to stop safely…",
+    "closing": "Closing; waiting for background tasks to finish…",
+    "device_detection_failed": "Device detection failed",
     "complete": "Complete",
     "error": "Error",
     "gpu": "GPU",
@@ -255,7 +262,7 @@
       "openMergedFile": "Open Merged MIDI",
       "audio_tracks": {
         "title": "Multitrack Audio Timeline",
-        "subtitle": "View and audition track waveforms, add local audio, and convert tracks independently. The mouse wheel scrolls the page; the controls adjust models, zoom, time, and volume.",
+        "subtitle": "Listen to and adjust tracks, add audio, or convert individual tracks to MIDI.",
         "play": "Play All",
         "pause": "Pause All",
         "replay": "Replay",
@@ -337,10 +344,10 @@
           "models": {
             "yourmt3": "YourMT3+ (Multi-Instrument)",
             "miros": "MIROS (MusicFM) (Multi-Instrument)",
-            "muscriptor": "MuScriptor-large (Multi-Instrument, hard constraints)",
+            "muscriptor": "MuScriptor Large (Multi-Instrument)",
             "muscriptor_large": "MuScriptor Large (Multi-Instrument, quality first)",
             "muscriptor_medium": "MuScriptor Medium (Multi-Instrument, balanced)",
-            "muscriptor_small": "MuScriptor Small (Multi-Instrument, fastest/lowest VRAM)",
+            "muscriptor_small": "MuScriptor Small (Multi-Instrument, lightweight)",
             "piano_transkun": "TransKun V2 (Piano)",
             "piano_transkun_v2_aug": "TransKun V2 Aug (Piano)",
             "piano_aria_amt": "Aria-AMT (Piano)",
@@ -427,7 +434,7 @@
       "accompaniment_midi": "Accompaniment MIDI",
       "vocal_midi": "Vocal MIDI",
       "midi_file": "MIDI file",
-      "output_retention": "Downloads enter expiration cleanup after {hours:g} hours; failed jobs are removed immediately and this instance's results are removed on normal process exit."
+      "output_retention": "Files are kept for about {hours:g} hours. Download them promptly: service shutdown may remove them earlier. Failed-job outputs are deleted immediately."
     }
   },
   "progress": {
@@ -437,7 +444,7 @@
     "running_beat_this": "Detecting beats and downbeats with Beat This...",
     "validating_beat_grid": "Refining the beat grid...",
     "beat_this_complete": "Beat This detection complete: {bpm} BPM",
-    "custom_bpm": "Manual single BPM set to {bpm}; exported MIDI preserves detected-BPM musical ticks and changes playback speed",
+    "custom_bpm": "Project BPM set to {bpm}",
     "finding_beats": "Finding beat positions...",
     "detecting_downbeats": "Detecting downbeats...",
     "loading_aria_amt": "Loading Aria-AMT...",
@@ -465,10 +472,10 @@
     "found_instruments_notes": "Found {instrument_count} instruments, {note_count} notes",
     "processing_results": "Processing results...",
     "found_notes": "Found {note_count} notes",
-    "preparing_precise_transcription": "Preparing precise transcription...",
+    "preparing_precise_transcription": "Preparing transcription…",
     "preparing_best_transcription": "Preparing YourMT3+ transcription...",
-    "parsing_precise_instruments": "Parsing precise instruments...",
-    "found_precise_instruments_notes": "Found {instrument_count} precise instruments, {note_count} notes",
+    "parsing_precise_instruments": "Identifying instruments…",
+    "found_precise_instruments_notes": "Detected {instrument_count} instruments and {note_count} notes",
     "found_instruments_drums": "Found {instrument_count} instruments + {drum_count} drum pitches",
     "preparing_miros": "Preparing MIROS...",
     "running_miros": "Transcribing with MIROS...",
@@ -521,9 +528,16 @@
     "complete_elapsed": "Complete, elapsed {seconds} seconds"
   },
   "muscriptor_result": {
-    "playback_progress_tooltip": "MIDI-master playback progress; dragging seeks MIDI and source audio together",
-    "export_bpm_tooltip": "Project BPM is written to the Standard MIDI File conductor track with the detected meter. Events retain the detected-tempo musical ticks, so file duration changes by project BPM / detected BPM while notes remain unquantized. Enable tempo-map import in a DAW. MuseScore 3/4 may re-beat-track unquantized human performance and replace the displayed notation tempo; that value is generated by MuseScore's importer and does not mean the file tempo was ignored by compliant MIDI hosts",
-    "playback_speed_label": "Playback speed",
+    "playback_progress_tooltip": "Playback position; drag to seek both MIDI and source audio",
+    "export_bpm_tooltip": "Set the BPM for playback and MIDI export. A higher BPM speeds up playback and shortens the duration. Enable tempo-map import in your DAW.",
+    "tempo_unset": "BPM not set · awaiting detection",
+    "tempo_detected": "Detected BPM {bpm}",
+    "project_bpm": "Project BPM",
+    "project_tempo": "Project tempo",
+    "editor_commands": "Note editing",
+    "editor_input_invalid": "Invalid input; change not applied: {error}",
+    "editor_properties": "Note properties & view",
+    "playback_speed_label": "Project rate",
     "playback_speed_tooltip": "The playback rate represented by project BPM / detected BPM. Changing this rate updates project BPM and affects linked source/MIDI audition and the downloaded MIDI; note content remains unchanged",
     "streaming": "MuScriptor is streaming notes into the piano roll…",
     "progress_waiting": "Waiting for the first transcription chunk…",
@@ -556,7 +570,7 @@
     "instruments": "Instruments",
     "not_detected": "not detected",
     "solo": "Solo (mute every other instrument)",
-    "mute": "Mute on the MIDI synthesis bus",
+    "mute": "Mute this instrument",
     "download": "Download",
     "midi_saved": "MIDI saved at {bpm} BPM: {path}",
     "edited_midi_saved": "Edited MIDI saved at {bpm} BPM: {path}",
@@ -585,11 +599,11 @@
     "editor_view_zoom": "View zoom",
     "editor_view_zoom_tooltip": "Resize notes horizontally in the piano roll. 1× is the default size; Ctrl/Alt + wheel also zooms.",
     "editor_summary": "{count} notes · {changes} edit steps",
-    "editor_audio_notice": "MIDI notes changed. Preparing a SoundFont audition that exactly matches the current edit.",
-    "editor_audio_rendering": "Rendering the edited SoundFont audition; stale audio playback is disabled.",
+    "editor_audio_notice": "Notes changed. Updating playback audio.",
+    "editor_audio_rendering": "Updating playback audio. Playback is temporarily unavailable.",
     "editor_audio_rendering_progress": "Rendering the edited SoundFont audition: {progress}% · {message}",
     "editor_audio_ready": "The edited MIDI and SoundFont audition are synchronized and ready to play.",
-    "editor_audio_failed": "Edited SoundFont rendering failed; stale audio playback remains disabled: {error}",
+    "editor_audio_failed": "Playback audio could not be updated and remains unavailable: {error}",
     "editor_export_failed": "Edited MIDI export failed: {error}",
     "export_edited_midi": "Export editable MIDI",
     "download_midi": "MIDI file",
@@ -604,28 +618,50 @@
     "audio_export_pcm24_48000": "24-bit / 48 kHz (recommended)",
     "audio_export_pcm16_44100": "16-bit / 44.1 kHz (compatible)",
     "audio_export_start": "Render and download WAV",
-    "audio_export_rendering": "Rendering and verifying a {bit_depth}-bit / {sample_rate} Hz WAV…",
-    "audio_export_saved": "Verified {bit_depth}-bit / {sample_rate} Hz WAV saved: {path}",
+    "audio_export_rendering": "Rendering a {bit_depth}-bit / {sample_rate} Hz WAV…",
+    "audio_export_saved": "Saved {bit_depth}-bit / {sample_rate} Hz WAV: {path}",
     "audio_export_failed": "Transcription WAV export failed: {error}",
-    "audio_export_cancelled": "Transcription WAV export was cancelled; no incomplete file was published.",
+    "audio_export_cancelled": "WAV export cancelled",
     "download_stems": "Download per-instrument WAVs (ZIP)",
     "stem_audio_export_start": "Render and download instrument WAVs",
-    "stem_audio_export_rendering": "Rendering, aligning, and verifying per-instrument WAVs at {bit_depth}-bit / {sample_rate} Hz…",
-    "stem_audio_export_saved": "{count} aligned instrument WAVs passed verification ({bit_depth}-bit / {sample_rate} Hz): {path}",
+    "stem_audio_export_rendering": "Rendering instrument WAVs at {bit_depth}-bit / {sample_rate} Hz…",
+    "stem_audio_export_saved": "Saved {count} instrument WAVs ({bit_depth}-bit / {sample_rate} Hz): {path}",
     "stem_audio_export_failed": "Per-instrument WAV export failed: {error}",
-    "stem_audio_export_cancelled": "Per-instrument WAV export was cancelled; no incomplete archive was published.",
+    "stem_audio_export_cancelled": "Instrument WAV export cancelled",
     "download_stereo": "Original left + MIDI right WAV",
     "another": "Transcribe another",
     "linked_source": "MIDI detail · Source audio: {track} · Model: {backend}",
     "close_detail": "Close MIDI detail",
-    "zoom_help": "Ctrl/Alt + wheel to zoom; Shift + wheel to scroll horizontally"
+    "zoom_help": "Ctrl/Alt + wheel to zoom; Shift + wheel to scroll horizontally",
+    "errors": {
+      "audio_settings": "The WAV export settings are invalid.",
+      "quantize_grid": "The quantization grid is invalid.",
+      "quantize_scope": "The quantization scope is invalid.",
+      "meter": "The MIDI time signature is invalid.",
+      "beats": "The beat data is invalid; beat lines cannot be displayed.",
+      "bpm": "The BPM is invalid. Check the tempo settings.",
+      "midi": "The MIDI data is invalid or incomplete.",
+      "notes": "The MIDI note data is invalid.",
+      "verification": "MIDI file validation failed.",
+      "unsupported": "This MIDI data type is not supported.",
+      "preview": "Playback audio has not finished loading.",
+      "render_service": "The playback service is unavailable; audio cannot be updated.",
+      "export_service": "The export service is unavailable.",
+      "sheet_service": "The sheet-music service is unavailable.",
+      "response": "The service did not return a valid export result.",
+      "zoom": "The zoom value is invalid.",
+      "velocity": "The note velocity is invalid.",
+      "http": "The audio or result file could not be loaded."
+    },
+    "error_details": "Diagnostic details: {error}",
+    "open_failed": "The MIDI result could not be opened."
   },
   "transcription_result": {
     "streaming": "{backend} is generating playable MIDI chunks…",
     "chunks": "{backend} chunk {completed}/{total}",
     "manual_title": "{track} · {backend}",
     "failed": "Transcription failed: {error}",
-    "cancelled": "Transcription was cancelled; incomplete chunks were not published as MIDI"
+    "cancelled": "Transcription cancelled; no complete MIDI was generated"
   },
   "theme": {
     "light": "Light",

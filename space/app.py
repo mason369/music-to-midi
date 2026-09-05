@@ -1017,6 +1017,8 @@ def _normalize_midi_result_state(
         "duration": duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "fixed_tempo_reliable": raw_state.get("fixed_tempo_reliable"),
+        "tempo_warning": raw_state.get("tempo_warning"),
         "time_signature": time_signature,
         "beat_times": beat_times,
         "downbeats": downbeats,
@@ -1284,6 +1286,8 @@ def _build_midi_result_state(
         "duration": assets.duration,
         "reference_bpm": reference_bpm,
         "target_bpm": target_bpm,
+        "fixed_tempo_reliable": result.beat_info.fixed_tempo_reliable,
+        "tempo_warning": result.beat_info.tempo_warning,
         "time_signature": time_signature,
         "beat_times": (
             [float(value) + bar_offset_seconds for value in result.beat_info.beat_times]
@@ -1397,6 +1401,7 @@ def ensure_miros_weights():
 
 def ensure_muscriptor_runtime():
     """Install and strictly verify the released MuScriptor v0.3.0 source."""
+    from src.utils.subprocess_utils import hidden_subprocess_kwargs
     from src.core.muscriptor_transcriber import (
         MUSCRIPTOR_SOURCE_COMMIT,
         MUSCRIPTOR_SOURCE_REQUIREMENT,
@@ -1424,6 +1429,7 @@ def ensure_muscriptor_runtime():
         stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
+        **hidden_subprocess_kwargs(),
         errors="replace",
     )
     if completed.stdout:
@@ -1475,6 +1481,7 @@ def _aria_amt_runtime_available():
 
 def ensure_aria_amt_runtime():
     """Install the pinned Aria-AMT code without letting it replace Space PyTorch."""
+    from src.utils.subprocess_utils import hidden_subprocess_kwargs
     from src.core.aria_amt_transcriber import get_aria_amt_runtime_unavailable_reason
 
     if _aria_amt_runtime_available():
@@ -1503,6 +1510,7 @@ def ensure_aria_amt_runtime():
         stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
+        **hidden_subprocess_kwargs(),
         errors="replace",
     )
     if completed.stdout:
@@ -3143,88 +3151,94 @@ with gr.Blocks(
             f"<p>{st('space.app.subtitle')}</p></div></div>"
         )
 
-    gr.Markdown(
-        f"**{st('space.ui.audio_section')}**",
-        elem_classes="section-title",
-    )
-    audio_input = gr.Audio(
-        label=st("space.ui.audio_input"),
-        type="filepath",
-        sources=["upload"],
-        editable=False,
-        elem_classes="upload-zone",
-    )
-    gr.Markdown(f"<small style='color:#6a7a8a'>{st('space.ui.audio_hint')}</small>")
+    workspace_pages = gr.Tabs(selected="setup", elem_id="workspace-pages")
+    with workspace_pages:
+        workspace_setup = gr.Tab(st("main.workspace.setup"), id="setup", render_children=True)
+        workspace_result = gr.Tab(st("main.workspace.result"), id="result", render_children=True)
 
-    gr.Markdown(
-        f"**{st('space.ui.track_section')}**",
-        elem_classes="section-title",
-    )
-    with gr.Group(elem_classes="settings-panel"):
-        mode_radio = gr.Radio(
-            choices=MODE_CHOICES,
-            value=ProcessingMode.SMART.value,
-            label=st("space.ui.mode_label"),
-        )
-        mode_info = gr.Markdown(
-            update_mode_info(ProcessingMode.SMART.value),
-            elem_classes="mode-info",
-        )
-        transcription_backend = gr.Radio(
-            choices=BACKEND_CHOICES,
-            value=MultiInstrumentModel.YOURMT3.value,
-            label=st("main.engine.active_label"),
-            visible=True,
-        )
-        yourmt3_model = gr.Dropdown(
-            choices=YOURMT3_MODEL_CHOICES,
-            value=YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
-            label=st("main.engine.yourmt3_model_label"),
-            visible=True,
-        )
-        muscriptor_model = gr.Dropdown(
-            choices=MUSCRIPTOR_MODEL_CHOICES,
-            value=MuscriptorModel.LARGE.value,
-            label=st("main.engine.muscriptor_model_label"),
-            visible=False,
-        )
-        muscriptor_instruments = gr.Dropdown(
-            choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
-            value=[],
-            multiselect=True,
-            filterable=True,
-            label=st("main.engine.muscriptor_instruments_title"),
-            info=st("main.engine.muscriptor_instruments_desc"),
-            visible=False,
-            elem_classes=["muscriptor-instrument-selector"],
-        )
-        muscriptor_processing_chain = gr.Radio(
-            choices=MUSCRIPTOR_PROCESSING_CHAIN_CHOICES,
-            value=MuscriptorProcessingChain.OFFICIAL.value,
-            label=st("main.engine.muscriptor_processing_chain_label"),
-            info=st("main.engine.muscriptor_processing_chain_tooltip"),
-            visible=False,
-        )
-        tempo_mode = gr.Radio(
-            choices=TEMPO_MODE_CHOICES,
-            value=TempoMode.FIXED_AUTO.value,
-            label=st("main.tempo.label"),
-            info=st("main.tempo.mode_tooltip"),
-        )
-        custom_bpm = gr.Number(
-            value=120.0,
-            minimum=MIN_TEMPO_BPM,
-            maximum=MAX_TEMPO_BPM,
-            step=0.1,
-            precision=1,
-            label=st("main.tempo.fixed_manual"),
-            info=st("main.tempo.custom_tooltip"),
-            visible=False,
-        )
+    with workspace_setup:
         gr.Markdown(
-            f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
-            elem_classes="device-badge",
+            f"**{st('space.ui.audio_section')}**",
+            elem_classes="section-title",
         )
+        audio_input = gr.Audio(
+            label=st("space.ui.audio_input"),
+            type="filepath",
+            sources=["upload"],
+            editable=False,
+            elem_classes="upload-zone",
+        )
+        gr.Markdown(f"<small style='color:#6a7a8a'>{st('space.ui.audio_hint')}</small>")
+
+        gr.Markdown(
+            f"**{st('space.ui.track_section')}**",
+            elem_classes="section-title",
+        )
+        with gr.Group(elem_classes="settings-panel"):
+            mode_radio = gr.Radio(
+                choices=MODE_CHOICES,
+                value=ProcessingMode.SMART.value,
+                label=st("space.ui.mode_label"),
+            )
+            mode_info = gr.Markdown(
+                update_mode_info(ProcessingMode.SMART.value),
+                elem_classes="mode-info",
+            )
+            transcription_backend = gr.Radio(
+                choices=BACKEND_CHOICES,
+                value=MultiInstrumentModel.YOURMT3.value,
+                label=st("main.engine.active_label"),
+                visible=True,
+            )
+            yourmt3_model = gr.Dropdown(
+                choices=YOURMT3_MODEL_CHOICES,
+                value=YourMT3Model.YPTF_MOE_MULTI_NOPS.value,
+                label=st("main.engine.yourmt3_model_label"),
+                visible=True,
+            )
+            muscriptor_model = gr.Dropdown(
+                choices=MUSCRIPTOR_MODEL_CHOICES,
+                value=MuscriptorModel.LARGE.value,
+                label=st("main.engine.muscriptor_model_label"),
+                visible=False,
+            )
+            muscriptor_instruments = gr.Dropdown(
+                choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
+                value=[],
+                multiselect=True,
+                filterable=True,
+                label=st("main.engine.muscriptor_instruments_title"),
+                info=st("main.engine.muscriptor_instruments_desc"),
+                visible=False,
+                elem_classes=["muscriptor-instrument-selector"],
+            )
+            muscriptor_processing_chain = gr.Radio(
+                choices=MUSCRIPTOR_PROCESSING_CHAIN_CHOICES,
+                value=MuscriptorProcessingChain.OFFICIAL.value,
+                label=st("main.engine.muscriptor_processing_chain_label"),
+                info=st("main.engine.muscriptor_processing_chain_tooltip"),
+                visible=False,
+            )
+            tempo_mode = gr.Radio(
+                choices=TEMPO_MODE_CHOICES,
+                value=TempoMode.FIXED_AUTO.value,
+                label=st("main.tempo.label"),
+                info=st("main.tempo.mode_tooltip"),
+            )
+            custom_bpm = gr.Number(
+                value=120.0,
+                minimum=MIN_TEMPO_BPM,
+                maximum=MAX_TEMPO_BPM,
+                step=0.1,
+                precision=1,
+                label=st("main.tempo.fixed_manual"),
+                info=st("main.tempo.custom_tooltip"),
+                visible=False,
+            )
+            gr.Markdown(
+                f"{st('space.ui.device')}: **{DEVICE_LABEL}**{ZERO_GPU_NOTE}",
+                elem_classes="device-badge",
+            )
 
     with gr.Row(elem_classes="action-row"):
         convert_btn = gr.Button(
@@ -3242,14 +3256,15 @@ with gr.Blocks(
         )
         _stop_api_btn = gr.Button(visible=False)
 
-    gr.Markdown(
-        f"**{st('main.progress.title')}**",
-        elem_classes="section-title",
-    )
-    progress_html = gr.HTML(
-        value=_progress_panel_html(ProcessingMode.SMART.value, None, 0.0, ""),
-        elem_classes="progress-panel",
-    )
+    with workspace_result:
+        gr.Markdown(
+            f"**{st('main.progress.title')}**",
+            elem_classes="section-title",
+        )
+        progress_html = gr.HTML(
+            value=_progress_panel_html(ProcessingMode.SMART.value, None, 0.0, ""),
+            elem_classes="progress-panel",
+        )
 
     mode_radio.change(
         fn=update_mode_controls,
@@ -3295,298 +3310,308 @@ with gr.Blocks(
         queue=False,
     )
 
-    gr.Markdown(
-        f"**{st('space.ui.result_section')}**",
-        elem_classes="section-title",
-    )
-    status_output = gr.Textbox(
-        label=st("space.ui.status_label"),
-        interactive=False,
-        lines=7,
-        placeholder=st("space.ui.status_placeholder"),
-        elem_classes="result-box",
-    )
+    with workspace_result:
+        gr.Markdown(
+            f"**{st('space.ui.result_section')}**",
+            elem_classes="section-title",
+        )
+        status_output = gr.Textbox(
+            label=st("space.ui.status_label"),
+            interactive=False,
+            lines=7,
+            placeholder=st("space.ui.status_placeholder"),
+            elem_classes="result-box",
+        )
 
-    gr.Markdown(
-        f"**{st('space.ui.download_section')}**",
-        elem_classes="section-title",
-    )
-    file_output = gr.File(
-        label=st("space.ui.download_label"),
-        file_count="multiple",
-    )
+        gr.Markdown(
+            f"**{st('space.ui.download_section')}**",
+            elem_classes="section-title",
+        )
+        file_output = gr.File(
+            label=st("space.ui.download_label"),
+            file_count="multiple",
+        )
 
-    gr.Markdown(
-        f"**{st('space.ui.logs_section')}**",
-        elem_classes="section-title",
-    )
-    log_output = gr.Textbox(
-        label=st("space.ui.logs_label"),
-        interactive=False,
-        lines=12,
-        max_lines=20,
-        placeholder=st("space.ui.logs_placeholder"),
-        elem_classes="log-box",
-    )
+        gr.Markdown(
+            f"**{st('space.ui.logs_section')}**",
+            elem_classes="section-title",
+        )
+        log_output = gr.Textbox(
+            label=st("space.ui.logs_label"),
+            interactive=False,
+            lines=12,
+            max_lines=20,
+            placeholder=st("space.ui.logs_placeholder"),
+            elem_classes="log-box",
+        )
 
-    @gr.render(inputs=[track_state, mode_radio, render_revision])
-    def render_track_workbench(current_state, selected_mode, _render_revision):
-        if not current_state:
-            return
-        if current_state.get("kind") in {"midi_result", "muscriptor_result"}:
-            if selected_mode in SPLIT_MODE_IDS:
+        @gr.render(inputs=[track_state, mode_radio, render_revision])
+        def render_track_workbench(current_state, selected_mode, _render_revision):
+            if not current_state:
                 return
+            if current_state.get("kind") in {"midi_result", "muscriptor_result"}:
+                if selected_mode in SPLIT_MODE_IDS:
+                    return
+                with gr.Group(elem_classes="track-workbench"):
+                    gr.Markdown(f"### {current_state.get('backend_label', MODE_LABELS[selected_mode])}")
+                    gr.HTML(
+                        build_muscriptor_result_html(
+                            current_state,
+                            st,
+                            SPACE_LANGUAGE,
+                        ),
+                        # A keyed component preserves its value when an @gr.render
+                        # tree is rebuilt. The resolved request-owned MIDI path
+                        # gives each real result a distinct identity while staying
+                        # stable for rerenders of that same result.
+                        key=(
+                            "muscriptor-result-workbench::"
+                            f"{Path(str(current_state['midi_path'])).resolve()}"
+                        ),
+                    )
+                    another = gr.Button(
+                        st("muscriptor_result.another"),
+                        key="muscriptor-transcribe-another",
+                    )
+                    another_event = another.click(
+                        fn=_clear_result_state,
+                        inputs=None,
+                        outputs=[track_state],
+                        api_visibility="private",
+                        queue=False,
+                    )
+                    another.click(
+                        fn=lambda: gr.Tabs(selected="setup"), inputs=None,
+                        outputs=[workspace_pages], queue=False, api_visibility="private",
+                    )
+                    another_event.then(
+                        fn=_next_render_revision,
+                        inputs=[render_revision],
+                        outputs=[render_revision],
+                        api_visibility="private",
+                        queue=False,
+                    )
+                return
+            if selected_mode not in SPLIT_MODE_IDS:
+                return
+            state = _normalize_track_state(current_state)
+            if state["mode"] != selected_mode:
+                return
+
             with gr.Group(elem_classes="track-workbench"):
-                gr.Markdown(f"### {current_state.get('backend_label', MODE_LABELS[selected_mode])}")
-                gr.HTML(
-                    build_muscriptor_result_html(
-                        current_state,
-                        st,
-                        SPACE_LANGUAGE,
-                    ),
-                    # A keyed component preserves its value when an @gr.render
-                    # tree is rebuilt. The resolved request-owned MIDI path
-                    # gives each real result a distinct identity while staying
-                    # stable for rerenders of that same result.
-                    key=(
-                        "muscriptor-result-workbench::"
-                        f"{Path(str(current_state['midi_path'])).resolve()}"
-                    ),
+                gr.Markdown(
+                    f"## {st('dialogs.complete.audio_tracks.title')}\n\n"
+                    f"{st('dialogs.complete.audio_tracks.subtitle')}"
                 )
-                another = gr.Button(
-                    st("muscriptor_result.another"),
-                    key="muscriptor-transcribe-another",
+                add_audio = gr.File(
+                    label=st("dialogs.complete.audio_tracks.add_track"),
+                    file_count="multiple",
+                    file_types=sorted(_SUPPORTED_AUDIO_SUFFIXES),
+                    type="filepath",
+                    key="add-audio-tracks",
                 )
-                another_event = another.click(
-                    fn=_clear_result_state,
-                    inputs=None,
+                add_audio_event = add_audio.change(
+                    fn=_add_audio_tracks,
+                    inputs=[add_audio, track_state],
+                    # Do not output ``None`` back to add_audio: that programmatic
+                    # clear fires this same change handler a second time and can
+                    # cancel the state-driven @gr.render update with a 500 error.
                     outputs=[track_state],
                     api_visibility="private",
                     queue=False,
                 )
-                another_event.then(
+                add_audio_event.then(
                     fn=_next_render_revision,
                     inputs=[render_revision],
                     outputs=[render_revision],
                     api_visibility="private",
                     queue=False,
                 )
-            return
-        if selected_mode not in SPLIT_MODE_IDS:
-            return
-        state = _normalize_track_state(current_state)
-        if state["mode"] != selected_mode:
-            return
 
-        with gr.Group(elem_classes="track-workbench"):
-            gr.Markdown(
-                f"## {st('dialogs.complete.audio_tracks.title')}\n\n"
-                f"{st('dialogs.complete.audio_tracks.subtitle')}"
-            )
-            add_audio = gr.File(
-                label=st("dialogs.complete.audio_tracks.add_track"),
-                file_count="multiple",
-                file_types=sorted(_SUPPORTED_AUDIO_SUFFIXES),
-                type="filepath",
-                key="add-audio-tracks",
-            )
-            add_audio_event = add_audio.change(
-                fn=_add_audio_tracks,
-                inputs=[add_audio, track_state],
-                # Do not output ``None`` back to add_audio: that programmatic
-                # clear fires this same change handler a second time and can
-                # cancel the state-driven @gr.render update with a 500 error.
-                outputs=[track_state],
-                api_visibility="private",
-                queue=False,
-            )
-            add_audio_event.then(
-                fn=_next_render_revision,
-                inputs=[render_revision],
-                outputs=[render_revision],
-                api_visibility="private",
-                queue=False,
-            )
+                # Shared browser mixer: same transport, playhead, mute/solo,
+                # volume, offset, zoom/fit/align controls as the desktop widget.
+                gr.HTML(
+                    build_track_mixer_html(state["tracks"], st),
+                    key="track-mixer",
+                )
 
-            # Shared browser mixer: same transport, playhead, mute/solo,
-            # volume, offset, zoom/fit/align controls as the desktop widget.
-            gr.HTML(
-                build_track_mixer_html(state["tracks"], st),
-                key="track-mixer",
-            )
+                for track in state["tracks"]:
+                    track_id_state = gr.State(track["id"])
+                    route_selected = track["route"] in MANUAL_MIDI_ROUTES
+                    with gr.Group(
+                        elem_classes="track-card",
+                    ):
+                        with gr.Row(equal_height=True):
+                            gr.Markdown(
+                                f"### ♪ <span style='color:{track['color']}'>"
+                                f"{_display_track_name(track['name'])}</span>\n"
+                                f"<small>{Path(track['audio_path']).name}</small>"
+                            )
+                            remove_track = gr.Button(
+                                st("dialogs.complete.audio_tracks.remove"),
+                                variant="stop",
+                                size="sm",
+                                scale=0,
+                                key=f"remove-{track['id']}",
+                            )
+                        with gr.Row(equal_height=True):
+                            midi_enabled = gr.Checkbox(
+                                value=track["midi_enabled"],
+                                label=st("dialogs.complete.audio_tracks.manual_midi.enable"),
+                                key=f"midi-enabled-{track['id']}",
+                            )
+                            midi_route = gr.Dropdown(
+                                choices=MANUAL_MIDI_ROUTE_CHOICES,
+                                value=track["route"] or None,
+                                label=st("dialogs.complete.audio_tracks.manual_midi.select_model"),
+                                interactive=track["midi_enabled"],
+                                scale=5,
+                                key=f"midi-route-{track['id']}",
+                            )
+                            start_midi = gr.Button(
+                                st("dialogs.complete.audio_tracks.manual_midi.start"),
+                                variant="primary",
+                                interactive=bool(track["midi_enabled"] and route_selected),
+                                key=f"midi-start-{track['id']}",
+                            )
+                        midi_instruments = gr.Dropdown(
+                            choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
+                            value=track.get("muscriptor_instruments", []),
+                            multiselect=True,
+                            filterable=True,
+                            label=st("main.engine.muscriptor_instruments_title"),
+                            info=st("main.engine.muscriptor_instruments_desc"),
+                            visible=is_muscriptor_midi_route(track["route"]),
+                            interactive=bool(
+                                track["midi_enabled"] and is_muscriptor_midi_route(track["route"])
+                            ),
+                            elem_classes=["muscriptor-instrument-selector"],
+                            key=f"midi-instruments-{track['id']}",
+                        )
+                        midi_status = gr.Markdown(
+                            track["status"],
+                            elem_classes="track-midi-status",
+                            key=f"midi-status-{track['id']}",
+                        )
+                        if track["midi_path"]:
+                            gr.File(
+                                value=track["midi_path"],
+                                label=st("space.status.midi_file"),
+                                # A track may be converted repeatedly with
+                                # different backends. Gradio preserves the value
+                                # of a keyed File component across @gr.render
+                                # rebuilds, so the MIDI path must participate in
+                                # the identity or the download can point at the
+                                # previous backend's output.
+                                key=(
+                                    f"midi-file-{track['id']}::"
+                                    f"{Path(str(track['midi_path'])).resolve()}"
+                                ),
+                            )
 
-            for track in state["tracks"]:
-                track_id_state = gr.State(track["id"])
-                route_selected = track["route"] in MANUAL_MIDI_ROUTES
-                with gr.Group(
-                    elem_classes="track-card",
-                ):
-                    with gr.Row(equal_height=True):
-                        gr.Markdown(
-                            f"### ♪ <span style='color:{track['color']}'>"
-                            f"{_display_track_name(track['name'])}</span>\n"
-                            f"<small>{Path(track['audio_path']).name}</small>"
+                        remove_event = remove_track.click(
+                            fn=_remove_track,
+                            inputs=[track_state, track_id_state],
+                            outputs=[track_state],
+                            api_visibility="private",
+                            queue=False,
                         )
-                        remove_track = gr.Button(
-                            st("dialogs.complete.audio_tracks.remove"),
-                            variant="stop",
-                            size="sm",
-                            scale=0,
-                            key=f"remove-{track['id']}",
+                        remove_event.then(
+                            fn=_next_render_revision,
+                            inputs=[render_revision],
+                            outputs=[render_revision],
+                            api_visibility="private",
+                            queue=False,
                         )
-                    with gr.Row(equal_height=True):
-                        midi_enabled = gr.Checkbox(
-                            value=track["midi_enabled"],
-                            label=st("dialogs.complete.audio_tracks.manual_midi.enable"),
-                            key=f"midi-enabled-{track['id']}",
+                        midi_enabled.input(
+                            fn=None,
+                            inputs=[midi_enabled, midi_route],
+                            outputs=[
+                                midi_route,
+                                start_midi,
+                                midi_status,
+                                midi_instruments,
+                            ],
+                            js=_track_control_client_js(),
+                            api_visibility="private",
+                            queue=False,
                         )
-                        midi_route = gr.Dropdown(
-                            choices=MANUAL_MIDI_ROUTE_CHOICES,
-                            value=track["route"] or None,
-                            label=st("dialogs.complete.audio_tracks.manual_midi.select_model"),
-                            interactive=track["midi_enabled"],
-                            scale=5,
-                            key=f"midi-route-{track['id']}",
+                        midi_route.input(
+                            fn=None,
+                            inputs=[midi_enabled, midi_route],
+                            outputs=[
+                                midi_route,
+                                start_midi,
+                                midi_status,
+                                midi_instruments,
+                            ],
+                            js=_track_control_client_js(),
+                            api_visibility="private",
+                            queue=False,
                         )
-                        start_midi = gr.Button(
-                            st("dialogs.complete.audio_tracks.manual_midi.start"),
-                            variant="primary",
-                            interactive=bool(track["midi_enabled"] and route_selected),
-                            key=f"midi-start-{track['id']}",
+                        start_midi_event = start_midi.click(
+                            fn=_convert_one_track,
+                            inputs=[
+                                track_state,
+                                track_id_state,
+                                midi_enabled,
+                                midi_route,
+                                midi_instruments,
+                                custom_bpm,
+                                tempo_mode,
+                                muscriptor_processing_chain,
+                            ],
+                            outputs=[track_state],
+                            api_visibility="private",
+                            concurrency_limit=1,
+                            concurrency_id=GPU_CONCURRENCY_ID,
                         )
-                    midi_instruments = gr.Dropdown(
-                        choices=MUSCRIPTOR_INSTRUMENT_CHOICES,
-                        value=track.get("muscriptor_instruments", []),
-                        multiselect=True,
-                        filterable=True,
-                        label=st("main.engine.muscriptor_instruments_title"),
-                        info=st("main.engine.muscriptor_instruments_desc"),
-                        visible=is_muscriptor_midi_route(track["route"]),
-                        interactive=bool(
-                            track["midi_enabled"] and is_muscriptor_midi_route(track["route"])
-                        ),
-                        elem_classes=["muscriptor-instrument-selector"],
-                        key=f"midi-instruments-{track['id']}",
-                    )
-                    midi_status = gr.Markdown(
-                        track["status"],
-                        elem_classes="track-midi-status",
-                        key=f"midi-status-{track['id']}",
-                    )
-                    if track["midi_path"]:
-                        gr.File(
-                            value=track["midi_path"],
-                            label=st("space.status.midi_file"),
-                            # A track may be converted repeatedly with
-                            # different backends. Gradio preserves the value
-                            # of a keyed File component across @gr.render
-                            # rebuilds, so the MIDI path must participate in
-                            # the identity or the download can point at the
-                            # previous backend's output.
+                        start_midi_event.then(
+                            fn=_next_render_revision,
+                            inputs=[render_revision],
+                            outputs=[render_revision],
+                            api_visibility="private",
+                            queue=False,
+                        )
+
+                active_midi_result = state.get("active_midi_result")
+                if active_midi_result:
+                    with gr.Group(elem_classes=["track-card", "linked-midi-detail"]):
+                        gr.HTML(
+                            build_muscriptor_result_html(
+                                active_midi_result,
+                                st,
+                                SPACE_LANGUAGE,
+                            ),
                             key=(
-                                f"midi-file-{track['id']}::"
-                                f"{Path(str(track['midi_path'])).resolve()}"
+                                "linked-midi-result-workbench::"
+                                f"{Path(str(active_midi_result['midi_path'])).resolve()}"
                             ),
                         )
+                        close_detail = gr.Button(
+                            st("muscriptor_result.close_detail"),
+                            size="sm",
+                            key="close-linked-midi-detail",
+                        )
+                        close_detail_event = close_detail.click(
+                            fn=_close_active_midi_detail,
+                            inputs=[track_state],
+                            outputs=[track_state],
+                            api_visibility="private",
+                            queue=False,
+                        )
+                        close_detail_event.then(
+                            fn=_next_render_revision,
+                            inputs=[render_revision],
+                            outputs=[render_revision],
+                            api_visibility="private",
+                            queue=False,
+                        )
 
-                    remove_event = remove_track.click(
-                        fn=_remove_track,
-                        inputs=[track_state, track_id_state],
-                        outputs=[track_state],
-                        api_visibility="private",
-                        queue=False,
-                    )
-                    remove_event.then(
-                        fn=_next_render_revision,
-                        inputs=[render_revision],
-                        outputs=[render_revision],
-                        api_visibility="private",
-                        queue=False,
-                    )
-                    midi_enabled.input(
-                        fn=None,
-                        inputs=[midi_enabled, midi_route],
-                        outputs=[
-                            midi_route,
-                            start_midi,
-                            midi_status,
-                            midi_instruments,
-                        ],
-                        js=_track_control_client_js(),
-                        api_visibility="private",
-                        queue=False,
-                    )
-                    midi_route.input(
-                        fn=None,
-                        inputs=[midi_enabled, midi_route],
-                        outputs=[
-                            midi_route,
-                            start_midi,
-                            midi_status,
-                            midi_instruments,
-                        ],
-                        js=_track_control_client_js(),
-                        api_visibility="private",
-                        queue=False,
-                    )
-                    start_midi_event = start_midi.click(
-                        fn=_convert_one_track,
-                        inputs=[
-                            track_state,
-                            track_id_state,
-                            midi_enabled,
-                            midi_route,
-                            midi_instruments,
-                            custom_bpm,
-                            tempo_mode,
-                            muscriptor_processing_chain,
-                        ],
-                        outputs=[track_state],
-                        api_visibility="private",
-                        concurrency_limit=1,
-                        concurrency_id=GPU_CONCURRENCY_ID,
-                    )
-                    start_midi_event.then(
-                        fn=_next_render_revision,
-                        inputs=[render_revision],
-                        outputs=[render_revision],
-                        api_visibility="private",
-                        queue=False,
-                    )
-
-            active_midi_result = state.get("active_midi_result")
-            if active_midi_result:
-                with gr.Group(elem_classes=["track-card", "linked-midi-detail"]):
-                    gr.HTML(
-                        build_muscriptor_result_html(
-                            active_midi_result,
-                            st,
-                            SPACE_LANGUAGE,
-                        ),
-                        key=(
-                            "linked-midi-result-workbench::"
-                            f"{Path(str(active_midi_result['midi_path'])).resolve()}"
-                        ),
-                    )
-                    close_detail = gr.Button(
-                        st("muscriptor_result.close_detail"),
-                        size="sm",
-                        key="close-linked-midi-detail",
-                    )
-                    close_detail_event = close_detail.click(
-                        fn=_close_active_midi_detail,
-                        inputs=[track_state],
-                        outputs=[track_state],
-                        api_visibility="private",
-                        queue=False,
-                    )
-                    close_detail_event.then(
-                        fn=_next_render_revision,
-                        inputs=[render_revision],
-                        outputs=[render_revision],
-                        api_visibility="private",
-                        queue=False,
-                    )
+    convert_btn.click(
+        fn=lambda: gr.Tabs(selected="result"), inputs=None,
+        outputs=[workspace_pages], queue=False, api_visibility="private",
+    )
 
     convert_btn.click(
         fn=convert_audio_to_midi,

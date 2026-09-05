@@ -299,6 +299,10 @@ class BeatInfo:
     # 自定义目标 BPM 启用时保存自动识别的原曲 BPM，供实际变速与预览对齐。
     source_bpm: Optional[float] = None
 
+    # None is legacy/unknown evidence, never an implicit successful validation.
+    fixed_tempo_reliable: Optional[bool] = None
+    tempo_warning: Optional[str] = None
+
     @property
     def is_variable_tempo(self) -> bool:
         return len(self.tempo_map) >= 2
@@ -550,7 +554,7 @@ class Config:
     processing_mode: str = "smart"
     # vocal_split 模式：是否额外输出人声+伴奏合并 MIDI
     vocal_split_merge_midi: bool = False
-    # TelkNet v10 shared tempo contract.  Automatic fixed BPM is the default;
+    # TelkNet v12 shared tempo contract. Automatic fixed BPM is the default;
     # adaptive and manual fixed BPM are explicit user choices.
     tempo_mode: str = TempoMode.FIXED_AUTO.value
     # Deprecated compatibility mirror.  Production decisions use tempo_mode.

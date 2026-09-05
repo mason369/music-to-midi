@@ -1,8 +1,9 @@
-"""TelkNet v10 Beat This grid normalization for local MIDI generation.
+"""TelkNet v12 Beat This grid normalization for local MIDI generation.
 
 This is the project-side implementation reviewed against the user private
 TelkNet dev branch. It consumes Beat This final0 timestamps only; it does
-not run another detector and it fails closed on invalid evidence.
+not run another detector and it fails closed on invalid evidence. Sparse-stem
+period fitting and observed-evidence counts are local follow-up corrections.
 """
 
 from __future__ import annotations
@@ -30,10 +31,11 @@ MIN_BEATS = 8
 MIN_GLOBAL_FIT_BEATS = 32
 MIN_METER_AGREEMENT = 0.90
 MAX_FIXED_TEMPO_PHASE_ERROR_BEATS = 3.0 / 8.0
+MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS = 0.040
 MIN_ISOLATED_PHASE_OUTLIER_BEATS = 1.0 / 16.0
 MAX_ISOLATED_PHASE_OUTLIER_BEATS = 3.0 / 8.0
 ISOLATED_PHASE_OUTER_PERIOD_TOLERANCE_RATIO = 0.05
-TEMPO_FIT_ID = "beat-this-final0-origin-l2-minimax-phase-grid-v10"
+TEMPO_FIT_ID = "beat-this-final0-origin-l2-minimax-40ms-grid-v12"
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,34 @@ def _validated_times(values: Sequence[float]) -> list[float]:
             raise RuntimeError("Beat This produced a non-monotonic beat timeline")
         normalized.append(timestamp)
     return normalized
+
+
+def _canonical_tempo_period_seconds(value: float) -> float:
+    """Collapse only binary float noise at the reviewed tempo boundaries."""
+
+    period = float(value)
+    if abs(period - MIN_BEAT_PERIOD_SECONDS) <= PERIOD_BOUNDARY_TOLERANCE_SECONDS:
+        return MIN_BEAT_PERIOD_SECONDS
+    if abs(period - MAX_BEAT_PERIOD_SECONDS) <= PERIOD_BOUNDARY_TOLERANCE_SECONDS:
+        return MAX_BEAT_PERIOD_SECONDS
+    return period
+
+
+def _canonical_tempo_bpm(value: float) -> float:
+    bpm = float(value)
+    if not math.isfinite(bpm) or bpm <= 0:
+        return bpm
+    return 60.0 / _canonical_tempo_period_seconds(60.0 / bpm)
+
+
+def _is_reviewed_tempo_period(value: float) -> bool:
+    period = float(value)
+    return (
+        math.isfinite(period)
+        and MIN_BEAT_PERIOD_SECONDS - PERIOD_BOUNDARY_TOLERANCE_SECONDS
+        <= period
+        <= MAX_BEAT_PERIOD_SECONDS + PERIOD_BOUNDARY_TOLERANCE_SECONDS
+    )
 
 
 def normalize_downbeat_grid(
@@ -283,7 +313,10 @@ def _remove_duplicate_detections(
     )
     close_index = 0
     while close_index + 1 < len(times):
-        if times[close_index + 1] - times[close_index] >= duplicate_threshold:
+        if (
+            times[close_index + 1] - times[close_index]
+            >= duplicate_threshold - PERIOD_BOUNDARY_TOLERANCE_SECONDS
+        ):
             close_index += 1
             continue
         left_index = close_index
@@ -430,7 +463,7 @@ def _fit_tempo(beat_times: Sequence[float]) -> tuple[float, float]:
     if not np.isfinite(slope) or slope <= 0:
         raise RuntimeError("Beat This produced an invalid beat slope")
     residual = beats - (intercept + slope * index)
-    return 60.0 / float(slope), float(residual.std())
+    return _canonical_tempo_bpm(60.0 / float(slope)), float(residual.std())
 
 
 def _fit_origin_tempo(beat_times: Sequence[float]) -> tuple[float, float]:
@@ -456,7 +489,7 @@ def _fit_origin_tempo(beat_times: Sequence[float]) -> tuple[float, float]:
     beats_per_second = (
         sum(seconds * ordinal for ordinal, seconds in zip(ordinals, elapsed)) / denominator
     )
-    bpm = 60.0 * beats_per_second
+    bpm = _canonical_tempo_bpm(60.0 * beats_per_second)
     if not math.isfinite(bpm) or not MIN_TEMPO_BPM <= bpm <= MAX_TEMPO_BPM:
         raise RuntimeError("Beat This produced an invalid origin-constrained slope")
     max_phase_error = max(
@@ -507,7 +540,7 @@ def _fit_minimax_origin_tempo(
     minimum_rate = max((ordinal - error) / seconds for ordinal, seconds in zip(ordinals, elapsed))
     maximum_rate = min((ordinal + error) / seconds for ordinal, seconds in zip(ordinals, elapsed))
     beats_per_second = (minimum_rate + maximum_rate) / 2.0
-    bpm = 60.0 * beats_per_second
+    bpm = _canonical_tempo_bpm(60.0 * beats_per_second)
     if not MIN_TEMPO_BPM <= bpm <= MAX_TEMPO_BPM:
         raise RuntimeError("Beat This produced an invalid minimax beat slope")
     max_phase_error = max(
@@ -530,6 +563,29 @@ def _origin_phase_violation_count(
     return sum(
         abs((timestamp - origin) * beats_per_second - ordinal) > maximum_error_beats
         for ordinal, timestamp in enumerate(times)
+    )
+
+
+def _origin_maximum_time_error(
+    beat_times: Sequence[float],
+    bpm: float,
+) -> float:
+    """Maximum physical drift of the publishable one-BPM grid.
+
+    V10's 3/8-beat ambiguity bound grows to 187.5 ms at 120 BPM, which is far
+    wider than Beat This's 20 ms frame step and can flatten audible detector
+    phase changes.  Keep the earlier beat-domain checks for robust outlier
+    handling, but make the final fixed/adaptive publication decision in
+    physical seconds, the coordinate actually preserved by MIDI serialization.
+    """
+
+    times = _validated_times(beat_times)
+    if len(times) < 2 or not math.isfinite(float(bpm)) or float(bpm) <= 0:
+        raise RuntimeError("Beat This produced invalid fixed-grid evidence")
+    origin = times[0]
+    period = 60.0 / float(bpm)
+    return max(
+        abs((timestamp - origin) - ordinal * period) for ordinal, timestamp in enumerate(times)
     )
 
 
@@ -615,6 +671,14 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
     reference_period, octave_family_normalized = _select_reference_period(raw_intervals)
     if not math.isfinite(reference_period) or reference_period <= 0:
         raise RuntimeError("Beat This produced an invalid representative beat period")
+    reference_period = _canonical_tempo_period_seconds(reference_period)
+
+    # Long detector gaps have an unknown beat ordinal. A frame-quantized
+    # adjacent median must not decide how many beats happened in a minute of
+    # silence: a small period error becomes several invented beats. Estimate
+    # the sub-frame period from observed runs BEFORE expanding those gaps.
+    if any(interval > 8 * reference_period for interval in raw_intervals):
+        reference_period = _fit_sparse_observed_period(raw, reference_period)
 
     deduplicated, duplicate_count = _remove_duplicate_detections(
         raw,
@@ -633,6 +697,15 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
         repaired,
         reference_period=reference_period,
     )
+    if not _is_reviewed_tempo_period(reference_period):
+        # The raw detector family can sit outside 30-300 BPM even after the
+        # normalization pass has removed sub-boundary duplicates or divided a
+        # slow gap into legal beats. Do not publish that rejected raw family as
+        # the representative tempo for the accepted timeline.
+        accepted_periods = [current - previous for previous, current in zip(expanded, expanded[1:])]
+        reference_period, _accepted_octave_family = _select_reference_period(accepted_periods)
+        octave_family_normalized = True
+        reference_period = _canonical_tempo_period_seconds(reference_period)
     representative_period = reference_period
     bpm = 60.0 / representative_period
     if not MIN_TEMPO_BPM <= bpm <= MAX_TEMPO_BPM:
@@ -669,6 +742,7 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
         reference_period=representative_period,
         timeline_periods=timeline_periods,
     )
+    dominant_period = _canonical_tempo_period_seconds(dominant_period)
     dominant_fixed = (
         dominant_ratio >= MIN_DOMINANT_PERIOD_RATIO
         and dominant_residual <= MAX_DOMINANT_PERIOD_RESIDUAL_RATIO * dominant_period
@@ -677,12 +751,13 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
     fitted_period = 60.0 / fitted_bpm
     dominant_bpm = 60.0 / dominant_period
     global_fit_disagreement = abs(fitted_bpm - dominant_bpm) / dominant_bpm
-    use_global_fit = len(expanded) >= MIN_GLOBAL_FIT_BEATS
+    observed_count = len(repaired)
+    use_global_fit = observed_count >= MIN_GLOBAL_FIT_BEATS
     global_fit_reliable = not use_global_fit or (
         lattice_residual <= MAX_GLOBAL_FIT_RESIDUAL_RATIO * fitted_period
         and global_fit_disagreement <= MAX_GLOBAL_FIT_DISAGREEMENT_RATIO
     )
-    fixed_reliable = len(expanded) >= MIN_BEATS and dominant_fixed and global_fit_reliable
+    fixed_reliable = observed_count >= MIN_BEATS and dominant_fixed and global_fit_reliable
     # Beat This occasionally emits one isolated half-beat or a short run of
     # frame-jittered detections. Those outliers can fail the statistical fixed
     # classifier and previously forced a dense variable tempo map with
@@ -691,8 +766,7 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
     # the source has no evidence that requires a variable DAW tempo map.
     phase_candidate = (
         not fixed_reliable
-        and len(raw) >= MIN_GLOBAL_FIT_BEATS
-        and len(expanded) >= MIN_BEATS
+        and observed_count >= MIN_GLOBAL_FIT_BEATS
         and dominant_ratio >= 0.90
         and global_fit_disagreement <= MAX_GLOBAL_FIT_DISAGREEMENT_RATIO
         and longest_change < MIN_SUSTAINED_CHANGE_BEATS
@@ -755,9 +829,16 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
             residual = dominant_residual
     else:
         residual = lattice_residual
-    if len(expanded) < MIN_BEATS:
+    fixed_grid_maximum_time_error = _origin_maximum_time_error(expanded, bpm)
+    fixed_revoked_by_seconds_gate = bool(
+        fixed_reliable
+        and fixed_grid_maximum_time_error > MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS + 1e-9
+    )
+    if fixed_revoked_by_seconds_gate:
+        fixed_reliable = False
+    if observed_count < MIN_BEATS:
         warning = (
-            f"Only {len(expanded)} normalized beats were detected; at least "
+            f"Only {observed_count} distinct observed beats were detected; at least "
             f"{MIN_BEATS} are required to confirm a fixed global BPM."
         )
     elif not fixed_reliable:
@@ -777,6 +858,12 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
                 f"({published_phase_violations} beats violated it; the best "
                 f"constant fit still misses by {minimax_phase_error:.3f} beats)."
             )
+        if fixed_revoked_by_seconds_gate:
+            warning += (
+                " The one-BPM grid was overruled because its maximum physical "
+                f"distance is {fixed_grid_maximum_time_error * 1000:.1f} ms, "
+                "above the reviewed 40 ms publication gate."
+            )
     else:
         warning = None
     return NormalizedBeatGrid(
@@ -792,3 +879,47 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
         octave_family_normalized=octave_family_normalized,
         tactus_period_seconds=reference_period,
     )
+
+
+def _fit_sparse_observed_period(times: Sequence[float], reference_period: float) -> float:
+    """Fit a shared slope with independent intercepts across observed runs.
+
+    Only short, unambiguous intervals establish local beat ordinals. Centering
+    each run removes its arbitrary phase; pooled least squares then estimates
+    the clock without giving synthetic gap-fill marks any statistical weight.
+    These cuts affect estimation only: no observed timestamps are removed from
+    the returned beat evidence or from adaptive-tempo validation.
+    """
+    import numpy as np
+
+    values = np.asarray(times, dtype=float)
+    intervals = np.diff(values)
+    steps = np.maximum(1, np.rint(intervals / reference_period))
+    local_periods = intervals / steps
+    ambiguous = (
+        (intervals > 8 * reference_period)
+        | (intervals < DUPLICATE_PERIOD_RATIO * reference_period)
+        | (abs(local_periods - reference_period) > DOMINANT_PERIOD_TOLERANCE_RATIO * reference_period)
+    )
+    runs = np.split(values, np.flatnonzero(ambiguous) + 1)
+    ordinal_variance = 0.0
+    ordinal_time_covariance = 0.0
+    observed_count = 0
+    for run in runs:
+        if len(run) < MIN_BEATS:
+            continue
+        ordinals = np.r_[0.0, np.cumsum(np.rint(np.diff(run) / reference_period))]
+        x = ordinals - ordinals.mean()
+        y = run - run.mean()
+        ordinal_variance += float(x @ x)
+        ordinal_time_covariance += float(x @ y)
+        observed_count += len(run)
+    if observed_count < MIN_BEATS or ordinal_variance <= 0:
+        raise RuntimeError(
+            "Beat This has long undetected gaps without enough contiguous beat evidence; "
+            "use the original mix as the tempo source"
+        )
+    period = ordinal_time_covariance / ordinal_variance
+    if not _is_reviewed_tempo_period(period):
+        raise RuntimeError("Beat This observed-run tempo is outside the reviewed range")
+    return _canonical_tempo_period_seconds(period)

@@ -526,7 +526,8 @@ class OneClickScriptContractTests(unittest.TestCase):
         script = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
 
         self.assertIn("检测到 AMD/ROCm", script)
-        self.assertIn("不会静默改用 CPU", script)
+        self.assertIn("检测到 AMD/ROCm，安装已停止", script)
+        self.assertIn("尚未支持 ROCm", script)
         self.assertNotIn("download.pytorch.org/whl/rocm5.7", script)
         self.assertNotIn("download.pytorch.org/whl/rocm6.3", script)
 

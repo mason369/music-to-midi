@@ -92,12 +92,12 @@ YOURMT3_MODELS = {
     "ymt3_plus": {
         "name": "YMT3+",
         "ui_label": "YMT3+",
-        "description": "YourMT3+ 基线模型，使用原始 YMT3+ 风格配置。",
-        "ui_description": "Baseline YourMT3+ model using MT3 tokens with singing extension.",
+        "description": "YourMT3+ 基础版本，支持乐器和歌声转写。",
+        "ui_description": "Baseline YourMT3+ model for instruments and singing.",
         "checkpoint": "YMT3+",
         "size_mb": 2000,
-        "features": ["YourMT3+ baseline", "MT3 tokens with singing extension"],
-        "features_zh": ["YourMT3+ 基线模型", "带歌声扩展的 MT3 token"],
+        "features": ["YourMT3+ baseline", "Singing support"],
+        "features_zh": ["YourMT3+ 基线模型", "支持歌声转写"],
     },
     "yptf_single_nops": {
         "name": "YPTF+Single (noPS)",
@@ -113,7 +113,7 @@ YOURMT3_MODELS = {
         "name": "YPTF+Multi (PS)",
         "ui_label": "YPTF+Multi (PS)",
         "description": "Perceiver-TF 编码器 + multi-t5 多通道解码，使用音高偏移增强。",
-        "ui_description": "Multi-channel Perceiver-TF checkpoint using multi-t5 / mc13_full_plus_256 style decoding with pitch-shift augmentation.",
+        "ui_description": "Multi-channel Perceiver-TF model trained with pitch-shift augmentation.",
         "checkpoint": "YPTF+Multi (PS)",
         "size_mb": 2000,
         "features": [
@@ -127,8 +127,8 @@ YOURMT3_MODELS = {
     "yptf_moe_multi_nops": {
         "name": "YPTF.MoE+Multi (noPS)",
         "ui_label": "YPTF.MoE+Multi (noPS)",
-        "description": "本项目默认模型，采用 Perceiver-TF、MoE 与 multi-t5 多通道解码，不使用音高偏移增强。",
-        "ui_description": "Project default using Perceiver-TF, MoE, and multi-channel decoding without pitch-shift augmentation.",
+        "description": "默认模型，采用 Perceiver-TF 与 MoE 多通道解码，训练时不使用音高偏移增强。",
+        "ui_description": "Default model using Perceiver-TF and MoE multi-channel decoding, trained without pitch-shift augmentation.",
         "checkpoint": "YPTF.MoE+Multi (noPS)",
         "size_mb": 2500,
         "recommended": True,

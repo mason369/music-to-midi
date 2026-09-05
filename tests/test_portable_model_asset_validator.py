@@ -139,6 +139,11 @@ def _prepare_valid_assets(tmp_path: Path, monkeypatch) -> dict[str, object]:
         validator.miros.MirosTranscriber.CHECKPOINT_REL_PATH,
         miros_finetuned,
     )
+    files["miros_config"] = _write(
+        miros_dir,
+        validator.miros.MIROS_CONFORMER_CONFIG_REL_PATH,
+        (Path(__file__).parent / "fixtures/miros_conformer_config.json").read_bytes(),
+    )
     monkeypatch.setattr(validator.miros, "MIROS_PRETRAINED_EXACT_BYTES", len(miros_pretrained))
     monkeypatch.setattr(validator.miros, "MIROS_PRETRAINED_SHA256", _sha256(miros_pretrained))
     monkeypatch.setattr(validator.miros, "MIROS_FINETUNED_EXACT_BYTES", len(miros_finetuned))
@@ -202,7 +207,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
     assert len(validated["aria_amt"]) == 1
     assert len(validated["bytedance_piano"]) == 1
     assert len(validated["beat_this"]) == 1
-    assert len(validated["miros"]) == 4
+    assert len(validated["miros"]) == 5
 
 
 def test_validator_rejects_retired_polarformer_fp32_asset(tmp_path, monkeypatch):

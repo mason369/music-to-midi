@@ -33,8 +33,8 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
     assert zh["space"]["ui"]["download_section"] == "下载输出文件"
     assert en["space"]["ui"]["download_section"] == "Download Output Files"
     for catalog, expected_default_name, expected_fix_name in (
-        (zh, "官方处理链路（默认）", "分段边界连续性修复链路"),
-        (en, "Official processing path (default)", "Segment-boundary continuity fix path"),
+        (zh, "标准（默认）", "跨段延音衔接"),
+        (en, "Standard (default)", "Sustain across segments"),
     ):
         vocal_info = catalog["space"]["mode"]["vocal_split_info"]
         six_stem_info = catalog["space"]["mode"]["six_stem_split_info"]
@@ -60,7 +60,6 @@ def test_space_copy_describes_all_outputs_and_current_telknet_alignment():
         assert expected_default_name.lower() in product_copy
         assert expected_fix_name.lower() in product_copy
         assert "telknet issue #74" not in product_copy
-        assert "muscriptor v0.3.0" in product_copy
         for banned_phrase in (
             "对齐",
             "落后",
@@ -478,5 +477,5 @@ def test_space_readme_describes_wav_only_split_and_explicit_per_track_midi():
     assert "`SMART` + MuScriptor Small" in readme
     assert "约 3.571 秒" in readme
     assert "开始分离" in readme
-    assert "`VOCAL_SPLIT` 生成两条经过校验的 WAV" in readme
-    assert "`SIX_STEM_SPLIT` 生成六条经过校验的 WAV" in readme
+    assert "`VOCAL_SPLIT` 生成两条 WAV" in readme
+    assert "`SIX_STEM_SPLIT` 生成六条 WAV" in readme

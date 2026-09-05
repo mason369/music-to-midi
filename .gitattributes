@@ -1,2 +1,5 @@
 # Shell entry points must stay executable in Linux, WSL, and release CI.
 *.sh text eol=lf
+
+# Preserve the exact upstream bytes used by the pinned model identity tests.
+tests/fixtures/miros_conformer_config.json -text

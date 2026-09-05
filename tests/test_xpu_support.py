@@ -229,6 +229,30 @@ def test_polarformer_cuda_keeps_required_auxiliary_cpu_nodes(tmp_path):
     assert not session.fallback_disabled
 
 
+def test_polarformer_cuda_uses_error_only_native_ort_logging(tmp_path):
+    class CudaSession(_FakeOrtSession):
+        @staticmethod
+        def get_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    fake_ort = SimpleNamespace(
+        SessionOptions=_FakeSessionOptions,
+        InferenceSession=CudaSession,
+    )
+    session = _create_strict_onnx_session(
+        fake_ort,
+        tmp_path / "polarformer.onnx",
+        [("CUDAExecutionProvider", {"device_id": 0})],
+        "cuda:0",
+    )
+
+    assert session.sess_options.log_severity_level == 3
+    assert session.get_providers() == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
 def test_polarformer_xpu_rejects_missing_openvino_and_cpu_append(tmp_path):
     missing = SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"])
     with pytest.raises(RuntimeError, match="OpenVINOExecutionProvider"):

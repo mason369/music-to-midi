@@ -17,7 +17,7 @@ namespace MusicToMidi.UniversalLauncher
         [STAThread]
         private static int Main(string[] args)
         {
-            bool backend = IsBackendLauncher();
+            string role = GetLauncherRole();
             try
             {
                 string accelerator = ResolveAccelerator();
@@ -27,16 +27,20 @@ namespace MusicToMidi.UniversalLauncher
                     "runtimes",
                     accelerator
                 );
-                string childName = GetChildExecutableName(backend, accelerator);
+                string childName = GetChildExecutableName(role, accelerator);
                 string childPath = Path.Combine(runtimeDirectory, childName);
                 RequireExecutable(childPath);
-                WriteSelectionTrace(backend, accelerator, childPath);
+                WriteSelectionTrace(role, accelerator, childPath);
 
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
                     FileName = childPath,
                     Arguments = JoinArguments(args),
-                    WorkingDirectory = runtimeDirectory,
+                    // CLI input, tempo-source and output paths belong to the caller.
+                    // The child executable is already resolved independently above.
+                    WorkingDirectory = role == "cli"
+                        ? Environment.CurrentDirectory
+                        : runtimeDirectory,
                     UseShellExecute = false,
                 };
                 startInfo.EnvironmentVariables[AcceleratorVariable] = accelerator;
@@ -55,20 +59,20 @@ namespace MusicToMidi.UniversalLauncher
             }
             catch (Exception ex)
             {
-                ReportFailure(backend, ex.Message);
+                ReportFailure(role, ex.Message);
                 return 70;
             }
         }
 
-        private static bool IsBackendLauncher()
+        private static string GetLauncherRole()
         {
-            string launcherName = Path.GetFileNameWithoutExtension(
-                Process.GetCurrentProcess().MainModule.FileName
-            );
-            return launcherName.IndexOf(
-                "Backend",
-                StringComparison.OrdinalIgnoreCase
-            ) >= 0;
+#if BACKEND_LAUNCHER
+            return "backend";
+#elif CLI_LAUNCHER
+            return "cli";
+#else
+            return "app";
+#endif
         }
 
         private static string ResolveAccelerator()
@@ -156,13 +160,19 @@ namespace MusicToMidi.UniversalLauncher
             return names;
         }
 
-        private static string GetChildExecutableName(bool backend, string accelerator)
+        private static string GetChildExecutableName(string role, string accelerator)
         {
-            if (backend)
+            if (role == "backend")
             {
                 return accelerator == "xpu"
                     ? "MusicToMidiBackendXpu.exe"
                     : "MusicToMidiBackend.exe";
+            }
+            if (role == "cli")
+            {
+                return accelerator == "xpu"
+                    ? "MusicToMidiCLIXpu.exe"
+                    : "MusicToMidiCLI.exe";
             }
             return accelerator == "xpu" ? "MusicToMidiXpu.exe" : "MusicToMidi.exe";
         }
@@ -180,7 +190,7 @@ namespace MusicToMidi.UniversalLauncher
         }
 
         private static void WriteSelectionTrace(
-            bool backend,
+            string role,
             string accelerator,
             string childPath
         )
@@ -203,7 +213,7 @@ namespace MusicToMidi.UniversalLauncher
                 new string[]
                 {
                     DateTimeOffset.Now.ToString("o"),
-                    backend ? "backend" : "app",
+                    role,
                     accelerator,
                     childPath,
                 }
@@ -260,7 +270,7 @@ namespace MusicToMidi.UniversalLauncher
             return result.ToString();
         }
 
-        private static void ReportFailure(bool backend, string message)
+        private static void ReportFailure(string role, string message)
         {
             string fullMessage = "MusicToMidi Universal 启动失败：" + message;
             Console.Error.WriteLine(fullMessage);

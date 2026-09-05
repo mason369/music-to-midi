@@ -361,6 +361,18 @@ $xpuAppSource = Assert-Role `
 $xpuBackendSource = Assert-Role `
     -Root (Join-Path $xpuRoot "MusicToMidi-XPU-WebBackend") `
     -Executable "MusicToMidiBackendXpu.exe"
+$sourceCliRequirements = @(
+    [pscustomobject]@{ Root = $cudaAppSource; Executable = "MusicToMidiCLI.exe" }
+    [pscustomobject]@{ Root = $cudaBackendSource; Executable = "MusicToMidiCLI.exe" }
+    [pscustomobject]@{ Root = $xpuAppSource; Executable = "MusicToMidiCLIXpu.exe" }
+    [pscustomobject]@{ Root = $xpuBackendSource; Executable = "MusicToMidiCLIXpu.exe" }
+)
+foreach ($requirement in $sourceCliRequirements) {
+    $cliPath = Join-Path $requirement.Root $requirement.Executable
+    if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
+        throw "Portable source role is missing its native CLI: $cliPath"
+    }
+}
 $xpuFrontendSource = Join-Path $xpuRoot "MusicToMidi-WebFrontend"
 foreach ($frontend in @($cudaFrontendSource, $xpuFrontendSource)) {
     if (-not (Test-Path -LiteralPath (Join-Path $frontend "MusicToMidiFrontend.exe") -PathType Leaf)) {
@@ -429,6 +441,12 @@ Move-Item `
 Move-Item `
     -LiteralPath (Join-Path $launcherBuildRoot "MusicToMidiBackend.exe") `
     -Destination (Join-Path $backendRoot "MusicToMidiBackend.exe")
+Copy-Item `
+    -LiteralPath (Join-Path $launcherBuildRoot "MusicToMidiCLI.exe") `
+    -Destination (Join-Path $appRoot "MusicToMidiCLI.exe")
+Move-Item `
+    -LiteralPath (Join-Path $launcherBuildRoot "MusicToMidiCLI.exe") `
+    -Destination (Join-Path $backendRoot "MusicToMidiCLI.exe")
 Remove-Item -LiteralPath $launcherBuildRoot -Recurse -Force
 
 $usageCandidates = @(
@@ -447,12 +465,18 @@ Copy-Item -LiteralPath $usageSource -Destination (Join-Path $frontendRoot "READM
 
 $requiredOutputs = @(
     (Join-Path $appRoot "MusicToMidi.exe"),
+    (Join-Path $appRoot "MusicToMidiCLI.exe"),
     (Join-Path $backendRoot "MusicToMidiBackend.exe"),
+    (Join-Path $backendRoot "MusicToMidiCLI.exe"),
     (Join-Path $frontendRoot "MusicToMidiFrontend.exe"),
     (Join-Path $cudaAppRuntime "MusicToMidi.exe"),
+    (Join-Path $cudaAppRuntime "MusicToMidiCLI.exe"),
     (Join-Path $xpuAppRuntime "MusicToMidiXpu.exe"),
+    (Join-Path $xpuAppRuntime "MusicToMidiCLIXpu.exe"),
     (Join-Path $cudaBackendRuntime "MusicToMidiBackend.exe"),
-    (Join-Path $xpuBackendRuntime "MusicToMidiBackendXpu.exe")
+    (Join-Path $cudaBackendRuntime "MusicToMidiCLI.exe"),
+    (Join-Path $xpuBackendRuntime "MusicToMidiBackendXpu.exe"),
+    (Join-Path $xpuBackendRuntime "MusicToMidiCLIXpu.exe")
 )
 foreach ($path in $requiredOutputs) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -481,6 +505,7 @@ $buildInfo = [ordered]@{
     launchers = [ordered]@{
         app_sha256 = Get-Sha256 (Join-Path $appRoot "MusicToMidi.exe")
         backend_sha256 = Get-Sha256 (Join-Path $backendRoot "MusicToMidiBackend.exe")
+        cli_sha256 = Get-Sha256 (Join-Path $appRoot "MusicToMidiCLI.exe")
     }
 }
 $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 8

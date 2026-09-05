@@ -53,6 +53,7 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 from src.utils.runtime_paths import get_ffmpeg_executable
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,7 @@ class MusicToMidiPipeline:
                 encoding="utf-8",
                 errors="replace",
                 timeout=300,
+                **hidden_subprocess_kwargs(),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
@@ -374,6 +376,8 @@ class MusicToMidiPipeline:
                 time_signature=beat_info.time_signature,
                 tempo_map=[],
                 source_bpm=detected_bpm,
+                fixed_tempo_reliable=beat_info.fixed_tempo_reliable,
+                tempo_warning=beat_info.tempo_warning,
             )
 
         if tempo_mode == TempoMode.FIXED_AUTO.value and beat_info.tempo_map:
@@ -384,6 +388,8 @@ class MusicToMidiPipeline:
                 time_signature=beat_info.time_signature,
                 tempo_map=[],
                 source_bpm=None,
+                fixed_tempo_reliable=beat_info.fixed_tempo_reliable,
+                tempo_warning=beat_info.tempo_warning,
             )
 
         logger.info("节拍检测完成: %.1f BPM；节拍源=%s", detected_bpm, beat_source)

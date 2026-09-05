@@ -875,6 +875,7 @@ if ($PyInstallerExitCode -ne 0) {
 $CollectionName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU" } else { "MusicToMidi" }
 $GuiExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiXpu.exe" } else { "MusicToMidi.exe" }
 $BackendExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiBackendXpu.exe" } else { "MusicToMidiBackend.exe" }
+$CliExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiCLIXpu.exe" } else { "MusicToMidiCLI.exe" }
 $DistDir = Join-Path $ResolvedDistRoot $CollectionName
 if (-not (Test-Path -LiteralPath $DistDir -PathType Container)) {
     throw "PyInstaller reported success but the portable directory is missing: $DistDir"
@@ -888,6 +889,15 @@ $PortableBackendExe = Join-Path $DistDir $BackendExecutableName
 if (-not (Test-Path -LiteralPath $PortableBackendExe -PathType Leaf)) {
     throw "Portable backend executable is missing: $PortableBackendExe"
 }
+$PortableCliExe = Join-Path $DistDir $CliExecutableName
+if (-not (Test-Path -LiteralPath $PortableCliExe -PathType Leaf)) {
+    throw "Portable native CLI executable is missing: $PortableCliExe"
+}
+$CliHelp = & $PortableCliExe --help 2>&1
+if ($LASTEXITCODE -ne 0 -or ($CliHelp -join "`n") -notmatch "track-to-midi") {
+    throw "Portable native CLI help smoke failed with exit code $LASTEXITCODE.`n$($CliHelp -join "`n")"
+}
+Write-Host "[ok] Portable native CLI command contract verified"
 if ($Accelerator -eq "xpu") {
     $XpuVenvRoot = Split-Path -Parent (Split-Path -Parent $Python)
     $XpuLibraryBin = Join-Path $XpuVenvRoot "Library\bin"

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_CONTRACT_FILES = (
     "_internal/config/web-frontend.json",
@@ -96,7 +95,7 @@ def test_universal_assembler_keeps_roles_and_native_runtimes_separate():
     assert "Get-Sha256" in script
     assert "System.Security.Cryptography.SHA256" in script
     assert "New-Item -ItemType HardLink" in script
-    assert 'failure_fallback = $false' in script
+    assert "failure_fallback = $false" in script
     assert '".incomplete"' in script
     assert "\u786c\u94fe\u63a5\u590d\u7528" in usage
     assert "\u53ea\u5360\u4e00\u4efd\u7269\u7406\u7a7a\u95f4" in usage
@@ -135,12 +134,15 @@ def test_universal_launchers_compile_route_and_propagate_exit_codes(tmp_path):
         build_dir / "MusicToMidiBackend.exe",
         backend_root / "MusicToMidiBackend.exe",
     )
+    shutil.copy2(build_dir / "MusicToMidiCLI.exe", app_root / "MusicToMidiCLI.exe")
     command_interpreter = Path(os.environ["WINDIR"]) / "System32" / "cmd.exe"
     child_paths = (
         app_root / "runtimes" / "cuda" / "MusicToMidi.exe",
         app_root / "runtimes" / "xpu" / "MusicToMidiXpu.exe",
         backend_root / "runtimes" / "cuda" / "MusicToMidiBackend.exe",
         backend_root / "runtimes" / "xpu" / "MusicToMidiBackendXpu.exe",
+        app_root / "runtimes" / "cuda" / "MusicToMidiCLI.exe",
+        app_root / "runtimes" / "xpu" / "MusicToMidiCLIXpu.exe",
     )
     for child in child_paths:
         child.parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +167,12 @@ def test_universal_launchers_compile_route_and_propagate_exit_codes(tmp_path):
         timeout=15,
         check=False,
     )
+    cli = subprocess.run(
+        [app_root / "MusicToMidiCLI.exe", "/d", "/c", "exit", "23"],
+        env=environment,
+        timeout=15,
+        check=False,
+    )
     environment["MUSIC_TO_MIDI_ACCELERATOR"] = "invalid"
     invalid = subprocess.run(
         [backend_root / "MusicToMidiBackend.exe"],
@@ -178,12 +186,103 @@ def test_universal_launchers_compile_route_and_propagate_exit_codes(tmp_path):
 
     assert cuda.returncode == 21
     assert xpu.returncode == 22
+    assert cli.returncode == 23
     assert invalid.returncode == 70
     assert "只能是 cuda 或 xpu" in invalid.stderr
     selections = trace.read_text(encoding="utf-8").splitlines()
-    assert len(selections) == 2
+    assert len(selections) == 3
     assert "\tapp\tcuda\t" in selections[0]
     assert "\tbackend\txpu\t" in selections[1]
+    assert "\tcli\txpu\t" in selections[2]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Universal CLI path integration")
+@pytest.mark.parametrize("accelerator", ["cuda", "xpu"])
+@pytest.mark.parametrize("package_role", ["MusicToMidi-App", "MusicToMidi-WebBackend"])
+def test_universal_cli_preserves_relative_paths(tmp_path, accelerator, package_role):
+    build_dir = tmp_path / "launcher-build"
+    compiled = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REPO_ROOT / "scripts" / "build_universal_windows_launchers.ps1"),
+            "-OutputDirectory",
+            str(build_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    package = tmp_path / package_role
+    runtime = package / "runtimes" / accelerator
+    runtime.mkdir(parents=True)
+    launcher = package / "MusicToMidiCLI.exe"
+    shutil.copy2(build_dir / launcher.name, launcher)
+    child = runtime / (
+        "MusicToMidiCLIXpu.exe" if accelerator == "xpu" else "MusicToMidiCLI.exe"
+    )
+    # Exercise the actual compiled launcher and native argument parsing. The
+    # child probes filesystem behavior without requiring either GPU runtime.
+    probe = tmp_path / "RelativePathProbe.cs"
+    probe.write_text(
+        "using System; using System.IO;\n"
+        "class RelativePathProbe { static int Main(string[] args) {\n"
+        "try {\n"
+        "string input = File.ReadAllText(args[0]);\n"
+        "string tempo = File.ReadAllText(args[1]);\n"
+        "Directory.CreateDirectory(args[2]);\n"
+        "File.WriteAllText(Path.Combine(args[2], \"result.txt\"), input + tempo);\n"
+        "return 0;\n"
+        "} catch (Exception error) { Console.Error.WriteLine(error); return 2; }\n"
+        "} }\n",
+        encoding="utf-8",
+    )
+    compiler = (
+        Path(os.environ["WINDIR"])
+        / "Microsoft.NET"
+        / "Framework64"
+        / "v4.0.30319"
+        / "csc.exe"
+    )
+    compiled_probe = subprocess.run(
+        [compiler, "/nologo", "/target:exe", f"/out:{child}", probe],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert compiled_probe.returncode == 0, compiled_probe.stdout + compiled_probe.stderr
+
+    caller = tmp_path / "调用目录 with spaces"
+    caller.mkdir()
+    source = caller / "输入 audio.wav"
+    tempo_source = caller / "节拍 source.wav"
+    output = caller / "输出 MIDI"
+    source.write_text("input-", encoding="utf-8")
+    tempo_source.write_text("tempo", encoding="utf-8")
+    result = subprocess.run(
+        [launcher, source.name, tempo_source.name, output.name],
+        cwd=caller,
+        env={
+            **os.environ,
+            "MUSIC_TO_MIDI_ACCELERATOR": accelerator,
+            "MUSIC_TO_MIDI_UNIVERSAL_NO_DIALOG": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (output / "result.txt").read_text(encoding="utf-8") == "input-tempo"
+    assert not (runtime / output.name).exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows NTFS Universal assembly integration")
@@ -203,6 +302,8 @@ def test_universal_assembler_deduplicates_models_and_preserves_role_independence
         {"models/shared.bin": shared_payload, "native/provider.bin": b"cuda"},
     )
     _link_backend_internal(cuda_app, cuda_backend, "MusicToMidiBackend.exe", b"cuda-web")
+    (cuda_app / "MusicToMidiCLI.exe").write_bytes(b"cuda-cli")
+    (cuda_backend / "MusicToMidiCLI.exe").write_bytes(b"cuda-cli")
     _write_role(
         xpu_app,
         "MusicToMidiXpu.exe",
@@ -215,6 +316,8 @@ def test_universal_assembler_deduplicates_models_and_preserves_role_independence
         "MusicToMidiBackendXpu.exe",
         b"xpu-web",
     )
+    (xpu_app / "MusicToMidiCLIXpu.exe").write_bytes(b"xpu-cli")
+    (xpu_backend / "MusicToMidiCLIXpu.exe").write_bytes(b"xpu-cli")
     _write_frontend(
         cuda / "MusicToMidi-WebFrontend",
         executable_payload=b"frontend-python-3.11.5",
@@ -254,17 +357,17 @@ def test_universal_assembler_deduplicates_models_and_preserves_role_independence
     backend = output / "MusicToMidi-WebBackend"
     frontend = output / "MusicToMidi-WebFrontend"
     assert (app / "MusicToMidi.exe").is_file()
+    assert (app / "MusicToMidiCLI.exe").is_file()
     assert (backend / "MusicToMidiBackend.exe").is_file()
+    assert (backend / "MusicToMidiCLI.exe").is_file()
+    assert (app / "runtimes" / "cuda" / "MusicToMidiCLI.exe").is_file()
+    assert (app / "runtimes" / "xpu" / "MusicToMidiCLIXpu.exe").is_file()
     assert (frontend / "MusicToMidiFrontend.exe").is_file()
     assert (frontend / "MusicToMidiFrontend.exe").read_bytes() == b"frontend-python-3.11.5"
     cuda_model = app / "runtimes" / "cuda" / "_internal" / "models" / "shared.bin"
     xpu_model = app / "runtimes" / "xpu" / "_internal" / "models" / "shared.bin"
-    cuda_backend_model = (
-        backend / "runtimes" / "cuda" / "_internal" / "models" / "shared.bin"
-    )
-    xpu_backend_model = (
-        backend / "runtimes" / "xpu" / "_internal" / "models" / "shared.bin"
-    )
+    cuda_backend_model = backend / "runtimes" / "cuda" / "_internal" / "models" / "shared.bin"
+    xpu_backend_model = backend / "runtimes" / "xpu" / "_internal" / "models" / "shared.bin"
     assert os.path.samefile(cuda_model, xpu_model)
     assert os.path.samefile(cuda_model, cuda_backend_model)
     assert os.path.samefile(xpu_model, xpu_backend_model)
@@ -277,6 +380,7 @@ def test_universal_assembler_deduplicates_models_and_preserves_role_independence
     assert build_info["failure_fallback"] is False
     assert build_info["accelerator_priority"] == ["cuda", "xpu"]
     assert build_info["frontend_canonical_source"] == "cuda"
+    assert build_info["launchers"]["cli_sha256"]
     assert build_info["frontend_contract_files"] == [
         relative.replace("/", "\\") for relative in FRONTEND_CONTRACT_FILES
     ]

@@ -20,6 +20,7 @@ import torchaudio
 
 from src.i18n.translator import Translator
 from src.models.data_models import Config
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 from src.core.muscriptor_result_assets import read_midi_roll_notes
 from src.core.transcription_stream import snapshot_event
 from src.utils.audio_utils import load_audio_tensor
@@ -724,6 +725,7 @@ class AriaAmtTranscriber:
             encoding="utf-8",
             errors="replace",
             env=process_env,
+            **hidden_subprocess_kwargs(),
         )
         self._process = process
         try:

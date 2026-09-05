@@ -500,9 +500,9 @@ if (-not $nvidiaOk) {
             Where-Object { $_.Name -match 'AMD|Radeon' }
     } catch { }
     if ($amdGpu) {
-        Write-Err "检测到 AMD GPU；完整七模式当前需要 NVIDIA CUDA 12.8 与 ONNX Runtime CUDAExecutionProvider。Windows 不会静默改用 CPU。"
+        Write-Err "检测到 AMD GPU，无法安装当前 CUDA 运行环境；需要 NVIDIA GPU、兼容 CUDA 12.8 的驱动与 ONNX Runtime CUDAExecutionProvider。"
     }
-    Write-Err "未检测到可用的 NVIDIA 驱动 (nvidia-smi)；完整七模式不支持 CPU/Intel 降级运行。"
+    Write-Err "未检测到可用的 NVIDIA 驱动 (nvidia-smi)，CUDA 安装已停止。请检查 NVIDIA 显卡及驱动。"
 }
 
 $nvText = $nvOutput -join " "
@@ -583,7 +583,7 @@ Write-Ok "PyTorch 三件套与 NVIDIA CUDA 12.8 实测通过"
         Write-Err "无法读取 Intel 显卡信息，不能验证 XPU 目标硬件: $_"
     }
     if ($intelGpu.Count -eq 0) {
-        Write-Err "未检测到 Intel GPU；XPU 安装不会静默改用 CUDA、DirectML 或 CPU。"
+        Write-Err "未检测到 Intel GPU，XPU 安装已停止。请检查显卡及驱动是否正确识别。"
     }
     foreach ($adapter in $intelGpu) {
         Write-Info "Intel GPU: $($adapter.Name)；驱动: $($adapter.DriverVersion)"

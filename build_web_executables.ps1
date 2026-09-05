@@ -67,6 +67,7 @@ $AppName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-App" } else { "MusicTo
 $BackendName = if ($Accelerator -eq "xpu") { "MusicToMidi-XPU-WebBackend" } else { "MusicToMidi-WebBackend" }
 $GuiExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiXpu.exe" } else { "MusicToMidi.exe" }
 $BackendExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiBackendXpu.exe" } else { "MusicToMidiBackend.exe" }
+$CliExecutableName = if ($Accelerator -eq "xpu") { "MusicToMidiCLIXpu.exe" } else { "MusicToMidiCLI.exe" }
 $AppRoot = Join-Path $ResolvedDistRoot $AppName
 $BackendRoot = Join-Path $ResolvedDistRoot $BackendName
 $FrontendSource = Join-Path $ResolvedDistRoot "MusicToMidiFrontend"
@@ -86,8 +87,10 @@ Move-Item -LiteralPath $FrontendSource -Destination $FrontendRoot
 
 $AppExe = Join-Path $AppRoot $GuiExecutableName
 $BackendExe = Join-Path $BackendRoot $BackendExecutableName
+$AppCliExe = Join-Path $AppRoot $CliExecutableName
+$BackendCliExe = Join-Path $BackendRoot $CliExecutableName
 $FrontendExe = Join-Path $FrontendRoot "MusicToMidiFrontend.exe"
-foreach ($Executable in @($AppExe, $BackendExe, $FrontendExe)) {
+foreach ($Executable in @($AppExe, $BackendExe, $AppCliExe, $BackendCliExe, $FrontendExe)) {
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
         throw "Expected executable was not produced: $Executable"
     }
@@ -104,4 +107,6 @@ if (Test-Path -LiteralPath (Join-Path $BackendRoot $GuiExecutableName)) {
 
 Write-Host "Desktop App: $AppExe" -ForegroundColor Green
 Write-Host "Web backend: $BackendExe" -ForegroundColor Green
+Write-Host "Native CLI (App): $AppCliExe" -ForegroundColor Green
+Write-Host "Native CLI (Web backend): $BackendCliExe" -ForegroundColor Green
 Write-Host "Web frontend: $FrontendExe" -ForegroundColor Green

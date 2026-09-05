@@ -27,6 +27,11 @@ def _checkpoint_payload() -> bytes:
 
 def _write_source(repo: Path, *, patched: bool) -> None:
     repo.mkdir(parents=True, exist_ok=True)
+    config = repo / miros_runtime.MIROS_CONFORMER_CONFIG_REL_PATH
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_bytes(
+        (Path(__file__).parent / "fixtures/miros_conformer_config.json").read_bytes()
+    )
     (repo / "main.py").write_text("print('miros')\n", encoding="utf-8")
     audio_segments = (
         download_miros_model.MIROS_AUDIO_SEGMENTS_CPU_BLOCK
@@ -465,6 +470,7 @@ class MirosDownloaderTests(unittest.TestCase):
                     (Path(cwd) / ".git").mkdir()
                 elif command[:3] == ["git", "checkout", "--detach"]:
                     _write_source(Path(cwd), patched=True)
+                    (Path(cwd) / miros_runtime.MIROS_CONFORMER_CONFIG_REL_PATH).unlink()
                     miros_runtime.MIROS_PATCHED_SOURCE_SHA256 = (
                         miros_runtime.compute_miros_source_tree_sha256(Path(cwd))
                     )
@@ -477,9 +483,17 @@ class MirosDownloaderTests(unittest.TestCase):
                     )
                 elif command[0] == "curl":
                     output = Path(command[command.index("-o") + 1])
-                    output.write_bytes(
-                        fine_tuned if "drive.usercontent.google.com" in command[-1] else pretrained
-                    )
+                    if command[-1] == download_miros_model.MIROS_CONFORMER_CONFIG_URL:
+                        payload = (
+                            Path(__file__).parent / "fixtures/miros_conformer_config.json"
+                        ).read_bytes()
+                    else:
+                        payload = (
+                            fine_tuned
+                            if "drive.usercontent.google.com" in command[-1]
+                            else pretrained
+                        )
+                    output.write_bytes(payload)
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
             with ExitStack() as stack:
@@ -534,6 +548,12 @@ class MirosDownloaderTests(unittest.TestCase):
             self.assertFalse(list(repo.parent.glob("*.download")))
 
         commands = [command for command, _cwd in calls]
+        self.assertTrue(
+            any(
+                command[-1] == download_miros_model.MIROS_CONFORMER_CONFIG_URL
+                for command in commands
+            )
+        )
         self.assertIn(
             [
                 "git",

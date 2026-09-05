@@ -20,10 +20,12 @@ if ACCELERATOR not in {"cuda", "xpu"}:
 IS_XPU = ACCELERATOR == "xpu"
 gui_name='MusicToMidi'
 backend_name='MusicToMidiBackend'
+cli_name='MusicToMidiCLI'
 collection_name = "MusicToMidi"
 if IS_XPU:
     gui_name = "MusicToMidiXpu"
     backend_name = "MusicToMidiBackendXpu"
+    cli_name = "MusicToMidiCLIXpu"
     collection_name = "MusicToMidi-XPU"
 
 
@@ -309,6 +311,8 @@ hiddenimports = [
     'src.web_api.__main__',
     'src.web_api.inference_process',
     'src.web_api.server_config',
+    'src.cli.__main__',
+    'src.cli.app',
     'uvicorn.protocols.websockets.websockets_sansio_impl',
     # Conditional source-runtime gate import in src/main.py. PyInstaller cannot
     # discover imports guarded by ``if __name__ == "__main__"`` reliably.
@@ -573,9 +577,29 @@ backend_exe = EXE(
     icon='resources/icons/app.ico',
 )
 
+cli_exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name=cli_name,
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='resources/icons/app.ico',
+)
+
 coll = COLLECT(
     exe,
     backend_exe,
+    cli_exe,
     a.binaries,
     a.datas,
     strip=False,

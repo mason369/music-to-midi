@@ -294,10 +294,14 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                 encoding,
                 errors,
                 env,
+                **process_options,
             ):
                 self.assertIsNotNone(stdout)
                 self.assertIsNotNone(stderr)
                 self.assertTrue(text)
+                from src.utils.subprocess_utils import hidden_subprocess_kwargs
+
+                self.assertEqual(process_options, hidden_subprocess_kwargs())
                 calls.append((command, encoding, errors, env))
                 return FakeProcess(command)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -216,8 +217,25 @@ def test_muscriptor_organ_label_uses_the_musical_instrument_term():
         ),
         ("song_bass.wav", ["acoustic_bass", "electric_bass"]),
         ("vocals.wav", ["voice"]),
+        (
+            "陌上踏青-guitar-04-01a0613f.wav",
+            [
+                "acoustic_guitar",
+                "clean_electric_guitar",
+                "distorted_electric_guitar",
+            ],
+        ),
+        ("陌上踏青-bass-02-01a0613f.wav", ["acoustic_bass", "electric_bass"]),
+        ("陌上踏青-drums-03-01a0613f.wav", ["drums"]),
+        ("陌上踏青-keys-05-01a0613f.wav", ["acoustic_piano", "electric_piano"]),
+        ("陌上踏青-vocals-08-01a0613f.wav", ["voice"]),
         ("mix_clean_electric_guitar.flac", ["clean_electric_guitar"]),
         ("guitar solo demo.wav", []),
+        ("guitar-04-session.wav", []),
+        ("song-guitar-2024.wav", []),
+        ("陌上踏青-orchestral-06-01a0613f.wav", []),
+        ("陌上踏青-percussion-07-01a0613f.wav", []),
+        ("陌上踏青-synth-09-01a0613f.wav", []),
         ("accompaniment.wav", []),
     ],
 )
@@ -226,6 +244,69 @@ def test_standard_stem_names_infer_visible_muscriptor_hard_constraints(
     expected: list[str],
 ):
     assert infer_muscriptor_instruments_from_stem_name(filename) == expected
+
+
+def test_standalone_web_uses_the_same_evidence_bounded_stem_inference():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node runtime is unavailable for standalone Web validation")
+
+    web_source = Path("web/app.js").read_text(encoding="utf-8")
+    metadata = re.search(
+        r"const TESTED_STEM_EXPORT_METADATA = /.*?/;",
+        web_source,
+    )
+    function = re.search(
+        r"function inferMuscriptorInstruments\(filename\) \{.*?\n\}",
+        web_source,
+        re.DOTALL,
+    )
+    assert metadata is not None
+    assert function is not None
+
+    filenames = [
+        "陌上踏青-guitar-04-01a0613f.wav",
+        "陌上踏青-bass-02-01a0613f.wav",
+        "陌上踏青-drums-03-01a0613f.wav",
+        "陌上踏青-keys-05-01a0613f.wav",
+        "陌上踏青-vocals-08-01a0613f.wav",
+        "guitar solo demo.wav",
+        "song-guitar-2024.wav",
+        "陌上踏青-synth-09-01a0613f.wav",
+    ]
+    expected = [infer_muscriptor_instruments_from_stem_name(filename) for filename in filenames]
+    capabilities = [
+        {"id": instrument}
+        for instrument in (
+            "acoustic_guitar",
+            "clean_electric_guitar",
+            "distorted_electric_guitar",
+            "acoustic_bass",
+            "electric_bass",
+            "acoustic_piano",
+            "electric_piano",
+            "voice",
+            "drums",
+        )
+    ]
+    javascript = "\n".join(
+        (
+            f"const state = {{capabilities: {{muscriptor_instruments: {json.dumps(capabilities)}}}}};",
+            metadata.group(0),
+            function.group(0),
+            f"const filenames = {json.dumps(filenames, ensure_ascii=False)};",
+            "process.stdout.write(JSON.stringify(filenames.map(inferMuscriptorInstruments)));",
+        )
+    )
+    completed = subprocess.run(
+        [node, "-e", javascript],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert json.loads(completed.stdout) == expected
 
 
 def test_solo_and_instrument_row_keep_active_editor_instrument_synchronized(tmp_path: Path):
@@ -500,11 +581,13 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
     audio.write_bytes(b"wav")
     output = tmp_path / "output.mid"
     model = FakeModel()
+    inferred = infer_muscriptor_instruments_from_stem_name("陌上踏青-piano-05-01a0613f.wav")
+    assert inferred == ["acoustic_piano", "electric_piano"]
     config = Config(
         use_gpu=False,
         transcription_backend="muscriptor",
         multi_instrument_model="muscriptor",
-        muscriptor_instruments=["acoustic_piano"],
+        muscriptor_instruments=inferred,
     )
     transcriber = MuscriptorTranscriber(config)
     transcriber._model = model
@@ -514,7 +597,7 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
     assert transcriber.transcribe_to_midi(str(audio), str(output)) == str(output.resolve())
     assert output.is_file()
     assert model.kwargs == {
-        "instruments": ["acoustic_piano"],
+        "instruments": ["acoustic_piano", "electric_piano"],
         "use_sampling": False,
         "batch_size": 1,
         "beam_size": 1,
@@ -2189,6 +2272,7 @@ app = QApplication([])
 source = {str(source)!r}
 note = MuscriptorRollNote("acoustic_piano", 60, 100, 0.25, 0.75)
 widget = MuscriptorResultWidget(source, ["acoustic_piano"])
+widget.set_bpm_context(120.0, 120.0)
 widget._on_preview_ready(
     1,
     MuscriptorPreviewAssets(
@@ -2211,19 +2295,24 @@ def run(action):
 
 def start():
     widget._toggle_playback()
+    QTimer.singleShot(120, lambda: run(pause_seek_resume))
 
 def pause_seek_resume():
     widget.pause()
     widget.seek(1.2)
     widget._toggle_playback()
+    QTimer.singleShot(140, lambda: run(change_rate_and_rewind))
 
 def change_rate_and_rewind():
     widget.speed_spin.setValue(1.1)
     widget.seek(0.0)
+    QTimer.singleShot(390, lambda: run(verify))
 
 def verify():
     if widget._playback_engine.output_stream_count != 1:
         failure.append("result playback created more than one output stream")
+    if abs(widget._playback_engine._source.playback_rate - 1.1) > 1e-9:
+        failure.append("playback speed confirmation did not reach the audio source")
     if not widget._playing or not widget._playback_engine.is_playing:
         failure.append("single synchronized stream stopped after seek/rate controls")
     if not 0.05 <= widget._playback_engine.position_seconds <= 0.8:
@@ -2235,10 +2324,10 @@ def verify():
     widget.close()
     app.quit()
 
+# Device startup can block longer than all four original absolute deadlines.
+# Measure the same 120 + 140 + 390 ms of real playback AFTER each operation,
+# so overdue timers cannot rewind and verify in the same event-loop turn.
 QTimer.singleShot(0, lambda: run(start))
-QTimer.singleShot(120, lambda: run(pause_seek_resume))
-QTimer.singleShot(260, lambda: run(change_rate_and_rewind))
-QTimer.singleShot(650, lambda: run(verify))
 app.exec()
 if failure:
     raise RuntimeError("; ".join(failure))
@@ -2763,7 +2852,7 @@ def test_desktop_midi_editor_add_delete_undo_redo_and_reset(tmp_path: Path):
         assert widget._edited_notes == (original,)
         assert widget.edit_reset_button.isEnabled() is False
         assert widget.edit_summary_label.text()
-        assert widget.edit_summary_label.wordWrap() is False
+        assert widget.edit_summary_label.wordWrap() is True
         assert widget.edit_summary_label.minimumHeight() >= 32
         assert all(
             button.minimumHeight() >= 34
@@ -3716,6 +3805,9 @@ def test_roll_horizontal_scrollbar_handle_drag_is_not_cancelled(tmp_path: Path):
 
 
 def test_project_native_selector_controls_real_constraint_state():
+    from src.i18n.translator import set_language
+
+    set_language("zh_CN")
     app = QApplication.instance() or QApplication([])
     selector = MuscriptorInstrumentSelector()
     selector.resize(760, 220)

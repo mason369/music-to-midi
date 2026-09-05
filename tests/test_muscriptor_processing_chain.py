@@ -114,13 +114,13 @@ def test_web_api_accepts_both_chains_and_defaults_to_telknet():
         "official",
         "telknet",
     ]
-    assert capabilities["muscriptor_processing_chains"][0]["label_zh"] == ("官方处理链路（默认）")
+    assert capabilities["muscriptor_processing_chains"][0]["label_zh"] == ("标准（默认）")
     assert capabilities["muscriptor_processing_chains"][0]["label_en"] == (
-        "Official processing path (default)"
+        "Standard (default)"
     )
-    assert capabilities["muscriptor_processing_chains"][1]["label_zh"] == ("分段边界连续性修复链路")
+    assert capabilities["muscriptor_processing_chains"][1]["label_zh"] == ("跨段延音衔接")
     assert capabilities["muscriptor_processing_chains"][1]["label_en"] == (
-        "Segment-boundary continuity fix path"
+        "Sustain across segments"
     )
 
 

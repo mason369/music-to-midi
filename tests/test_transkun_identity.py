@@ -15,6 +15,7 @@ from src.core.transkun_transcriber import (
     TRANSKUN_WEIGHT_SHA256,
     TRANSKUN_WEIGHT_SIZE,
     TranskunTranscriber,
+    _disable_inference_gradient_checkpointing,
     _transkun_worker,
 )
 
@@ -141,6 +142,27 @@ def test_transkun_worker_loads_the_pinned_checkpoint_strictly():
     source = inspect.getsource(_transkun_worker)
     assert "model.load_state_dict(state_dict, strict=True)" in source
     assert "strict=False" not in source
+
+
+def test_transkun_inference_disables_training_only_gradient_checkpointing():
+    class Module:
+        def __init__(self, enabled=None):
+            if enabled is not None:
+                self.useGradientCheckpoint = enabled
+
+    modules = [Module(True), Module(False), Module(), Module(True)]
+
+    class Model:
+        @staticmethod
+        def modules():
+            return iter(modules)
+
+    assert _disable_inference_gradient_checkpointing(Model()) == 2
+    assert modules[0].useGradientCheckpoint is False
+    assert modules[1].useGradientCheckpoint is False
+    assert not hasattr(modules[2], "useGradientCheckpoint")
+    assert modules[3].useGradientCheckpoint is False
+    assert "_disable_inference_gradient_checkpointing(model)" in inspect.getsource(_transkun_worker)
 
 
 def test_transkun_parent_uses_blocking_queue_read_with_timeout():

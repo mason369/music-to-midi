@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QSizePolicy,
     QStyle,
     QStyleOptionSlider,
@@ -116,14 +117,18 @@ class ResponsiveGuiTests(unittest.TestCase):
             window.resize(480, 360)
             self._app.processEvents()
 
-            self.assertIsInstance(window.centralWidget(), QScrollArea)
+            self.assertIsInstance(window.workspace_tabs, QTabWidget)
+            self.assertEqual(window.workspace_tabs.count(), 2)
+            self.assertEqual(window.workspace_tabs.currentIndex(), 0)
+            self.assertIsInstance(window.workspace_tabs.widget(0), QScrollArea)
+            self.assertIsInstance(window.workspace_tabs.widget(1), QScrollArea)
             self.assertEqual(window.size().width(), 480)
             self.assertEqual(window.size().height(), 360)
             self.assertEqual(
-                window.centralWidget().horizontalScrollBarPolicy(),
+                window.content_scroll.horizontalScrollBarPolicy(),
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
             )
-            self.assertGreater(window.centralWidget().verticalScrollBar().maximum(), 0)
+            self.assertGreater(window.content_scroll.verticalScrollBar().maximum(), 0)
         finally:
             window.close()
 

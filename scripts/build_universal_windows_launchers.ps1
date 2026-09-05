@@ -32,8 +32,9 @@ if (-not $cscPath) {
 [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $appLauncher = Join-Path $outputRoot "MusicToMidi.exe"
 $backendLauncher = Join-Path $outputRoot "MusicToMidiBackend.exe"
+$cliLauncher = Join-Path $outputRoot "MusicToMidiCLI.exe"
 
-foreach ($path in @($appLauncher, $backendLauncher)) {
+foreach ($path in @($appLauncher, $backendLauncher, $cliLauncher)) {
     if (Test-Path -LiteralPath $path) {
         Remove-Item -LiteralPath $path -Force
     }
@@ -71,7 +72,23 @@ if ($LASTEXITCODE -ne 0) {
     throw "Universal Web backend launcher compilation failed with exit code $LASTEXITCODE."
 }
 
-foreach ($path in @($appLauncher, $backendLauncher)) {
+& $cscPath `
+    /nologo `
+    /optimize+ `
+    /codepage:65001 `
+    /platform:x64 `
+    /target:exe `
+    /define:CLI_LAUNCHER `
+    "/win32icon:$iconPath" `
+    /reference:System.Management.dll `
+    /reference:System.Windows.Forms.dll `
+    "/out:$cliLauncher" `
+    $sourcePath
+if ($LASTEXITCODE -ne 0) {
+    throw "Universal CLI launcher compilation failed with exit code $LASTEXITCODE."
+}
+
+foreach ($path in @($appLauncher, $backendLauncher, $cliLauncher)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Universal launcher was not produced: $path"
     }
@@ -82,3 +99,4 @@ foreach ($path in @($appLauncher, $backendLauncher)) {
 
 Write-Host "[ok] Universal App launcher: $appLauncher"
 Write-Host "[ok] Universal Web backend launcher: $backendLauncher"
+Write-Host "[ok] Universal CLI launcher: $cliLauncher"

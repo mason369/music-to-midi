@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-cd /app
+app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${app_dir}${PYTHONPATH:+:${PYTHONPATH}}"
 
 fail() {
     printf 'Music to MIDI container startup failed: %s\n' "$*" >&2
@@ -36,6 +37,11 @@ verify_source_runtime() {
 command_name="${1:-server}"
 shift || true
 
+# Honor docker run --workdir / docker compose run -w for CLI user paths.
+if [[ "$command_name" != "cli" ]]; then
+    cd "$app_dir"
+fi
+
 case "$command_name" in
     model-init)
         require_env MUSIC_TO_MIDI_ENABLED_PROFILES
@@ -53,6 +59,16 @@ case "$command_name" in
         exec python -m src.model_profiles verify \
             --profiles "$MUSIC_TO_MIDI_ENABLED_PROFILES" \
             --require-ready "$@"
+        ;;
+    cli)
+        require_env MUSIC_TO_MIDI_ENABLED_PROFILES
+        [[ "${MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES:-}" == "1" ]] \
+            || fail "MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES must be 1"
+        verify_source_runtime
+        python -m src.model_profiles verify \
+            --profiles "$MUSIC_TO_MIDI_ENABLED_PROFILES" \
+            --require-ready
+        exec python -m src.cli "$@"
         ;;
     server)
         require_env PUBLIC_ORIGIN
@@ -135,6 +151,6 @@ case "$command_name" in
             "$@"
         ;;
     *)
-        fail "unsupported command '$command_name'; expected server, server-selfhost, model-init or verify-models"
+        fail "unsupported command '$command_name'; expected server, server-selfhost, model-init, verify-models or cli"
         ;;
 esac

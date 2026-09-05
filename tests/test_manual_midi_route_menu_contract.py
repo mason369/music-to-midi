@@ -31,7 +31,7 @@ EXPECTED_ROUTE_COPY = {
             ("miros", "MIROS (MusicFM)（多乐器）"),
             ("muscriptor", "MuScriptor Large（多乐器，质量优先）"),
             ("muscriptor:medium", "MuScriptor Medium（多乐器，速度/质量平衡）"),
-            ("muscriptor:small", "MuScriptor Small（多乐器，最快/最低显存）"),
+            ("muscriptor:small", "MuScriptor Small（多乐器，轻量）"),
             ("piano_transkun", "TransKun V2（钢琴）"),
             ("piano_transkun_v2_aug", "TransKun V2 Aug（钢琴）"),
             ("piano_aria_amt", "Aria-AMT（钢琴）"),
@@ -46,7 +46,7 @@ EXPECTED_ROUTE_COPY = {
             ("miros", "MIROS (MusicFM) (Multi-Instrument)"),
             ("muscriptor", "MuScriptor Large (Multi-Instrument, quality first)"),
             ("muscriptor:medium", "MuScriptor Medium (Multi-Instrument, balanced)"),
-            ("muscriptor:small", "MuScriptor Small (Multi-Instrument, fastest/lowest VRAM)"),
+            ("muscriptor:small", "MuScriptor Small (Multi-Instrument, lightweight)"),
             ("piano_transkun", "TransKun V2 (Piano)"),
             ("piano_transkun_v2_aug", "TransKun V2 Aug (Piano)"),
             ("piano_aria_amt", "Aria-AMT (Piano)"),
@@ -191,6 +191,33 @@ def test_per_track_midi_menu_lists_every_route_with_localized_labels(
             assert midi_route_label(route) == f"YourMT3+ · {checkpoint_label}"
         for route, localized_label in expected_copy["other_routes"]:
             assert midi_route_label(route) == localized_label
+    finally:
+        row.close()
+        row.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_metadata_stem_preselects_the_visible_muscriptor_hard_mask(
+    qapp,
+    tmp_path,
+):
+    audio_path = tmp_path / "陌上踏青-guitar-04-01a0613f.wav"
+    audio_path.write_bytes(b"audio")
+    row = _AudioTrackRow(audio_path.stem, audio_path, "#5eb1ff")
+    row.show()
+    qapp.processEvents()
+
+    try:
+        row.midi_enabled_checkbox.setChecked(True)
+        row.midi_model_selector.setCurrentIndex(row.midi_model_selector.findData("muscriptor"))
+        qapp.processEvents()
+
+        assert row.muscriptor_instrument_selector.isVisibleTo(row)
+        assert row.selected_muscriptor_instruments() == [
+            "acoustic_guitar",
+            "clean_electric_guitar",
+            "distorted_electric_guitar",
+        ]
     finally:
         row.close()
         row.deleteLater()

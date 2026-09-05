@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -323,6 +324,17 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """设置主用户界面"""
+        shell = QWidget()
+        shell.setObjectName("mainContent")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(4)
+        self.setCentralWidget(shell)
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setObjectName("workspacePages")
+        self.workspace_tabs.setDocumentMode(True)
+        shell_layout.addWidget(self.workspace_tabs, 1)
+
         self.content_scroll = QScrollArea()
         self.content_scroll.setObjectName("mainContentScroll")
         self.content_scroll.viewport().setObjectName("mainContentViewport")
@@ -331,7 +343,7 @@ class MainWindow(QMainWindow):
         self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.content_scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.setCentralWidget(self.content_scroll)
+        self.workspace_tabs.addTab(self.content_scroll, t("main.workspace.setup"))
 
         central_widget = QWidget()
         central_widget.setObjectName("mainContent")
@@ -388,6 +400,23 @@ class MainWindow(QMainWindow):
         # 进度组件
         self.progress_widget = ProgressWidget()
         self._add_shadow(self.progress_widget)
+
+        self.result_scroll = QScrollArea()
+        self.result_scroll.setObjectName("mainContentScroll")
+        self.result_scroll.viewport().setObjectName("mainContentViewport")
+        self.result_scroll.setWidgetResizable(True)
+        self.result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.result_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.result_scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
+        result_page = QWidget()
+        result_page.setObjectName("mainContent")
+        self.result_scroll.setWidget(result_page)
+        result_page_layout = QVBoxLayout(result_page)
+        result_page_layout.setContentsMargins(12, 6, 12, 6)
+        result_page_layout.setSpacing(6)
+        result_page_layout.addWidget(self.progress_widget)
+        self.workspace_tabs.addTab(self.result_scroll, t("main.workspace.result"))
+        self.workspace_tabs.setTabEnabled(1, False)
 
         # 输出设置
         self.output_group = self._create_output_settings()
@@ -479,10 +508,18 @@ class MainWindow(QMainWindow):
         # 添加组件
         main_layout.addWidget(self.dropzone)
         main_layout.addWidget(self.track_panel)
-        main_layout.addWidget(self.progress_widget)
         main_layout.addWidget(self.output_group)
-        main_layout.addLayout(self.action_layout)
-        main_layout.addWidget(self.result_panel)
+        main_layout.addStretch(1)
+        result_page_layout.addWidget(self.result_panel)
+        result_page_layout.addStretch(1)
+        # Keep cancellation reachable on both pages without duplicating workers
+        # or recreating the persistent MIDI editor when the user switches tabs.
+        shell_layout.addLayout(self.action_layout)
+
+    def _reveal_result_page(self) -> None:
+        self.workspace_tabs.setTabEnabled(1, True)
+        self.workspace_tabs.setCurrentIndex(1)
+        self.result_scroll.verticalScrollBar().setValue(0)
 
     def _create_header(self) -> QWidget:
         """创建顶部标题区域"""
@@ -942,6 +979,7 @@ class MainWindow(QMainWindow):
 
         class _GpuDetector(QThread):
             detected = pyqtSignal(str, object)  # (device_label, memory_info)
+            failed = pyqtSignal(str)
 
             def run(self):
                 try:
@@ -959,14 +997,36 @@ class MainWindow(QMainWindow):
                     else:
                         memory_info = None
                     self.detected.emit(device_text, memory_info)
-                except Exception:
-                    self.detected.emit("CPU", None)
+                except Exception as exc:
+                    logger.exception("设备检测失败")
+                    self.failed.emit(str(exc))
 
         self._gpu_detector = _GpuDetector()
         self._gpu_detector.detected.connect(self._on_gpu_detected)
+        self._gpu_detector.failed.connect(self._on_gpu_detection_failed)
+        detector = self._gpu_detector
+        detector.finished.connect(lambda: self._on_gpu_detection_finished(detector))
         self._gpu_detector.start()
 
+    def _on_gpu_detection_failed(self, error_message: str) -> None:
+        """Expose failed detection without reporting a successful CPU result."""
+        self._raw_device_label = "DEVICE_DETECTION_FAILED"
+        self._last_memory_info = None
+        self.device_label.setText(self._format_device_label(self._raw_device_label))
+        self.device_label.setToolTip(error_message)
+        self._render_memory_label()
+
+    def _on_gpu_detection_finished(self, detector: QThread) -> None:
+        """Keep the detector alive until its native thread has finished."""
+        if getattr(self, "_gpu_detector", None) is detector:
+            self._gpu_detector = None
+        detector.deleteLater()
+        if getattr(self, "_close_pending", False):
+            self.close()
+
     def _format_device_label(self, dev: str) -> str:
+        if dev == "DEVICE_DETECTION_FAILED":
+            return t("status.device_detection_failed")
         return t("status.cpu") if dev == "CPU" else dev
 
     def _render_memory_label(self):
@@ -1104,6 +1164,8 @@ class MainWindow(QMainWindow):
 
     def _clear_completed_result(self) -> None:
         """Hide stale success output before another input or processing run."""
+        self.workspace_tabs.setCurrentIndex(0)
+        self.workspace_tabs.setTabEnabled(1, False)
         self._last_result = None
         self._last_separation_result = None
         self._manual_midi_context = None
@@ -1164,10 +1226,7 @@ class MainWindow(QMainWindow):
             self._clear_widget_layout(self.result_actions_layout)
         self.audio_timeline_container.show()
         self.result_panel.show()
-        QTimer.singleShot(
-            0,
-            lambda: self.content_scroll.ensureWidgetVisible(self.result_panel, 0, 16),
-        )
+        self._reveal_result_page()
 
     def _on_audio_mixer_playing_changed(self, playing: bool) -> None:
         """Keep the WAV mixer and linked MIDI detail from playing simultaneously."""
@@ -1207,22 +1266,13 @@ class MainWindow(QMainWindow):
         if workbench is None:
             raise RuntimeError("Transcription result workbench could not be created")
 
-        if result.beat_info:
-            bpm_text = result.beat_info.bpm_display
-            if result.beat_info.is_variable_tempo:
-                bpm_text += f" ({t('dialogs.complete.bpm_variable')})"
-        else:
-            bpm_text = "N/A"
         self._last_result = result
         self._last_separation_result = None
         self.result_title_label.setText(f"✓  {workbench.backend_label}")
-        self.result_info_label.setText(
-            f"<b>{t('dialogs.complete.midi_file')}:</b> {escape(result.midi_path)}<br>"
-            f"<b>{t('dialogs.complete.note_count')}:</b> {result.total_notes}<br>"
-            f"<b>BPM:</b> {bpm_text}<br>"
-            f"<b>{t('dialogs.complete.processing_time')}:</b> "
-            f"{result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}"
-        )
+        if not workbench.property("summaryTempoConnected"):
+            workbench.tempo_changed.connect(self._refresh_result_editor_summary)
+            workbench.setProperty("summaryTempoConnected", True)
+        self._refresh_result_editor_summary()
         self.result_info_label.show()
         self._clear_widget_layout(self.result_actions_layout)
         self.audio_timeline_container.show()
@@ -1241,10 +1291,31 @@ class MainWindow(QMainWindow):
         if workbench.midi_path != str(Path(result.midi_path).resolve()):
             workbench.finalize_result(result)
         if reveal:
-            QTimer.singleShot(
-                0,
-                lambda: self.content_scroll.ensureWidgetVisible(self.result_panel, 0, 16),
+            self._reveal_result_page()
+
+    def _refresh_result_editor_summary(self) -> None:
+        """Show the current project tempo, never a stale conversion-time value."""
+        workbench = self.muscriptor_result_widget
+        result = self._last_result
+        if workbench is None or result is None:
+            return
+        tempo = (
+            f"{t('muscriptor_result.project_bpm')}: {workbench.bpm_spin.value():.1f}"
+            if workbench._detected_bpm is not None
+            else t("muscriptor_result.tempo_unset")
+        )
+        self.result_info_label.setText(
+            f"<b>{t('dialogs.complete.midi_file')}:</b> {escape(result.midi_path)}<br>"
+            f"<b>{t('dialogs.complete.note_count')}:</b> {result.total_notes} &nbsp; · &nbsp; "
+            f"{escape(tempo)} &nbsp; · &nbsp; "
+            f"{t('dialogs.complete.processing_time')}: "
+            f"{result.processing_time:.1f}{t('dialogs.complete.seconds_suffix')}"
+            + (
+                f"<p>{escape(t('main.tempo_evidence_notice'))}</p>"
+                if result.beat_info and result.beat_info.fixed_tempo_reliable is False
+                else ""
             )
+        )
 
     @staticmethod
     def _result_button_style(*, primary: bool = False) -> str:
@@ -1361,6 +1432,8 @@ class MainWindow(QMainWindow):
         self.result_title_label.setText(
             "✓  " + t("dialogs.complete.audio_tracks.result_panel_title")
         )
+        if result.beat_info and result.beat_info.fixed_tempo_reliable is False:
+            info_text += f"<p>{escape(t('main.tempo_evidence_notice'))}</p>"
         self.result_info_label.setText(info_text)
         self._clear_widget_layout(self.result_actions_layout)
         self._add_result_button(
@@ -1412,14 +1485,7 @@ class MainWindow(QMainWindow):
                 show_timeline=show_timeline,
             )
         if reveal:
-            QTimer.singleShot(
-                0,
-                lambda: self.content_scroll.ensureWidgetVisible(
-                    self.result_panel,
-                    0,
-                    16,
-                ),
-            )
+            self._reveal_result_page()
 
     def _show_separation_result(
         self,
@@ -1493,14 +1559,7 @@ class MainWindow(QMainWindow):
         if replace_timeline:
             self._set_audio_tracks(dict(ordered_paths))
         if reveal:
-            QTimer.singleShot(
-                0,
-                lambda: self.content_scroll.ensureWidgetVisible(
-                    self.result_panel,
-                    0,
-                    16,
-                ),
-            )
+            self._reveal_result_page()
 
     def _on_file_selected(self, file_path: str):
         """处理文件选择"""
@@ -1678,6 +1737,7 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(True)
         self.track_panel.set_processing_controls_enabled(False)
         self.progress_widget.reset()
+        self._reveal_result_page()
         self.status_label.setText(t("status.processing"))
 
         # 开始处理
@@ -2193,6 +2253,8 @@ class MainWindow(QMainWindow):
 
         self.title_label.setText(t("app.name"))
         self.subtitle_label.setText(t("app.subtitle"))
+        self.workspace_tabs.setTabText(0, t("main.workspace.setup"))
+        self.workspace_tabs.setTabText(1, t("main.workspace.result"))
 
         # 输出设置
         self.output_group.setTitle(t("main.output.title"))
@@ -2255,7 +2317,16 @@ class MainWindow(QMainWindow):
             event.ignore()
             logger.info("关闭请求已延后；等待工作线程真正退出")
             return
+        detector = getattr(self, "_gpu_detector", None)
+        if detector is not None and detector.isRunning():
+            self._close_pending = True
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            self.track_panel.set_processing_controls_enabled(False)
+            self.status_label.setText(t("status.closing"))
+            event.ignore()
+            logger.info("关闭请求已延后；等待设备检测线程退出")
+            return
+        self._close_pending = False
         self._clear_audio_mixer()
-        if hasattr(self, "_gpu_detector") and self._gpu_detector.isRunning():
-            self._gpu_detector.wait(1000)
         super().closeEvent(event)

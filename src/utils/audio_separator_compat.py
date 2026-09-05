@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import inspect
+import subprocess
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, TypeVar
 
@@ -13,7 +14,8 @@ from src.utils.gpu_utils import (
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
 )
-from src.utils.runtime_paths import activate_audio_separator_runtime
+from src.utils.runtime_paths import activate_audio_separator_runtime, get_ffmpeg_executable
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,28 @@ def get_separator_cls():
     activate_audio_separator_runtime()
     from audio_separator.separator import Separator
 
-    return patch_separator_package_metadata(Separator)
+    separator_cls = patch_separator_package_metadata(Separator)
+
+    class BackgroundSeparator(separator_cls):
+        def check_ffmpeg_installed(self):
+            # Override only the upstream process boundary. Never suppress missing
+            # FFmpeg (including during tests) or patch subprocess globally.
+            completed = subprocess.run(
+                [get_ffmpeg_executable(), "-version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **hidden_subprocess_kwargs(),
+            )
+            lines = completed.stdout.splitlines()
+            if not lines or not lines[0].startswith("ffmpeg version "):
+                raise RuntimeError(f"FFmpeg 版本探测返回无效输出: {completed.stdout!r}")
+            self.logger.info("FFmpeg 版本: %s", lines[0])
+
+    return BackgroundSeparator
 
 
 def _force_separator_cpu(separator: Any) -> Any:

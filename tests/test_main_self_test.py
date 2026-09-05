@@ -448,6 +448,9 @@ class MainSelfTestTests(unittest.TestCase):
         hard_exit.assert_called_once_with(7)
 
     def test_main_help_exits_before_gui_startup_and_torch_preload(self):
+        from src.i18n.translator import set_language
+
+        set_language("zh_CN")
         stdout = io.StringIO()
         with (
             patch.object(sys, "argv", ["MusicToMidi.exe", "--help"]),

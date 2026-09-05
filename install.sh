@@ -268,9 +268,9 @@ info "验证完整七模式 NVIDIA CUDA 12.8 运行时..."
 
 if ! command -v nvidia-smi &>/dev/null || ! nvidia-smi &>/dev/null 2>&1; then
     if command -v rocm-smi &>/dev/null && rocm-smi &>/dev/null 2>&1; then
-        error "检测到 AMD/ROCm；当前完整七模式需要 NVIDIA CUDA 12.8 与 ONNX Runtime CUDAExecutionProvider，尚未支持 ROCm。不会静默改用 CPU。"
+        error "检测到 AMD/ROCm，安装已停止；当前 Linux 完整七模式需要 NVIDIA CUDA 12.8 与 ONNX Runtime CUDAExecutionProvider，尚未支持 ROCm。"
     fi
-    error "未检测到可用的 NVIDIA 驱动 (nvidia-smi)；完整七模式不支持 CPU/Intel 降级运行。"
+    error "未检测到可用的 NVIDIA 驱动 (nvidia-smi)，安装已停止。请检查 NVIDIA 显卡及驱动。"
 fi
 
 CUDA_VER=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1)

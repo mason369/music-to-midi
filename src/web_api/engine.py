@@ -114,6 +114,8 @@ class InferenceEngine:
             "bpm": float(beat.bpm),
             "bpm_display": beat.bpm_display,
             "source_bpm": beat.source_bpm,
+            "fixed_tempo_reliable": beat.fixed_tempo_reliable,
+            "tempo_warning": beat.tempo_warning,
             "time_signature": list(beat.time_signature) if beat.time_signature else None,
             "is_variable_tempo": bool(beat.is_variable_tempo),
             "tempo_map": [[float(sec), float(bpm)] for sec, bpm in beat.tempo_map],

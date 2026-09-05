@@ -185,6 +185,7 @@ def _validate_miros_assets(repo_dir: Path) -> tuple[Path, ...]:
         repo_dir / "transcribe.py",
         repo_dir / miros.MirosTranscriber.PRETRAINED_REL_PATH,
         repo_dir / miros.MirosTranscriber.CHECKPOINT_REL_PATH,
+        repo_dir / miros.MIROS_CONFORMER_CONFIG_REL_PATH,
     )
 
 

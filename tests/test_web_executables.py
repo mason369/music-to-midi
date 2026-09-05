@@ -185,6 +185,7 @@ def test_portable_role_separator_creates_independent_hardlinked_trees(tmp_path):
     internal.mkdir(parents=True)
     (combined / "MusicToMidi.exe").write_bytes(b"desktop")
     (combined / "MusicToMidiBackend.exe").write_bytes(b"backend")
+    (combined / "MusicToMidiCLI.exe").write_bytes(b"cli")
     (internal / "runtime.bin").write_bytes(b"shared-runtime")
 
     helper = REPO_ROOT / "scripts" / "separate_windows_portable_roles.ps1"
@@ -217,6 +218,8 @@ def test_portable_role_separator_creates_independent_hardlinked_trees(tmp_path):
     assert not (app_root / "MusicToMidiBackend.exe").exists()
     assert (backend_root / "MusicToMidiBackend.exe").is_file()
     assert not (backend_root / "MusicToMidi.exe").exists()
+    assert (app_root / "MusicToMidiCLI.exe").is_file()
+    assert (backend_root / "MusicToMidiCLI.exe").is_file()
     assert os.path.samefile(
         app_root / "_internal" / "runtime.bin",
         backend_root / "_internal" / "runtime.bin",

@@ -855,6 +855,12 @@ def _create_strict_onnx_session(ort_module, onnx_path: Path, providers: list, de
     add_entry = getattr(session_options, "add_session_config_entry", None)
     normalized_device = str(device).strip().lower()
     strict_gpu_only = normalized_device.startswith("xpu")
+    if normalized_device.startswith("cuda"):
+        # PolarFormer's fixed CUDA graph intentionally keeps ORT's built-in
+        # CPU assignment for graph-management/shape operations. ORT otherwise
+        # emits a native warning for this expected, validated assignment on
+        # every session creation. Keep actual errors visible.
+        session_options.log_severity_level = 3
     if strict_gpu_only:
         if not callable(add_entry):
             raise RuntimeError(

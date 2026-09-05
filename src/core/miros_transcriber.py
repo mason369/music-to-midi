@@ -30,6 +30,7 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 from src.utils.runtime_paths import get_miros_source_dir, is_frozen_app
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
 from src.core.transcription_stream import read_new_jsonl_events
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,14 @@ MIROS_PRETRAINED_EXACT_BYTES = 1_316_802_088
 MIROS_PRETRAINED_SHA256 = "218b483a0256ddef736267425fabb166fd97008983696bb9270def464b47bded"
 MIROS_FINETUNED_EXACT_BYTES = 4_347_922_234
 MIROS_FINETUNED_SHA256 = "b1b8c167b3d2e3eaeb19202cd3fd366bb43492cd7720ff1516e1553c72e356e5"
+MIROS_CONFORMER_CONFIG_COMMIT = "6b36ef01c6443c67ae7ed0822876d091ab50e4aa"
+MIROS_CONFORMER_CONFIG_REL_PATH = Path(
+    "facebook/wav2vec2-conformer-rope-large-960h-ft/config.json"
+)
+MIROS_CONFORMER_CONFIG_EXACT_BYTES = 2239
+MIROS_CONFORMER_CONFIG_SHA256 = (
+    "7a63cb5706c9a37483f1973a3c226d54eb504ce15cf62cb52637019540c8a75d"
+)
 
 _MIROS_SOURCE_EXCLUDED_DIRS = {".git", "__pycache__", ".pytest_cache"}
 
@@ -81,11 +90,12 @@ def _canonical_source_bytes(data: bytes) -> bytes:
 
 
 def compute_miros_source_tree_sha256(repo_dir: Path | str) -> str:
-    """Hash the complete patched source tree, excluding VCS/cache data and model weights."""
+    """Hash source; required weights/configuration have separate exact identity checks."""
     repo = Path(repo_dir)
     excluded_files = {
         MirosTranscriber.PRETRAINED_REL_PATH.as_posix(),
         MirosTranscriber.CHECKPOINT_REL_PATH.as_posix(),
+        MIROS_CONFORMER_CONFIG_REL_PATH.as_posix(),
     }
     entries: list[tuple[str, str]] = []
     for path in repo.rglob("*"):
@@ -120,6 +130,7 @@ def _git_head_commit(repo_dir: Path) -> tuple[Optional[str], Optional[str]]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"cannot read MIROS Git HEAD: {exc}"
@@ -256,6 +267,12 @@ def get_miros_weight_identity_error(repo_dir: Path | str) -> str:
             MIROS_FINETUNED_EXACT_BYTES,
             MIROS_FINETUNED_SHA256,
             "MIROS fine-tuned checkpoint",
+        ),
+        (
+            repo / MIROS_CONFORMER_CONFIG_REL_PATH,
+            MIROS_CONFORMER_CONFIG_EXACT_BYTES,
+            MIROS_CONFORMER_CONFIG_SHA256,
+            "MIROS Conformer 配置文件",
         ),
     )
     for path, expected_size, expected_sha256, label in checks:
@@ -637,6 +654,7 @@ class MirosTranscriber:
             encoding="utf-8",
             errors="replace",
             env=process_env,
+            **hidden_subprocess_kwargs(),
         )
         with self._process_lock:
             self._process = process

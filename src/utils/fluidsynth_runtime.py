@@ -11,6 +11,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from src.utils.subprocess_utils import hidden_subprocess_kwargs
+
 FLUIDSYNTH_VERSION = "2.5.6"
 FLUIDSYNTH_WINDOWS_ARCHIVE = f"fluidsynth-v{FLUIDSYNTH_VERSION}-win10-x64-cpp11.zip"
 FLUIDSYNTH_WINDOWS_URL = (
@@ -61,6 +63,7 @@ def _validate_runtime(executable: Path, *, require_pinned_version: bool) -> Path
         errors="replace",
         timeout=20,
         env=get_fluidsynth_subprocess_env(executable),
+        **hidden_subprocess_kwargs(),
     )
     version_text = completed.stdout or ""
     if completed.returncode != 0 or (

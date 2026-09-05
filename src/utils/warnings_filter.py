@@ -12,6 +12,14 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 _FALLBACK_STREAM = None
+_FROZEN_CONSOLE_ENTRY_NAMES = frozenset(
+    {
+        "musictomidibackend",
+        "musictomidibackendxpu",
+        "musictomidicli",
+        "musictomidiclixpu",
+    }
+)
 
 # 警告消息的中文翻译
 WARNING_TRANSLATIONS = {
@@ -175,7 +183,9 @@ def _is_writable_stream(stream) -> bool:
     if getattr(sys, "frozen", False):
         stream_name = getattr(stream, "name", "")
         is_tty = getattr(stream, "isatty", lambda: False)
-        if stream_name in {"<stdout>", "<stderr>"} and not is_tty():
+        executable_name = os.path.splitext(os.path.basename(sys.executable))[0].casefold()
+        is_console_entry = executable_name in _FROZEN_CONSOLE_ENTRY_NAMES
+        if stream_name in {"<stdout>", "<stderr>"} and not is_tty() and not is_console_entry:
             return False
 
     # TextIOWrapper.write("") and flush() do not necessarily enter the Windows

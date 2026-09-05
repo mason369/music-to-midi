@@ -220,6 +220,9 @@ class SixStemSeparator:
                         "output_dir": str(output_path),
                         "model_file_dir": str(self.cache_dir),
                         "output_format": "WAV",
+                        # The official SoundFile writer preserves the input WAV
+                        # subtype and avoids pydub spawning six console encoders.
+                        "use_soundfile": True,
                         "mdxc_params": {
                             "segment_size": 128,
                             "override_model_segment_size": True,

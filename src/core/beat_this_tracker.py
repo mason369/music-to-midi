@@ -24,7 +24,7 @@ from typing import Callable, Iterable, Optional, Sequence
 import numpy as np
 
 from src.i18n.translator import Translator
-from src.core.telknet_beat_grid_v10 import (
+from src.core.telknet_beat_grid_v12 import (
     TEMPO_FIT_ID,
     infer_beats_per_bar as infer_telknet_beats_per_bar,
     normalize_beat_grid,
@@ -358,17 +358,23 @@ def analyze_beat_this_grid(
     tempo_mode: str = TempoMode.FIXED_AUTO.value,
     manual_bpm: float | None = None,
 ) -> BeatInfo:
-    """Apply the reviewed TelkNet v10 grid and one explicit tempo mode."""
+    """Apply the reviewed TelkNet v12 grid and one explicit tempo mode."""
 
     selected_mode = str(tempo_mode or TempoMode.FIXED_AUTO.value).strip().lower()
     if selected_mode not in {mode.value for mode in TempoMode}:
         raise BeatThisGridError(f"Unsupported MIDI tempo mode: {selected_mode!r}")
+    if len(beats) < MIN_BEATS:
+        raise BeatThisGridError(
+            f"Beat This detected only {len(beats)} observed beats; at least {MIN_BEATS} "
+            "observed beats are required (interpolated marks are not new evidence)"
+        )
     try:
         normalized = normalize_beat_grid([float(value) for value in beats])
-        if normalized.bpm is None or len(normalized.beat_times) < MIN_BEATS:
+        observed_count = len(normalized.raw_beat_times) - normalized.duplicate_beats_removed
+        if normalized.bpm is None or observed_count < MIN_BEATS:
             raise RuntimeError(
-                f"Beat This detected only {len(normalized.beat_times)} usable beats; "
-                f"at least {MIN_BEATS} are required"
+                f"Beat This detected only {observed_count} distinct observed beats; "
+                f"at least {MIN_BEATS} are required (interpolated marks are not new evidence)"
             )
         normalized_downbeats = normalize_downbeat_grid(
             [float(value) for value in downbeats],
@@ -399,7 +405,6 @@ def analyze_beat_this_grid(
                 tempo_map = list(adaptive.events)
                 strategy = adaptive.strategy
                 maximum_phase_error = adaptive.maximum_phase_error_beats
-                output_bpm = float(tempo_map[0][1])
         elif selected_mode == TempoMode.FIXED_MANUAL.value:
             if (
                 manual_bpm is None
@@ -417,7 +422,7 @@ def analyze_beat_this_grid(
     except BeatThisGridError:
         raise
     except Exception as exc:
-        raise BeatThisGridError(f"TelkNet v10 beat-grid validation failed: {exc}") from exc
+        raise BeatThisGridError(f"TelkNet v12 beat-grid validation failed: {exc}") from exc
 
     logger.info(
         "Beat This %s: mode=%s strategy=%s detected=%.6f BPM output=%.6f BPM, "
@@ -448,6 +453,8 @@ def analyze_beat_this_grid(
         time_signature=time_signature,
         tempo_map=tempo_map,
         source_bpm=source_bpm,
+        fixed_tempo_reliable=normalized.fixed_tempo_reliable,
+        tempo_warning=normalized.tempo_warning,
     )
 
 

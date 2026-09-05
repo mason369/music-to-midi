@@ -45,11 +45,11 @@ RUN apt-get update \
         ffmpeg \
         fluidsynth \
         git \
-        libasound2 \
+        libasound2t64 \
         libegl1 \
         libfontconfig1 \
         libgl1 \
-        libglib2.0-0 \
+        libglib2.0-0t64 \
         libgomp1 \
         libportaudio2 \
         libsamplerate0-dev \

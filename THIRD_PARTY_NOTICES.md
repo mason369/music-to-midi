@@ -245,6 +245,15 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
 - MusicFM pretrained weight: [minzwon/MusicFM](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c), pinned revision
   `546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c`.
 - MusicFM declared license: MIT (the pinned model card declares `license: mit`).
+- MusicFM Conformer architecture configuration: Meta/Facebook
+  [wav2vec2-conformer-rope-large-960h-ft/config.json](https://huggingface.co/facebook/wav2vec2-conformer-rope-large-960h-ft/blob/6b36ef01c6443c67ae7ed0822876d091ab50e4aa/config.json),
+  revision `6b36ef01c6443c67ae7ed0822876d091ab50e4aa`, 2,239 bytes,
+  SHA-256 `7a63cb5706c9a37483f1973a3c226d54eb504ce15cf62cb52637019540c8a75d`.
+  The [upstream model card](https://huggingface.co/facebook/wav2vec2-conformer-rope-large-960h-ft/tree/6b36ef01c6443c67ae7ed0822876d091ab50e4aa)
+  declares Apache-2.0. Only the unmodified configuration is included (not the
+  speech-recognition weights), under `external/ai4m-miros/facebook/wav2vec2-conformer-rope-large-960h-ft/config.json`.
+  This required configuration is separately size/SHA-256 validated; adding it
+  does not authorize changes to the pinned MIROS source or model weights.
 
 ### Major frozen runtime components
 

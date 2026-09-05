@@ -70,6 +70,49 @@ def build_muscriptor_result_html(
         }
         for index, instrument in enumerate(ordered)
     ]
+    error_keys = {
+        "Invalid MIDI audio export preset contract": "audio_settings",
+        "selected WAV preset is invalid": "audio_settings",
+        "Invalid MIDI quantization-grid contract": "quantize_grid",
+        "Unsupported MIDI quantization grid": "quantize_grid",
+        "Invalid MIDI quantization-scope contract": "quantize_scope",
+        "Unsupported MIDI quantization scope": "quantize_scope",
+        "Invalid MIDI time signature": "meter",
+        "Invalid Beat This grid": "beats",
+        "Piano-roll beat grid requires": "beats",
+        "Invalid result playback BPM": "bpm",
+        "Invalid target BPM": "bpm",
+        "Invalid reference BPM": "bpm",
+        "Invalid MIDI BPM": "bpm",
+        "Cannot derive MIDI editor grid": "bpm",
+        "Truncated MIDI": "midi",
+        "Invalid MIDI variable-length": "midi",
+        "Edited MIDI source": "midi",
+        "Invalid tempo event": "midi",
+        "Edited MIDI contains a zero tempo": "midi",
+        "Invalid edited MIDI note": "notes",
+        "No MIDI channel template": "notes",
+        "Edited MIDI verification": "verification",
+        "Edited MIDI note verification": "verification",
+        "Edited MIDI tempo verification": "verification",
+        "SMPTE MIDI timing": "unsupported",
+        "Unsupported system event": "unsupported",
+        "Unsupported piano-roll transform": "unsupported",
+        "Original SoundFont preview": "preview",
+        "server render context": "render_service",
+        "server export context": "export_service",
+        "server stem export context": "export_service",
+        "server sheet-music context": "sheet_service",
+        "Edited preview endpoint returned": "response",
+        "MIDI audio export endpoint returned": "response",
+        "MIDI stem export endpoint returned": "response",
+        "Sheet-music endpoint returned": "response",
+        "MIDI audio export verification metadata": "response",
+        "MIDI stem export verification metadata": "response",
+        "Piano-roll zoom": "zoom",
+        "Invalid MIDI velocity": "velocity",
+        "HTTP ": "http",
+    }
     manifest = {
         "notes": list(state.get("notes", [])),
         "duration": float(state.get("duration", 0.0)),
@@ -109,12 +152,25 @@ def build_muscriptor_result_html(
             "transcription": track_file_url(str(state["transcription_wav"])),
             "stereo": track_file_url(str(state["stereo_mix_wav"])),
         },
+        "errorMessages": {
+            prefix: translate(f"muscriptor_result.errors.{key}")
+            for prefix, key in error_keys.items()
+        },
         "strings": {
             key: translate(f"muscriptor_result.{key}")
             for key in (
+                "error_details",
                 "play",
                 "pause",
+                "player_failed",
+                "editor_input_invalid",
                 "follow",
+                "tempo_unset",
+                "tempo_detected",
+                "project_bpm",
+                "playback_speed_label",
+                "editor_commands",
+                "editor_properties",
                 "original",
                 "stereo",
                 "instruments",
@@ -176,8 +232,16 @@ def build_muscriptor_result_html(
         },
     }
     encoded = html.escape(json.dumps(manifest, ensure_ascii=False), quote=False)
+    tempo_notice = (
+        '<p class="msr-tempo-notice" role="status">'
+        + html.escape(translate("main.tempo_evidence_notice"))
+        + "</p>"
+        if state.get("fixed_tempo_reliable") is False
+        else ""
+    )
     return (
-        '<div class="msr-root">'
+        f'<div class="msr-root" data-error-label="{html.escape(translate("muscriptor_result.open_failed"), quote=True)}">'
+        f"{tempo_notice}"
         f'<pre class="msr-manifest" hidden>{encoded}</pre>'
         '<div class="msr-host"></div>'
         "</div>"
@@ -203,6 +267,7 @@ MUSCRIPTOR_RESULT_CSS = r"""
   color:#e0e0e0 !important; font-size:12px !important; min-height:34px !important;
 }
 .msr-root { margin: 10px 0; color: #e0e0e0; }
+.msr-root *, .msr-root *::before, .msr-root *::after { box-sizing:border-box; }
 .msr-source { color:#8fc6ff; font-weight:600; background:#122039; border:1px solid #2c4f7c; border-radius:6px; padding:8px 10px; margin-bottom:8px; }
 .msr-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px; border:1px solid #365f8d; border-radius:8px; background:#17243d; }
 .msr-btn { background:#2a3f5f; color:#e0e0e0; border:1px solid #3a4a6a; border-radius:5px; padding:6px 11px; cursor:pointer; }
@@ -211,7 +276,15 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-btn.active { color:#8fc6ff; border-color:#4a9eff; background:#203f68; }
 .msr-clock { font-family:monospace; color:#c8d3e6; border:1px solid #3a4a6a; border-radius:4px; background:#16213e; padding:5px 8px; }
 .msr-transport { display:flex; align-items:center; gap:10px; margin-top:8px; padding:8px 12px; border:1px solid #365f8d; border-radius:7px; background:#132139; }
-.msr-editor { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; padding:8px 12px; border:1px solid #365f8d; border-radius:7px; background:#132139; }
+.msr-editor { display:flex; flex-direction:column; gap:10px; margin-top:8px; padding:10px 12px; border:1px solid #304968; border-radius:7px; background:#132139; }
+.msr-command-group, .msr-tempo-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
+.msr-tempo-bar { padding:8px 0; color:#86b5dd; }
+.msr-tempo-bar label { display:flex; align-items:center; gap:6px; }
+.msr-group-label { color:#86a3c7; font-size:12px; min-width:66px; }
+.msr-tempo-bar input, .msr-editor input[type="number"] { width:88px; }
+.msr-tempo-bar input { color:#d7e6f8; background:#172941; border:1px solid #3b5577; border-radius:5px; padding:0 7px; }
+.msr-toolbar .msr-btn, .msr-editor .msr-btn, .msr-editor select, .msr-editor input[type="number"], .msr-tempo-bar input { min-height:36px; }
+.msr-quantize-apply:not(:disabled) { background:#21486b; border-color:#4789ad; color:#c8edff; }
 .msr-editor label { display:flex; align-items:center; gap:5px; color:#9fb3d9; }
 .msr-editor select, .msr-editor input[type="number"] { color:#e0e0e0; background:#16213e; border:1px solid #3a4a6a; border-radius:4px; padding:5px 7px; }
 .msr-editor .msr-quantize-grid select { min-width:74px; }
@@ -221,7 +294,11 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-edit-notice { flex-basis:100%; color:#d8b56a; display:none; }
 .msr-progress { flex:1; min-width:160px; accent-color:#4a9eff; cursor:pointer; }
 .msr-duration { font-family:monospace; color:#8da4c9; white-space:nowrap; }
-.msr-mix { margin-left:auto; display:flex; align-items:center; gap:8px; color:#9aa5ad; }
+.msr-mix { margin-left:auto; display:flex; flex-wrap:wrap; align-items:center; gap:8px; color:#9aa5ad; min-width:0; }
+.msr-mix input[type="range"] { width:128px; min-width:60px; }
+.msr-clock { overflow-wrap:anywhere; }
+.msr-editor label { max-width:100%; flex-wrap:wrap; }
+.msr-editor select { max-width:100%; }
 .msr-grid { display:grid; grid-template-columns:minmax(0,4fr) minmax(220px,1fr); gap:12px; margin-top:12px; }
 .msr-resize-handle { height:10px; margin:8px 0 -4px; cursor:ns-resize; touch-action:none; border-top:1px solid #4a78aa; border-bottom:1px solid #10233e; background:#203657; border-radius:4px; }
 .msr-resize-handle:hover, .msr-resize-handle.dragging { background:#365f8d; }
@@ -294,6 +371,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     return notes.map(function (note) { return Object.assign({}, note); });
   }
   function notesEqual(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+  function roundGridStep(value) {
+    // Python's round() is ties-to-even. Match the desktop and MIDI API at
+    // exact half-grid positions instead of JavaScript's ties-to-positive rule.
+    var lower = Math.floor(value), fraction = value - lower;
+    return fraction < 0.5 ? lower : fraction > 0.5 ? lower + 1 : lower + (lower % 2);
+  }
   function snapTime(value) { return Math.round(Math.max(0, value) / SNAP_SECONDS) * SNAP_SECONDS; }
   function load(url) {
     if (bufferCache[url]) return Promise.resolve(bufferCache[url]);
@@ -874,6 +957,8 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.position = 0;
     this.startedAt = 0;
     this.playing = false;
+    this.starting = false;
+    this.playRequestId = 0;
     this.muted = new Set();
     this.solo = null;
     this.mix = 0.75;
@@ -904,6 +989,14 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.audioExportInFlight = false;
     this.onExternalPlayback = this.handleExternalPlayback.bind(this);
   }
+  ResultSession.prototype.errorText = function (error) {
+    var original = error && error.message ? error.message : String(error);
+    var messages = this.m && this.m.errorMessages;
+    if (!messages || !this.m.strings) return original;
+    var prefix = Object.keys(messages).find(function (key) { return original.indexOf(key) === 0; });
+    var details = this.m.strings.error_details.replace("{error}", original);
+    return prefix ? messages[prefix] + "\n" + details : details;
+  };
   ResultSession.prototype.init = function () {
     try {
       this.m = JSON.parse(this.root.querySelector(".msr-manifest").textContent);
@@ -989,7 +1082,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       this.targetBpm = Number(this.m.targetBpm);
       this.activeInstrument = this.m.notes.length ? this.m.notes[0].instrument : "";
     } catch (error) {
-      this.host.textContent = String(error);
+      this.host.textContent = this.root.dataset.errorLabel + "\n" + this.errorText(error);
       return;
     }
     this.build();
@@ -1021,7 +1114,9 @@ MUSCRIPTOR_RESULT_JS = r"""
       self.drawStatic();
       self.layoutPlayhead();
     }).catch(function (error) {
-      if (!self.disposed) self.status.textContent = String(error);
+      if (!self.disposed) {
+        self.status.textContent = self.m.strings.player_failed.replace("{error}", self.errorText(error));
+      }
     });
   };
   ResultSession.prototype.build = function () {
@@ -1036,6 +1131,8 @@ MUSCRIPTOR_RESULT_JS = r"""
       ));
     }
     var bar = el("div", "msr-toolbar");
+    this.tempoBar = el("div", "msr-tempo-bar");
+    this.host.appendChild(this.tempoBar);
     this.play = button(strings.play);
     this.play.disabled = true;
     this.play.onclick = function () { self.toggle(); };
@@ -1303,7 +1400,7 @@ MUSCRIPTOR_RESULT_JS = r"""
   ResultSession.prototype.scheduleEditedPreview = function () {
     var self = this, revision = ++this.previewRevision;
     clearTimeout(this.previewTimer);
-    if (this.playing) this.pause();
+    if (this.playing || this.starting) this.pause();
     this.buffers = this.buffers.original ? { original: this.buffers.original } : {};
     this.play.disabled = true;
     this.progress.disabled = true;
@@ -1314,7 +1411,7 @@ MUSCRIPTOR_RESULT_JS = r"""
         this.syncEditor();
       } catch (error) {
         this.status.textContent = this.m.strings.editor_audio_failed
-          .replace("{error}", String(error));
+          .replace("{error}", this.errorText(error));
       }
       return;
     }
@@ -1328,7 +1425,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     var self = this;
     if (!this.m.previewApi || !this.m.previewToken) {
       this.status.textContent = this.m.strings.editor_audio_failed
-        .replace("{error}", "server render context is unavailable");
+        .replace("{error}", this.errorText("server render context is unavailable"));
       return;
     }
     fetch(this.m.previewApi, {
@@ -1385,7 +1482,7 @@ MUSCRIPTOR_RESULT_JS = r"""
         self.progress.disabled = true;
         self.setDownloadAudioEnabled(false);
         self.status.textContent = self.m.strings.editor_audio_failed
-          .replace("{error}", String(error));
+          .replace("{error}", self.errorText(error));
       });
   };
   ResultSession.prototype.buildEditor = function () {
@@ -1504,7 +1601,15 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.velocityInput.max = "127";
     this.velocityInput.step = "1";
     this.velocityInput.value = "100";
-    this.velocityInput.onchange = function () { self.changeVelocity(Number(this.value)); };
+    this.velocityInput.onchange = function () {
+      try {
+        self.changeVelocity(Number(this.value));
+        this.removeAttribute("aria-invalid");
+      } catch (error) {
+        this.setAttribute("aria-invalid", "true");
+        self.status.textContent = strings.editor_input_invalid.replace("{error}", self.errorText(error));
+      }
+    };
     velocityLabel.appendChild(this.velocityInput);
     editor.appendChild(velocityLabel);
 
@@ -1517,13 +1622,19 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.zoomInput.value = "1.00";
     this.zoomInput.title = strings.editor_view_zoom_tooltip;
     this.zoomInput.onchange = function () {
-      self.setZoomRatio(Number(this.value), self.scroll.clientWidth / 2);
+      try {
+        self.setZoomRatio(Number(this.value), self.scroll.clientWidth / 2);
+        this.removeAttribute("aria-invalid");
+      } catch (error) {
+        this.setAttribute("aria-invalid", "true");
+        self.status.textContent = strings.editor_input_invalid.replace("{error}", self.errorText(error));
+      }
     };
     zoomLabel.appendChild(this.zoomInput);
     zoomLabel.appendChild(document.createTextNode("×"));
     editor.appendChild(zoomLabel);
 
-    var bpmLabel = el("label", "", "BPM");
+    var bpmLabel = el("label", "", strings.project_bpm);
     this.bpmInput = el("input");
     this.bpmInput.type = "number";
     this.bpmInput.min = String(MIN_BPM);
@@ -1534,11 +1645,56 @@ MUSCRIPTOR_RESULT_JS = r"""
       try {
         self.commitBpm();
       } catch (error) {
-        self.status.textContent = strings.editor_export_failed.replace("{error}", String(error));
+        self.status.textContent = strings.editor_export_failed.replace("{error}", self.errorText(error));
       }
     };
     bpmLabel.appendChild(this.bpmInput);
-    editor.appendChild(bpmLabel);
+    this.tempoBar.appendChild(el("span", "msr-detected-tempo",
+      strings.tempo_detected.replace("{bpm}", Number(this.m.referenceBpm).toFixed(1))));
+    this.tempoBar.appendChild(bpmLabel);
+    var rateLabel = el("label", "", strings.playback_speed_label);
+    this.rateInput = el("input");
+    this.rateInput.type = "number";
+    this.rateInput.min = String(Math.ceil(MIN_BPM / this.m.referenceBpm * 1000) / 1000);
+    this.rateInput.max = String(Math.floor(MAX_BPM / this.m.referenceBpm * 1000) / 1000);
+    this.rateInput.step = "0.001";
+    this.rateInput.value = this.playbackRate().toFixed(3);
+    this.rateInput.onchange = function () {
+      try {
+        var rate = Number(this.value), target = rate * self.m.referenceBpm;
+        if (!Number.isFinite(rate) || target < MIN_BPM || target > MAX_BPM) {
+          throw new Error("Invalid project playback rate: " + this.value);
+        }
+        self.bpmInput.value = target.toFixed(1);
+        self.commitBpm();
+      } catch (error) {
+        self.status.textContent = strings.editor_export_failed.replace("{error}", self.errorText(error));
+      }
+    };
+    rateLabel.appendChild(this.rateInput);
+    rateLabel.appendChild(document.createTextNode("×"));
+    this.tempoBar.appendChild(rateLabel);
+
+    var commands = el("div", "msr-command-group");
+    commands.appendChild(el("span", "msr-group-label", strings.editor_commands));
+    [this.editToggle, this.addButton, this.deleteButton, this.undoButton, this.redoButton,
+      this.resetButton, this.selectAllButton, this.cutButton, this.copyButton,
+      this.pasteButton, this.duplicateButton].forEach(function (node) { commands.appendChild(node); });
+    var quantization = el("div", "msr-command-group");
+    [quantizeScopeLabel, quantizeGridLabel, this.quantizeButton].forEach(function (node) {
+      quantization.appendChild(node);
+    });
+    this.quantizeButton.classList.add("msr-quantize-apply");
+    var properties = el("div", "msr-command-group");
+    [instrumentLabel, velocityLabel, zoomLabel].forEach(function (node) { properties.appendChild(node); });
+    editor.appendChild(commands);
+    editor.appendChild(quantization);
+    editor.appendChild(properties);
+    [this.quantizeScopeSelect, this.quantizeGridSelect, this.instrumentSelect,
+      this.velocityInput, this.zoomInput, this.bpmInput, this.rateInput, this.mixInput]
+      .forEach(function (node) {
+        node.addEventListener("wheel", function (event) { event.preventDefault(); }, { passive:false });
+      });
     this.editSummary = el("span", "msr-edit-summary");
     editor.appendChild(this.editSummary);
     this.editNotice = el("span", "msr-edit-notice", strings.editor_audio_notice);
@@ -1554,15 +1710,16 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (!Number.isFinite(nextBpm) || nextBpm < MIN_BPM || nextBpm > MAX_BPM) {
       throw new Error("Invalid MIDI BPM: " + this.bpmInput.value);
     }
-    var wasPlaying = this.playing;
+    var wasPlaying = this.playing || this.starting;
     if (wasPlaying) this.pause();
     this.targetBpm = nextBpm;
+    if (this.rateInput) this.rateInput.value = this.playbackRate().toFixed(3);
     this.drawStatic();
     if (wasPlaying) {
       var self = this;
       this.start().catch(function (error) {
         self.status.textContent = self.m.strings.editor_export_failed
-          .replace("{error}", String(error));
+          .replace("{error}", self.errorText(error));
       });
     }
   };
@@ -1592,10 +1749,14 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.start = function () {
     var context = ctx(), self = this, rate = this.playbackRate();
+    var requestId = ++this.playRequestId;
+    this.starting = true;
     if (this.position >= this.m.duration) this.position = 0;
     window.dispatchEvent(new CustomEvent("music-to-midi-playback-start", { detail: { owner: this.ownerId } }));
     return context.resume().then(function () {
-      if (self.disposed) return;
+      if (self.disposed || requestId !== self.playRequestId) return;
+      self.starting = false;
+      cancelAnimationFrame(self.raf);
       self.stopSources();
       var startAt = context.currentTime + 0.02;
       self.startedAt = startAt - self.position / rate;
@@ -1622,14 +1783,16 @@ MUSCRIPTOR_RESULT_JS = r"""
       self.applyMix();
       self.play.textContent = self.m.strings.pause;
       self.tick();
+    }).catch(function (error) {
+      if (requestId === self.playRequestId) self.pause();
+      throw error;
     });
   };
   ResultSession.prototype.pause = function () {
+    this.playRequestId += 1;
+    this.starting = false;
     if (this.playing) {
-      this.position = Math.min(
-        this.m.duration,
-        (ctx().currentTime - this.startedAt) * this.playbackRate()
-      );
+      this.position = clamp((ctx().currentTime - this.startedAt) * this.playbackRate(), 0, this.m.duration);
     }
     this.playing = false;
     this.stopSources();
@@ -1637,12 +1800,20 @@ MUSCRIPTOR_RESULT_JS = r"""
     cancelAnimationFrame(this.raf);
     this.layoutPlayhead();
   };
-  ResultSession.prototype.toggle = function () { if (this.playing) this.pause(); else this.start(); };
+  ResultSession.prototype.requestPlayback = function () {
+    var self = this;
+    return this.start().catch(function (error) {
+      self.status.textContent = self.m.strings.player_failed.replace("{error}", self.errorText(error));
+    });
+  };
+  ResultSession.prototype.toggle = function () {
+    if (this.playing || this.starting) this.pause(); else this.requestPlayback();
+  };
   ResultSession.prototype.seek = function (seconds) {
-    var wasPlaying = this.playing;
+    var wasPlaying = this.playing || this.starting;
     if (wasPlaying) this.pause();
     this.position = clamp(seconds, 0, this.m.duration);
-    if (wasPlaying) this.start(); else this.layoutPlayhead();
+    if (wasPlaying) this.requestPlayback(); else this.layoutPlayhead();
   };
   ResultSession.prototype.handleExternalPlayback = function (event) {
     if (event.detail && event.detail.owner !== this.ownerId) this.pause();
@@ -2277,10 +2448,10 @@ MUSCRIPTOR_RESULT_JS = r"""
     var before = cloneNotes(this.m.notes), grid = this.gridSeconds();
     indices.forEach(function (index) {
       var note = this.m.notes[index], duration = note.end - note.start;
-      var quantizedDuration = Math.max(grid, Math.round(duration / grid) * grid);
+      var quantizedDuration = Math.max(grid, roundGridStep(duration / grid) * grid);
       quantizedDuration = Math.min(this.m.duration, quantizedDuration);
       var start = clamp(
-        Math.round(note.start / grid) * grid,
+        roundGridStep(note.start / grid) * grid,
         0,
         this.m.duration - quantizedDuration
       );
@@ -2376,7 +2547,7 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.commitEdit = function (before) {
     if (notesEqual(before, this.m.notes)) return;
-    if (this.playing) this.pause();
+    if (this.playing || this.starting) this.pause();
     this.undoStack.push(before);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack = [];
@@ -2444,7 +2615,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (!this.audioDownloadReady || this.audioExportInFlight) return;
     if (!this.m.audioExportApi || !this.m.previewToken) {
       this.status.textContent = this.m.strings.audio_export_failed
-        .replace("{error}", "server export context is unavailable");
+        .replace("{error}", this.errorText("server export context is unavailable"));
       return;
     }
     var presetId = String(this.audioExportSelect.value || "");
@@ -2453,7 +2624,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
     if (!preset) {
       this.status.textContent = this.m.strings.audio_export_failed
-        .replace("{error}", "selected WAV preset is invalid");
+        .replace("{error}", this.errorText("selected WAV preset is invalid"));
       return;
     }
     var noteSnapshot = cloneNotes(this.m.notes);
@@ -2512,7 +2683,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       })
       .catch(function (error) {
         self.status.textContent = self.m.strings.audio_export_failed
-          .replace("{error}", String(error));
+          .replace("{error}", self.errorText(error));
       })
       .finally(function () {
         self.audioExportInFlight = false;
@@ -2524,7 +2695,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (!this.audioDownloadReady || this.audioExportInFlight) return;
     if (!this.m.audioStemExportApi || !this.m.previewToken) {
       this.status.textContent = this.m.strings.stem_audio_export_failed
-        .replace("{error}", "server stem export context is unavailable");
+        .replace("{error}", this.errorText("server stem export context is unavailable"));
       return;
     }
     var presetId = String(this.audioExportSelect.value || "");
@@ -2533,7 +2704,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
     if (!preset) {
       this.status.textContent = this.m.strings.stem_audio_export_failed
-        .replace("{error}", "selected WAV preset is invalid");
+        .replace("{error}", this.errorText("selected WAV preset is invalid"));
       return;
     }
     this.audioExportInFlight = true;
@@ -2602,7 +2773,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       })
       .catch(function (error) {
         self.status.textContent = self.m.strings.stem_audio_export_failed
-          .replace("{error}", String(error));
+          .replace("{error}", self.errorText(error));
       })
       .finally(function () {
         self.audioExportInFlight = false;
@@ -2639,7 +2810,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     try {
       this.commitBpm();
     } catch (error) {
-      this.status.textContent = this.m.strings.editor_export_failed.replace("{error}", String(error));
+      this.status.textContent = this.m.strings.editor_export_failed.replace("{error}", this.errorText(error));
       return;
     }
     this.status.textContent = this.m.strings.ready;
@@ -2655,21 +2826,21 @@ MUSCRIPTOR_RESULT_JS = r"""
         setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
       })
       .catch(function (error) {
-        self.status.textContent = self.m.strings.editor_export_failed.replace("{error}", String(error));
+        self.status.textContent = self.m.strings.editor_export_failed.replace("{error}", self.errorText(error));
       });
   };
   ResultSession.prototype.downloadSheetMusic = function () {
     var self = this;
     if (!this.m.sheetApi || !this.m.sheetToken) {
       this.status.textContent = this.m.strings.sheet_music_failed
-        .replace("{error}", "server sheet-music context is unavailable");
+        .replace("{error}", this.errorText("server sheet-music context is unavailable"));
       return;
     }
     try {
       this.commitBpm();
     } catch (error) {
       this.status.textContent = this.m.strings.sheet_music_failed
-        .replace("{error}", String(error));
+        .replace("{error}", this.errorText(error));
       return;
     }
     this.sheetMusicButton.disabled = true;
@@ -2719,7 +2890,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       })
       .catch(function (error) {
         self.status.textContent = self.m.strings.sheet_music_failed
-          .replace("{error}", String(error));
+          .replace("{error}", self.errorText(error));
       })
       .finally(function () {
         if (!self.disposed) self.sheetMusicButton.disabled = false;

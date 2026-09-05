@@ -858,7 +858,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             "此 Colab 与桌面版、Space 使用同一套七模式工作流",
             "SMART 与四种钢琴模式",
             "分别生成 2/6 个 WAV",
-            "分离完成后显示真实波形音轨",
+            "分离完成后显示音轨波形",
             "13 种转写路线",
             "每条音轨都可单独转换 MIDI",
             "The two split modes create WAV stems",
@@ -917,11 +917,11 @@ class TestColabNotebookDependencies(unittest.TestCase):
         shared_zh = json.loads(Path("src/i18n/zh_CN.json").read_text(encoding="utf-8"))
         shared_en = json.loads(Path("src/i18n/en_US.json").read_text(encoding="utf-8"))
         self.assertIn(
-            "鼠标滚轮用于滚动页面",
+            "同步试听、调整音轨",
             shared_zh["dialogs"]["complete"]["audio_tracks"]["subtitle"],
         )
         self.assertIn(
-            "scroll",
+            "listen",
             shared_en["dialogs"]["complete"]["audio_tracks"]["subtitle"].lower(),
         )
 

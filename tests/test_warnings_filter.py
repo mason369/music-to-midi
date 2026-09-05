@@ -98,6 +98,49 @@ class WarningsFilterTests(unittest.TestCase):
             sys.stdout = original_stdout
             sys.stderr = original_stderr
 
+    def test_frozen_console_entries_preserve_redirected_standard_streams(self):
+        class RedirectedConsoleStream(io.StringIO):
+            name = "<stdout>"
+
+            def isatty(self):
+                return False
+
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        original_executable = sys.executable
+        had_frozen = hasattr(sys, "frozen")
+        original_frozen = getattr(sys, "frozen", None)
+
+        try:
+            sys.frozen = True
+            for executable_name in (
+                "MusicToMidiCLI.exe",
+                "MusicToMidiCLIXpu.exe",
+                "MusicToMidiBackend.exe",
+                "MusicToMidiBackendXpu.exe",
+            ):
+                with self.subTest(executable_name=executable_name):
+                    redirected_stdout = RedirectedConsoleStream()
+                    redirected_stderr = RedirectedConsoleStream()
+                    sys.executable = rf"C:\\portable\\{executable_name}"
+                    sys.stdout = redirected_stdout
+                    sys.stderr = redirected_stderr
+
+                    warnings_filter.ensure_standard_streams()
+
+                    self.assertIs(sys.stdout, redirected_stdout)
+                    self.assertIs(sys.stderr, redirected_stderr)
+                    print("captured CLI output")
+                    self.assertIn("captured CLI output", redirected_stdout.getvalue())
+        finally:
+            if had_frozen:
+                sys.frozen = original_frozen
+            else:
+                delattr(sys, "frozen")
+            sys.executable = original_executable
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
 
 if __name__ == "__main__":
     unittest.main()

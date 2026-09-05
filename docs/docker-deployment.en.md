@@ -38,6 +38,28 @@ http://127.0.0.1:7860
 
 `setup` pulls the pinned images, validates the GPU runtime, prepares the selected models, starts the services, and completes readiness checks. An error returns a non-zero status and keeps the relevant diagnostics visible.
 
+## Native CLI batch jobs in Docker
+
+The backend image includes the same native CLI as the portable packages. Use a one-shot Compose container with explicit input and output mounts. It shares the model-volume cross-process GPU lock with the running Web backend, so both processes cannot own the same GPU at once:
+
+```bash
+docker compose run --rm \
+  -v /absolute/audio:/input:ro \
+  -v /absolute/midi:/output \
+  backend cli batch /input --recursive -o /output
+```
+
+With PowerShell and Docker Desktop, use absolute Windows host paths:
+
+```powershell
+docker compose run --rm `
+  -v "D:\Audio:/input:ro" `
+  -v "D:\MidiOutput:/output" `
+  backend cli batch /input --recursive -o /output
+```
+
+The container entry point strictly verifies enabled models before starting the CLI. Input, model, and runtime errors return a non-zero exit code. The command uses the selected model and the configured GPU runtime. If either is unavailable, it stops with an error. Run `backend cli routes --json` to list all 13 explicit per-track routes.
+
 ## Supported environment
 
 | Area | Supported range |

@@ -21,16 +21,16 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
 | 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。产品在运行时显式选择官方 `TranscriptionModel` 或下游 TelkNet Issue #74 子类；模型原生音符秒数不做 onset 相位平移，Beat This `final0` 只负责独立的速度/拍号元数据与卷帘拍线 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
-| Intel XPU 加载 | `safetensors==0.8.0` 官方 `pread`；先打开惰性文件句柄，再建立约 5.50 GiB 统一内存模型，随后按偏移逐张量复制；不回退 mmap、不改精度、不靠扩大页面文件或重试 |
+| Intel XPU 加载 | `safetensors==0.8.0` 官方 `pread`；先打开惰性文件句柄，再建立约 5.50 GiB 统一内存模型，随后按偏移逐张量复制；读取失败时停止加载 |
 
-这解释了“模型页面似乎更早、代码和正式资料随后才出现”的现象：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.3.0` 在 8 月 5 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
+发布时间线：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.3.0` 在 8 月 5 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
 
-### 分段边界连续性链路
+### 分段衔接
 
-- `官方处理链路（默认）`：直接实例化固定上游的 `TranscriptionModel`，不运行下述状态恢复或边界音符合并，严格保留官方分段输出。
-- `分段边界连续性修复链路`：显式可选项。在保持官方权重、tokenizer、5 秒窗口和 MIDI writer 的前提下，打破混合编制反复继承单一 program 后形成的分段自强化状态，同时保留真实 tie；另只合并严格命中 5 秒边界、并在后三个 10 ms 帧内重启的同乐器同音高连续音符，用于同输入 A/B。
+- `标准（默认）`：直接实例化固定上游的 `TranscriptionModel`，不运行下述状态恢复或边界音符合并，严格保留官方分段输出。
+- `跨段延音衔接`：显式可选项。在保持官方权重、tokenizer、5 秒窗口和 MIDI writer 的前提下，打破混合编制反复继承单一 program 后形成的分段自强化状态，同时保留真实 tie；另只合并严格命中 5 秒边界、并在后三个 10 ms 帧内重启的同乐器同音高连续音符，用于同输入 A/B。
 
-这个选项只控制 MuScriptor 的分段状态。速度模式仍由“跟随原曲速度变化 / 自动检测唯一 BPM / 手动设置唯一 BPM”独立决定；切换链路不会静默更换模型大小、权重、乐器约束或速度方案。
+分段衔接只控制 MuScriptor 的分段状态，与模型大小、乐器选择和速度方案分别设置。
 
 ## 3. 架构、训练数据与输出能力
 
@@ -66,7 +66,7 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 | `D_Synth + D_Real + D_RL` | 1 | **60.4** | **73.3** | **49.0** | **50.2** | **48.2** |
 | `D_Synth + D_Real + D_RL` | 2 | 60.4 | 72.4 | 48.6 | 49.6 | 47.8 |
 
-官方当前代码说明已发布的 post-RL 权重应保持 `cfg_coef=1`；模型卡 headline 表仍列 CFG=2。项目调用固定上游接口的默认 CFG=1，不把 CFG=2 的模型卡数字冒充为本地实测结果。
+官方当前代码说明已发布的 post-RL 权重应保持 `cfg_coef=1`；模型卡 headline 表仍列 CFG=2。项目调用固定上游接口的默认 CFG=1；模型卡 CFG=2 的成绩与本地默认 CFG=1 属于不同配置。
 
 ## 5. 公共跨域数据集对比
 
@@ -96,7 +96,7 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 | Medium | 约 300M | 52.4 | 68.0 | 40.3 | 42.0 | 39.7 | 是 |
 | Large | 约 1.3B | **53.2** | **68.7** | **41.0** | **42.5** | **40.5** | 是，本项目当前使用 |
 
-同一消融设置下，提供正确乐器列表会把 Onset / Frame / Offset / Drums / Multi 从 `51.6 / 66.5 / 40.1 / 40.6 / 38.7` 提升到 `53.2 / 68.7 / 41.0 / 42.5 / 40.5`。这也是本项目把乐器多选实现为真实生成约束、而不是显示过滤器的依据。
+同一消融设置下，提供正确乐器列表会把 Onset / Frame / Offset / Drums / Multi 从 `51.6 / 66.5 / 40.1 / 40.6 / 38.7` 提升到 `53.2 / 68.7 / 41.0 / 42.5 / 40.5`。本项目的乐器多选在模型生成阶段生效。
 
 ## 7. Mirelo Studio 的“改进版本”是什么
 
@@ -113,7 +113,7 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 
 | 方向 | 当前证据 | 项目判断 |
 |---|---|---|
-| MuScriptor Small / Medium | 官方公开 103M / 307M 权重，与 Large 共用接口；官方代码把 Medium 作为速度/质量折中、Small 作为 CPU 实用选项 | 已作为独立显式选择接入并固定各自 revision；三档不互相静默替代，继续用同一批真实音频分别记录质量、速度、首段延迟和显存。 |
+| MuScriptor Small / Medium | 官方公开 103M / 307M 权重，与 Large 共用接口；官方代码把 Medium 作为速度/质量折中、Small 作为 CPU 实用选项 | 已作为独立显式选择接入并固定各自 revision；三档分别选择；质量、速度、首段延迟和显存需在相同输入与硬件上比较。 |
 | Mirelo Studio 改进版 | 官方只确认“更多数据、更准确”，没有公开权重或同协议分数 | 仅列观察项；在公开可下载、许可明确、可复现前不能集成。 |
 | MIROS / MusicFM 路线 | [2025 AMT Challenge 论文](https://arxiv.org/abs/2603.27528)给出 MIROS F1 0.5998、YourMT3-YPTF-MoE-M 0.5938、MT3 0.3932；测试集是 76 个受约束合成短片段 | 已作为独立后端集成，但挑战分数不能与 MuScriptor `D_Test` 或 Slakh 分数横比。 |
 | 更强乐器检测与抗泄漏 | 挑战论文指出密集复音、相似音色、乐器 hallucination/leakage 仍是主要失败模式，并计划扩大 jazz/pop、稀有乐器与乐器检测评测 | 新模型优先看 instrument-aware F1、泄漏率和三乐器以上退化，而不只看单一 note F1。 |
