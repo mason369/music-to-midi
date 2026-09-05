@@ -1,5 +1,6 @@
 import builtins
 import io
+from pathlib import Path
 import sys
 import unittest
 import warnings
@@ -122,7 +123,7 @@ class WarningsFilterTests(unittest.TestCase):
                 with self.subTest(executable_name=executable_name):
                     redirected_stdout = RedirectedConsoleStream()
                     redirected_stderr = RedirectedConsoleStream()
-                    sys.executable = rf"C:\\portable\\{executable_name}"
+                    sys.executable = str(Path("portable") / executable_name)
                     sys.stdout = redirected_stdout
                     sys.stderr = redirected_stderr
 

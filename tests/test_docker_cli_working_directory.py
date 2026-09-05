@@ -1,5 +1,6 @@
 """Run the real container entrypoint with a path probe, without a GPU or image build."""
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -52,8 +53,9 @@ def test_container_entrypoint_preserves_cli_paths_and_verifies_models(tmp_path, 
         '[[ "$1" == "-m" ]] || exit 90\n'
         'printf "%s\\t%s\\t%s\\n" "$PWD" "${PYTHONPATH%%:*}" "$2" >> "$PROBE_LOG"\n'
         'case "$2" in\n'
-        'src.utils.source_runtime|src.model_profiles) exit 0 ;;\n'
-        'src.cli) mkdir -p -- "$7"; cat -- "$3" "$5" > "$7/result.txt" ;;\n'
+        'src.utils.source_runtime|src.model_profiles) printf "preflight %s\\n" "$2"; exit 0 ;;\n'
+        'src.cli) mkdir -p -- "$7"; cat -- "$3" "$5" > "$7/result.txt"; '
+        'printf \'{"event":"summary"}\\n\' ;;\n'
         '*) exit 91 ;;\nesac\n',
         encoding="utf-8",
         newline="\n",
@@ -97,8 +99,14 @@ def test_container_entrypoint_preserves_cli_paths_and_verifies_models(tmp_path, 
     if command == "cli":
         expected_modules.append("src.cli")
         assert (output / "result.txt").read_text(encoding="utf-8") == "input-tempo"
+        assert json.loads(result.stdout) == {"event": "summary"}
+        assert "preflight src.utils.source_runtime" in result.stderr
+        assert "preflight src.model_profiles" in result.stderr
     else:
         assert not output.exists()
+        assert result.stdout.splitlines() == [
+            "preflight src.utils.source_runtime", "preflight src.model_profiles",
+        ]
     assert [row[2] for row in rows] == expected_modules
     _, expected_cwd = _bash_and_path(caller if command == "cli" else REPO_ROOT)
     _, expected_import_root = _bash_and_path(REPO_ROOT)

@@ -567,11 +567,11 @@ def test_src_main_cli_switch_dispatches_before_gui(monkeypatch):
     assert received == ["routes", "--json"]
 
 
-def test_frozen_cli_executable_name_is_a_first_class_entry(monkeypatch):
+def test_frozen_cli_executable_name_is_a_first_class_entry(monkeypatch, tmp_path):
     import src.main as main_module
 
     monkeypatch.setattr(main_module.sys, "argv", ["MusicToMidiCLIXpu.exe", "routes"])
     monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(main_module.sys, "executable", r"C:\bundle\MusicToMidiCLIXpu.exe")
+    monkeypatch.setattr(main_module.sys, "executable", str(tmp_path / "MusicToMidiCLIXpu.exe"))
 
     assert main_module._is_cli_runtime() is True

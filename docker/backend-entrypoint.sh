@@ -64,10 +64,11 @@ case "$command_name" in
         require_env MUSIC_TO_MIDI_ENABLED_PROFILES
         [[ "${MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES:-}" == "1" ]] \
             || fail "MUSIC_TO_MIDI_REQUIRE_ENABLED_PROFILES must be 1"
-        verify_source_runtime
+        # Keep CLI stdout reserved for its result / JSONL event stream.
+        verify_source_runtime >&2
         python -m src.model_profiles verify \
             --profiles "$MUSIC_TO_MIDI_ENABLED_PROFILES" \
-            --require-ready
+            --require-ready >&2
         exec python -m src.cli "$@"
         ;;
     server)
