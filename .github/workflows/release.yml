@@ -1571,7 +1571,6 @@ jobs:
 
       - name: 更新 Release 说明
         run: |
-          TAG="${{ steps.tag.outputs.tag }}"
           cat > release-notes.md << NOTES
           ## 音乐转MIDI转换器 ${TAG}
 
@@ -1625,7 +1624,7 @@ jobs:
           - Windows 与 Linux GPU 完整包都保留桌面 App、Web 后端、Web 前端三个独立目录；App 与 WebBackend 各有自己的入口和可单独复制的完整运行环境。Windows 在 NTFS 上通过 WIM 硬链接复用相同模型/运行时文件，Linux 通过 tar hard-link metadata 复用；两端另发不含模型的轻量 WebFrontend 包。
           - App 与 WebBackend 目录都内置原生 CLI：支持单文件、多文件、目录递归批处理、SHA-256 清单断点续跑、JSON Lines、明确失败终态和 13 条显式逐轨 MIDI 路线；分离模式仍先只交付 WAV，不会自动转换全部 stem。
           - Windows 与 Linux 发布烟测都会从三个独立目录真实启动，核对 API 2.0、运行时配置和 CSP；Linux 还会从最终分卷归档抽取三个角色并验证 App/WebBackend 硬链接确实被还原。Web 两端不内置认证、授权或 TLS，只适用于受信任局域网。
-          - Issue #9 的 Docker 自托管包包含无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型按使用者选择的配置初始化到持久卷，常驻推理容器离线运行，默认入口为本机 `127.0.0.1:7860`。
+          - Issue #9 的 Docker 自托管包包含无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型按使用者选择的配置初始化到持久卷，常驻推理容器离线运行，默认入口为本机 \`127.0.0.1:7860\`。
           - 伴奏改用固定的标准 Leap Instrumental 权重与原始配置，经 audio-separator 0.44.1 原生 FP32 推理；人声保持 Leap XE。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
           - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；使用条件是同一账户已在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
@@ -1726,10 +1725,11 @@ jobs:
           The combined portable work is distributed under GPL-3.0 with component-specific notices. Aria-AMT remains CC BY-NC-SA 4.0; MuScriptor checkpoints remain CC BY-NC 4.0 plus their model-page conditions. See \`THIRD_PARTY_NOTICES.md\`, \`THIRD_PARTY_SBOM.txt\`, and \`FFMPEG_BUILD_AUDIT.txt\` inside the package for exact evidence and attribution.
           NOTES
           gh release edit "${TAG}" \
-            --repo ${{ github.repository }} \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "${TAG}" \
             --notes-file release-notes.md
         env:
+          TAG: ${{ steps.tag.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 删除旧 CPU 发布资产

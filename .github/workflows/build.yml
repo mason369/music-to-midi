@@ -108,6 +108,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             ffmpeg \
+            fluidsynth \
             libsndfile1 \
             libportaudio2 \
             portaudio19-dev \
@@ -141,6 +142,20 @@ jobs:
           pip install beartype==0.18.5 diffq-fixed==0.2.4 julius==0.2.7 ml_collections==1.1.0 onnx-weekly==1.21.0.dev20260223 onnx2torch-py313==1.6.0 pydub==0.25.1 onnxruntime-gpu==1.23.2 resampy==0.4.3 rotary-embedding-torch==0.6.5 samplerate==0.1.0 six==1.17.0
           pip install audio-separator==0.44.1 --no-deps
           pip install flake8
+
+      - name: Prepare verified playback resources
+        run: |
+          python - <<'PY'
+          from src.utils.fluidsynth_runtime import get_fluidsynth_executable
+          from src.utils.muscriptor_soundfont_downloader import (
+              MUSCRIPTOR_SF2_FILENAME,
+              MUSCRIPTOR_SF3_FILENAME,
+              download_muscriptor_soundfont,
+          )
+          print(get_fluidsynth_executable())
+          for filename in (MUSCRIPTOR_SF2_FILENAME, MUSCRIPTOR_SF3_FILENAME):
+              print(download_muscriptor_soundfont(filename))
+          PY
 
       - name: Run code checks
         run: |
