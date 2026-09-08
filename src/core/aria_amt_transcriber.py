@@ -24,6 +24,7 @@ from src.utils.subprocess_utils import hidden_subprocess_kwargs
 from src.core.muscriptor_result_assets import read_midi_roll_notes
 from src.core.transcription_stream import snapshot_event
 from src.utils.audio_utils import load_audio_tensor
+from src.utils.aria_amt_runtime import prepare_aria_audio_assets
 from src.utils.artifact_identity import validate_file_identity
 from src.utils.gpu_utils import (
     ensure_accelerator_runtime_compatibility,
@@ -508,6 +509,7 @@ class AriaAmtTranscriber:
         device = "cuda:0"
         try:
             device = self._resolve_runtime_device()
+            prepare_aria_audio_assets()
             import torch
 
             from amt.audio import AudioTransform
@@ -683,40 +685,30 @@ class AriaAmtTranscriber:
             raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from exc
 
     def _run_transcription_in_process(self, input_path: Path, temp_dir: Path) -> None:
-        try:
-            run_module = importlib.import_module("amt.run")
-            run_module.transcribe(
-                model_name=ARIA_AMT_MODEL_CONFIG_NAME,
-                checkpoint_path=str(self.checkpoint_path),
-                load_path=str(input_path),
-                load_dir=None,
-                save_dir=str(temp_dir),
-                batch_size=1,
-            )
-        except Exception as exc:
-            friendly_message = rewrite_cuda_runtime_error(exc, "cuda:0")
-            raise RuntimeError(f"Aria-AMT 转写失败:\n{friendly_message}") from exc
+        self._run_transcription_windows_single_file(input_path, temp_dir)
 
     def _run_transcription_subprocess(self, input_path: Path, temp_dir: Path) -> None:
         command = [
             sys.executable,
             "-m",
-            "amt.run",
-            "transcribe",
-            ARIA_AMT_MODEL_CONFIG_NAME,
+            "src.core.aria_amt_worker",
+            "--checkpoint",
             str(self.checkpoint_path),
-            "-load_path",
+            "--input",
             str(input_path),
-            "-save_dir",
+            "--output-directory",
             str(temp_dir),
-            "-bs",
-            "1",
         ]
 
         logger.info("Running Aria-AMT transcription: %s", " ".join(command))
         process_env = dict(os.environ)
         process_env["PYTHONIOENCODING"] = "utf-8"
         process_env["PYTHONUTF8"] = "1"
+        source_root = str(Path(__file__).resolve().parents[2])
+        inherited_path = process_env.get("PYTHONPATH")
+        process_env["PYTHONPATH"] = (
+            source_root + os.pathsep + inherited_path if inherited_path else source_root
+        )
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,

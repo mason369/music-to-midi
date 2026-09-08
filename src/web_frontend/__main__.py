@@ -42,60 +42,64 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _install_windows_break_handler()
     args = _parser().parse_args(argv)
-    config_path = (
-        Path(args.config).expanduser().resolve() if args.config else default_frontend_config_path()
-    )
-    config = load_frontend_config(config_path)
-    overrides = {
-        "host": args.host,
-        "port": args.port,
-        "public_host": args.public_host,
-        "backend_url": args.api_url,
-        "edge_path": args.edge_path,
-    }
-    config = replace(
-        config,
-        **{key: value for key, value in overrides.items() if value is not None},
-    ).validated()
-    if args.save_config:
-        write_frontend_config(config_path, config)
-    server = FrontendServer(config)
-    if args.no_window or not config.open_app_window:
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.close()
-        return 0
+    show_dialog = not args.no_window
     try:
-        return server.run_app_window()
+        log_path = get_logs_dir() / "web-frontend.log"
+        logging.basicConfig(
+            filename=log_path,
+            level=logging.INFO,
+            encoding="utf-8",
+            format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        )
+        _install_windows_break_handler()
+        config_path = (
+            Path(args.config).expanduser().resolve()
+            if args.config
+            else default_frontend_config_path()
+        )
+        config = load_frontend_config(config_path)
+        show_dialog = show_dialog and config.open_app_window
+        overrides = {
+            "host": args.host,
+            "port": args.port,
+            "public_host": args.public_host,
+            "backend_url": args.api_url,
+            "edge_path": args.edge_path,
+        }
+        config = replace(
+            config,
+            **{key: value for key, value in overrides.items() if value is not None},
+        ).validated()
+        if args.save_config:
+            write_frontend_config(config_path, config)
+        server = FrontendServer(config)
+        if not show_dialog:
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                server.close()
+            return 0
+        try:
+            return server.run_app_window()
+        except KeyboardInterrupt:
+            return 0
     except KeyboardInterrupt:
         return 0
+    except Exception as exc:
+        _show_fatal_error(str(exc), show_dialog=show_dialog)
+        return 1
 
 
-def _show_fatal_error(message: str) -> None:
+def _show_fatal_error(message: str, *, show_dialog: bool = True) -> None:
     logging.getLogger(__name__).critical(message, exc_info=True)
-    if sys.platform == "win32" and getattr(sys, "frozen", False):
+    if show_dialog and sys.platform == "win32" and getattr(sys, "frozen", False):
         ctypes.windll.user32.MessageBoxW(0, message, "Music to MIDI Frontend", 0x10)
-    else:
+    elif sys.stderr is not None:
         print(message, file=sys.stderr)
 
 
 if __name__ == "__main__":
-    log_path = get_logs_dir() / "web-frontend.log"
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        encoding="utf-8",
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
-    try:
-        raise SystemExit(main())
-    except SystemExit:
-        raise
-    except Exception as exc:
-        _show_fatal_error(str(exc))
-        raise SystemExit(1) from exc
+    raise SystemExit(main())

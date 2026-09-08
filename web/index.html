@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="locales/startup.js" defer></script>
     <script src="app.js" defer></script>
+    <script src="projects.js" defer></script>
+    <link rel="stylesheet" href="projects.css" />
   </head>
   <body>
     <header class="topbar">
@@ -56,8 +58,9 @@
           </button>
         </section>
 
+        <section id="projectPanel" aria-label="Projects"></section>
         <section class="upload-panel guidance-target" id="dropZone" aria-labelledby="uploadTitle" tabindex="0" data-i18n-aria-label="upload.dropzone_aria">
-          <input id="audioInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.wma" hidden />
+          <input id="audioInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.wma" multiple hidden />
           <div class="upload-mark" aria-hidden="true">♫</div>
           <div class="upload-copy">
             <h2 id="uploadTitle" data-i18n="upload.title"></h2>

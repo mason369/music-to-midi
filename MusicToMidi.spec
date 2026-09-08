@@ -281,8 +281,24 @@ datas = [
     ('THIRD_PARTY_NOTICES.md', '.'),
 ]
 aria_amt_config_datas = _collect_aria_amt_config_datas()
+# Preserve required empty directories in read-only portable installations.
+# A nested documentation file is ignored by upstream's immediate audio scan.
+datas += [
+    (os.path.join(ROOT_DIR, "resources", "aria_amt", "README.txt"),
+     f"amt/assets/{name}/.inference-runtime")
+    for name in ("impulse", "noise", "applause")
+]
 datas += _collect_tree(os.path.join(ROOT_DIR, "YourMT3", "amt", "src"), "YourMT3/amt/src")
-datas += _collect_tree(audio_separator_models_dir, "models/audio-separator")
+# Shared caches may still contain assets used by older installations. Only
+# the current Leap accompaniment is redistributed by this build.
+retired_accompaniment_assets = {
+    "bs_polarformer.onnx", "bs_polarformer_fp16.onnx",
+    "model_bs_polarformer.yaml", "model_bs_polarformer_float16.yaml",
+}
+datas += [
+    item for item in _collect_tree(audio_separator_models_dir, "models/audio-separator")
+    if os.path.basename(item[0]) not in retired_accompaniment_assets
+]
 datas += _collect_tree(aria_amt_models_dir, "models/aria_amt")
 datas += _collect_tree(bytedance_piano_models_dir, "models/bytedance_piano")
 datas += _collect_tree(beat_this_models_dir, "models/beat_this")
@@ -313,6 +329,10 @@ hiddenimports = [
     'src.web_api.server_config',
     'src.cli.__main__',
     'src.cli.app',
+    'src.projects.cli',
+    'src.projects.runner',
+    'src.projects.results',
+    'src.gui.widgets.project_panel',
     'uvicorn.protocols.websockets.websockets_sansio_impl',
     # Conditional source-runtime gate import in src/main.py. PyInstaller cannot
     # discover imports guarded by ``if __name__ == "__main__"`` reliably.
@@ -325,7 +345,7 @@ hiddenimports = [
     'librosa',
     'soundfile',
     'audioread',
-    # 人声分离（Leap XE vocals + PolarFormer accompaniment）与六声部 BS-RoFormer SW Fixed
+    # 人声分离（Leap XE vocals + Leap Instrumental accompaniment）与六声部 BS-RoFormer SW Fixed
     'audio_separator',
     'audio_separator.separator',
     'onnxruntime',

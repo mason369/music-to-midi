@@ -279,7 +279,7 @@ def _profile_unavailable_reason(
         from src.core.vocal_separator import VocalSeparator
 
         if not VocalSeparator.is_model_available():
-            return "Leap XE or PolarFormer assets are missing or failed identity checks"
+            return "Leap XE or Leap Instrumental assets are missing or failed identity checks"
         return _audio_separator_runtime_unavailable_reason(profile_id)
 
     if profile_id == "six_stem_split":

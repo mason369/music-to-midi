@@ -195,6 +195,7 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
                     "src.core.aria_amt_transcriber.ensure_cuda_runtime_compatibility",
                     return_value=None,
                 ),
+                patch("src.core.aria_amt_transcriber.prepare_aria_audio_assets"),
                 patch.object(
                     transcriber,
                     "_load_aria_model",

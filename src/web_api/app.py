@@ -454,6 +454,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        project_service.close()
         if owned_manager:
             job_manager.close()
 
@@ -467,6 +468,9 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.job_manager = job_manager
+    from src.web_api.soundfonts import install_soundfont_routes
+
+    install_soundfont_routes(app, job_manager)
 
     @app.exception_handler(QueueCapacityError)
     async def queue_capacity_error(_request: Request, exc: QueueCapacityError) -> JSONResponse:
@@ -482,7 +486,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=cors_origins or _default_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Last-Event-ID", "Range"],
         expose_headers=[
             "Content-Length",
@@ -829,6 +833,14 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    from src.web_api.projects import install_project_routes
+
+    project_service = install_project_routes(
+        app, job_manager=job_manager, write_upload=_write_upload,
+        max_upload_bytes=upload_limit, require_primary=require_primary_options,
+        require_manual=require_manual_options,
+    )
 
     if frontend_root is not None:
         resolved_frontend = Path(frontend_root).resolve()

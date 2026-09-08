@@ -980,7 +980,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 # --- 第 12 步/共 12 步：逐项验证新模型路线 ---
-Write-Info "第 12 步/共 12 步  验证 Leap XE 人声、PolarFormer 伴奏与 TransKun V2 Aug 模型..."
+Write-Info "第 12 步/共 12 步  验证 Leap XE 人声、Leap Instrumental 伴奏与 TransKun V2 Aug 模型..."
 
 Set-Location $REPO_DIR
 & "$PYTHON" (Join-Path $REPO_DIR "download_vocal_model.py")
@@ -992,9 +992,9 @@ if ($LASTEXITCODE -eq 0) {
 
 & "$PYTHON" (Join-Path $REPO_DIR "download_accompaniment_model.py")
 if ($LASTEXITCODE -eq 0) {
-    Write-Ok "PolarFormer 伴奏模型准备完成"
+    Write-Ok "Leap Instrumental 伴奏模型准备完成"
 } else {
-    Write-Err "PolarFormer 伴奏模型下载或校验失败"
+    Write-Err "Leap Instrumental 伴奏模型下载或校验失败"
 }
 
 & "$PYTHON" (Join-Path $REPO_DIR "download_transkun_v2_aug_model.py")

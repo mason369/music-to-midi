@@ -388,6 +388,7 @@ function Assert-PortableModelIdentities {
         [string]$ByteDancePianoDir,
         [string]$BeatThisDir,
         [string]$MirosDir,
+        [string]$MuseScoreDir,
         [string]$PythonPath,
         [string]$Label
     )
@@ -400,6 +401,7 @@ function Assert-PortableModelIdentities {
         "ByteDance Piano" = $ByteDancePianoDir
         "Beat This final0" = $BeatThisDir
         "MIROS" = $MirosDir
+        "MuseScore Studio" = $MuseScoreDir
     }
     foreach ($entry in $requiredDirectories.GetEnumerator()) {
         if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
@@ -420,6 +422,7 @@ function Assert-PortableModelIdentities {
         --bytedance-piano-dir $ByteDancePianoDir `
         --beat-this-dir $BeatThisDir `
         --miros-dir $MirosDir `
+        --musescore-executable (Join-Path $MuseScoreDir "bin\MuseScore4.exe") `
         --label $Label
     if ($LASTEXITCODE -ne 0) {
         throw "Pinned portable model identity validation failed for ${Label}."
@@ -693,6 +696,7 @@ Assert-PortableModelIdentities `
     -ByteDancePianoDir $ByteDancePianoSource `
     -BeatThisDir $BeatThisSource `
     -MirosDir $MirosSource `
+    -MuseScoreDir $MuseScoreSource `
     -PythonPath $Python `
     -Label "portable source assets"
 Assert-SixStemAssets -ModelDir $AudioSeparatorSource -PythonPath $Python -Label "audio-separator source"
@@ -780,6 +784,7 @@ Assert-PortableModelIdentities `
     -ByteDancePianoDir $ByteDancePianoBundle `
     -BeatThisDir $BeatThisBundle `
     -MirosDir $MirosBundle `
+    -MuseScoreDir $MuseScoreBundle `
     -PythonPath $Python `
     -Label "staged portable model assets"
 

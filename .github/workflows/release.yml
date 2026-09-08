@@ -51,7 +51,7 @@ jobs:
             yourmt3_checkpoints
             yourmt3_patched_source
             leap_xe
-            polarformer
+            leap_instrumental
             bs_roformer_sw_fixed
             audio_separator
             transkun_source
@@ -443,7 +443,7 @@ jobs:
           echo "=== Verify BS-RoFormer SW six-stem assets (Fixed checkpoint) ==="
           python download_multistem_model.py --check-only
 
-          echo "=== Verify PolarFormer accompaniment assets ==="
+          echo "=== Verify Leap Instrumental accompaniment assets ==="
           python download_accompaniment_model.py
 
           echo "=== Verify TransKun V2 Aug checkpoint assets ==="
@@ -575,6 +575,7 @@ jobs:
             --bytedance-piano-dir "$BUILD_ASSET_ROOT/bytedance_piano" \
             --beat-this-dir "$BUILD_ASSET_ROOT/beat_this" \
             --miros-dir "$BUILD_ASSET_ROOT/ai4m-miros" \
+            --musescore-executable "$BUILD_ASSET_ROOT/musescore/AppRun" \
             --label "staged Linux portable model assets"
           python download_multistem_model.py \
             --cache-dir "$BUILD_ASSET_ROOT/audio-separator" \
@@ -1276,7 +1277,7 @@ jobs:
 
           处理模式（完整 7 种）：
             1. SMART：完整混音多乐器转写
-            2. VOCAL_SPLIT：Leap XE 人声 + PolarFormer 伴奏，生成两条 WAV
+            2. VOCAL_SPLIT：Leap XE 人声 + Leap Instrumental 伴奏，生成两条 WAV
             3. SIX_STEM_SPLIT：BS-RoFormer SW Fixed 六声部，生成六条 WAV
             4. PIANO_TRANSKUN：TransKun 2.0.1 默认 V2
             5. PIANO_TRANSKUN_V2_AUG：TransKun V2 Aug
@@ -1288,7 +1289,7 @@ jobs:
             VOCAL_SPLIT / SIX_STEM_SPLIT 分离阶段不调用 MIDI 后端；完成后可在同一结果工作台逐轨显式选择 13 条 MIDI 路线之一。
 
           内置资产：YourMT3+ (5 checkpoints)、MIROS (source + pretrained + fine-tuned)、MuScriptor Small / Medium / Large 三套固定权重与配置、
-            MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、PolarFormer、TransKun 2.0.1 default V2、
+            MuseScore General SoundFont、FluidSynth、SW Fixed、Leap XE、Leap Instrumental、TransKun 2.0.1 default V2、
             TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。
 
           无需安装 Python，解压即用
@@ -1625,7 +1626,7 @@ jobs:
           - App 与 WebBackend 目录都内置原生 CLI：支持单文件、多文件、目录递归批处理、SHA-256 清单断点续跑、JSON Lines、明确失败终态和 13 条显式逐轨 MIDI 路线；分离模式仍先只交付 WAV，不会自动转换全部 stem。
           - Windows 与 Linux 发布烟测都会从三个独立目录真实启动，核对 API 2.0、运行时配置和 CSP；Linux 还会从最终分卷归档抽取三个角色并验证 App/WebBackend 硬链接确实被还原。Web 两端不内置认证、授权或 TLS，只适用于受信任局域网。
           - Issue #9 的 Docker 自托管包包含无外置 checkpoint 的后端/网关镜像、digest 固定 Compose、环境模板、Windows/Linux 管理脚本、镜像身份、SBOM 与 SHA-256。模型按使用者选择的配置初始化到持久卷，常驻推理容器离线运行，默认入口为本机 `127.0.0.1:7860`。
-          - PolarFormer 固定使用官方 \`bs_polarformer_fp16.onnx\`；已移除并拒绝退役 FP32 文件，不再存在 PolarFormer FP32 推理选择路径。其他模型仍各自遵循官方 FP32、FP16/BF16 或 autocast 策略，不做全局精度强改。
+          - 伴奏改用固定的标准 Leap Instrumental 权重与原始配置，经 audio-separator 0.44.1 原生 FP32 推理；人声保持 Leap XE。
           - README、MuScriptor 专题文档和 Hugging Face 模型说明已补充公开分数、适用边界、Mirelo Studio 私有增强版区别及后续模型观察项。
           - 源码安装会在下载大体积资源前检查 MuScriptor 三档 gated 仓库权限；使用条件是同一账户已在三个模型页接受许可，并通过 \`hf auth login\` 或私有 \`HF_TOKEN\` 登录。该限制来自 Hugging Face 与模型许可，不能匿名全自动下载，也不会被静默跳过。
           - Windows/Linux GPU 便携包内置并校验完整模型资产、SoundFont、FluidSynth 与 FFmpeg；依赖或模型身份不匹配时显式失败，不静默切换后端或 CPU。
@@ -1697,7 +1698,7 @@ jobs:
           - MuScriptor Small, Medium, and Large use the identity-checked official v0.3.0 runtime. The default **Official processing path** preserves upstream five-second segment state; the optional **Segment-boundary continuity fix path** only blocks recurrent single-program boundary feedback while preserving genuine tied notes. Both paths run one official inference per segment without retrying, second-pass inference, or post-hoc track rewriting.
           - Source installers verify the active project virtual environment, exact runtime assets, CUDA providers, and required model identities before inference. Missing or mismatched dependencies fail visibly; no backend or CPU fallback is introduced.
           - MuScriptor repositories are gated. Source availability requires an account that has accepted the license on all three Hugging Face model pages and authenticated with \`hf auth login\` or a private \`HF_TOKEN\`; anonymous fully automatic download is not available.
-          - PolarFormer now exclusively uses the official \`bs_polarformer_fp16.onnx\` asset. Retired FP32 files and selection paths are rejected.
+          - Accompaniment now uses the pinned standard Leap Instrumental checkpoint and original config through audio-separator 0.44.1 native FP32 inference.
 
           #### Native CLI and batch processing
           - App and WebBackend packages both include \`MusicToMidiCLI\`. It supports direct files, multiple files, recursive directories, SHA-256 manifest resume, JSON Lines, explicit terminal failures, and all 13 per-track MIDI routes.

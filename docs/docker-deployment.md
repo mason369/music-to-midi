@@ -174,7 +174,7 @@ MUSIC_TO_MIDI_ENABLED_PROFILES=yourmt3:yptf_moe_multi_nops,piano_transkun
 | `piano_transkun_v2_aug` | TransKun V2 Aug |
 | `piano_aria_amt` | Aria-AMT |
 | `piano_bytedance_pedal` | ByteDance Piano Pedal |
-| `vocal_split` | Leap XE vocals + PolarFormer accompaniment |
+| `vocal_split` | Leap XE vocals + Leap Instrumental accompaniment |
 | `six_stem_split` | BS-RoFormer SW Fixed 六声部 |
 
 修改列表后，以下命令会补齐并校验新选择的模型，然后重新启动服务：

@@ -34,7 +34,7 @@ from src.utils.yourmt3_downloader import (
     get_model_path,
 )
 
-# Historical aggregate-downloader API name.  It now resolves the PolarFormer
+# Historical aggregate-downloader API name.  It now resolves the Leap Instrumental
 # accompaniment leg; no karaoke/chorus model is used by the current route.
 download_chorus_model = download_accompaniment_model
 
@@ -140,7 +140,7 @@ def download_sota_models() -> dict[str, object]:
     print(f"ready: {vocal_model}")
 
     print("")
-    print("Preparing BS PolarFormer public ONNX accompaniment assets...")
+    print("Preparing pinned Leap Instrumental accompaniment assets...")
     accompaniment_model = download_chorus_model()
     print(f"ready: {accompaniment_model}")
 
@@ -197,7 +197,7 @@ def download_sota_models() -> dict[str, object]:
         "vocal_leap_xe": {
             "primary_model": vocal_model,
         },
-        "accompaniment_polarformer": {
+        "accompaniment_leap_instrumental": {
             "primary_model": accompaniment_model,
         },
         "transkun_v2_aug": {

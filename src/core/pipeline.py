@@ -3,7 +3,7 @@
 
 处理模式：
 1. SMART: 所选 YourMT3+ / MIROS 后端直接转写完整混音
-2. VOCAL_SPLIT: Leap XE + PolarFormer 分离为两条 WAV，之后由用户逐轨显式转 MIDI
+2. VOCAL_SPLIT: Leap XE + Leap Instrumental 分离为两条 WAV，之后由用户逐轨显式转 MIDI
 3. SIX_STEM_SPLIT: BS-RoFormer SW 分离为六条 WAV，之后由用户逐轨显式转 MIDI
 4. PIANO_TRANSKUN: 官方 TransKun 2.0 钢琴转写
 5. PIANO_TRANSKUN_V2_AUG: TransKun V2 Aug 钢琴与踏板转写
@@ -92,7 +92,7 @@ class MusicToMidiPipeline:
 
         处理模式：
         SMART: 使用所选多乐器后端直接对完整混音进行转写。
-        VOCAL_SPLIT: Leap XE + PolarFormer 只先交付人声与伴奏 WAV。
+        VOCAL_SPLIT: Leap XE + Leap Instrumental 只先交付人声与伴奏 WAV。
         SIX_STEM_SPLIT: BS-RoFormer SW 只先交付六条 stem WAV。
         两个分离模式的 MIDI 均由用户在逐轨工作台显式触发。
         四个钢琴模式分别固定路由到 TransKun、TransKun V2 Aug、Aria-AMT 与 ByteDance Pedal。

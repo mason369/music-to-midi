@@ -58,7 +58,7 @@ def test_notice_covers_every_bundled_model_family_with_pinned_provenance():
         "mimbres/YourMT3",
         "5e66c1ea173a8186e0d20432b841d3180cc015b5",
         "pcunwa/BS-Roformer-Leap",
-        "bgkb/bs_polarformer",
+        "bs_roformer_leap_inst.ckpt",
         "noblebarkrr/mvsepless_resources",
         "TransKun default V2 and V2 Aug",
         "EleutherAI/aria-amt",
@@ -92,7 +92,7 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         "yourmt3_checkpoints",
         "yourmt3_patched_source",
         "leap_xe",
-        "polarformer",
+        "leap_instrumental",
         "bs_roformer_sw_fixed",
         "audio_separator",
         "transkun_source",
@@ -127,7 +127,7 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         assert " | artifact=" in row
         assert " | revision=" in row
         assert " | license=" in row
-        assert row.endswith((" | status=VERIFIED", " | status=OWNER_ACCEPTED"))
+        assert row.endswith((" | status=VERIFIED", " | status=OWNER_ACCEPTED", " | status=BLOCKED"))
     for component_id in expected_ids:
         assert component_id in workflow
     assert "Portable license inventory count mismatch" in workflow
@@ -139,9 +139,9 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
     notice = _read("THIRD_PARTY_NOTICES.md")
     workflow = _read(".github/workflows/release.yml")
 
-    # The fail-closed markers are retired: every component is either VERIFIED
-    # with declared license evidence or OWNER_ACCEPTED with a distribution record.
-    assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE:" not in notice
+    # Local replacement does not automatically authorize redistribution of new weights.
+    assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE: leap_instrumental" in notice
+    assert "artifact=checkpoint+config" in notice
 
     rows = [line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")]
     owner_accepted = {
@@ -158,6 +158,9 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
 
     for component_id in sorted(owner_accepted):
         assert f"OWNER_ACCEPTED_NOTICE: {component_id}" in notice
+
+    blocked = {line.split(" |", 1)[0].split(": ", 1)[1] for line in rows if line.endswith(" | status=BLOCKED")}
+    assert blocked == {"leap_instrumental"}
 
     # Owner-accepted records keep full attribution and the takedown route.
     assert "undeclared upstream" in notice
@@ -183,7 +186,7 @@ def test_verified_license_claims_name_the_primary_upstream_declaration():
     notice = _read("THIRD_PARTY_NOTICES.md")
 
     assert "license: apache-2.0" in notice
-    assert notice.count("license: mit") >= 2
+    assert "license: mit" in notice
     assert "CC BY-NC-SA 4.0" in notice
     assert "CC BY 4.0" in notice
     assert "publicly accessible does not by itself grant redistribution rights" in notice

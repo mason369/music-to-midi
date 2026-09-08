@@ -1,5 +1,7 @@
 # 音乐转 MIDI 转换器 (AI Audio to MIDI)
 
+[项目、工作流配置与跨会话续跑](docs/projects.md)
+
 <p align="center">
   中文 | <a href="./docs/README.md">English</a>
 </p>
@@ -126,7 +128,7 @@ MusicToMidiCLI batch /data/audio --recursive --json
 | 范围 | 当前行为 |
 |------|----------|
 | 完整混音 | `SMART` 读取整首音频，可选 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small，输出含音符、鼓点和 GM 乐器分组的 MIDI。默认 checkpoint 是 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`。 |
-| 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 PolarFormer 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
+| 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 Leap Instrumental 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
 | 钢琴转写 | `PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 和 `PIANO_BYTEDANCE_PEDAL` 分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。 |
 | MuScriptor 乐器约束 | 空选时由模型检测乐器；选中乐器后，模型只生成所选乐器。输出包含其他乐器时任务会报错。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。默认不量化模型事件；只有用户显式执行量化时才吸附到所选网格。 |
@@ -158,11 +160,11 @@ MusicToMidiCLI batch /data/audio --recursive --json
 
 | 位置 | 已同步内容 | 说明 |
 |------|------------|------|
-| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4 | 固定来源模型和运行时按已知大小/SHA256 或明确身份校验；任一必需资源失败时立即停止。 |
-| `run.ps1` / `run_xpu.ps1` / `run.sh` | 启动前检查加速器实际执行、Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源或 CPU 回退当作可运行状态。 |
+| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4 | 固定来源模型和运行时按已知大小/SHA256 或明确身份校验；任一必需资源失败时立即停止。 |
+| `run.ps1` / `run_xpu.ps1` / `run.sh` | 启动前检查加速器实际执行、Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源或 CPU 回退当作可运行状态。 |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | 安装隔离的 NVIDIA PyTorch 2.7 或 Intel XPU PyTorch 2.11、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | NVIDIA 使用 `venv` + CUDA 12.8；Windows Intel 使用 `venv-xpu` + 原生 PyTorch XPU + OpenVINO GPU。两套互斥运行时不混装；`audio-separator` 使用 `--no-deps`。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
-| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与 MuseScore Studio | 发布条件是 30 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
+| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与 MuseScore Studio | 发布条件是 30 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
 | `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台的完整路线均与桌面版同步。 |
 
 ## 处理模式
@@ -170,7 +172,7 @@ MusicToMidiCLI batch /data/audio --recursive --json
 | 模式 | 处理流程 | 主要输出 | 说明 |
 |------|----------|----------|------|
 | `SMART` | 音频 -> 所选 YourMT3+ / MIROS / MuScriptor Large、Medium 或 Small -> MIDI | `<歌曲名>.mid` | 不做音源分离；MuScriptor 非空乐器选择会成为解码约束。 |
-| `VOCAL_SPLIT` | 音频 -> Leap XE 90-band vocals + PolarFormer accompaniment -> 两条 WAV -> 逐轨转 MIDI | `<歌曲名>_vocals.wav`、`<歌曲名>_accompaniment.wav`；按需生成逐轨 MIDI | 分离阶段不自动转 MIDI；每条 WAV 可独立选择五个 YourMT3+ checkpoint、MIROS、三档 MuScriptor 或四个钢琴后端，共 13 条路线。 |
+| `VOCAL_SPLIT` | 音频 -> Leap XE 90-band vocals + Leap Instrumental accompaniment -> 两条 WAV -> 逐轨转 MIDI | `<歌曲名>_vocals.wav`、`<歌曲名>_accompaniment.wav`；按需生成逐轨 MIDI | 分离阶段不自动转 MIDI；每条 WAV 可独立选择五个 YourMT3+ checkpoint、MIROS、三档 MuScriptor 或四个钢琴后端，共 13 条路线。 |
 | `SIX_STEM_SPLIT` | 音频 -> `BS-Rofo-SW-Fixed.ckpt` -> 六条 WAV -> 逐轨转 MIDI | `<歌曲名>_<stem>.wav`；按需生成逐轨 MIDI | 每条 WAV 的转写路线和是否转换均由用户明确选择。 |
 | `PIANO_TRANSKUN` | 音频 -> TransKun 默认 V2 模型 -> MIDI | `<歌曲名>_piano_transkun.mid` | 适合纯钢琴音频；使用 PyPI 包随附 checkpoint。 |
 | `PIANO_TRANSKUN_V2_AUG` | 音频 -> 官方 TransKun V2 Aug checkpoint -> MIDI | `<歌曲名>_piano_transkun_v2_aug.mid` | 独立模式，使用单独下载并校验的 V2 Aug 资源。 |
@@ -220,7 +222,7 @@ song_other.wav
 
 ### YourMT3+
 
-YourMT3+ 是默认多乐器后端。`download_sota_models.py` 准备完整公开工作流资源：Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格验证默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
+YourMT3+ 是默认多乐器后端。`download_sota_models.py` 准备完整公开工作流资源：Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT 和 ByteDance，并严格验证默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
 
 源码运行依赖以下文件：
 
@@ -360,7 +362,7 @@ models/transkun_v2_aug/checkpointMSimplerAug     # 打包资源
 
 ### Aria-AMT
 
-Aria-AMT 是另一条钢琴专用后端。上游官方 README 使用 `aria-amt transcribe` CLI；本项目包装器 `src/core/aria_amt_transcriber.py` 当前通过 Python 模块入口调用 `amt.run transcribe`。默认 checkpoint 为：
+Aria-AMT 是另一条钢琴专用后端。项目通过 `src/core/aria_amt_transcriber.py` 统一调用官方单文件推理和 MIDI writer；Linux 源码版由 `src.core.aria_amt_worker` 独立进程执行，模型错误会直接返回项目队列，不再嵌套上游批处理进程。Docker 和便携包会提前准备官方 AudioTransform 读取的三个目录，支持运行时安装目录只读。默认 checkpoint 为：
 
 ```text
 piano-medium-double-1.0.safetensors
@@ -436,10 +438,10 @@ models/bytedance_piano           # 打包资源
 | TransKun V2 Aug | 钢琴专精 | `PIANO_TRANSKUN_V2_AUG` | 上游官方数据增强 checkpoint；不将不同 checkpoint 的指标混写 | 独立下载、固定大小与 SHA256 校验，不是默认 V2 的 fallback。 |
 | Aria-AMT | 钢琴专精 | `PIANO_ARIA_AMT` | 公开 checkpoint；README 不写入未发布的同口径统一 F1 | 适合常规纯钢琴 A/B。 |
 | ByteDance Pedal | 钢琴专精 / 踏板感知 | `PIANO_BYTEDANCE_PEDAL` | MAESTRO note onset F1 / 踏板 onset F1 = 96.72% / 91.86% | 需要踏板 CC64 时优先选择。 |
-| Leap XE + PolarFormer | 人声/伴奏分离 | `VOCAL_SPLIT` 前置分离 | 两个公开模型使用不同目标/口径，不合成单一 benchmark | Leap XE 提取 vocals，PolarFormer 提取 accompaniment；后续 MIDI 质量还取决于转写后端。 |
+| Leap XE + Leap Instrumental | 人声/伴奏分离 | `VOCAL_SPLIT` 前置分离 | 两个公开模型使用不同目标/口径，不合成单一 benchmark | Leap XE 提取 vocals，Leap Instrumental 提取 accompaniment；后续 MIDI 质量还取决于转写后端。 |
 | BS-RoFormer SW Fixed | 六声部分离 | `SIX_STEM_SPLIT` 前置分离 | MVSEP 6-stem SDR 口径 | 生成六条 WAV，每条 stem 都可单独选择 MIDI 路线。分离指标不是端到端 MIDI F1。 |
 
-YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / ByteDance Pedal 属于钢琴专精后端，Leap XE / PolarFormer / BS-RoFormer SW Fixed 属于音源分离后端；三类模型的公开指标不能混成同一张排行榜。
+YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / ByteDance Pedal 属于钢琴专精后端，Leap XE / Leap Instrumental / BS-RoFormer SW Fixed 属于音源分离后端；三类模型的公开指标不能混成同一张排行榜。
 
 ### 当前默认转写模型：YourMT3+
 
@@ -503,20 +505,20 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，TransKun / Aria-AMT / Byte
 - 所有入口默认使用固定高质量处理策略。
 - `MIROS` 当前为固定 checkpoint 推理，可用于与 YourMT3+ 做同任务 A/B。
 
-### 当前人声分离模型：Leap XE vocals + PolarFormer accompaniment
+### 当前人声分离模型：Leap XE vocals + Leap Instrumental accompaniment
 
-`VOCAL_SPLIT` 使用两个分离模型：BS-RoFormer Leap XE 90-band 对原混音生成 vocals，BS PolarFormer public ONNX 也对原混音独立生成 accompaniment。两路规范 WAV 进入音轨工作台后，可分别选择五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small 或四个钢琴后端，共 13 条路线。
+`VOCAL_SPLIT` 使用两个分离模型：BS-RoFormer Leap XE 90-band 对原混音生成 vocals，标准 BS-RoFormer Leap Instrumental 62-band 也对原混音独立生成 accompaniment。两路规范 WAV 进入音轨工作台后，可分别选择五个 YourMT3+ checkpoint、MIROS、MuScriptor Large / Medium / Small 或四个钢琴后端，共 13 条路线。
 
 YourMT3+ 和 MIROS 保留官方 writer 的音符输出，并补充速度信息。两个分离模式先输出 WAV；在音轨工作台选择模型并开始转换后，才生成对应 MIDI。
 
 | 项目 | 详情 |
 |------|------|
 | vocals 模型 | [BS-RoFormer Leap XE](https://huggingface.co/pcunwa/BS-Roformer-Leap)：`Xe/bs_leap_xe_voc.ckpt` + `Xe/leap_xe_config_voc.yaml` |
-| accompaniment 模型 | [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer)：官方 `bs_polarformer_fp16.onnx` + `model_bs_polarformer_float16.yaml` |
-| 运行库 | Leap XE 使用 audio-separator 内的 BS-RoFormer 实现；PolarFormer 使用 ONNX Runtime |
-| 调用方式 | 两个模型各自对原音频推理；Leap XE 输出 vocals，PolarFormer 的 vocals 估计从混音中相减得到 accompaniment |
+| accompaniment 模型 | [BS-RoFormer Leap Instrumental](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e)：`bs_roformer_leap_inst.ckpt` + 原始 `bs_leap_inst_conf.yaml`，大小与 SHA-256 严格校验 |
+| 运行库 | 两路均使用 PyTorch 与 audio-separator；Leap Instrumental 使用该库原生 FP32 demix |
+| 调用方式 | 两个模型各自对原音频推理；Leap XE 输出 vocals，Leap Instrumental 直接预测 other 作为 accompaniment |
 | 模型准备 | `download_sota_models.py` 会准备并校验两组资源；也可分别运行 `download_vocal_model.py` 与 `download_accompaniment_model.py` |
-| 兼容入口 | 历史文件 `download_vocal_harmony_model.py` 仍转发 PolarFormer accompaniment 下载；它不再表示 karaoke/和声链路 |
+| 兼容入口 | 历史文件 `download_vocal_harmony_model.py` 仍转发 Leap Instrumental accompaniment 下载；它不再表示 karaoke/和声链路 |
 | 打包行为 | release 工作流会把 `~/.music-to-midi/models/audio-separator/` 打进便携包；运行时缺模型或校验失败会明确报错 |
 | 输出选项 | 分离阶段输出 `<歌曲名>_vocals.wav` 与 `<歌曲名>_accompaniment.wav`；逐轨 MIDI 仅在用户勾选路线并点击转换后生成，不自动合并 |
 
@@ -528,7 +530,7 @@ YourMT3+ 和 MIROS 保留官方 writer 的音符输出，并补充速度信息�
 
 | 模型/方向 | 来源 | 类型 | 状态 | 说明 |
 |-----------|------|------|------|------|
-| Leap XE vocals + PolarFormer accompaniment（当前） | [Leap XE 模型仓库](https://huggingface.co/pcunwa/BS-Roformer-Leap) / [PolarFormer 模型仓库](https://huggingface.co/bgkb/bs_polarformer) | 本地 PyTorch + ONNX 双模型 | 使用中 | 分别生成 vocals 与 accompaniment。两个模型的目标不同，指标应分别比较。 |
+| Leap XE vocals + Leap Instrumental accompaniment（当前） | [固定模型与配置](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | 本地 PyTorch 双模型 | 使用中 | 两路独立读取原混音，分别交付 vocals 与 accompaniment。受控人工混音的伴奏 SI-SDR 已复现为 19.34015 dB；不是原曲真值或所有歌曲的质量保证。 |
 | BS-RoFormer ep317（公开可下载） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) | 本地直替（audio-separator） | 可替换（权衡） | `model_bs_roformer_ep_317_sdr_12.9755.ckpt` 公开可下载；ZFTurbo 表按 Multisong 写明 `SDR vocals = 10.87`。文件名中的 `12.9755` 是训练标签，不等同于表中 vocals SDR。 |
 | MelBand-RoFormer (KimberleyJensen) | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [Hugging Face](https://huggingface.co/KimberleyJSN/melbandroformer) | 本地可用（vocals/other） | 可用（偏人声） | 公开权重 `MelBandRoformer.ckpt` 可核；ZFTurbo 表按 Multisong 写明 `SDR vocals = 10.98`。 |
 | SCNet XL IHF（开源权重） | [ZFTurbo 预训练列表](https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/docs/pretrained_models.md) / [ZFTurbo Release v1.0.15](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.15) | 开源可下载（4-stem） | 需改造接入 | 公开权重是 4-stem 模型，不是本项目现有 2-stem 直替；ZFTurbo 表写明 MUSDB test avg 10.08、Multisong avg 9.92。 |
@@ -658,9 +660,9 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，不能与上表的钢琴�
 | 平台 | Python / Torch | NumPy 与 GPU 运行时 | 发布边界 |
 |------|----------------|---------------------|----------|
 | Windows / NVIDIA 桌面与便携目标 | Python 3.11-3.12；Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4；CUDA 12.8 wheel | 源码与便携发布均按此契约校验；`release.yml` 同时执行第三方许可闭集门禁、模型身份校验和成品烟测 |
-| Windows / Intel XPU 桌面与本地便携目标 | Python 3.11-3.12；原生 Torch 2.11.0 XPU / torchaudio 2.11.0 XPU / torchvision 0.26.0 XPU | NumPy 1.26.4；`onnxruntime-openvino==1.24.1` + `openvino==2025.4.1`；启动门禁验证 FFT/STFT、BF16 和矩阵运算驻留 XPU，PolarFormer 固定使用 `OpenVINOExecutionProvider` 的 `GPU.0` | 当前完整三件套基线覆盖 PyTorch 官方硬件矩阵中的 Arc B-Series（Battlemage）与 Core Ultra Series 3（Panther Lake）；Panther Lake 按官方矩阵要求 Windows 11。运行环境为独立 `venv-xpu`；IPEX、CUDA ORT 混装和 CPU EP 回退会被门禁拒绝。官方 GitHub release 暂仍只构建 CUDA 包 |
+| Windows / Intel XPU 桌面与本地便携目标 | Python 3.11-3.12；原生 Torch 2.11.0 XPU / torchaudio 2.11.0 XPU / torchvision 0.26.0 XPU | NumPy 1.26.4；`onnxruntime-openvino==1.24.1` + `openvino==2025.4.1`；启动门禁验证 FFT/STFT、BF16 和矩阵运算驻留 XPU，新 Leap Instrumental 使用 PyTorch FP32，尚未完成 XPU 实机验收 | 当前完整三件套基线覆盖 PyTorch 官方硬件矩阵中的 Arc B-Series（Battlemage）与 Core Ultra Series 3（Panther Lake）；Panther Lake 按官方矩阵要求 Windows 11。运行环境为独立 `venv-xpu`；IPEX、CUDA ORT 混装和 CPU EP 回退会被门禁拒绝。官方 GitHub release 暂仍只构建 CUDA 包 |
 | Linux / NVIDIA 源码运行 | Python 3.11-3.12 x64；Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4；NVIDIA 驱动兼容 CUDA 12.8；仅 `cu128` | `install.sh` / `run.sh` 对完整七模式执行精确运行时校验；安装器要求 Debian/Ubuntu/WSL2 的 apt 软件源提供对应 Python venv/dev 包；`build.yml` 只做源码、测试和打包契约检查 |
-| Linux / AMD/ROCm | 不提供完整七模式兼容运行时 | PolarFormer 固定依赖 ONNX Runtime `CUDAExecutionProvider` | 当前不支持；安装脚本会停止并说明兼容性问题 |
+| Linux / AMD/ROCm | 尚未完成完整七模式实机验收 | 本次替换没有扩大已验证的硬件范围 | 当前不支持；安装脚本会停止并说明兼容性问题 |
 | Hugging Face Space | Python 3.12.12；Torch 2.8.0 / torchaudio 2.8.0 / torchvision 0.23.0 | NumPy `>=2,<2.5`；ZeroGPU | 使用 `space/requirements.txt`；桌面 NumPy 1.26 不属于 Space 兼容组合 |
 | Google Colab | Colab 当前预装 Python/Torch | 保留预装 Torch；只安装 pinned Web/runtime 依赖 | 避免替换 Torch 导致 CUDA 运行库冲突 |
 
@@ -709,7 +711,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 run.bat
 ```
 
-`run.ps1` 会检查虚拟环境、核心依赖、Beat This `final0`、五种 YourMT3+ checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.ps1`。
+`run.ps1` 会检查虚拟环境、核心依赖、Beat This `final0`、五种 YourMT3+ checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.ps1`。
 
 Intel GPU 使用独立的原生 XPU 环境，不与 CUDA 环境共用 wheel 或 DLL：
 
@@ -720,9 +722,9 @@ powershell -ExecutionPolicy Bypass -File .\run_xpu.ps1
 
 安装和每次启动都会做真实 `torch.xpu` 矩阵、FFT 与 STFT 运算，捕获并拒绝 XPU→CPU 算子回落；随后初始化 OpenVINO GPU，并在禁用 CPU EP 回退后用 `OpenVINOExecutionProvider` 的 `GPU.0` 实际执行 MatMul ONNX 图。ORT 会自动列出内置 CPU provider，但 `session.disable_cpu_ep_fallback=1` 会让任何需分配给 CPU 的节点直接导致会话失败。任一门禁失败都会停止，不会改用 IPEX、DirectML、CUDA 或 CPU。
 
-PolarFormer 默认把模型配置的 882000 采样点窗口限制为 441000，以控制显存峰值；该默认值已在 16 GiB NVIDIA 基线上完成真实双模型分离。需要显式压低峰值时可在启动前设置 `POLARFORMER_MAX_CHUNK_SIZE=220500`，设为 `0` 才会取消上限。显存不足时任务停止，并显示 OOM 错误。
+Leap Instrumental 固定使用 audio-separator 0.44.1 的原生 FP32 路线，与受控对比采用同一权重和配置：`dim_t=1101`、每片 563200 个采样、步进 8 秒。短音频补齐一个模型窗口后裁回原长度；不改变窗口或降精度。显存不足时任务停止，并显示 OOM 错误。新增伴奏权重的上游未声明许可证，便携包发布仍受第三方声明中的待确认记录约束。
 
-Leap XE 在 XPU 上保留官方完整约 20 秒音频窗口、全部 key/value、checkpoint 与后处理，仅把 attention 的 query 轴固定分成 128 行逐块求值后拼接。每个 query 仍注意完整上下文，因此这是推理期数值等价的显存有界实现，不是缩短音频窗口、降低模型或 CPU 回退；训练态误用会直接报错。该路径用于避开仅覆盖部分 Intel 架构的 XPU Flash Attention 内核，并已在 Arc 140T 16 GB 上完成真实两轨分离。
+Leap XE 在 XPU 上保留官方完整约 20 秒音频窗口、全部 key/value、checkpoint 与后处理，仅把 attention 的 query 轴固定分成 128 行逐块求值后拼接。每个 query 仍注意完整上下文，因此这是推理期数值等价的显存有界实现，不是缩短音频窗口、降低模型或 CPU 回退；训练态误用会直接报错。该路径用于避开仅覆盖部分 Intel 架构的 XPU Flash Attention 内核，此前版本已在 Arc 140T 16 GB 上完成真实两轨分离；该历史结果不包含本次替换的 Leap Instrumental，新伴奏路线尚未完成 XPU 实机验收。
 
 MuScriptor Large 的 5.1 GiB checkpoint 在 XPU 上固定使用 `safetensors==0.8.0` 的官方 `pread` reader，并按文件偏移顺序一次只装载一个张量。XPU 路径会先打开惰性的 `pread` 文件句柄，再建立约 5.50 GiB 的统一内存模型，避免模型占用系统提交空间后才打开 checkpoint 所触发的 Windows `os error 1455`。该实现不会把完整 checkpoint 映射为 PyTorch storage，也不改变官方权重、精度与 writer；读取失败会直接停止，不会改回 mmap、扩大页面文件或自动重试。
 
@@ -735,7 +737,7 @@ chmod +x run.sh
 ./run.sh
 ```
 
-`run.sh` 会检查虚拟环境、核心依赖、Beat This `final0`、受控 YourMT3+ 源码与五种 checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.sh`。
+`run.sh` 会检查虚拟环境、核心依赖、Beat This `final0`、受控 YourMT3+ 源码与五种 checkpoint、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont 与 FluidSynth；资源缺失或身份校验失败时会调用 `install.sh`。
 
 ### 源码直接运行
 
@@ -787,7 +789,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 Windows Intel XPU 的标准安装入口是 `install_xpu.ps1`。手动准备对应独立的 `venv-xpu` 和 `requirements-xpu.txt` 固定版本；在 `venv` 中覆盖 CUDA wheel 会破坏两套环境的隔离契约。
 
-Intel XPU 采用“最新完整兼容组合”而不是单独追最高 `torch` 版本：截至当前，PyTorch XPU 已发布 2.13，但 `torchaudio` XPU 的最新匹配版本是 2.11，因此项目固定 `torch/torchaudio==2.11.0+xpu` 与 `torchvision==0.26.0+xpu`。这套官方硬件矩阵已经列出 [Arc B-Series 与 Panther Lake / Core Ultra Series 3](https://docs.pytorch.org/docs/2.11/notes/get_start_xpu.html)。PolarFormer 的 ONNX 路线与 [ONNX Runtime OpenVINO 1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1) 对齐到 OpenVINO 2025.4.1。未来只有在三件套与全部七模式重新验收通过后才整体升级，不混装不匹配版本。
+Intel XPU 采用“最新完整兼容组合”而不是单独追最高 `torch` 版本：截至当前，PyTorch XPU 已发布 2.13，但 `torchaudio` XPU 的最新匹配版本是 2.11，因此项目固定 `torch/torchaudio==2.11.0+xpu` 与 `torchvision==0.26.0+xpu`。这套官方硬件矩阵已经列出 [Arc B-Series 与 Panther Lake / Core Ultra Series 3](https://docs.pytorch.org/docs/2.11/notes/get_start_xpu.html)。既有 XPU 包中的 [ONNX Runtime OpenVINO 1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1) 与 OpenVINO 2025.4.1 仍按打包依赖管理；新 Leap Instrumental 走 PyTorch FP32，本次只在 NVIDIA CUDA 实测，尚未完成新伴奏路线的 Intel XPU 实机验收。未来只有在三件套与全部七模式重新验收通过后才整体升级，不混装不匹配版本。
 
 Intel XPU 没有可直接等同 NVIDIA `sm_XX` 的项目级兼容版本号。该栈通过 oneAPI/Level Zero 发现设备，常规 JIT 路径由 Intel Graphics Compiler 按实际硬件生成代码；真正的支持边界以固定 PyTorch 版本的官方硬件矩阵、操作系统/驱动要求和本项目启动时的真实算子门禁共同决定，不能把“任意 Intel GPU”视为自动兼容。
 
@@ -795,9 +797,9 @@ Intel XPU 没有可直接等同 NVIDIA `sm_XX` 的项目级兼容版本号。该
 
 `cu118` / CUDA 11 不属于当前一键启动器和完整七模式验收契约；启动器检测到该环境时会停止并提示更新。
 
-AMD/ROCm 当前不能完成七模式：当前固定的分离器执行契约只验收 NVIDIA `CUDAExecutionProvider` 或 Intel `OpenVINOExecutionProvider/GPU.0`，不提供 AMD 对应的严格 GPU provider。安装脚本会停止并说明兼容性问题。
+AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停止并说明兼容性问题。本次将伴奏分离改为 PyTorch FP32，不代表其余模型和完整工作流已获得 AMD 支持。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：26 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -817,7 +819,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 与 ByteDance checkpoint，并严格校验默认 TransKun 2.0.1 包版本和内置 V2 资源；缺失或身份不符会直接失败。
+当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT 与 ByteDance checkpoint，并严格校验默认 TransKun 2.0.1 包版本和内置 V2 资源；缺失或身份不符会直接失败。
 
 ### 5. 准备分离与钢琴模型
 
@@ -895,7 +897,7 @@ cd space
 python app.py
 ```
 
-Space 版随部署包携带项目已验证的 `YourMT3/amt/src` 兼容源码，与桌面版和 Colab 使用同一棵源码树；不会在运行时改用 Hugging Face Space 的可变源码。运行转换时会按所选模式检查/准备 YourMT3+ 官方 checkpoint 或 MIROS、BS-RoFormer SW Fixed、Leap XE、PolarFormer、TransKun V2 Aug、Aria-AMT 或 ByteDance Pedal 资源；缺失或身份校验失败会显式暴露。
+Space 版随部署包携带项目已验证的 `YourMT3/amt/src` 兼容源码，与桌面版和 Colab 使用同一棵源码树；不会在运行时改用 Hugging Face Space 的可变源码。运行转换时会按所选模式检查/准备 YourMT3+ 官方 checkpoint 或 MIROS、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT 或 ByteDance Pedal 资源；缺失或身份校验失败会显式暴露。
 
 ZeroGPU 入口用于短片段试用。长歌建议使用 Colab、桌面版或专用 GPU。[Hugging Face ZeroGPU 文档](https://huggingface.co/docs/hub/main/en/spaces-zerogpu) 当前公开配额为匿名用户每日 2 分钟、登录免费账户每日 5 分钟 GPU。当前保守的最小请求经 `large` GPU 平台倍率折算后已高于匿名额度，因此转换入口要求登录；Space 会按模式、后端和模型估算，再按固定的 `spaces==0.51.1` 平台倍率上界折算，超过登录免费账户 300 GPU 秒窗口的请求会在下载模型前明确拒绝。该估算只是准入上限，不代表用户一定仍有足够的当日配额或队列容量；Colab、桌面版或专用 GPU 更适合长歌。
 
@@ -912,7 +914,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 26 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；任一项目重新变为未解决状态时，官方 release 会在构建前显式阻断。
+当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、1 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，官方 release 会在构建前显式阻断。
 
 Windows CUDA 完整三包构建（桌面 App、Web 后端、Web 前端）：
 
@@ -1013,12 +1015,12 @@ space/app.py                 # Gradio Web 界面
 colab_notebook.ipynb         # Colab 运行入口
 download_sota_models.py      # Beat This + 全部公开工作流模型下载 + 默认 TransKun 严格校验
 download_vocal_model.py      # Leap XE vocals 模型下载
-download_accompaniment_model.py # PolarFormer accompaniment 下载入口
+download_accompaniment_model.py # Leap Instrumental accompaniment 下载入口
 download_multistem_model.py  # BS-RoFormer SW Fixed 六声部分离模型下载
 download_transkun_v2_aug_model.py # TransKun V2 Aug 下载与校验
 download_aria_amt_model.py   # Aria-AMT 模型下载
 download_bytedance_piano_model.py # ByteDance Pedal 模型下载
-download_vocal_harmony_model.py # PolarFormer 历史兼容入口
+download_vocal_harmony_model.py # Leap Instrumental 历史兼容入口
 MusicToMidi.spec             # PyInstaller 配置
 ```
 

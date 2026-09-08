@@ -119,6 +119,8 @@ class InferenceEngine:
             "time_signature": list(beat.time_signature) if beat.time_signature else None,
             "is_variable_tempo": bool(beat.is_variable_tempo),
             "tempo_map": [[float(sec), float(bpm)] for sec, bpm in beat.tempo_map],
+            "beat_times": [float(value) for value in beat.beat_times],
+            "downbeats": [float(value) for value in (beat.downbeats or [])],
         }
 
     @classmethod

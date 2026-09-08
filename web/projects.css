@@ -1,0 +1,101 @@
+#projectPanel {
+  margin: 16px 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+}
+#projectPanel h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+}
+#projectPanel p {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.project-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+#projectPanel button,
+#projectPanel select,
+#projectPanel input {
+  max-width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+#projectPanel button {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-corner);
+  background: var(--panel-input);
+  cursor: pointer;
+}
+#projectPanel button:not(:disabled):hover {
+  background: var(--panel-hover);
+}
+#projectPanel [data-action="run"] {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #071427;
+  font-weight: 600;
+}
+#projectPanel select,
+#projectPanel input:not([type="checkbox"]):not([type="file"]) {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-corner);
+  background: var(--panel-input);
+  color: var(--text);
+}
+#projectPanel input[type="checkbox"] {
+  accent-color: var(--blue);
+}
+.project-status {
+  padding: 10px 12px;
+  border-left: 3px solid var(--blue);
+  background: var(--panel-deep);
+}
+.project-list,
+.project-song {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+}
+.project-stems {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 12px 0;
+  padding: 12px;
+}
+.project-stem {
+  display: grid;
+  grid-template-columns: auto 100px minmax(120px, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.project-song-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px;
+}
+.project-song-list button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 500px) {
+  #projectPanel {
+    padding: 12px;
+  }
+  .project-stem {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .project-stem select {
+    grid-column: 1/-1;
+    width: 100%;
+  }
+}

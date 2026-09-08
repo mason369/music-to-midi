@@ -205,9 +205,9 @@ class TestBackendSelectorUi(unittest.TestCase):
         self.assertFalse(hasattr(panel, "_midi_track_mode_row"))
         self.assertFalse(hasattr(panel, "yourmt3_arch_hint_label"))
         self.assertEqual(panel.get_midi_track_mode(), "multi_track")
-        self.assertIn("Leap XE + PolarFormer", panel.mode_desc_label.text())
+        self.assertIn("Leap XE + Leap Instrumental", panel.mode_desc_label.text())
         self.assertIn(
-            "Leap XE and PolarFormer create two WAV tracks", panel.hint_label.text()
+            "Leap XE and Leap Instrumental create two WAV tracks", panel.hint_label.text()
         )
         self.assertIn(
             "each completed track can use its own model for MIDI conversion",

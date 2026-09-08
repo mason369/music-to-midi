@@ -289,7 +289,7 @@ class SynchronizedPcmPlayer(QObject):
     def _create_sink(self) -> QAudioSink:
         output_device = QMediaDevices.defaultAudioOutput()
         if output_device.isNull():
-            raise RuntimeError("No Windows audio output device is available for MIDI playback")
+            raise RuntimeError("No audio output device is available for MIDI playback")
         if not output_device.isFormatSupported(self._format):
             raise RuntimeError(
                 "The selected audio device does not support the required synchronized format: "

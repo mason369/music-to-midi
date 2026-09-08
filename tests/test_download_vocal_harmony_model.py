@@ -1,231 +1,132 @@
+"""Pinned Leap Instrumental assets and historical installer compatibility."""
+
 import hashlib
-import tempfile
-import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-from download_vocal_harmony_model import (
-    DEFAULT_CACHE_DIR,
-    POLARFORMER_CONFIG_NAME,
-    POLARFORMER_ONNX_NAME,
-    POLARFORMER_REPO_ID,
-    POLARFORMER_REVISION,
-    REMOVED_POLARFORMER_FP32_ONNX_NAME,
-    download_accompaniment_model,
-    download_chorus_model,
-    is_accompaniment_model_available,
-    is_chorus_model_available,
-    resolve_accompaniment_config_path,
-    resolve_accompaniment_model_path,
-    resolve_chorus_model_paths,
-)
+import pytest
+
+import download_accompaniment_model as assets
+import download_vocal_harmony_model as legacy
 
 
-class TestDownloadVocalHarmonyModel(unittest.TestCase):
-    def test_default_cache_dir_is_under_user_home(self):
-        self.assertIn(".music-to-midi", str(DEFAULT_CACHE_DIR))
-        self.assertIn("audio-separator", str(DEFAULT_CACHE_DIR))
-
-    def test_resolve_paths_find_nested_huggingface_assets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            nested = cache_dir / "polar"
-            nested.mkdir()
-            model = nested / POLARFORMER_ONNX_NAME
-            config = nested / POLARFORMER_CONFIG_NAME
-            model.write_bytes(b"model")
-            config.write_bytes(b"config")
-
-            self.assertEqual(resolve_accompaniment_model_path(cache_dir), model)
-            self.assertEqual(resolve_accompaniment_config_path(cache_dir), config)
-            self.assertEqual(resolve_chorus_model_paths(cache_dir), (model, config))
-
-    def test_availability_requires_expected_onnx_size_and_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            (cache_dir / POLARFORMER_ONNX_NAME).write_bytes(b"model")
-            (cache_dir / POLARFORMER_CONFIG_NAME).write_bytes(b"config")
-
-            with (
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
-                    hashlib.sha256(b"model").hexdigest(),
-                ),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
-                    hashlib.sha256(b"config").hexdigest(),
-                ),
-            ):
-                self.assertTrue(is_accompaniment_model_available(cache_dir))
-                self.assertTrue(is_chorus_model_available(cache_dir))
-            with patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 6):
-                self.assertFalse(is_accompaniment_model_available(cache_dir))
-
-    def test_download_uses_pinned_repo_revision_and_verifies_onnx(self):
-        payload = b"polar-model"
-        expected_hash = hashlib.sha256(payload).hexdigest()
-        config_payload = b"yaml"
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            calls = []
-
-            def fake_download(**kwargs):
-                calls.append(kwargs)
-                path = cache_dir / kwargs["filename"]
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(payload if path.suffix == ".onnx" else config_payload)
-                return str(path)
-
-            with (
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", len(payload)),
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", expected_hash),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", len(config_payload)),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
-                    hashlib.sha256(config_payload).hexdigest(),
-                ),
-            ):
-                result = download_accompaniment_model(
-                    cache_dir=cache_dir,
-                    downloader=fake_download,
-                    printer=lambda *_: None,
-                )
-
-            self.assertEqual(result, cache_dir / POLARFORMER_ONNX_NAME)
-            self.assertEqual(
-                [call["filename"] for call in calls],
-                [POLARFORMER_ONNX_NAME, POLARFORMER_CONFIG_NAME],
-            )
-            self.assertTrue(all(call["repo_id"] == POLARFORMER_REPO_ID for call in calls))
-            self.assertTrue(all(call["revision"] == POLARFORMER_REVISION for call in calls))
-
-    def test_legacy_download_entrypoint_routes_to_polarformer(self):
-        with patch(
-            "download_vocal_harmony_model.download_accompaniment_model",
-            return_value=Path("polar.onnx"),
-        ) as download:
-            result = download_chorus_model(printer=lambda *_: None)
-        self.assertEqual(result, Path("polar.onnx"))
-        download.assert_called_once()
-
-    def test_download_skips_only_when_both_assets_have_valid_identity(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            model = cache_dir / POLARFORMER_ONNX_NAME
-            config = cache_dir / POLARFORMER_CONFIG_NAME
-            model.write_bytes(b"model")
-            config.write_bytes(b"config")
-            downloader = Mock(side_effect=AssertionError("download must not run"))
-
-            with (
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
-                    hashlib.sha256(b"model").hexdigest(),
-                ),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
-                    hashlib.sha256(b"config").hexdigest(),
-                ),
-            ):
-                result = download_accompaniment_model(
-                    cache_dir=cache_dir,
-                    downloader=downloader,
-                    printer=lambda *_: None,
-                )
-            self.assertEqual(result, model)
-            downloader.assert_not_called()
-
-    def test_download_removes_only_the_verified_retired_fp32_asset(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            model = cache_dir / POLARFORMER_ONNX_NAME
-            config = cache_dir / POLARFORMER_CONFIG_NAME
-            retired = cache_dir / REMOVED_POLARFORMER_FP32_ONNX_NAME
-            model.write_bytes(b"model")
-            config.write_bytes(b"config")
-            retired.write_bytes(b"retired-fp32")
-            messages = []
-
-            with (
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 5),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_ONNX_SHA256",
-                    hashlib.sha256(b"model").hexdigest(),
-                ),
-                patch("download_vocal_harmony_model.POLARFORMER_CONFIG_SIZE", 6),
-                patch(
-                    "download_vocal_harmony_model.POLARFORMER_CONFIG_SHA256",
-                    hashlib.sha256(b"config").hexdigest(),
-                ),
-                patch(
-                    "download_vocal_harmony_model.REMOVED_POLARFORMER_FP32_ONNX_SIZE",
-                    12,
-                ),
-                patch(
-                    "download_vocal_harmony_model.REMOVED_POLARFORMER_FP32_ONNX_SHA256",
-                    hashlib.sha256(b"retired-fp32").hexdigest(),
-                ),
-            ):
-                result = download_accompaniment_model(
-                    cache_dir=cache_dir,
-                    downloader=Mock(side_effect=AssertionError("download must not run")),
-                    printer=messages.append,
-                )
-
-            self.assertEqual(result, model)
-            self.assertFalse(retired.exists())
-            self.assertTrue(
-                any("Removed retired PolarFormer FP32 asset" in message for message in messages)
-            )
-
-    def test_download_refuses_to_delete_an_unknown_retired_filename_collision(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            retired = cache_dir / REMOVED_POLARFORMER_FP32_ONNX_NAME
-            retired.write_bytes(b"unknown")
-
-            with self.assertRaisesRegex(RuntimeError, "Refusing to delete it automatically"):
-                download_accompaniment_model(
-                    cache_dir=cache_dir,
-                    downloader=Mock(),
-                    printer=lambda *_: None,
-                )
-            self.assertTrue(retired.is_file())
-
-    def test_download_rejects_onnx_hash_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-
-            def fake_download(**kwargs):
-                path = cache_dir / kwargs["filename"]
-                path.write_bytes(b"bad" if path.suffix == ".onnx" else b"yaml")
-                return str(path)
-
-            with (
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SIZE", 3),
-                patch("download_vocal_harmony_model.POLARFORMER_ONNX_SHA256", "0" * 64),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "SHA256 mismatch"):
-                    download_accompaniment_model(
-                        cache_dir=cache_dir,
-                        downloader=fake_download,
-                        printer=lambda *_: None,
-                    )
-
-    def test_download_rejects_old_karaoke_preset(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "Unsupported accompaniment model"):
-                download_accompaniment_model(
-                    cache_dir=Path(tmp),
-                    model_name="ensemble:karaoke",
-                    downloader=Mock(),
-                    printer=lambda *_: None,
-                )
+@pytest.fixture
+def tiny_assets(monkeypatch):
+    payloads = {
+        assets.LEAP_INSTRUMENTAL_CHECKPOINT_NAME: b"leap-checkpoint",
+        assets.LEAP_INSTRUMENTAL_CONFIG_NAME: b"leap-config",
+    }
+    for prefix, name in (
+        ("LEAP_INSTRUMENTAL_CHECKPOINT", assets.LEAP_INSTRUMENTAL_CHECKPOINT_NAME),
+        ("LEAP_INSTRUMENTAL_CONFIG", assets.LEAP_INSTRUMENTAL_CONFIG_NAME),
+    ):
+        monkeypatch.setattr(assets, prefix + "_SIZE", len(payloads[name]))
+        monkeypatch.setattr(assets, prefix + "_SHA256", hashlib.sha256(payloads[name]).hexdigest())
+    return payloads
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_historical_entrypoints_select_current_instrumental_model():
+    assert legacy.CHORUS_MODEL == "bs_roformer_leap_inst.ckpt"
+    assert legacy.download_accompaniment_model is assets.download_accompaniment_model
+    assert legacy.is_chorus_model_available is assets.is_chorus_model_available
+    assert assets.CHORUS_MODELS == ("bs_roformer_leap_inst.ckpt", "bs_leap_inst_conf.yaml")
+
+
+def test_default_cache_dir_is_under_user_home():
+    assert assets.DEFAULT_CACHE_DIR == Path.home() / ".music-to-midi/models/audio-separator"
+
+
+def test_downloads_and_verifies_both_assets_at_exact_revision(tmp_path, tiny_assets):
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs)
+        path = tmp_path / kwargs["filename"]
+        path.write_bytes(tiny_assets[path.name])
+        return str(path)
+
+    result = assets.download_accompaniment_model(
+        tmp_path, downloader=download, printer=lambda _: None
+    )
+    assert result == tmp_path / assets.LEAP_INSTRUMENTAL_CHECKPOINT_NAME
+    assert [call["filename"] for call in calls] == list(tiny_assets)
+    assert all(call["repo_id"] == "pcunwa/BS-Roformer-Leap" for call in calls)
+    assert all(call["revision"] == "4e47d6662ae82eaa8b4ac4329fe66099a843b48e" for call in calls)
+    assert assets.is_accompaniment_model_available(tmp_path)
+    assert legacy.is_chorus_model_available(tmp_path)
+
+
+def test_valid_nested_assets_are_reused_without_network(tmp_path, tiny_assets):
+    nested = tmp_path / "snapshot"
+    nested.mkdir()
+    for name, data in tiny_assets.items():
+        (nested / name).write_bytes(data)
+    downloader = Mock(side_effect=AssertionError("unexpected download"))
+    result = legacy.download_chorus_model(tmp_path, downloader=downloader, printer=lambda _: None)
+    assert result.parent == nested
+    assert assets.resolve_chorus_model_paths(tmp_path) == tuple(
+        nested / name for name in tiny_assets
+    )
+    downloader.assert_not_called()
+
+
+@pytest.mark.parametrize("filename", assets.CHORUS_MODELS)
+def test_same_size_corruption_is_rejected_without_overwrite(tmp_path, tiny_assets, filename):
+    for name, data in tiny_assets.items():
+        (tmp_path / name).write_bytes(data)
+    corrupt = b"x" * len(tiny_assets[filename])
+    (tmp_path / filename).write_bytes(corrupt)
+    downloader = Mock()
+    assert not assets.is_accompaniment_model_available(tmp_path)
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        assets.download_accompaniment_model(tmp_path, downloader=downloader, printer=lambda _: None)
+    assert (tmp_path / filename).read_bytes() == corrupt
+    downloader.assert_not_called()
+
+
+def test_failed_download_stops_before_config(tmp_path, tiny_assets):
+    downloader = Mock(side_effect=ConnectionError("download failed"))
+    with pytest.raises(ConnectionError, match="download failed"):
+        assets.download_accompaniment_model(tmp_path, downloader=downloader, printer=lambda _: None)
+    assert downloader.call_count == 1
+    assert not assets.is_accompaniment_model_available(tmp_path)
+
+
+def test_wrong_downloaded_model_stops_before_config(tmp_path, tiny_assets):
+    calls = []
+
+    def download(**kwargs):
+        calls.append(kwargs["filename"])
+        path = tmp_path / kwargs["filename"]
+        path.write_bytes(b"wrong")
+        return path
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        assets.download_accompaniment_model(tmp_path, downloader=download, printer=lambda _: None)
+    assert calls == [assets.LEAP_INSTRUMENTAL_CHECKPOINT_NAME]
+
+
+def test_polarformer_files_do_not_satisfy_leap_readiness(tmp_path):
+    (tmp_path / "bs_polarformer_fp16.onnx").write_bytes(b"old model")
+    (tmp_path / "model_bs_polarformer_float16.yaml").write_bytes(b"old config")
+    assert not assets.is_accompaniment_model_available(tmp_path)
+    with pytest.raises(ValueError):
+        assets.download_accompaniment_model(tmp_path, model_name="bs_polarformer_fp16.onnx")
+
+
+def test_ambiguous_nested_models_are_rejected(tmp_path):
+    for directory in ("first", "second"):
+        root = tmp_path / directory
+        root.mkdir()
+        (root / assets.CHORUS_MODEL).write_bytes(b"data")
+    with pytest.raises(RuntimeError):
+        assets.resolve_accompaniment_model_path(tmp_path)
+    assert not assets.is_accompaniment_model_available(tmp_path)
+
+
+def test_cli_reports_invalid_assets(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        assets, "download_accompaniment_model", Mock(side_effect=RuntimeError("bad identity"))
+    )
+    assert assets.main(["--cache-dir", str(tmp_path)]) == 1
+    assert "bad identity" in capsys.readouterr().out

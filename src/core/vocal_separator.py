@@ -1,16 +1,16 @@
-"""Project-selected Leap XE + PolarFormer vocal/accompaniment separation."""
+"""Project-selected Leap XE + Leap Instrumental vocal/accompaniment separation."""
 
 from __future__ import annotations
 
 import logging
-import os
-import threading
 from contextlib import nullcontext
 from pathlib import Path
 from types import MethodType
 from typing import Callable, Dict, Optional
 
 from download_accompaniment_model import (
+    LEAP_INSTRUMENTAL_CHECKPOINT_NAME,
+    LEAP_INSTRUMENTAL_CONFIG_NAME,
     is_accompaniment_model_available,
     resolve_accompaniment_config_path,
     resolve_accompaniment_model_path,
@@ -29,7 +29,6 @@ from src.utils.gpu_utils import (
     is_unsupported_cuda_architecture_error,
     rewrite_cuda_runtime_error,
 )
-from src.utils.openvino_runtime import initialize_openvino_gpu_runtime
 from src.utils.runtime_paths import (
     activate_audio_separator_runtime,
     get_audio_separator_model_dir,
@@ -39,16 +38,13 @@ logger = logging.getLogger(__name__)
 
 LEAP_CHECKPOINT_NAME = "bs_leap_xe_voc.ckpt"
 LEAP_CONFIG_NAME = "leap_xe_config_voc.yaml"
-POLARFORMER_ONNX_NAME = "bs_polarformer_fp16.onnx"
-POLARFORMER_CONFIG_NAME = "model_bs_polarformer_float16.yaml"
-DEFAULT_POLARFORMER_MAX_CHUNK_SIZE = 441_000
 LEAP_XPU_ATTENTION_QUERY_CHUNK_SIZE = 128
 
 # Compatibility constants retained for callers that imported the old names.
 ROFORMER_MODEL = LEAP_CHECKPOINT_NAME
 ROFORMER_REQUIRED_MODELS = (LEAP_CHECKPOINT_NAME, LEAP_CONFIG_NAME)
-KARAOKE_MODEL = POLARFORMER_ONNX_NAME
-KARAOKE_REQUIRED_MODELS = (POLARFORMER_ONNX_NAME, POLARFORMER_CONFIG_NAME)
+KARAOKE_MODEL = LEAP_INSTRUMENTAL_CHECKPOINT_NAME
+KARAOKE_REQUIRED_MODELS = (LEAP_INSTRUMENTAL_CHECKPOINT_NAME, LEAP_INSTRUMENTAL_CONFIG_NAME)
 
 
 def _resolve_verified_model_assets(cache_dir: Path) -> tuple[Path, Path, Path, Path]:
@@ -56,7 +52,7 @@ def _resolve_verified_model_assets(cache_dir: Path) -> tuple[Path, Path, Path, P
     if not is_vocal_model_available(cache_dir):
         invalid_groups.append("Leap XE checkpoint/config")
     if not is_accompaniment_model_available(cache_dir):
-        invalid_groups.append("PolarFormer ONNX/config")
+        invalid_groups.append("Leap Instrumental checkpoint/config")
     if invalid_groups:
         raise RuntimeError(
             "Vocal split model assets are missing or failed exact size/SHA256 "
@@ -734,347 +730,170 @@ def _run_leap_vocals_leg(
         clear_gpu_memory()
 
 
-def _prepare_polar_stft(audio, stft_kwargs: dict, win_length: int):
-    import torch
-
-    audio_tensor = torch.from_numpy(audio).float().unsqueeze(0)
-    raw_audio = audio_tensor.reshape(-1, audio_tensor.shape[-1])
-    stft_window = torch.hann_window(win_length)
-    stft = torch.stft(
-        raw_audio,
-        **stft_kwargs,
-        window=stft_window,
-        return_complex=True,
-    )
-    stft_real = torch.view_as_real(stft)
-    channels, frequencies, frames, complex_parts = stft_real.shape
-    stft_repr = (
-        stft_real.reshape(1, channels, frequencies, frames, complex_parts)
-        .permute(0, 2, 1, 3, 4)
-        .reshape(1, frequencies * channels, frames, complex_parts)
-    )
-    features = stft_repr.permute(0, 2, 1, 3).reshape(
-        1, frames, frequencies * channels * complex_parts
-    )
-    return features, stft_repr, stft_window, raw_audio.shape[-1]
-
-
-def _reconstruct_polar_audio(
-    stft_repr,
-    mask,
-    stft_kwargs: dict,
-    stft_window,
-    audio_channels: int,
-    raw_audio_length: int,
-):
-    import torch
-
-    mask_tensor = torch.from_numpy(mask)
-    stft_complex = torch.view_as_complex(stft_repr.unsqueeze(1).contiguous())
-    mask_complex = torch.view_as_complex(mask_tensor.contiguous())
-    masked = stft_complex * mask_complex
-    batch, stems, combined_frequencies, frames = masked.shape
-    if combined_frequencies % audio_channels != 0:
-        raise RuntimeError(
-            "PolarFormer mask has an invalid frequency/channel dimension: "
-            f"{combined_frequencies}"
-        )
-    frequencies = combined_frequencies // audio_channels
-    masked = (
-        masked.reshape(batch, stems, frequencies, audio_channels, frames)
-        .permute(0, 1, 3, 2, 4)
-        .reshape(batch * stems * audio_channels, frequencies, frames)
-    )
-    masked[:, 0, :] = 0.0
-    reconstructed = torch.istft(
-        masked,
-        **stft_kwargs,
-        window=stft_window,
-        return_complex=False,
-        length=raw_audio_length,
-    )
-    return reconstructed.reshape(batch, stems, audio_channels, raw_audio_length)
-
-
-def _resolve_onnx_providers(requested_device: Optional[str], ort_module) -> list:
-    available = set(ort_module.get_available_providers())
-    device_name = str(requested_device or "").strip().lower()
-    if not device_name:
-        device_name = get_device(prefer_gpu=True)
-
-    if device_name == "cpu":
-        if "CPUExecutionProvider" not in available:
-            raise RuntimeError("ONNX Runtime CPUExecutionProvider is unavailable")
-        return ["CPUExecutionProvider"]
-    if device_name.startswith("cuda"):
-        if "CUDAExecutionProvider" not in available:
-            raise RuntimeError(
-                "CUDA was requested for PolarFormer but ONNX Runtime has no "
-                "CUDAExecutionProvider"
-            )
-        try:
-            device_id = int(device_name.split(":", 1)[1]) if ":" in device_name else 0
-        except ValueError as exc:
-            raise ValueError(f"Invalid CUDA device: {device_name!r}") from exc
-        return [("CUDAExecutionProvider", {"device_id": device_id})]
-    if device_name.startswith("xpu"):
-        if "OpenVINOExecutionProvider" not in available:
-            raise RuntimeError(
-                "Intel XPU was requested for PolarFormer but ONNX Runtime has no "
-                "OpenVINOExecutionProvider; install onnxruntime-openvino==1.24.1 "
-                "and openvino==2025.4.1 in the XPU environment"
-            )
-        try:
-            device_id = int(device_name.split(":", 1)[1]) if ":" in device_name else 0
-        except ValueError as exc:
-            raise ValueError(f"Invalid Intel XPU device: {device_name!r}") from exc
-        if device_id < 0:
-            raise ValueError(f"Invalid Intel XPU device: {device_name!r}")
-        initialize_openvino_gpu_runtime()
-        return [
-            (
-                "OpenVINOExecutionProvider",
-                {"device_type": f"GPU.{device_id}"},
-            )
-        ]
-    raise ValueError(f"Unsupported PolarFormer ONNX device: {device_name!r}")
-
-
-def _create_strict_onnx_session(ort_module, onnx_path: Path, providers: list, device: str):
-    """Create an ORT session and enforce the selected accelerator contract.
-
-    CUDA keeps ONNX Runtime's built-in CPU assignment for graph-management ops;
-    the PolarFormer graph cannot initialize when that assignment is disabled.
-    Intel XPU disables both CPU node assignment and Python's runtime EP retry.
-    ONNX Runtime still registers its built-in CPU provider in the returned
-    provider list, so GPU-only execution is proved by both fallback gates plus
-    OpenVINO remaining the primary provider.
-    """
-
-    session_options = ort_module.SessionOptions()
-    add_entry = getattr(session_options, "add_session_config_entry", None)
-    normalized_device = str(device).strip().lower()
-    strict_gpu_only = normalized_device.startswith("xpu")
-    if normalized_device.startswith("cuda"):
-        # PolarFormer's fixed CUDA graph intentionally keeps ORT's built-in
-        # CPU assignment for graph-management/shape operations. ORT otherwise
-        # emits a native warning for this expected, validated assignment on
-        # every session creation. Keep actual errors visible.
-        session_options.log_severity_level = 3
-    if strict_gpu_only:
-        if not callable(add_entry):
-            raise RuntimeError(
-                "ONNX Runtime does not expose session.disable_cpu_ep_fallback; "
-                f"cannot prove accelerator-only execution for {device}"
-            )
-        add_entry("session.disable_cpu_ep_fallback", "1")
-
-    session = ort_module.InferenceSession(
-        str(onnx_path),
-        sess_options=session_options,
-        providers=providers,
-    )
-    actual = list(session.get_providers())
-    if normalized_device.startswith("cuda"):
-        if not actual or actual[0] != "CUDAExecutionProvider":
-            raise RuntimeError(
-                "PolarFormer ONNX CUDA provider contract failed: "
-                f"device={device}, expected_primary='CUDAExecutionProvider', actual={actual}"
-            )
-    elif strict_gpu_only:
-        expected = "OpenVINOExecutionProvider"
-        if not actual or actual[0] != expected:
-            raise RuntimeError(
-                "PolarFormer ONNX accelerator provider contract failed: "
-                f"device={device}, expected_primary={expected!r}, actual={actual}"
-            )
-        disable_runtime_fallback = getattr(session, "disable_fallback", None)
-        if not callable(disable_runtime_fallback):
-            raise RuntimeError(
-                "ONNX Runtime does not expose InferenceSession.disable_fallback(); "
-                f"cannot prevent runtime CPU retry for {device}"
-            )
-        disable_runtime_fallback()
-    return session
-
-
-def _describe_onnx_session(session, device: str) -> str:
-    """Describe effective ONNX execution without presenting registered EPs as active."""
-
-    actual = list(session.get_providers())
-    if not actual:
-        raise RuntimeError("ONNX Runtime session returned no execution providers")
-    normalized_device = str(device).strip().lower()
-    if normalized_device.startswith("xpu"):
-        device_id = normalized_device.split(":", 1)[1] if ":" in normalized_device else "0"
-        return f"ONNX Runtime · {actual[0]} " f"(GPU.{device_id}; CPU fallback disabled)"
-    return f"ONNX Runtime · {' + '.join(actual)}"
-
-
-def _resolve_polarformer_chunk_size(configured_chunk_size: int) -> int:
-    """Bound PolarFormer's inference window to a verified 16 GiB-safe default."""
-
-    if configured_chunk_size <= 0:
-        raise RuntimeError(f"PolarFormer chunk_size is invalid: {configured_chunk_size}")
-
-    raw_override = os.environ.get("POLARFORMER_MAX_CHUNK_SIZE", "").strip()
-    if raw_override:
-        try:
-            max_chunk_size = int(raw_override)
-        except ValueError as exc:
-            raise RuntimeError(f"POLARFORMER_MAX_CHUNK_SIZE is invalid: {raw_override!r}") from exc
-    else:
-        max_chunk_size = DEFAULT_POLARFORMER_MAX_CHUNK_SIZE
-
-    if max_chunk_size <= 0:
-        return configured_chunk_size
-    return max(1, min(configured_chunk_size, max_chunk_size))
-
-
-def _run_polarformer_accompaniment_leg(
+def _run_leap_accompaniment_leg(
     *,
     audio_path: str,
-    onnx_path: Path,
+    checkpoint_path: Path,
     config_path: Path,
     requested_device: Optional[str],
     progress_callback: Optional[Callable[[float, str], None]],
     translate: Callable[..., str],
     cancel_check: Callable[[], None],
-    active_run_options_callback: Optional[Callable[[Optional[object]], None]] = None,
 ):
+    """Run audio-separator's native FP32 Leap Instrumental demixer.
+
+    Match the controlled comparison: author dim_t=1101, 563200 samples per
+    window, and audio-separator 0.44.1 overlap=8 (an eight-second stride).
+    The original YAML stays unchanged; model_type is only a loader hint.
+    """
     import numpy as np
+    import torch
 
     activate_audio_separator_runtime()
-    import onnxruntime as ort
+    from audio_separator.separator.architectures.mdxc_separator import MDXCSeparator
+    from audio_separator.separator.uvr_lib_v5 import spec_utils
 
     config = _load_yaml(config_path)
+    if config["training"]["target_instrument"] != "other":
+        raise RuntimeError("Leap Instrumental 配置必须直接预测 other 伴奏轨")
     sample_rate = int(config["audio"]["sample_rate"])
+    chunk_size = int(config["model"]["stft_hop_length"]) * (int(config["inference"]["dim_t"]) - 1)
+    if sample_rate != 44_100 or chunk_size != 563_200:
+        raise RuntimeError("Leap Instrumental 采样率或分片尺寸与固定模型不一致")
+    step = min(8 * sample_rate, chunk_size)
     mix = _load_stereo_audio(audio_path, sample_rate)
-    total_samples = mix.shape[1]
-    model_config = config["model"]
-    inference_config = config["inference"]
-    stft_kwargs = {
-        "n_fft": int(model_config["stft_n_fft"]),
-        "hop_length": int(model_config["stft_hop_length"]),
-        "win_length": int(model_config["stft_win_length"]),
-        "normalized": bool(model_config.get("stft_normalized", False)),
-    }
-    audio_channels = 2 if model_config.get("stereo", False) else 1
-    if audio_channels != 2:
-        raise RuntimeError(
-            f"PolarFormer config expected {audio_channels} audio channel(s), not stereo"
-        )
-    chunk_size = _resolve_polarformer_chunk_size(int(inference_config.get("chunk_size", 882_000)))
-    num_overlap = int(inference_config.get("num_overlap", 2))
-    if chunk_size <= 0 or num_overlap <= 0:
-        raise RuntimeError(
-            f"Invalid PolarFormer chunk settings: chunk_size={chunk_size}, overlap={num_overlap}"
-        )
-    step = max(1, chunk_size // num_overlap)
-    positions = list(range(0, total_samples, step))
-    providers = _resolve_onnx_providers(requested_device, ort)
-    requested_provider_names = " + ".join(
-        str(provider[0] if isinstance(provider, tuple) else provider) for provider in providers
-    )
-    requested_engine = f"ONNX Runtime · {requested_provider_names}"
-    if progress_callback is not None:
-        progress_callback(
-            0.51,
-            translate(
-                "progress.separation_model_loading",
-                model="PolarFormer",
-                role=translate("progress.audio_chunk_role_accompaniment"),
-                model_file=onnx_path.name,
-                engine=requested_engine,
-            ),
-        )
-    effective_device = str(requested_device or get_device(prefer_gpu=True)).strip().lower()
-    session = _create_strict_onnx_session(
-        ort,
-        onnx_path,
-        providers,
-        effective_device,
-    )
-    inputs = session.get_inputs()
-    if len(inputs) != 1 or inputs[0].name != "stft_features":
-        raise RuntimeError(
-            "Unexpected PolarFormer ONNX input contract: " f"{[item.name for item in inputs]}"
-        )
-    actual_engine = _describe_onnx_session(session, effective_device)
-    logger.info(
-        "PolarFormer accompaniment leg loaded with providers=%s chunks=%s",
-        session.get_providers(),
-        len(positions),
-    )
+    if not np.isfinite(mix).all():
+        raise RuntimeError("Leap Instrumental 输入包含非有限数值")
+    original_length = mix.shape[1]
+    mix = spec_utils.normalize(wave=mix, max_peak=0.9, min_peak=0.0)
+    # Stock overlap-add requires a complete window. Pad short clips once and
+    # crop back to their exact length without changing the model's window.
+    if original_length < chunk_size:
+        mix = np.pad(mix, ((0, 0), (0, chunk_size - original_length)))
+    total_chunks = len(range(0, mix.shape[1], step))
+    device = _resolve_torch_device(requested_device)
+    engine = f"PyTorch · {device} · FP32"
+    model_data = dict(config, model_type="bs_roformer", is_roformer=True)
+    runtime = None
+    hooks = []
+    completed_chunks = 0
+    cancel_check()
 
-    vocals = np.zeros((2, total_samples), dtype=np.float32)
-    counter = np.zeros(total_samples, dtype=np.float32)
-    for index, start in enumerate(positions):
+    def report_running(_model, _inputs):
         cancel_check()
         if progress_callback is not None:
             progress_callback(
-                0.52 + 0.43 * (index / len(positions)),
+                0.53 + 0.43 * completed_chunks / total_chunks,
                 _audio_chunk_running_message(
                     translate,
-                    model="PolarFormer",
+                    model="Leap Instrumental",
                     role_key="progress.audio_chunk_role_accompaniment",
-                    current=str(index + 1),
-                    total=len(positions),
-                    model_file=onnx_path.name,
-                    engine=actual_engine,
+                    current=str(completed_chunks + 1),
+                    total=total_chunks,
+                    model_file=checkpoint_path.name,
+                    engine=engine,
                     chunk_size=chunk_size,
                     step=step,
                     sample_rate=sample_rate,
                 ),
             )
-        end = min(start + chunk_size, total_samples)
-        chunk = mix[:, start:end]
-        if chunk.shape[1] < chunk_size:
-            chunk = np.pad(chunk, ((0, 0), (0, chunk_size - chunk.shape[1])))
-        features, stft_repr, stft_window, raw_audio_length = _prepare_polar_stft(
-            chunk,
-            stft_kwargs,
-            stft_kwargs["win_length"],
-        )
-        run_options = ort.RunOptions()
-        if active_run_options_callback is not None:
-            active_run_options_callback(run_options)
-        try:
-            cancel_check()
-            try:
-                mask = session.run(
-                    None,
-                    {"stft_features": features.numpy()},
-                    run_options=run_options,
-                )[0]
-            except Exception:
-                # RunOptions.terminate makes ONNX Runtime raise its own non-RuntimeError
-                # exception. Convert it to cancellation only when the application flag
-                # confirms a real user request; otherwise preserve the inference error.
-                cancel_check()
-                raise
-            cancel_check()
-        finally:
-            if active_run_options_callback is not None:
-                active_run_options_callback(None)
-        prediction = _reconstruct_polar_audio(
-            stft_repr,
-            mask,
-            stft_kwargs,
-            stft_window,
-            audio_channels,
-            raw_audio_length,
-        )[0, 0].numpy()
-        actual_length = end - start
-        vocals[:, start:end] += prediction[:, :actual_length]
-        counter[start:end] += 1.0
 
-    if np.any(counter <= 0):
-        raise RuntimeError("PolarFormer did not cover every output sample")
-    vocals /= counter[np.newaxis, :]
-    accompaniment = mix - vocals
-    np.nan_to_num(accompaniment, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-    return accompaniment, sample_rate
+    def report_completed(_model, _inputs, _output):
+        nonlocal completed_chunks
+        cancel_check()
+        completed_chunks += 1
+        if progress_callback is not None:
+            progress_callback(
+                0.53 + 0.43 * completed_chunks / total_chunks,
+                _audio_chunk_progress_message(
+                    translate,
+                    model="Leap Instrumental",
+                    role_key="progress.audio_chunk_role_accompaniment",
+                    done=completed_chunks,
+                    total=total_chunks,
+                    chunk_size=chunk_size,
+                    step=step,
+                    sample_rate=sample_rate,
+                ),
+            )
+
+    try:
+        if progress_callback is not None:
+            progress_callback(
+                0.515,
+                translate(
+                    "progress.separation_model_loading",
+                    model="Leap Instrumental",
+                    role=translate("progress.audio_chunk_role_accompaniment"),
+                    model_file=checkpoint_path.name,
+                    engine=engine,
+                ),
+            )
+        try:
+            runtime = MDXCSeparator(
+                common_config={
+                    "logger": logger,
+                    "log_level": logging.INFO,
+                    "torch_device": device,
+                    "torch_device_cpu": torch.device("cpu"),
+                    "torch_device_mps": None,
+                    "onnx_execution_provider": [],
+                    "model_name": checkpoint_path.stem,
+                    "model_path": str(checkpoint_path),
+                    "model_data": model_data,
+                    "sample_rate": sample_rate,
+                    "normalization_threshold": 0.9,
+                    "amplification_threshold": 0.0,
+                    "output_single_stem": "other",
+                    "output_format": "WAV",
+                    "use_soundfile": True,
+                },
+                arch_config={
+                    "overlap": 8,
+                    "batch_size": 1,
+                    "pitch_shift": 0,
+                    "override_model_segment_size": False,
+                },
+            )
+        except SystemExit as exc:
+            raise RuntimeError(
+                "Leap Instrumental 模型加载失败；audio-separator 已终止加载"
+            ) from exc
+        parameters = list(runtime.model_run.parameters())
+        if not parameters or any(
+            parameter.device.type != device.type
+            or (device.index is not None and parameter.device.index != device.index)
+            or parameter.dtype != torch.float32
+            for parameter in parameters
+        ):
+            raise RuntimeError("Leap Instrumental 实际模型设备或 FP32 精度与请求不一致")
+        _enable_leap_xpu_exact_query_chunking(runtime.model_run, device)
+        hooks.append(runtime.model_run.register_forward_pre_hook(report_running))
+        hooks.append(runtime.model_run.register_forward_hook(report_completed))
+        logger.info(
+            "Leap Instrumental accompaniment loaded: model=%s device=%s "
+            "precision=FP32 chunk=%s step=%s chunks=%s",
+            checkpoint_path,
+            device,
+            chunk_size,
+            step,
+            total_chunks,
+        )
+        with torch.inference_mode():
+            sources = runtime.demix(mix)
+        cancel_check()
+        if not isinstance(sources, dict) or "other" not in sources:
+            raise RuntimeError("Leap Instrumental 未返回直接预测的 other 伴奏轨")
+        accompaniment = np.asarray(sources["other"], dtype=np.float32)
+        if accompaniment.shape != mix.shape or not np.isfinite(accompaniment).all():
+            raise RuntimeError("Leap Instrumental 伴奏输出的长度、声道或数值无效")
+        accompaniment = accompaniment[:, :original_length]
+        return spec_utils.normalize(wave=accompaniment, max_peak=0.9, min_peak=0.0), sample_rate
+    finally:
+        for hook in hooks:
+            hook.remove()
+        runtime = None
+        clear_gpu_memory()
 
 
 def _write_and_validate_wav(path: Path, audio, sample_rate: int) -> None:
@@ -1088,7 +907,7 @@ def _write_and_validate_wav(path: Path, audio, sample_rate: int) -> None:
 
 
 class VocalSeparator:
-    """Run independent Leap XE vocals and PolarFormer accompaniment legs."""
+    """Run independent Leap XE vocals and Leap Instrumental accompaniment legs."""
 
     def __init__(
         self,
@@ -1104,8 +923,6 @@ class VocalSeparator:
             )
         self._cancelled = False
         self._cancel_check: Optional[Callable[[], bool]] = None
-        self._cancel_lock = threading.Lock()
-        self._active_onnx_run_options: Optional[object] = None
         self._translator = Translator(language)
         self.primary_device = primary_device
         self.accompaniment_device = accompaniment_device or karaoke_device
@@ -1122,26 +939,14 @@ class VocalSeparator:
         if self._cancel_check and self._cancel_check():
             raise InterruptedError("用户取消了处理")
 
-    def _set_active_onnx_run_options(self, run_options: Optional[object]) -> None:
-        """Publish the one ONNX run that cancel() may safely terminate."""
-        with self._cancel_lock:
-            self._active_onnx_run_options = run_options
-            if run_options is not None and self._cancelled:
-                run_options.terminate = True
-
     def cancel(self) -> None:
-        with self._cancel_lock:
-            self._cancelled = True
-            run_options = self._active_onnx_run_options
-            if run_options is not None:
-                run_options.terminate = True
+        self._cancelled = True
 
     @staticmethod
     def is_available() -> bool:
         try:
             activate_audio_separator_runtime()
             import librosa  # noqa: F401
-            import onnxruntime  # noqa: F401
             import soundfile  # noqa: F401
             import torch  # noqa: F401
             import yaml  # noqa: F401
@@ -1168,7 +973,7 @@ class VocalSeparator:
         output_dir: str,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, str]:
-        """Create one real Leap XE vocal WAV and one real PolarFormer accompaniment WAV."""
+        """Create one real Leap XE vocal WAV and one real Leap Instrumental accompaniment WAV."""
         self._check_cancelled()
         input_path = Path(audio_path)
         if not input_path.is_file() or input_path.stat().st_size <= 0:
@@ -1180,8 +985,8 @@ class VocalSeparator:
         vocals_path = output_path / f"{stem}_vocals.wav"
         accompaniment_path = output_path / f"{stem}_accompaniment.wav"
         cache_dir = get_audio_separator_model_dir()
-        leap_checkpoint, leap_config, polar_onnx, polar_config = _resolve_verified_model_assets(
-            cache_dir
+        leap_checkpoint, leap_config, accompaniment_checkpoint, accompaniment_config = (
+            _resolve_verified_model_assets(cache_dir)
         )
 
         if progress_callback is not None:
@@ -1189,10 +994,11 @@ class VocalSeparator:
 
         try:
             logger.info(
-                "Starting project-selected vocal split: Leap XE=%s (%s), " "PolarFormer=%s (%s)",
+                "Starting project-selected vocal split: Leap XE=%s (%s), "
+                "Leap Instrumental=%s (%s)",
                 leap_checkpoint,
                 self.primary_device or "auto",
-                polar_onnx,
+                accompaniment_checkpoint,
                 self.accompaniment_device or "auto",
             )
             vocals, vocals_sample_rate = _run_leap_vocals_leg(
@@ -1212,22 +1018,21 @@ class VocalSeparator:
                         "progress.separation_model_switching",
                         from_model="Leap XE",
                         from_role=self._pt("progress.audio_chunk_role_vocals"),
-                        to_model="PolarFormer",
+                        to_model="Leap Instrumental",
                         to_role=self._pt("progress.audio_chunk_role_accompaniment"),
-                        model_file=polar_onnx.name,
+                        model_file=accompaniment_checkpoint.name,
                     ),
                 )
             _write_and_validate_wav(vocals_path, vocals, vocals_sample_rate)
 
-            accompaniment, accompaniment_sample_rate = _run_polarformer_accompaniment_leg(
+            accompaniment, accompaniment_sample_rate = _run_leap_accompaniment_leg(
                 audio_path=str(input_path),
-                onnx_path=polar_onnx,
-                config_path=polar_config,
+                checkpoint_path=accompaniment_checkpoint,
+                config_path=accompaniment_config,
                 requested_device=self.accompaniment_device,
                 progress_callback=progress_callback,
                 translate=self._pt,
                 cancel_check=self._check_cancelled,
-                active_run_options_callback=self._set_active_onnx_run_options,
             )
             self._check_cancelled()
             if progress_callback is not None:

@@ -115,6 +115,10 @@ pasted-text*
 !/docs/muscriptor-model.md
 !/docs/docker-deployment.md
 !/docs/docker-deployment.en.md
+!/docs/portable-build.md
+!/docs/soundfont-and-sheet-music.md
+!/docs/projects.md
+!/docs/projects.en.md
 .tmp/ai4m-miros/
 /external/ai4m-miros/
 /.tmp/

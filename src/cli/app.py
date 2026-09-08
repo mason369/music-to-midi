@@ -48,7 +48,7 @@ from src.web_api.schemas import InferenceOptions, ManualMidiOptions
 
 SUPPORTED_AUDIO_SUFFIXES = frozenset({".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma"})
 QUANTIZE_GRIDS = ("1/4", "1/8", "1/16", "1/32", "1/64")
-COMMANDS = frozenset({"convert", "batch", "track-to-midi", "routes"})
+COMMANDS = frozenset({"convert", "batch", "track-to-midi", "routes", "project"})
 MANIFEST_NAME = "music-to-midi-job.json"
 MANIFEST_SCHEMA = 1
 RUN_SUMMARY_SCHEMA = 1
@@ -320,6 +320,9 @@ def build_parser(arguments: Sequence[str] | None = None) -> argparse.ArgumentPar
         dest="command", required=True,
         parser_class=partial(_CliArgumentParser, language=language),
     )
+    from src.projects.cli import add_parser as add_project_parser
+
+    add_project_parser(subparsers)
 
     for command, help_key in (("convert", "convert_help"), ("batch", "batch_help")):
         convert = subparsers.add_parser(command, help=_message(language, help_key))
@@ -1635,6 +1638,11 @@ def main(
                 from src.web_api.engine import InferenceEngine
 
                 engine_factory = InferenceEngine
+            if namespace.command == "project":
+                from src.projects.cli import run_command
+
+                return run_command(namespace, engine_factory=engine_factory, stdout=machine_output,
+                                   install_signal_handlers=install_signal_handlers)
             return _process_jobs(
                 namespace,
                 engine_factory=engine_factory,

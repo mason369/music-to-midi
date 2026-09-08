@@ -14,7 +14,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -36,7 +36,8 @@ from PyQt6.QtWidgets import QApplication, QDialog
 
 from src.core.manual_midi import MANUAL_MIDI_ROUTES
 from src.gui.main_window import MainWindow
-from src.models.data_models import Config, ProcessingResult, TempoMode
+from src.models.data_models import BeatInfo, Config, ProcessingResult, TempoMode
+from src.gui.widgets.project_panel import ProjectWorker
 
 
 def _sha256(path: Path) -> str:
@@ -186,6 +187,7 @@ def _wait_for_worker(
     *,
     result_signal_name: str,
     timeout_seconds: float,
+    error_signal_name: str = "error_occurred",
 ) -> Any:
     state: dict[str, Any] = {}
     loop = QEventLoop()
@@ -193,7 +195,9 @@ def _wait_for_worker(
     timer.setSingleShot(True)
     timer.timeout.connect(loop.quit)
     getattr(worker, result_signal_name).connect(lambda result: state.setdefault("result", result))
-    worker.error_occurred.connect(lambda message: state.setdefault("error", str(message)))
+    getattr(worker, error_signal_name).connect(
+        lambda message: state.setdefault("error", str(message))
+    )
     worker.finished.connect(loop.quit)
     timer.start(max(1, int(timeout_seconds * 1000)))
     loop.exec()
@@ -255,23 +259,77 @@ def _click_primary(
     *,
     timeout_seconds: float,
 ) -> Any:
-    window.dropzone.file_selected.emit(str(audio_path))
+    window.dropzone.files_selected.emit([str(audio_path)])
     app.processEvents()
     if not window.start_btn.isEnabled():
         raise RuntimeError("desktop Start button did not enable after file selection")
     window.start_btn.click()
-    app.processEvents()
     worker = window.worker
     if worker is None or not worker.isRunning():
         raise RuntimeError("desktop Start button did not launch a worker")
-    signal_name = (
-        "separation_finished" if hasattr(worker, "separation_finished") else "processing_finished"
-    )
-    return _wait_for_worker(
+    if not isinstance(worker, ProjectWorker):
+        raise RuntimeError("The normal desktop file input did not use the project worker")
+    snapshot = _wait_for_worker(
         app,
         worker,
-        result_signal_name=signal_name,
+        result_signal_name="completed",
+        error_signal_name="failed",
         timeout_seconds=timeout_seconds,
+    )
+    if snapshot["status"] not in {"succeeded", "pending"}:
+        raise RuntimeError(snapshot.get("error") or snapshot["status"])
+    return _saved_project_result(window)
+
+
+def _saved_project_result(window: MainWindow, track_id: str | None = None) -> Any:
+    store = window.project_panel.store
+    song = window.project_panel.song()
+    signature = song.track_keys[track_id] if track_id else song.primary_key
+    step = song.checkpoints[signature]
+    if step.status != "succeeded":
+        raise RuntimeError(step.error or f"Checkpoint ended as {step.status}")
+    if step.result.get("manual_midi_required"):
+        from src.core.separation_service import SeparationResult
+
+        return SeparationResult(
+            step.options["processing_mode"],
+            str(store.verify(song.source)),
+            str(store.resolve(step.output_dir)),
+            {a.track_id: str(store.verify(a)) for a in step.artifacts if a.kind == "audio_track"},
+            step.result["processing_time"],
+        )
+    beat = step.result.get("beat")
+    beat_info = (
+        BeatInfo(**{k: v for k, v in beat.items() if k in {f.name for f in fields(BeatInfo)}})
+        if beat
+        else None
+    )
+    midi = next(a for a in step.artifacts if a.kind == "midi")
+    workbench = window.muscriptor_result_widget
+    if workbench is None or Path(workbench.midi_path) != store.verify(midi):
+        raise RuntimeError("Saved project MIDI was not opened in the shared editor")
+    expected_groups = (
+        step.options["route"].startswith("muscriptor")
+        if track_id else step.result.get("transcription_backend") == "muscriptor"
+    )
+    if workbench.muscriptor_groups != expected_groups:
+        raise RuntimeError("Project editor uses the wrong instrument grouping for its model")
+    deadline = time.monotonic() + 60
+    while workbench._asset_worker is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    if workbench._asset_worker is not None:
+        raise TimeoutError("Project MIDI preview assets did not finish")
+    if workbench._original_assets is None or not workbench._playback_engine.is_configured:
+        raise RuntimeError(f"Project MIDI editor failed: {workbench.status_label.text()}")
+    return ProcessingResult(
+        midi_path=str(store.verify(midi)),
+        processing_time=step.result["processing_time"],
+        total_notes=step.result["total_notes"],
+        beat_info=beat_info,
+        selected_instruments=step.result.get("selected_instruments", []),
+        detected_instruments=step.result.get("detected_instruments", []),
+        transcription_backend=step.result.get("transcription_backend"),
     )
 
 
@@ -298,16 +356,21 @@ def _click_manual_route(
     if not row.convert_midi_button.isEnabled():
         raise RuntimeError(f"desktop per-track Convert button is disabled for {route!r}")
     row.convert_midi_button.click()
-    app.processEvents()
     worker = window.worker
     if worker is None or not worker.isRunning():
         raise RuntimeError(f"desktop per-track button did not launch {route!r}")
-    return _wait_for_worker(
+    if not isinstance(worker, ProjectWorker):
+        raise RuntimeError("The project track button did not use the project worker")
+    snapshot = _wait_for_worker(
         app,
         worker,
-        result_signal_name="processing_finished",
+        result_signal_name="completed",
+        error_signal_name="failed",
         timeout_seconds=timeout_seconds,
     )
+    if snapshot["status"] not in {"succeeded", "pending"}:
+        raise RuntimeError(snapshot.get("error") or snapshot["status"])
+    return _saved_project_result(window, "piano")
 
 
 def _close_window(app: QApplication, window: MainWindow) -> None:
@@ -456,10 +519,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "tempo_label": panel._tempo_label.text(),
                     "tempo_mode_tooltip": panel.tempo_mode_combo.toolTip(),
                     "offscreen_platform": os.environ.get("QT_QPA_PLATFORM"),
+                    "tempo_mode": panel.get_tempo_mode(),
                 }
-                if "Beat This final0" not in " ".join(ui_contract.values()):
+                if ui_contract["tempo_mode"] != case.get("tempo_mode", TempoMode.FIXED_AUTO.value):
                     raise RuntimeError(
-                        "desktop tempo controls do not identify official Beat This final0"
+                        "desktop tempo selection does not match the requested workflow"
                     )
             if case["name"] == "six-stem-split":
                 six_stem_window = window

@@ -10,6 +10,10 @@ on:
       - 'src/utils/**'
       - 'src/i18n/**'
       - 'src/gui/web/**'
+      - 'src/projects/**'
+      - 'src/web_api/**'
+      - 'src/web_contract.py'
+      - 'src/model_profiles.py'
       - 'space/**'
       - 'YourMT3/amt/src/**'
       - 'download_sota_models.py'
@@ -78,7 +82,8 @@ jobs:
 
           # ── 核心源码（排除桌面 Qt GUI，保留三端共用的 Web 混音运行时） ──
           cp src/__init__.py "$WORK/src/"
-          for dir in core models utils i18n; do
+          cp src/model_profiles.py src/web_contract.py "$WORK/src/"
+          for dir in core models utils i18n projects web_api; do
             cp -r "src/$dir" "$WORK/src/"
           done
           mkdir -p "$WORK/src/gui"

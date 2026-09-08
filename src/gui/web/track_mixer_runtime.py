@@ -109,6 +109,28 @@ def track_file_url(path: str | Path) -> str:
     return "/gradio_api/file=" + quote(posix_path, safe="/")
 
 
+def gradio_allowed_paths(*roots: str | Path) -> list[str]:
+    """Allow each output root in both native and Windows extended-path form.
+
+    Gradio compares pathlib parents without equating the two Windows namespaces.
+    Both entries refer to the same directory; no additional directory is exposed.
+    """
+    from src.projects.store import project_path
+
+    paths = []
+    for root in roots:
+        extended = str(project_path(root))
+        native = extended
+        if native.startswith("\\\\?\\UNC\\"):
+            native = "\\\\" + native[8:]
+        elif native.startswith("\\\\?\\"):
+            native = native[4:]
+        for path in (native, extended):
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
 def build_track_mixer_manifest(
     tracks: Iterable[Mapping[str, object]],
     translate: Callable[[str], str],
@@ -125,6 +147,7 @@ def build_track_mixer_manifest(
                 "color": str(track.get("color") or TRACK_COLORS[0]),
                 "url": track_file_url(audio_path),
                 "fileName": audio_path.name,
+                "view": dict(track.get("view") or {}),
             }
         )
     return {"tracks": entries, "strings": track_mixer_strings(translate)}
@@ -371,10 +394,10 @@ TRACK_MIXER_JS = r"""
         failed: false,
         gain: null,
         source: null,
-        muted: false,
-        solo: false,
-        volumeDb: 0.0,
-        offsetS: 0.0,
+        muted: Boolean(spec.view && spec.view.muted),
+        solo: Boolean(spec.view && spec.view.solo),
+        volumeDb: spec.view ? Number(spec.view.gain_db || 0) : 0.0,
+        offsetS: spec.view ? Number(spec.view.offset || 0) : 0.0,
         els: {}
       };
     });
@@ -549,6 +572,7 @@ TRACK_MIXER_JS = r"""
         controls.appendChild(fileName);
       }
       var muteButton = makeButton(self.strings.mute || "", "mtm-btn mtm-mute", self.strings.mute);
+      muteButton.classList.toggle("mtm-active", track.muted);
       muteButton.addEventListener("click", function () {
         track.muted = !track.muted;
         muteButton.classList.toggle("mtm-active", track.muted);
@@ -556,6 +580,7 @@ TRACK_MIXER_JS = r"""
       });
       controls.appendChild(muteButton);
       var soloButton = makeButton(self.strings.solo || "", "mtm-btn mtm-solo", self.strings.solo);
+      soloButton.classList.toggle("mtm-active", track.solo);
       soloButton.addEventListener("click", function () {
         track.solo = !track.solo;
         soloButton.classList.toggle("mtm-active", track.solo);

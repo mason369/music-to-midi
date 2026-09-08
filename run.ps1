@@ -188,9 +188,9 @@ sys.exit(0)
     }
 }
 
-# 检查 7：Leap XE 人声 + PolarFormer 伴奏分离模型
+# 检查 7：Leap XE 人声 + Leap Instrumental 伴奏分离模型
 if (-not $NEED_INSTALL) {
-    Write-Info "检查 Leap XE 90-band 人声与 PolarFormer 伴奏分离模型..."
+    Write-Info "检查 Leap XE 90-band 人声与 Leap Instrumental 伴奏分离模型..."
     $checkVocalScript = @"
 import sys
 sys.path.insert(0, r'$REPO_DIR')
@@ -198,19 +198,19 @@ from download_accompaniment_model import is_accompaniment_model_available, resol
 from download_vocal_model import is_vocal_model_available, resolve_vocal_model_paths
 from src.core.vocal_separator import VocalSeparator
 print('Leap XE vocals assets:', [str(path) for path in resolve_vocal_model_paths()])
-print('PolarFormer accompaniment model:', resolve_accompaniment_model_path())
+print('Leap Instrumental accompaniment model:', resolve_accompaniment_model_path())
 print('audio-separator package:', VocalSeparator.is_available())
 print('Leap XE vocals available:', is_vocal_model_available())
-print('PolarFormer accompaniment available:', is_accompaniment_model_available())
+print('Leap Instrumental accompaniment available:', is_accompaniment_model_available())
 print('Vocal split route available:', VocalSeparator.is_model_available())
 sys.exit(0 if VocalSeparator.is_available() and is_vocal_model_available() and is_accompaniment_model_available() and VocalSeparator.is_model_available() else 1)
 "@
     $pythonExitCode = Invoke-PythonScript -PythonExecutable $VENV_PYTHON -Script $checkVocalScript
     if ($pythonExitCode -ne 0) {
-        Write-Warn "Leap XE 人声或 PolarFormer 伴奏模型缺失/校验失败"
+        Write-Warn "Leap XE 人声或 Leap Instrumental 伴奏模型缺失/校验失败"
         $NEED_INSTALL = $true
     } else {
-        Write-Ok "Leap XE + PolarFormer 人声分离模型检查通过"
+        Write-Ok "Leap XE + Leap Instrumental 人声分离模型检查通过"
     }
 }
 

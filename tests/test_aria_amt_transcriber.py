@@ -281,7 +281,7 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                 returncode = 0
 
                 def communicate(self, timeout=None):
-                    save_dir = Path(self.command[self.command.index("-save_dir") + 1])
+                    save_dir = Path(self.command[self.command.index("--output-directory") + 1])
                     _write_valid_midi(save_dir / "song.mid")
                     return ("", "")
 
@@ -339,15 +339,11 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             self.assertEqual(errors, "replace")
             self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
             self.assertEqual(env["PYTHONUTF8"], "1")
-            self.assertEqual(command[1:4], ["-m", "amt.run", "transcribe"])
-            self.assertIn(ARIA_AMT_MODEL_CONFIG_NAME, command)
+            self.assertEqual(command[1:3], ["-m", "src.core.aria_amt_worker"])
             self.assertIn(str(checkpoint_path), command)
-            self.assertIn("-load_path", command)
-            self.assertIn("-save_dir", command)
-            self.assertNotIn("--load_path", command)
-            self.assertNotIn("--save_dir", command)
-            self.assertLess(command.index(ARIA_AMT_MODEL_CONFIG_NAME), command.index("-load_path"))
-            self.assertLess(command.index(str(checkpoint_path)), command.index("-load_path"))
+            self.assertEqual(command[command.index("--input") + 1], str(audio_path))
+            self.assertEqual(command[command.index("--checkpoint") + 1], str(checkpoint_path))
+            self.assertNotIn("amt.run", command)
 
     def test_windows_transcribe_uses_single_file_path_instead_of_posix_batch_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,13 +468,11 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             checkpoint_path.write_bytes(b"weights")
             calls = []
 
-            def fake_transcribe(**kwargs):
-                calls.append(kwargs)
-                save_dir = Path(kwargs["save_dir"])
+            def fake_transcribe(input_path, save_dir):
+                calls.append((input_path, save_dir))
                 save_dir.mkdir(parents=True, exist_ok=True)
                 _write_valid_midi(save_dir / "song.mid")
 
-            fake_run_module = types.SimpleNamespace(transcribe=fake_transcribe)
             transcriber = AriaAmtTranscriber(checkpoint_path=checkpoint_path)
 
             with (
@@ -501,9 +495,9 @@ class AriaAmtTranscriberTests(unittest.TestCase):
                     "src.core.aria_amt_transcriber.is_frozen_app",
                     return_value=True,
                 ),
-                patch(
-                    "src.core.aria_amt_transcriber.importlib.import_module",
-                    return_value=fake_run_module,
+                patch.object(
+                    transcriber, "_run_transcription_windows_single_file",
+                    side_effect=fake_transcribe,
                 ),
             ):
                 result = transcriber.transcribe(str(audio_path), str(output_path))
@@ -511,13 +505,8 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             self.assertEqual(result, str(output_path))
             popen.assert_not_called()
             self.assertEqual(len(calls), 1)
-            call = calls[0]
-            self.assertEqual(call["model_name"], ARIA_AMT_MODEL_CONFIG_NAME)
-            self.assertEqual(call["checkpoint_path"], str(checkpoint_path))
-            self.assertEqual(call["load_path"], str(audio_path))
-            self.assertIsNone(call["load_dir"])
-            self.assertEqual(call["batch_size"], 1)
-            save_dir = Path(call["save_dir"])
+            input_path, save_dir = calls[0]
+            self.assertEqual(input_path, audio_path)
             self.assertEqual(save_dir.parent, output_path.parent)
             self.assertTrue(save_dir.name.startswith(".aria_amt_"))
             self.assertFalse(save_dir.exists())

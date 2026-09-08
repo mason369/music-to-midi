@@ -1,7 +1,4 @@
-import os
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,7 +68,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                     return_value=(vocals, 44_100),
                 ) as leap_leg,
                 patch(
-                    "src.core.vocal_separator._run_polarformer_accompaniment_leg",
+                    "src.core.vocal_separator._run_leap_accompaniment_leg",
                     return_value=(accompaniment, 44_100),
                 ) as polar_leg,
             ):
@@ -116,7 +113,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                     "src.core.vocal_separator._run_leap_vocals_leg",
                     side_effect=RuntimeError("leap failed"),
                 ),
-                patch("src.core.vocal_separator._run_polarformer_accompaniment_leg") as polar_leg,
+                patch("src.core.vocal_separator._run_leap_accompaniment_leg") as polar_leg,
             ):
                 with self.assertRaisesRegex(RuntimeError, "leap failed"):
                     VocalSeparator().separate(str(audio_path), str(root / "out"))
@@ -196,126 +193,6 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertEqual("Loading Leap XE (vocals)...", events[loading_index][1])
         self.assertIn("about 0s each", events[running_index][1])
 
-    def test_polarformer_reports_model_and_chunk_before_slow_calls(self):
-        class FakeOrtFailure(Exception):
-            pass
-
-        config = {
-            "audio": {"sample_rate": 44_100},
-            "model": {
-                "stereo": True,
-                "stft_n_fft": 4,
-                "stft_hop_length": 2,
-                "stft_win_length": 4,
-                "stft_normalized": False,
-            },
-            "inference": {"chunk_size": 4, "num_overlap": 1},
-        }
-        audio = np.zeros((2, 4), dtype=np.float32)
-        events = []
-
-        class RunOptions:
-            def __init__(self):
-                self.terminate = False
-
-        class SessionOptions:
-            def add_session_config_entry(self, key, value):
-                events.append(("session_config", f"{key}={value}"))
-
-        class Features:
-            @staticmethod
-            def numpy():
-                return np.zeros((1,), dtype=np.float32)
-
-        class Session:
-            def __init__(self, *_args, **_kwargs):
-                events.append(("session", ""))
-
-            @staticmethod
-            def get_inputs():
-                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
-
-            @staticmethod
-            def get_outputs():
-                return [SimpleNamespace(name="mask", type="tensor(float)")]
-
-            @staticmethod
-            def get_providers():
-                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-
-            @staticmethod
-            def get_provider_options():
-                return {"CUDAExecutionProvider": {"use_tf32": "0"}}
-
-            @staticmethod
-            def run(_outputs, _feed, run_options=None):
-                events.append(("run", ""))
-                self.assertIsNotNone(run_options)
-                raise FakeOrtFailure("stop after observing progress order")
-
-        fake_ort = SimpleNamespace(
-            InferenceSession=Session,
-            RunOptions=RunOptions,
-            SessionOptions=SessionOptions,
-        )
-
-        def prepare_stft(*_args, **_kwargs):
-            events.append(("prepare", ""))
-            return Features(), object(), object(), 4
-
-        def report_progress(_progress, message):
-            events.append(("progress", message))
-
-        with (
-            patch("src.core.vocal_separator.activate_audio_separator_runtime"),
-            patch("src.core.vocal_separator._load_yaml", return_value=config),
-            patch("src.core.vocal_separator._load_stereo_audio", return_value=audio),
-            patch(
-                "src.core.vocal_separator._resolve_onnx_providers",
-                return_value=[("CUDAExecutionProvider", {"device_id": 0})],
-            ),
-            patch.dict("sys.modules", {"onnxruntime": fake_ort}),
-            patch(
-                "src.core.vocal_separator._prepare_polar_stft",
-                side_effect=prepare_stft,
-            ),
-        ):
-            with self.assertRaisesRegex(
-                FakeOrtFailure,
-                "stop after observing progress order",
-            ):
-                vocal_separator._run_polarformer_accompaniment_leg(
-                    audio_path="song.wav",
-                    onnx_path=Path("bs_polarformer_fp16.onnx"),
-                    config_path=Path("config.yaml"),
-                    requested_device="cuda:0",
-                    progress_callback=report_progress,
-                    translate=Translator("en_US").t,
-                    cancel_check=lambda: None,
-                )
-
-        loading_index = next(
-            index
-            for index, event in enumerate(events)
-            if event[0] == "progress"
-            and "Loading PolarFormer (accompaniment)" in event[1]
-        )
-        session_index = next(index for index, event in enumerate(events) if event[0] == "session")
-        running_index = next(
-            index
-            for index, event in enumerate(events)
-            if event[0] == "progress"
-            and "PolarFormer is processing accompaniment · chunk 1/1" in event[1]
-        )
-        prepare_index = next(index for index, event in enumerate(events) if event[0] == "prepare")
-        run_index = next(index for index, event in enumerate(events) if event[0] == "run")
-
-        self.assertLess(loading_index, session_index)
-        self.assertLess(session_index, running_index)
-        self.assertLess(running_index, prepare_index)
-        self.assertLess(prepare_index, run_index)
-        self.assertEqual("Loading PolarFormer (accompaniment)...", events[loading_index][1])
-        self.assertIn("about 0s each", events[running_index][1])
 
     def test_separate_reports_switch_before_saving_and_polarformer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,7 +233,7 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                     side_effect=leap_leg,
                 ),
                 patch(
-                    "src.core.vocal_separator._run_polarformer_accompaniment_leg",
+                    "src.core.vocal_separator._run_leap_accompaniment_leg",
                     side_effect=polar_leg,
                 ),
                 patch(
@@ -384,212 +261,9 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
         self.assertLess(switching_index, first_write_index)
         self.assertLess(first_write_index, polar_index)
         self.assertIn("正在保存 WAV", events[switching_index][1])
-        self.assertIn("准备 PolarFormer（伴奏）", events[switching_index][1])
+        self.assertIn("准备 Leap Instrumental（伴奏）", events[switching_index][1])
 
-    def test_polarformer_cancel_terminates_active_onnx_run(self):
-        config = {
-            "audio": {"sample_rate": 44_100},
-            "model": {
-                "stereo": True,
-                "stft_n_fft": 4,
-                "stft_hop_length": 2,
-                "stft_win_length": 4,
-                "stft_normalized": False,
-            },
-            "inference": {"chunk_size": 4, "num_overlap": 1},
-        }
-        audio = np.zeros((2, 4), dtype=np.float32)
-        run_started = threading.Event()
-        observed = {}
-        errors = []
 
-        class FakeOrtFailure(Exception):
-            pass
-
-        class RunOptions:
-            def __init__(self):
-                self.terminate = False
-
-        class SessionOptions:
-            def add_session_config_entry(self, key, value):
-                observed["session_config"] = (key, value)
-
-        class Features:
-            @staticmethod
-            def numpy():
-                return np.zeros((1,), dtype=np.float32)
-
-        class BlockingSession:
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            @staticmethod
-            def get_inputs():
-                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
-
-            @staticmethod
-            def get_outputs():
-                return [SimpleNamespace(name="mask", type="tensor(float)")]
-
-            @staticmethod
-            def get_providers():
-                return ["CUDAExecutionProvider"]
-
-            @staticmethod
-            def run(_outputs, _feed, run_options=None):
-                observed["run_options"] = run_options
-                run_started.set()
-                deadline = time.monotonic() + 2.0
-                while not run_options.terminate:
-                    if time.monotonic() >= deadline:
-                        raise AssertionError("cancel did not terminate the active ONNX run")
-                    time.sleep(0.005)
-                raise FakeOrtFailure("Exiting due to terminate flag being set to true.")
-
-        fake_ort = SimpleNamespace(
-            InferenceSession=BlockingSession,
-            RunOptions=RunOptions,
-            SessionOptions=SessionOptions,
-        )
-
-        separator = VocalSeparator()
-
-        def run_leg():
-            try:
-                vocal_separator._run_polarformer_accompaniment_leg(
-                    audio_path="song.wav",
-                    onnx_path=Path("model.onnx"),
-                    config_path=Path("config.yaml"),
-                    requested_device="cuda:0",
-                    progress_callback=None,
-                    translate=separator._pt,
-                    cancel_check=separator._check_cancelled,
-                    active_run_options_callback=(separator._set_active_onnx_run_options),
-                )
-            except BaseException as exc:
-                errors.append(exc)
-
-        with (
-            patch("src.core.vocal_separator.activate_audio_separator_runtime"),
-            patch("src.core.vocal_separator._load_yaml", return_value=config),
-            patch(
-                "src.core.vocal_separator._load_stereo_audio",
-                return_value=audio,
-            ),
-            patch(
-                "src.core.vocal_separator._resolve_onnx_providers",
-                return_value=["CUDAExecutionProvider"],
-            ),
-            patch.dict("sys.modules", {"onnxruntime": fake_ort}),
-            patch(
-                "src.core.vocal_separator._prepare_polar_stft",
-                return_value=(Features(), object(), object(), 4),
-            ),
-        ):
-            thread = threading.Thread(target=run_leg)
-            thread.start()
-            self.assertTrue(run_started.wait(1.0))
-            separator.cancel()
-            thread.join(1.0)
-
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(len(errors), 1)
-        self.assertIsInstance(errors[0], InterruptedError)
-        self.assertTrue(observed["run_options"].terminate)
-        self.assertIsNone(separator._active_onnx_run_options)
-
-    def test_polarformer_preserves_non_cancel_onnx_error(self):
-        config = {
-            "audio": {"sample_rate": 44_100},
-            "model": {
-                "stereo": True,
-                "stft_n_fft": 4,
-                "stft_hop_length": 2,
-                "stft_win_length": 4,
-                "stft_normalized": False,
-            },
-            "inference": {"chunk_size": 4, "num_overlap": 1},
-        }
-        audio = np.zeros((2, 4), dtype=np.float32)
-
-        class FakeOrtFailure(Exception):
-            pass
-
-        class RunOptions:
-            def __init__(self):
-                self.terminate = False
-
-        class SessionOptions:
-            @staticmethod
-            def add_session_config_entry(_key, _value):
-                return None
-
-        class Features:
-            @staticmethod
-            def numpy():
-                return np.zeros((1,), dtype=np.float32)
-
-        class FailingSession:
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            @staticmethod
-            def get_inputs():
-                return [SimpleNamespace(name="stft_features", type="tensor(float)")]
-
-            @staticmethod
-            def get_outputs():
-                return [SimpleNamespace(name="mask", type="tensor(float)")]
-
-            @staticmethod
-            def get_providers():
-                return ["CUDAExecutionProvider"]
-
-            @staticmethod
-            def run(_outputs, _feed, run_options=None):
-                assert run_options is not None
-                raise FakeOrtFailure("real ONNX inference failure")
-
-        fake_ort = SimpleNamespace(
-            InferenceSession=FailingSession,
-            RunOptions=RunOptions,
-            SessionOptions=SessionOptions,
-        )
-
-        separator = VocalSeparator()
-        with (
-            patch("src.core.vocal_separator.activate_audio_separator_runtime"),
-            patch("src.core.vocal_separator._load_yaml", return_value=config),
-            patch(
-                "src.core.vocal_separator._load_stereo_audio",
-                return_value=audio,
-            ),
-            patch(
-                "src.core.vocal_separator._resolve_onnx_providers",
-                return_value=["CUDAExecutionProvider"],
-            ),
-            patch.dict("sys.modules", {"onnxruntime": fake_ort}),
-            patch(
-                "src.core.vocal_separator._prepare_polar_stft",
-                return_value=(Features(), object(), object(), 4),
-            ),
-        ):
-            with self.assertRaisesRegex(
-                FakeOrtFailure,
-                "real ONNX inference failure",
-            ):
-                vocal_separator._run_polarformer_accompaniment_leg(
-                    audio_path="song.wav",
-                    onnx_path=Path("model.onnx"),
-                    config_path=Path("config.yaml"),
-                    requested_device="cuda:0",
-                    progress_callback=None,
-                    translate=separator._pt,
-                    cancel_check=separator._check_cancelled,
-                    active_run_options_callback=(separator._set_active_onnx_run_options),
-                )
-
-        self.assertIsNone(separator._active_onnx_run_options)
 
     def test_leap_chunk_starts_match_reference_partial_chunk_schedule(self):
         self.assertEqual(vocal_separator._leap_chunk_starts(100, 200, 50), [0, 50])
@@ -670,41 +344,11 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
             0,
         )
 
-    def test_polarformer_chunk_size_uses_verified_default_and_explicit_override(self):
-        with patch.dict("os.environ", {}, clear=False):
-            os.environ.pop("POLARFORMER_MAX_CHUNK_SIZE", None)
-            self.assertEqual(
-                vocal_separator._resolve_polarformer_chunk_size(882_000),
-                441_000,
-            )
-            self.assertEqual(
-                vocal_separator._resolve_polarformer_chunk_size(220_500),
-                220_500,
-            )
 
-        with patch.dict(
-            "os.environ",
-            {"POLARFORMER_MAX_CHUNK_SIZE": "330750"},
-        ):
-            self.assertEqual(
-                vocal_separator._resolve_polarformer_chunk_size(882_000),
-                330_750,
-            )
-
-    def test_polarformer_chunk_size_rejects_invalid_values(self):
-        with self.assertRaisesRegex(RuntimeError, "chunk_size is invalid"):
-            vocal_separator._resolve_polarformer_chunk_size(0)
-
-        with patch.dict(
-            "os.environ",
-            {"POLARFORMER_MAX_CHUNK_SIZE": "invalid"},
-        ):
-            with self.assertRaisesRegex(RuntimeError, "POLARFORMER_MAX_CHUNK_SIZE"):
-                vocal_separator._resolve_polarformer_chunk_size(882_000)
 
     def test_audio_chunk_progress_explains_duration_overlap_and_non_stage_semantics(self):
         kwargs = {
-            "model": "PolarFormer",
+            "model": "Leap Instrumental",
             "role_key": "progress.audio_chunk_role_accompaniment",
             "done": 2,
             "total": 24,
@@ -718,14 +362,14 @@ class VocalSeparatorTwoLegTests(unittest.TestCase):
                 Translator("zh_CN").t,
                 **kwargs,
             ),
-            "PolarFormer 伴奏 · 分片 2/24 · 每片约 20s",
+            "Leap Instrumental 伴奏 · 分片 2/24 · 每片约 20s",
         )
         self.assertEqual(
             vocal_separator._audio_chunk_progress_message(
                 Translator("en_US").t,
                 **kwargs,
             ),
-            "PolarFormer accompaniment · chunk 2/24 · about 20s each",
+            "Leap Instrumental accompaniment · chunk 2/24 · about 20s each",
         )
 
     def test_leap_reference_demix_uses_configured_overlap_batching_and_reconstructs(self):

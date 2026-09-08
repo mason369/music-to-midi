@@ -353,8 +353,8 @@ def test_browser_workbench_exposes_default_recommended_wav_export_contract():
     encoded = re.search(r'<pre class="msr-manifest" hidden>(.*?)</pre>', markup).group(1)
     manifest = json.loads(html.unescape(encoded))
 
-    assert manifest["audioExportApi"] == "./api/render_edited_midi_audio_export"
-    assert manifest["audioStemExportApi"] == "./api/render_edited_midi_stem_export"
+    assert manifest["audioExportApi"] == "./gradio_api/api/render_edited_midi_audio_export"
+    assert manifest["audioStemExportApi"] == "./gradio_api/api/render_edited_midi_stem_export"
     assert manifest["defaultAudioExportPreset"] == "pcm24_48000"
     assert manifest["audioExportPresets"] == [
         {

@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import download_vocal_harmony_model as polarformer  # noqa: E402
+import download_accompaniment_model as accompaniment  # noqa: E402
 import download_vocal_model as leap  # noqa: E402
 import src.core.aria_amt_transcriber as aria_amt  # noqa: E402
 import src.core.beat_this_tracker as beat_this  # noqa: E402
@@ -62,32 +62,8 @@ def _validate_leap_assets(model_dir: Path) -> tuple[Path, Path]:
     return checkpoint, config
 
 
-def _validate_polarformer_assets(model_dir: Path) -> tuple[Path, Path]:
-    retired = tuple(
-        path
-        for path in model_dir.rglob(polarformer.REMOVED_POLARFORMER_FP32_ONNX_NAME)
-        if path.is_file()
-    )
-    if retired:
-        raise RuntimeError(
-            "Retired PolarFormer FP32 assets must not be included in a portable build: "
-            + ", ".join(str(path) for path in retired)
-        )
-    checkpoint = polarformer.resolve_accompaniment_model_path(model_dir)
-    config = polarformer.resolve_accompaniment_config_path(model_dir)
-    validate_file_identity(
-        checkpoint,
-        expected_size=polarformer.POLARFORMER_ONNX_SIZE,
-        expected_sha256=polarformer.POLARFORMER_ONNX_SHA256,
-        label="PolarFormer ONNX checkpoint",
-    )
-    validate_file_identity(
-        config,
-        expected_size=polarformer.POLARFORMER_CONFIG_SIZE,
-        expected_sha256=polarformer.POLARFORMER_CONFIG_SHA256,
-        label="PolarFormer config",
-    )
-    return checkpoint, config
+def _validate_accompaniment_assets(model_dir: Path) -> tuple[Path, Path]:
+    return accompaniment.validate_accompaniment_assets(model_dir)
 
 
 def _validate_yourmt3_assets(model_dir: Path) -> tuple[Path, ...]:
@@ -209,7 +185,9 @@ def _require_runtime_available(label: str, unavailable_reason: str) -> None:
         raise RuntimeError(f"{label} runtime identity validation failed: {unavailable_reason}")
 
 
-def validate_portable_runtime_identities() -> dict[str, str]:
+def validate_portable_runtime_identities(
+    *, musescore_executable: Path | str | None = None
+) -> dict[str, str]:
     """Require exact package/source identities for every bundled runtime backend."""
 
     accelerator = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "cuda").strip().lower()
@@ -256,7 +234,10 @@ def validate_portable_runtime_identities() -> dict[str, str]:
         raise RuntimeError(
             "TransKun packaged V2 resources failed exact size/SHA-256 identity validation"
         )
-    musescore.validate_pinned_musescore_distribution()
+    if musescore_executable is None:
+        musescore.validate_pinned_musescore_distribution()
+    else:
+        musescore.validate_pinned_musescore_distribution(musescore_executable)
 
     identities = {
         "audio-separator": audio_separator_version,
@@ -294,7 +275,7 @@ def validate_portable_model_assets(
 
     return {
         "leap_xe": _validate_leap_assets(audio_separator_root),
-        "polarformer": _validate_polarformer_assets(audio_separator_root),
+        "leap_instrumental": _validate_accompaniment_assets(audio_separator_root),
         "yourmt3": _validate_yourmt3_assets(yourmt3_root),
         "yourmt3_source": _validate_yourmt3_source(yourmt3_source_root),
         "aria_amt": _validate_aria_amt_assets(aria_amt_root),
@@ -315,6 +296,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bytedance-piano-dir", type=Path, required=True)
     parser.add_argument("--beat-this-dir", type=Path, required=True)
     parser.add_argument("--miros-dir", type=Path, required=True)
+    parser.add_argument("--musescore-executable", type=Path)
     parser.add_argument("--label", default="portable model assets")
     return parser
 
@@ -331,7 +313,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             beat_this_dir=args.beat_this_dir,
             miros_dir=args.miros_dir,
         )
-        runtime_identities = validate_portable_runtime_identities()
+        runtime_identities = validate_portable_runtime_identities(
+            musescore_executable=args.musescore_executable
+        )
     except Exception as exc:
         print(f"[error] {args.label} identity validation failed: {exc}", file=sys.stderr)
         return 1

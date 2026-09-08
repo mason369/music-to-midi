@@ -208,6 +208,14 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._apply_modern_style()
 
+        from src.gui.widgets.project_panel import ProjectPanel
+
+        self.project_panel = ProjectPanel(self)
+        self.content_scroll.widget().layout().insertWidget(2, self.project_panel)
+        self.dropzone.files_selected.connect(
+            lambda paths: self.project_panel.guard(lambda: self.project_panel.add_audio(paths))
+        )
+
         self.setWindowTitle(t("app.name"))
         self.setMinimumSize(320, 240)
         self._fit_to_available_screen()
@@ -1579,6 +1587,8 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.status_label.setText(f"{t('status.ready')} - {Path(file_path).name}")
         logger.info(f"已选择文件: {file_path}")
+        if hasattr(self, "project_panel") and Path(file_path).is_file():
+            self.project_panel.guard(lambda: self.project_panel.add_audio([file_path]))
 
     def _open_file(self):
         """打开文件对话框"""
@@ -1587,15 +1597,15 @@ class MainWindow(QMainWindow):
         formats = get_supported_formats()
         filter_str = f"{t('dialogs.openFile.filter')} (*{' *'.join(formats)})"
 
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             t("dialogs.openFile.title"),
             "",
             filter_str,
         )
 
-        if file_path:
-            self._on_file_selected(file_path)
+        if file_paths:
+            self.project_panel.guard(lambda: self.project_panel.add_audio(file_paths))
 
     @staticmethod
     def _transcription_backend_label(config: Config) -> str:
@@ -1643,6 +1653,11 @@ class MainWindow(QMainWindow):
     def _start_processing(self):
         """开始处理音频文件"""
         if not self.current_file:
+            return
+
+        if self.project_panel.handles_current():
+            self.project_panel.guard(lambda: self.project_panel.start(
+                [self.project_panel.current_song_id], capture=True))
             return
 
         # 检查旧 worker 是否仍在运行
@@ -1765,6 +1780,9 @@ class MainWindow(QMainWindow):
         route: str,
     ) -> None:
         """Transcribe only the clicked timeline row with its explicit model."""
+        if self.project_panel.handles_current():
+            self.project_panel.guard(lambda: self.project_panel.convert_track(track_name, route))
+            return
         mixer = self.audio_mixer
         if mixer is None:
             raise RuntimeError("The audio timeline is not available")
@@ -2238,6 +2256,8 @@ class MainWindow(QMainWindow):
         if app:
             app.setApplicationName(t("app.name"))
         self.config.language = get_translator().get_language()
+        if hasattr(self, "project_panel"):
+            self.project_panel.update_translations()
 
         # 菜单
         self.file_menu.menuAction().setText(t("menu.file"))

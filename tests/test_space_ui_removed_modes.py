@@ -23,7 +23,7 @@ def test_space_ui_uses_shared_i18n_labels():
     assert "Component.api_info = _patched_component_api_info" in source_text
     assert 'if __name__ == "__main__":' in source_text
     assert "configure_uvicorn_websocket_protocol()" in source_text
-    assert ("        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],") in source_text
+    assert ("        allowed_paths=gradio_allowed_paths(SPACE_OUTPUT_INSTANCE),") in source_text
 
 
 def test_space_copy_describes_all_outputs_and_current_telknet_alignment():

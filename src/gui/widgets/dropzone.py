@@ -22,6 +22,7 @@ class DropZoneWidget(QWidget):
     """
 
     file_selected = pyqtSignal(str)
+    files_selected = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -167,15 +168,18 @@ class DropZoneWidget(QWidget):
         formats = get_supported_formats()
         filter_str = f"{t('dialogs.openFile.filter')} (*{' *'.join(formats)})"
 
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
             t("dialogs.openFile.title"),
             "",
             filter_str,
         )
 
-        if file_path:
-            self._set_file(file_path)
+        if file_paths:
+            if len(file_paths) == 1:
+                self._set_file(file_paths[0])
+            else:
+                self.files_selected.emit(file_paths)
 
     def _set_file(self, file_path: str):
         """设置已选文件"""
@@ -194,7 +198,7 @@ class DropZoneWidget(QWidget):
         """处理拖入事件"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
-            if urls and is_supported_format(urls[0].toLocalFile()):
+            if urls and all(url.isLocalFile() and is_supported_format(url.toLocalFile()) for url in urls):
                 event.acceptProposedAction()
                 self.setStyleSheet("""
                     DropZoneWidget {
@@ -213,10 +217,15 @@ class DropZoneWidget(QWidget):
     def dropEvent(self, event: QDropEvent):
         """处理放下事件"""
         urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            if is_supported_format(file_path):
-                self._set_file(file_path)
+        paths = [url.toLocalFile() for url in urls]
+        if paths and all(is_supported_format(path) for path in paths):
+            if len(paths) == 1:
+                self._set_file(paths[0])
+            else:
+                self.files_selected.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
         self._apply_default_style()
         self.icon_label.setText("🎵")

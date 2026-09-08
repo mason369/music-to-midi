@@ -19,7 +19,6 @@ models:
   - mimbres/YourMT3
   - minzwon/MusicFM
   - pcunwa/BS-Roformer-Leap
-  - bgkb/bs_polarformer
   - noblebarkrr/mvsepless_resources
 datasets:
   - loubb/aria-midi
@@ -73,7 +72,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 | YourMT3+ 五个 checkpoint | [`mimbres/YourMT3`](https://huggingface.co/mimbres/YourMT3/tree/5e66c1ea173a8186e0d20432b841d3180cc015b5) @ `5e66c1ea173a8186e0d20432b841d3180cc015b5` | 默认多乐器路线及五个逐轨选择项 | 固定 Space revision 声明 Apache-2.0；启动时使用该 revision 与项目的受控兼容补丁 |
 | MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目保留完整归属与维护者责任记录；这些记录不构成上游许可授予 |
 | Leap XE vocals | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 vocals WAV | 上游未声明许可；完整边界见第三方声明 |
-| PolarFormer accompaniment | [`bgkb/bs_polarformer`](https://huggingface.co/bgkb/bs_polarformer/tree/9158719ee2173edd480a735764627526506fe4af) | `VOCAL_SPLIT` 的 accompaniment WAV | 上游模型卡声明 MIT |
+| Leap Instrumental accompaniment | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 accompaniment WAV | 上游未声明许可；新增权重的便携包发布记录待维护者确认 |
 | BS-RoFormer SW Fixed | [`noblebarkrr/mvsepless_resources`](https://huggingface.co/noblebarkrr/mvsepless_resources/tree/370198fbb6997e3f5774778254698794e7b1267d) | `SIX_STEM_SPLIT` 的六条 WAV | 上游未声明许可；分离质量使用 SDR 类指标，与 MIDI F1 分开记录 |
 | TransKun V2 / V2 Aug | [`Yujia-Yan/Transkun`](https://github.com/Yujia-Yan/Transkun)；`transkun==2.0.1` 与官方 V2 Aug 文件 | 两条独立钢琴路线 | 包内 V2 资源随 MIT 包发布；V2 Aug 按官方项目发布记录单独固定，两条路线分别加载各自 checkpoint |
 | Aria-AMT | [`EleutherAI/aria-amt`](https://github.com/EleutherAI/aria-amt/tree/a1ab73fc901d1759ec3bc173c146b3c6a3040261)；[`loubb/aria-midi`](https://huggingface.co/datasets/loubb/aria-midi/tree/8cc4cf5c83b47f2689ac256a947b2a57c17a4c8b) | 钢琴专用逐轨/直接转写 | 源码 Apache-2.0；checkpoint 为 CC BY-NC-SA 4.0，保持非商用和原许可 |
@@ -87,7 +86,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 |------|------|
 | 多乐器转写 | `SMART` 可选择 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small；YourMT3+ 默认 `YPTF.MoE+Multi (noPS)`，并提供五种官方 checkpoint。 |
 | MuScriptor 乐器选择 | 空选时由模型检测；非空选择在生成阶段屏蔽未选乐器 token，并校验事件流和最终 MIDI。 |
-| 音源分离 | Leap XE 90-band 与 PolarFormer 生成 vocals、accompaniment 两条 WAV；`BS-Rofo-SW-Fixed.ckpt` 生成 bass、drums、guitar、piano、vocals、other 六条 WAV。 |
+| 音源分离 | Leap XE 90-band 与 Leap Instrumental 生成 vocals、accompaniment 两条 WAV；`BS-Rofo-SW-Fixed.ckpt` 生成 bass、drums、guitar、piano、vocals、other 六条 WAV。 |
 | 逐轨 MIDI | 每条波形音轨都可试听、下载或添加本地音频。勾选“转 MIDI”、从 13 个模型中选择一个，再点击该行“开始转换”；一次只处理该音轨。 |
 | 钢琴模式 | 四个钢琴模式直接生成一个 MIDI；ByteDance Pedal 保留延音踏板 CC64。 |
 | BPM 与试听 | 默认自动检测唯一 BPM；也可跟随原曲速度变化，或手动设置 30–300 BPM。模型事件先按检测 BPM 映射到音乐 tick，再按工程 BPM 播放。默认不量化；在结果编辑器点击“量化”后，按所选范围和网格调整音符。 |
@@ -95,7 +94,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 
 ## 人声与伴奏分离
 
-`VOCAL_SPLIT` 使用 Leap XE 90-band 和 PolarFormer 分别从原混音生成 vocals 与 accompaniment。两条 WAV 可独立试听、下载，并在音轨工作台选择模型转为 MIDI。
+`VOCAL_SPLIT` 使用 Leap XE 90-band 和 Leap Instrumental 分别从原混音生成 vocals 与 accompaniment。两条 WAV 可独立试听、下载，并在音轨工作台选择模型转为 MIDI。
 
 ## MuScriptor Large 公开评价
 
@@ -135,12 +134,12 @@ MuScriptor Small / Medium / Large 是三个独立选项。所选档位失败、�
 | ZeroGPU / Web | `spaces==0.51.1`、Gradio 6.17.3、Pydantic 2.10.6 |
 | 分离运行时 | `audio-separator==0.44.1`、`onnxruntime-gpu==1.23.2` |
 | 转写引擎 | YourMT3+、MIROS、MuScriptor Large / Medium / Small、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal |
-| 分离模型 | Leap XE vocals、PolarFormer accompaniment、BS-RoFormer SW Fixed |
+| 分离模型 | Leap XE vocals、Leap Instrumental accompaniment、BS-RoFormer SW Fixed |
 | 节拍检测 | Beat This `final0`；所有模式使用同一固定 checkpoint |
 
-Space 的 Torch 2.8 / NumPy 2 环境是独立部署契约，不能用桌面版 Torch 2.7 / NumPy 1.26 依赖覆盖。PolarFormer 依赖 ONNX Runtime `CUDAExecutionProvider`，因此 AMD/ROCm 当前不支持完整七模式；CUDA provider 不可用时启动检查会失败。
+Space 的 Torch 2.8 / NumPy 2 环境是独立部署契约，不能用桌面版 Torch 2.7 / NumPy 1.26 依赖覆盖。Leap Instrumental 使用 PyTorch 原生 FP32 推理。完整七模式目前仍只验收 NVIDIA CUDA；尚未据此扩大 AMD/ROCm 支持范围。
 
-Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 29 项闭集清单为 25 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；发布仍会逐次 fail-closed 校验，任何项目未满足就停止。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
+Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 30 项闭集清单为 25 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，发布校验会显式停止。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
 
 ## 链接
 

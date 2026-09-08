@@ -37,6 +37,26 @@ def _colab_code() -> str:
     )
 
 
+@pytest.mark.parametrize("cuda_available", [True, False])
+def test_space_leap_runtime_checks_cuda_without_onnx_provider(cuda_available):
+    namespace = {}
+    exec(_function_source("space/app.py", "_validate_vocal_split_gpu_runtime"), namespace)
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: cuda_available)
+    )
+    with (
+        mock.patch.dict(sys.modules, {"torch": fake_torch, "onnxruntime": None}),
+        mock.patch("src.core.vocal_separator._resolve_torch_device") as resolve_device,
+    ):
+        if cuda_available:
+            namespace["_validate_vocal_split_gpu_runtime"]()
+            resolve_device.assert_called_once_with("cuda:0")
+        else:
+            with pytest.raises(RuntimeError, match="CUDA unavailable"):
+                namespace["_validate_vocal_split_gpu_runtime"]()
+            resolve_device.assert_not_called()
+
+
 def test_pinned_gradio_fastapi_starlette_stack_serves_the_homepage():
     from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
 
@@ -80,7 +100,8 @@ def test_space_request_outputs_have_failure_and_success_cleanup_contracts():
     assert "torch.cuda.is_available" not in ensure_vocal_source
     assert "ort.get_available_providers" not in ensure_vocal_source
     assert "torch.cuda.is_available" in vocal_gpu_source
-    assert "ort.get_available_providers" in vocal_gpu_source
+    assert "_resolve_torch_device" in vocal_gpu_source
+    assert "onnxruntime" not in vocal_gpu_source
     assert "_validate_gpu_runtime_for_request(mode)" in gpu_entry_source
     assert "_prepare_request_models" in public_source
     assert "_convert_audio_to_midi_on_gpu" in public_source

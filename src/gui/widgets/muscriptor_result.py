@@ -74,6 +74,7 @@ from src.core.muscriptor_result_assets import (
 from src.core.sheet_music import SheetMusicExportResult
 from src.gui.layouts import FlowLayout
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
+from src.gui.widgets.soundfont_panel import SoundFontPanel
 from src.gui.widgets.wheel_safe_controls import (
     NoWheelComboBox,
     NoWheelDoubleSpinBox,
@@ -1505,6 +1506,8 @@ class _EditedAssetWorker(QThread):
         output_dir: str,
         muscriptor_groups: bool,
         parent=None,
+        *,
+        soundfont_selection=None,
     ):
         super().__init__(parent)
         self.generation = int(generation)
@@ -1514,6 +1517,7 @@ class _EditedAssetWorker(QThread):
         self.audio_path = str(audio_path)
         self.output_dir = str(output_dir)
         self.muscriptor_groups = bool(muscriptor_groups)
+        self.soundfont_selection = soundfont_selection
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -1544,6 +1548,11 @@ class _EditedAssetWorker(QThread):
                 cancel_check=lambda: self._cancelled,
                 muscriptor_groups=self.muscriptor_groups,
                 allow_empty_notes=True,
+                **(
+                    {"soundfont_selection": self.soundfont_selection}
+                    if self.soundfont_selection is not None
+                    else {}
+                ),
             )
             self.succeeded.emit(self.generation, assets)
         except Exception as exc:
@@ -1567,6 +1576,8 @@ class _MidiAudioExportWorker(QThread):
         stem_archive: bool,
         muscriptor_groups: bool,
         parent=None,
+        *,
+        soundfont_selection=None,
     ):
         super().__init__(parent)
         self.midi_path = str(midi_path)
@@ -1576,6 +1587,7 @@ class _MidiAudioExportWorker(QThread):
         self.snapshot_dir = str(snapshot_dir)
         self.stem_archive = bool(stem_archive)
         self.muscriptor_groups = bool(muscriptor_groups)
+        self.soundfont_selection = soundfont_selection
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -1591,6 +1603,11 @@ class _MidiAudioExportWorker(QThread):
                     muscriptor_groups=self.muscriptor_groups,
                     minimum_duration_seconds=self.silence_duration_seconds,
                     cancel_check=lambda: self._cancelled,
+                    **(
+                        {"soundfont_selection": self.soundfont_selection}
+                        if self.soundfont_selection is not None
+                        else {}
+                    ),
                 )
             else:
                 result = render_midi_audio_export(
@@ -1599,6 +1616,11 @@ class _MidiAudioExportWorker(QThread):
                     self.preset_id,
                     silence_duration_seconds=self.silence_duration_seconds,
                     cancel_check=lambda: self._cancelled,
+                    **(
+                        {"soundfont_selection": self.soundfont_selection}
+                        if self.soundfont_selection is not None
+                        else {}
+                    ),
                 )
             self.succeeded.emit(result)
         except InterruptedError:
@@ -1758,6 +1780,7 @@ class MuscriptorResultWidget(QFrame):
         self._edit_asset_worker: _EditedAssetWorker | None = None
         self._audio_export_worker: _MidiAudioExportWorker | None = None
         self._audio_export_is_stem = False
+        self._soundfont_selection = None
         self._sheet_export_worker: SheetMusicExportWorker | None = None
         self._deferred_preview: tuple[int, MuscriptorPreviewAssets] | None = None
         self._deferred_final_assets: MuscriptorPlaybackAssets | None = None
@@ -2309,6 +2332,13 @@ class MuscriptorResultWidget(QFrame):
         self.result_splitter.handle(1).setToolTip(t("muscriptor_result.editor_resize_hint"))
         root.addWidget(self.result_splitter, 1)
 
+        self.soundfont_panel = SoundFontPanel(
+            self._edit_asset_root / "soundfonts", self, instrument_label=_instrument_label
+        )
+        self.soundfont_panel.setEnabled(False)
+        self.soundfont_panel.apply_requested.connect(self._apply_soundfont)
+        root.addWidget(self.soundfont_panel)
+
         outputs = FlowLayout(horizontal_spacing=8, vertical_spacing=6)
         self.download_button = QToolButton()
         self.download_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -2508,8 +2538,10 @@ class MuscriptorResultWidget(QFrame):
                 result.beat_info.bpm,
                 time_signature=result.beat_info.time_signature or (4, 4),
             )
-        output_dir = Path(self._midi_path).parent / "midi-playback"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # A reopened project can still have the previous result's PCM files
+        # mapped for playback. Each finalization owns immutable render files in
+        # the existing session cache, which shutdown releases and removes.
+        output_dir = Path(tempfile.mkdtemp(prefix="final-", dir=self._preview_root))
         playback_midi_path = Path(self._midi_path)
         if self._detected_bpm is not None:
             playback_midi_path = _export_midi_with_bpm(
@@ -2863,6 +2895,8 @@ class MuscriptorResultWidget(QFrame):
         self._original_assets = assets
         self._replace_playback_assets(assets, detected_notes=assets.notes)
         self._begin_editor_session(assets.notes, assets.duration)
+        self.soundfont_panel.set_notes(assets.notes)
+        self.soundfont_panel.setEnabled(True)
         self.status_label.setText(t("muscriptor_result.ready"))
         self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
         self._preview_duration = 0.0
@@ -3067,15 +3101,22 @@ class MuscriptorResultWidget(QFrame):
                 self._queue_editor_audio_render(before, after)
             self._sync_editor_controls()
 
+    def _apply_soundfont(self, selection) -> None:
+        self._soundfont_selection = selection
+        self._queue_editor_audio_render(self._edited_notes, self._edited_notes, force=True)
+
     def _queue_editor_audio_render(
         self,
         before: tuple[MuscriptorRollNote, ...],
         after: tuple[MuscriptorRollNote, ...],
+        *,
+        force: bool = False,
     ) -> None:
         """Invalidate stale audio and queue one render for the latest edit snapshot."""
 
-        if before == after:
+        if before == after and not force:
             return
+        self.soundfont_panel.set_notes(after)
         if self._playing:
             self.pause()
         self._edit_asset_generation += 1
@@ -3088,7 +3129,11 @@ class MuscriptorResultWidget(QFrame):
         if self._edit_asset_worker is not None and self._edit_asset_worker.isRunning():
             self._edit_asset_worker.cancel()
 
-        if tuple(after) == self._original_edit_notes and self._original_assets is not None:
+        if (
+            self._soundfont_selection is None
+            and tuple(after) == self._original_edit_notes
+            and self._original_assets is not None
+        ):
             self._edit_asset_debounce.stop()
             self._edit_asset_pending = None
             self._apply_editor_audio_assets(
@@ -3125,6 +3170,11 @@ class MuscriptorResultWidget(QFrame):
             str(output_dir),
             self.muscriptor_groups,
             self,
+            **(
+                {"soundfont_selection": self._soundfont_selection}
+                if self._soundfont_selection is not None
+                else {}
+            ),
         )
         worker.progress.connect(self._on_editor_audio_progress)
         worker.succeeded.connect(self._on_editor_audio_ready)
@@ -4301,6 +4351,11 @@ class MuscriptorResultWidget(QFrame):
                 stem_archive,
                 self.muscriptor_groups,
                 self,
+                **(
+                    {"soundfont_selection": self._soundfont_selection}
+                    if self._soundfont_selection is not None
+                    else {}
+                ),
             )
             worker.succeeded.connect(self._on_midi_audio_export_succeeded)
             worker.failed.connect(self._on_midi_audio_export_failed)
@@ -4642,6 +4697,7 @@ class MuscriptorResultWidget(QFrame):
             if self.source_track_name
             else ""
         )
+        self.soundfont_panel.update_translations()
         self._update_play_label()
         self.follow_checkbox.setText(t("muscriptor_result.follow"))
         self.playback_slider.setToolTip(t("muscriptor_result.playback_progress_tooltip"))
@@ -4711,6 +4767,7 @@ class MuscriptorResultWidget(QFrame):
         if self._shutting_down:
             return
         self._shutting_down = True
+        self.soundfont_panel.shutdown()
         self._preview_pending = None
         self._edit_asset_pending = None
         self._deferred_preview = None

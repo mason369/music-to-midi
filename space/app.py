@@ -367,6 +367,7 @@ from src.gui.web.server_runtime import configure_uvicorn_websocket_protocol
 from src.gui.web.sheet_music_export import SheetMusicExportRegistry
 from src.gui.web.track_mixer_runtime import TRACK_COLORS as _TRACK_COLORS
 from src.gui.web.track_mixer_runtime import (
+    gradio_allowed_paths,
     build_track_mixer_html,
     mixer_head,
 )
@@ -791,6 +792,14 @@ def _request_root_for_owned_path(path_value: str | Path) -> Path:
         ):
             return parent
     raise RuntimeError(f"Path does not belong to an active Space request: {candidate}")
+
+
+def import_result_soundfont(token: str, path: str) -> str:
+    try:
+        return json.dumps(_EDITED_MIDI_PREVIEWS.import_soundfont_file(token, path), ensure_ascii=False)
+    except Exception as exc:
+        logger.error("SoundFont import failed: %s", exc)
+        raise gr.Error(st("soundfont.failed", error=exc)) from exc
 
 
 def render_edited_midi_preview(payload_json: str) -> str:
@@ -1355,35 +1364,27 @@ def ensure_multistem_weights():
 
 
 def ensure_vocal_split_weights():
-    """确保 Leap XE vocals + PolarFormer accompaniment 权重已下载。"""
+    """确保 Leap XE vocals + Leap Instrumental accompaniment 权重已下载。"""
     from download_accompaniment_model import download_accompaniment_model
     from download_vocal_model import download_vocal_model
 
     vocal_model = download_vocal_model(printer=logger.info)
     accompaniment_model = download_accompaniment_model(printer=logger.info)
     logger.info("Leap XE vocals checkpoint ready: %s", vocal_model)
-    logger.info("PolarFormer accompaniment model ready: %s", accompaniment_model)
+    logger.info("Leap Instrumental accompaniment model ready: %s", accompaniment_model)
 
 
 def _validate_vocal_split_gpu_runtime() -> None:
-    """Validate CUDA runtimes only after ZeroGPU has allocated the worker GPU."""
+    """Validate the two PyTorch models after ZeroGPU allocates the worker GPU."""
 
-    import onnxruntime as ort
     import torch
+    from src.core.vocal_separator import _resolve_torch_device
 
     if not torch.cuda.is_available():
         raise RuntimeError(
             "Space Vocal Split requires a CUDA GPU; PyTorch reports CUDA unavailable"
         )
-    preload_dlls = getattr(ort, "preload_dlls", None)
-    if callable(preload_dlls):
-        preload_dlls()
-    providers = ort.get_available_providers()
-    if "CUDAExecutionProvider" not in providers:
-        raise RuntimeError(
-            "PolarFormer GPU inference is unavailable: ONNX Runtime providers="
-            f"{providers}. Install the pinned onnxruntime-gpu runtime."
-        )
+    _resolve_torch_device("cuda:0")
 
 
 def _validate_gpu_runtime_for_request(mode: str) -> None:
@@ -3125,6 +3126,17 @@ with gr.Blocks(
     title=st("space.app.title"),
     delete_cache=(3600, SPACE_OUTPUT_RETENTION_SECONDS),
 ) as demo:
+    from src.gui.web.project_workbench import build_project_workbench
+    from src.gui.web.project_zero_gpu import make_zerogpu_engine
+
+    project_engine_factory = (
+        make_zerogpu_engine(spaces.GPU, _estimate_zerogpu_duration) if ZERO_GPU else None
+    )
+    project_service = build_project_workbench(
+        SPACE_OUTPUT_INSTANCE / "projects", SPACE_LANGUAGE,
+        engine_factory=project_engine_factory,
+        preview_registry=_EDITED_MIDI_PREVIEWS, sheet_registry=_SHEET_MUSIC_EXPORTS,
+    )
     track_state = gr.State({})
     # Events created inside @gr.render only mutate hidden state. Keep an
     # explicit revision input so every completed mutation deterministically
@@ -3134,6 +3146,10 @@ with gr.Blocks(
     edited_preview_response = gr.Textbox(visible=False)
     edited_preview_button = gr.Button(visible=False)
     edited_audio_export_request = gr.Textbox(visible=False)
+    soundfont_import_token = gr.Textbox(visible=False)
+    soundfont_import_file = gr.File(file_types=[".sf2", ".sf3"], type="filepath", visible=False)
+    soundfont_import_response = gr.Textbox(visible=False)
+    soundfont_import_button = gr.Button(visible=False)
     edited_audio_export_response = gr.Textbox(visible=False)
     edited_audio_export_button = gr.Button(visible=False)
     edited_stem_export_request = gr.Textbox(visible=False)
@@ -3664,6 +3680,13 @@ with gr.Blocks(
         api_name="render_edited_midi_preview",
         queue=False,
     )
+    soundfont_import_button.click(
+        fn=import_result_soundfont,
+        inputs=[soundfont_import_token, soundfont_import_file],
+        outputs=[soundfont_import_response],
+        api_name="import_result_soundfont",
+        queue=False,
+    )
     edited_audio_export_button.click(
         fn=render_edited_midi_audio_export,
         inputs=[edited_audio_export_request],
@@ -3700,7 +3723,7 @@ if __name__ == "__main__":
     configure_uvicorn_websocket_protocol()
     demo.launch(
         server_name="0.0.0.0",
-        allowed_paths=[str(SPACE_OUTPUT_INSTANCE)],
+        allowed_paths=gradio_allowed_paths(SPACE_OUTPUT_INSTANCE),
         theme=SPACE_THEME,
         css=CUSTOM_CSS,
         favicon_path=str(APP_ICON_PATH),

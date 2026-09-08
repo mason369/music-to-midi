@@ -21,6 +21,7 @@ from src.core.muscriptor_result_assets import (
     render_midi_stem_audio_export,
 )
 from src.gui.web.track_mixer_runtime import track_file_url
+from src.core.soundfont_library import import_soundfont, read_soundfont, soundfont_selection
 
 _MAX_EDITED_NOTES = 200_000
 
@@ -40,6 +41,7 @@ class EditedMidiPreviewRegistry:
 
     def __init__(self) -> None:
         self._contexts: dict[str, _PreviewContext] = {}
+        self._soundfonts = {}
         self._cache: dict[tuple[str, str], dict[str, object]] = {}
         self._audio_export_cache: dict[tuple[str, str, str], dict[str, object]] = {}
         self._stem_audio_export_cache: dict[tuple[str, str, str], dict[str, object]] = {}
@@ -133,6 +135,41 @@ class EditedMidiPreviewRegistry:
                 raise ValueError(f"Edited MIDI note {index} is malformed") from exc
         return tuple(notes)
 
+    def import_soundfont_file(self, token: str, path: str) -> dict:
+        with self._lock:
+            context = self._contexts.get(token)
+        if context is None or not context.request_dir.is_dir():
+            raise ValueError("音色库导入上下文无效或已过期")
+        library = import_soundfont(path, context.request_dir / "soundfonts")
+        with self._lock:
+            self._soundfonts[(token, library.sha256)] = library
+        return library.to_dict()
+
+    def _soundfont_options(self, token: str, payload: dict) -> dict:
+        requested = payload.get("soundfont")
+        if requested is None:
+            return {}
+        if not isinstance(requested, dict) or set(requested) != {"id", "assignments"}:
+            raise ValueError("音色库选择字段无效")
+        identity = requested["id"]
+        if not isinstance(identity, str):
+            raise ValueError("音色库编号无效")
+        with self._lock:
+            library = self._soundfonts.get((token, identity))
+        if library is None:
+            raise ValueError("此结果未导入指定音色库")
+        checked = read_soundfont(library.path, name=library.name)
+        if checked.sha256 != library.sha256:
+            raise RuntimeError("已导入的音色库发生变化，已停止渲染")
+        return {"soundfont_selection": soundfont_selection(library, requested["assignments"])}
+
+    @staticmethod
+    def _soundfont_identity(options: dict) -> bytes:
+        selection = options.get("soundfont_selection")
+        if selection is None:
+            return b""
+        return b"\0" + json.dumps(selection.cache_identity(), sort_keys=True).encode("utf-8")
+
     def render(self, payload_json: str) -> dict[str, object]:
         try:
             payload = json.loads(payload_json)
@@ -154,7 +191,8 @@ class EditedMidiPreviewRegistry:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        digest = hashlib.sha256(canonical).hexdigest()
+        render_options = self._soundfont_options(token, payload)
+        digest = hashlib.sha256(canonical + self._soundfont_identity(render_options)).hexdigest()
         cache_key = (token, digest)
         with self._lock:
             cached = self._cache.get(cache_key)
@@ -189,6 +227,7 @@ class EditedMidiPreviewRegistry:
                 output_dir,
                 muscriptor_groups=context.muscriptor_groups,
                 allow_empty_notes=True,
+                **render_options,
             )
             result: dict[str, object] = {
                 "digest": digest,
@@ -228,7 +267,8 @@ class EditedMidiPreviewRegistry:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        digest_bytes = hashlib.sha256(canonical).digest()
+        render_options = self._soundfont_options(token, payload)
+        digest_bytes = hashlib.sha256(canonical + self._soundfont_identity(render_options)).digest()
         digest = digest_bytes.hex()
         path_digest = base64.urlsafe_b64encode(digest_bytes).decode("ascii").rstrip("=")
         cache_key = (token, digest, preset.id)
@@ -263,6 +303,7 @@ class EditedMidiPreviewRegistry:
                 destination,
                 preset.id,
                 silence_duration_seconds=context.duration_seconds,
+                **render_options,
             )
             result: dict[str, object] = {
                 "digest": digest,
@@ -304,7 +345,8 @@ class EditedMidiPreviewRegistry:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        digest_bytes = hashlib.sha256(canonical).digest()
+        render_options = self._soundfont_options(token, payload)
+        digest_bytes = hashlib.sha256(canonical + self._soundfont_identity(render_options)).digest()
         digest = digest_bytes.hex()
         path_digest = base64.urlsafe_b64encode(digest_bytes).decode("ascii").rstrip("=")
         cache_key = (token, digest, preset.id)
@@ -340,6 +382,7 @@ class EditedMidiPreviewRegistry:
                 preset.id,
                 muscriptor_groups=context.muscriptor_groups,
                 minimum_duration_seconds=context.duration_seconds,
+                **render_options,
             )
             result: dict[str, object] = {
                 "digest": digest,

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import mido
 
+from src.core.soundfont_library import SoundFontSelection, write_soundfont_render_midi
 from src.models.muscriptor_instruments import MUSCRIPTOR_REPRESENTATIVE_PROGRAMS
 from src.utils.fluidsynth_runtime import (
     get_fluidsynth_executable,
@@ -385,6 +386,47 @@ def _synthesize(
     *,
     sample_rate: int = _SAMPLE_RATE,
     audio_file_format: str | None = None,
+    soundfont_selection: SoundFontSelection | None = None,
+) -> None:
+    if soundfont_selection is None:
+        _run_fluidsynth(
+            executable,
+            soundfont,
+            midi_path,
+            output_path,
+            cancel_check,
+            sample_rate=sample_rate,
+            audio_file_format=audio_file_format,
+        )
+        return
+    with tempfile.TemporaryDirectory(prefix=".soundfont-render-", dir=output_path.parent) as root:
+        render_midi = write_soundfont_render_midi(
+            midi_path,
+            Path(root) / "render.mid",
+            soundfont_selection,
+        )
+        _run_fluidsynth(
+            executable,
+            soundfont_selection.library.path,
+            render_midi,
+            output_path,
+            cancel_check,
+            sample_rate=sample_rate,
+            audio_file_format=audio_file_format,
+            custom_soundfont=True,
+        )
+
+
+def _run_fluidsynth(
+    executable: Path,
+    soundfont: Path,
+    midi_path: Path,
+    output_path: Path,
+    cancel_check=None,
+    *,
+    sample_rate: int = _SAMPLE_RATE,
+    audio_file_format: str | None = None,
+    custom_soundfont: bool = False,
 ) -> None:
     sample_rate = int(sample_rate)
     if not 8_000 <= sample_rate <= 96_000:
@@ -395,6 +437,8 @@ def _synthesize(
     if temporary.exists():
         temporary.unlink()
     command = [str(executable), "-ni"]
+    if custom_soundfont:
+        command.extend(["-o", "synth.midi-bank-select=mma"])
     if audio_file_format is not None:
         command.extend(["-o", f"audio.file.format={audio_file_format}"])
     command.extend(
@@ -415,7 +459,16 @@ def _synthesize(
         **hidden_subprocess_kwargs(),
     )
     started = time.monotonic()
+    stdout = stderr = None
     while process.poll() is None:
+        # Drain both pipes while the child is running; a verbose or damaged
+        # SoundFont can otherwise fill stderr and deadlock the synthesizer.
+        try:
+            stdout, stderr = process.communicate(timeout=0.1)
+        except subprocess.TimeoutExpired:
+            pass
+        if stdout is not None:
+            break
         if cancel_check is not None and cancel_check():
             process.terminate()
             try:
@@ -432,8 +485,14 @@ def _synthesize(
             if temporary.exists():
                 temporary.unlink()
             raise RuntimeError(f"FluidSynth timed out after 600 seconds for {midi_path.name}")
-        time.sleep(0.1)
-    stdout, stderr = process.communicate()
+    if stdout is None:
+        stdout, stderr = process.communicate()
+    diagnostics = stderr.decode(errors="replace").strip()
+    if custom_soundfont and any(
+        marker in diagnostics.lower() for marker in ("error:", "failed to", "invalid soundfont")
+    ):
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"自定义音色库渲染失败：{diagnostics}")
     if process.returncode != 0 or not temporary.is_file() or temporary.stat().st_size <= 0:
         raise RuntimeError(
             f"FluidSynth failed for {midi_path.name} (exit={process.returncode}): "
@@ -533,6 +592,7 @@ def render_midi_audio_export(
     *,
     silence_duration_seconds: float | None = None,
     cancel_check=None,
+    soundfont_selection: SoundFontSelection | None = None,
 ) -> MidiAudioExportResult:
     """Render, verify, and atomically publish a selected-quality SoundFont WAV."""
 
@@ -567,7 +627,11 @@ def render_midi_audio_export(
             )
         else:
             executable = get_fluidsynth_executable()
-            soundfont = validate_muscriptor_soundfont()
+            soundfont = (
+                soundfont_selection.library.path
+                if soundfont_selection
+                else validate_muscriptor_soundfont()
+            )
             _synthesize(
                 executable,
                 soundfont,
@@ -576,6 +640,7 @@ def render_midi_audio_export(
                 cancel_check=check_cancelled,
                 sample_rate=preset.sample_rate,
                 audio_file_format=preset.fluidsynth_format,
+                **({"soundfont_selection": soundfont_selection} if soundfont_selection else {}),
             )
         frames, channels, peak = _verify_midi_audio_export(
             staged_wav,
@@ -670,6 +735,7 @@ def render_midi_stem_audio_export(
     muscriptor_groups: bool = False,
     minimum_duration_seconds: float | None = None,
     cancel_check=None,
+    soundfont_selection: SoundFontSelection | None = None,
 ) -> MidiStemAudioExportResult:
     """Render every detected instrument to aligned WAV files in one ZIP."""
 
@@ -724,6 +790,7 @@ def render_midi_stem_audio_export(
                     raw_wav,
                     preset.id,
                     cancel_check=check_cancelled,
+                    **({"soundfont_selection": soundfont_selection} if soundfont_selection else {}),
                 )
                 raw_renders.append((instrument, raw_wav, rendered))
 
@@ -1313,6 +1380,7 @@ def prepare_midi_playback_assets(
     cancel_check=None,
     muscriptor_groups: bool = False,
     allow_empty_notes: bool = False,
+    soundfont_selection: SoundFontSelection | None = None,
 ) -> MuscriptorPlaybackAssets:
     """Create every real audio artifact behind the shared result controls."""
 
@@ -1394,8 +1462,10 @@ def prepare_midi_playback_assets(
     checkpoint()
     report(0.02, "Validating FluidSynth")
     executable = get_fluidsynth_executable()
-    report(0.05, "Preparing the official MuseScore General SoundFont")
-    soundfont = validate_muscriptor_soundfont()
+    report(0.05, "校验试听音色库")
+    soundfont = (
+        soundfont_selection.library.path if soundfont_selection else validate_muscriptor_soundfont()
+    )
     report(0.07, f"SoundFont identity verified: {soundfont}")
     last_note_end = max(note.end for note in notes)
     transport_boundary = max(source_frames / _SAMPLE_RATE, last_note_end)
@@ -1412,6 +1482,7 @@ def prepare_midi_playback_assets(
         midi_path,
         transcription_wav,
         cancel_check=check_cancelled,
+        **({"soundfont_selection": soundfont_selection} if soundfont_selection else {}),
     )
     instrument_wavs: dict[str, Path] = {}
     instruments = list(grouped)
@@ -1433,6 +1504,7 @@ def prepare_midi_playback_assets(
                 instrument_midi,
                 instrument_wav,
                 cancel_check=check_cancelled,
+                **({"soundfont_selection": soundfont_selection} if soundfont_selection else {}),
             )
             instrument_wavs[instrument] = instrument_wav
             report(

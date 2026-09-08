@@ -17,6 +17,7 @@ from src.core.muscriptor_result_assets import (
     MIDI_AUDIO_EXPORT_PRESETS,
 )
 from src.gui.web.track_mixer_runtime import track_file_url
+from src.gui.web.soundfont_runtime import SOUNDFONT_JS, SOUNDFONT_STRING_KEYS
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_REPRESENTATIVE_PROGRAMS,
@@ -128,12 +129,17 @@ def build_muscriptor_result_html(
         "defaultQuantizeScope": DEFAULT_MIDI_QUANTIZE_SCOPE,
         "backendLabel": str(state.get("backend_label", "")),
         "sourceTrackName": str(state.get("source_track_name", "")),
-        "previewApi": str(state.get("preview_api", "")),
+        "previewApi": str(state.get("preview_api", "")).replace("./api/", "./gradio_api/api/", 1),
         "previewToken": str(state.get("preview_token", "")),
-        "sheetApi": str(state.get("sheet_api", "")),
+        "sheetApi": str(state.get("sheet_api", "")).replace("./api/", "./gradio_api/api/", 1),
         "sheetToken": str(state.get("sheet_token", "")),
-        "audioExportApi": str(state.get("audio_export_api", "")),
-        "audioStemExportApi": str(state.get("audio_stem_export_api", "")),
+        "audioExportApi": str(state.get("audio_export_api", "")).replace(
+            "./api/", "./gradio_api/api/", 1
+        ),
+        "audioStemExportApi": str(state.get("audio_stem_export_api", "")).replace(
+            "./api/", "./gradio_api/api/", 1
+        ),
+        "soundfontStrings": {key: translate(f"soundfont.{key}") for key in SOUNDFONT_STRING_KEYS},
         "audioExportPresets": [
             {
                 "id": preset.id,
@@ -1315,6 +1321,36 @@ MUSCRIPTOR_RESULT_JS = r"""
     self.downloadAnchors.stereo = stereoAnchor;
     downloads.appendChild(stereoAnchor);
     this.host.appendChild(downloads);
+    this.soundfontPicker = new window.MidiSoundFontPicker({
+      strings: this.m.soundfontStrings,
+      getSources: function () {
+        var sources = new Map();
+        self.m.notes.forEach(function (note) {
+          var instrument = self.m.instruments.find(function (item) { return item.id === note.instrument; });
+          sources.set(note.program + ':' + note.is_drum, {program: note.program, is_drum: note.is_drum, name: instrument ? instrument.label : note.instrument});
+        });
+        return Array.from(sources.values());
+      },
+      importFile: async function (file) {
+        var endpoint = new URL(self.m.previewApi, window.location.href);
+        var uploadUrl = new URL('../upload', endpoint);
+        var importUrl = new URL('import_result_soundfont', endpoint);
+        var form = new FormData(); form.append('files', file);
+        var upload = await fetch(uploadUrl, {method: 'POST', body: form});
+        if (!upload.ok) throw new Error('HTTP ' + upload.status + ' ' + await upload.text());
+        var paths = await upload.json();
+        if (!Array.isArray(paths) || paths.length !== 1) throw new Error(self.m.soundfontStrings.invalid_file);
+        var response = await fetch(importUrl, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({data: [self.m.previewToken, {path: paths[0], orig_name: file.name, meta: {_type: 'gradio.FileData'}}]})
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + await response.text());
+        var envelope = await response.json();
+        return JSON.parse(envelope.data[0]);
+      },
+      apply: function (selection) { self.soundfontSelection = selection; self.scheduleEditedPreview(); }
+    });
+    this.host.appendChild(this.soundfontPicker.root);
     this.resizeObserver = new ResizeObserver(function () { self.layout(); });
     this.resizeObserver.observe(scroll);
     this.layout();
@@ -1405,7 +1441,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.play.disabled = true;
     this.progress.disabled = true;
     this.setDownloadAudioEnabled(false);
-    if (notesEqual(this.m.notes, this.originalNotes) && this.originalPreview) {
+    if (!this.soundfontSelection && notesEqual(this.m.notes, this.originalNotes) && this.originalPreview) {
       try {
         this.restoreOriginalPreview();
         this.syncEditor();
@@ -1433,7 +1469,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        data: [JSON.stringify({ token: this.m.previewToken, notes: this.m.notes })]
+        data: [JSON.stringify({ token: this.m.previewToken, notes: this.m.notes, soundfont: this.soundfontSelection || null })]
       })
     })
       .then(function (response) {
@@ -2641,7 +2677,8 @@ MUSCRIPTOR_RESULT_JS = r"""
         data: [JSON.stringify({
           token: this.m.previewToken,
           notes: noteSnapshot,
-          preset: preset.id
+          preset: preset.id,
+          soundfont: this.soundfontSelection || null
         })]
       })
     })
@@ -2720,7 +2757,8 @@ MUSCRIPTOR_RESULT_JS = r"""
         data: [JSON.stringify({
           token: this.m.previewToken,
           notes: cloneNotes(this.m.notes),
-          preset: preset.id
+          preset: preset.id,
+          soundfont: this.soundfontSelection || null
         })]
       })
     })
@@ -2958,4 +2996,4 @@ MUSCRIPTOR_RESULT_JS = r"""
 
 
 def muscriptor_result_head() -> str:
-    return f"<style>{MUSCRIPTOR_RESULT_CSS}</style><script>{MUSCRIPTOR_RESULT_JS}</script>"
+    return f"<style>{MUSCRIPTOR_RESULT_CSS}</style><script>{SOUNDFONT_JS}\n{MUSCRIPTOR_RESULT_JS}</script>"

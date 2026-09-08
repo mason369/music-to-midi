@@ -156,6 +156,7 @@ if torch.version.cuda != "12.8" or getattr(torch.version, "hip", None):
 print("container dependency identities verified", actual)
 PY
 RUN python -m src.utils.source_runtime \
+    && python -m src.utils.aria_amt_runtime \
     && python - <<'PY'
 from download_sota_models import validate_default_transkun_runtime
 from src.utils.yourmt3_source_identity import validate_patched_yourmt3_source

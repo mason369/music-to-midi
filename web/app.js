@@ -364,6 +364,7 @@ function renderConnectionState() {
 }
 
 function applyLanguage({ rerender = true } = {}) {
+  if (typeof musicProjects !== "undefined" && musicProjects?.allLabels) musicProjects.translate();
   document.documentElement.lang = state.language === "zh_CN" ? "zh-CN" : "en";
   document.title = t("document.title");
   $$('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
@@ -537,6 +538,7 @@ async function connectBackend({ quiet = false } = {}) {
     populateControls();
     renderModes();
     const jobs = await refreshJobs();
+    await initializeProjects();
     const activeJob = jobs.find((job) => !["succeeded", "failed", "cancelled"].includes(job.status));
     if (activeJob && !state.currentJob) openJob(activeJob, { scroll: false });
     updateReadyState();
@@ -810,6 +812,13 @@ function buildInferenceOptions() {
 }
 
 async function startPrimaryJob() {
+  if (musicProjects?.song()) {
+    await musicProjects.guard(async () => {
+      await musicProjects.configure(musicProjects.workflow(), [musicProjects.songId]);
+      await musicProjects.start([musicProjects.songId], null, true);
+    });
+    return;
+  }
   if (!state.audioFile || state.submissionPending || isJobRunning()) return;
   let options;
   try { options = buildInferenceOptions(); } catch (error) { toast(error.message, "error"); return; }
@@ -883,6 +892,7 @@ function handlePrimaryJobUpdate(job) {
   else if (job.status === "cancelled") { renderFailure(t("error.task_cancelled"), false); refreshJobs(); }
 }
 async function stopCurrentJob() {
+  if (musicProjects?.project?.active) return musicProjects.guard(() => musicProjects.action('stop'));
   if (!state.currentJob) return;
   try {
     state.currentJob = await api(`/api/v1/jobs/${state.currentJob.id}/cancel`, { method: "POST" });
@@ -943,12 +953,85 @@ async function generateSheetMusicForJob(jobId, midiArtifact) {
     artifact_id: midiArtifact.id,
     quantize_grid: "1/32",
   });
-  const job = await api(`/api/v1/jobs/${encodeURIComponent(jobId)}/sheet-music?${query}`, {
+  const job = await api(`${resultEndpoint(jobId)}/sheet-music?${query}`, {
     method: "POST",
   });
   const sheetArtifact = findSheetMusicArtifact(job, midiArtifact);
   if (!sheetArtifact) throw new Error(t("error.sheet_music_missing"));
   return { job, sheetArtifact };
+}
+let soundfontRuntimePromise = null;
+function loadSoundfontRuntime() {
+  if (window.MidiSoundFontPicker) return Promise.resolve();
+  if (!soundfontRuntimePromise) {
+    soundfontRuntimePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `${state.apiBase}/api/v1/soundfont-ui.js`;
+      script.onload = () => resolve();
+      script.onerror = () => { soundfontRuntimePromise = null; script.remove(); reject(new Error(t("soundfont.failed", { error: "SoundFont UI HTTP" }))); };
+      document.head.append(script);
+    });
+  }
+  return soundfontRuntimePromise;
+}
+function attachSoundfontPreview(job, midiArtifact, container) {
+  const previous = container.querySelector(':scope > .soundfont-result');
+  const identity = `${job.id}/${midiArtifact.id}`;
+  if (previous?.dataset.source === identity) return;
+  previous?.remove();
+  const host = document.createElement("div");
+  host.className = "soundfont-result"; host.dataset.source = identity;
+  host.style.gridColumn = "1 / -1"; host.style.whiteSpace = "normal";
+  const open = document.createElement("button");
+  open.type = "button"; open.textContent = t("soundfont.render");
+  host.append(open); container.append(host);
+  open.addEventListener("click", async () => {
+    open.disabled = true;
+    const endpoint = `${resultEndpoint(job.id)}/soundfonts/${encodeURIComponent(midiArtifact.id)}`;
+    try {
+      await loadSoundfontRuntime();
+      const catalog = await api(endpoint);
+      const strings = Object.fromEntries(Object.entries(state.messages[state.language])
+        .filter(([key]) => key.startsWith("soundfont.")).map(([key, value]) => [key.slice(10), value]));
+      const player = document.createElement("audio"); player.controls = true; player.hidden = true;
+      const download = document.createElement("a"); download.hidden = true;
+      let audioUrl = "";
+      const picker = new window.MidiSoundFontPicker({
+        strings,
+        getSources: () => catalog.sources.map((source) => ({ ...source, name: source.labels[state.language] })),
+        importFile: async (file) => {
+          const form = new FormData(); form.append("file", file);
+          return api(endpoint, { method: "POST", body: form });
+        },
+        apply: async (selection) => {
+          player.pause(); player.hidden = true; download.hidden = true;
+          const response = await fetch(`${state.apiBase}${endpoint}/render`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ soundfont: selection, preset: "pcm24_48000" }),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status} ${await response.text()}`);
+          const blob = await response.blob();
+          if (!blob.size || !blob.type.startsWith("audio/wav")) throw new Error(t("soundfont.failed", { error: "WAV" }));
+          if (audioUrl) URL.revokeObjectURL(audioUrl);
+          audioUrl = URL.createObjectURL(blob);
+          player.src = audioUrl; player.hidden = false;
+          download.href = audioUrl; download.download = `${midiArtifact.name.replace(/\.midi?$/i, "")}-soundfont.wav`;
+          download.textContent = t("soundfont.download"); download.hidden = false;
+        },
+      });
+      catalog.libraries.forEach((library) => {
+        picker.libraries.set(library.id, library);
+        picker.library.append(new Option(library.name, library.id));
+      });
+      picker.root.open = true;
+      picker.root.append(player, download);
+      open.replaceWith(picker.root);
+      const observer = new MutationObserver(() => {
+        if (!picker.root.isConnected) { player.pause(); if (audioUrl) URL.revokeObjectURL(audioUrl); observer.disconnect(); }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch (error) { open.disabled = false; toast(t("soundfont.failed", { error: error.message }), "error"); }
+  });
 }
 function renderArtifacts(job) {
   const warningRows = (job.result?.quality_warnings || []).map((warning) => {
@@ -969,6 +1052,8 @@ function renderArtifacts(job) {
     </div>`);
   $("#artifactList").innerHTML = [...warningRows, ...artifactRows].join("");
   $$('[data-sheet-source]', $("#artifactList")).forEach((button) => {
+    const soundfontSource = job.artifacts.find((artifact) => artifact.id === button.dataset.sheetSource);
+    if (soundfontSource) attachSoundfontPreview(job, soundfontSource, button.closest('.artifact-row'));
     button.addEventListener("click", async () => {
       const midiArtifact = job.artifacts.find((artifact) => artifact.id === button.dataset.sheetSource);
       if (!midiArtifact) {
@@ -1158,6 +1243,7 @@ function updateTrackDownload(track, artifact) {
     ? `<a href="${escapeHtml(artifactUrl(sheetArtifact))}" download>${escapeHtml(t("result.artifact.sheet_music"))} ↓</a>`
     : `<button class="track-sheet-button" type="button">${escapeHtml(t("result.generate_sheet_music"))}</button>`}`;
   const sheetButton = $(".track-sheet-button", status);
+  if (track.midiJob) attachSoundfontPreview(track.midiJob, artifact, row);
   if (!sheetButton) return;
   sheetButton.addEventListener("click", async () => {
     sheetButton.disabled = true;
@@ -1203,11 +1289,19 @@ function removeTrack(id) {
   state.tracks.splice(index, 1); trackRow({ id })?.remove(); updateTransportTime();
 }
 async function addLocalTracks(files) {
+  if (musicProjects?.song() && state.currentJob?.project_id === musicProjects.project.storage_id) return musicProjects.guard(() => musicProjects.addTracks(files));
   [...files].forEach((file) => state.tracks.push(makeTrack({ name: file.name.replace(/\.[^.]+$/, ""), localFile: file, fileName: file.name })));
   renderMixer(); await Promise.all(state.tracks.filter((track) => track.localFile && !track.buffer).map(loadTrackAudio)); redrawWaveforms();
 }
 
 async function convertTrackToMidi(track, button) {
+  if (track.projectId) {
+    const primary = buildInferenceOptions();
+    const options = { route: track.route, muscriptor_instruments: track.muscriptorInstruments || [], muscriptor_processing_chain: primary.muscriptor_processing_chain, tempo_mode: primary.tempo_mode, custom_bpm: primary.custom_bpm, quantize_notes: primary.quantize_notes, quantize_grid: primary.quantize_grid, use_gpu: true, gpu_device: primary.gpu_device, language: state.language };
+    if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
+    await musicProjects.guard(() => musicProjects.convertTrack(track, options));
+    return;
+  }
   if (track.midiJob && !["succeeded", "failed", "cancelled"].includes(track.midiJob.status)) {
     button.disabled = true;
     button.textContent = t("track.stopping");
@@ -1325,7 +1419,7 @@ async function refreshJobs() {
   try {
     const jobs = await api("/api/v1/jobs"); const root = $("#recentJobs"); root.innerHTML = "";
     if (!jobs.length) { root.innerHTML = `<p class="empty-copy">${escapeHtml(t("jobs.empty"))}</p>`; return jobs; }
-    jobs.slice(0, 5).forEach((job) => {
+    jobs.forEach((job) => {
       const item = document.createElement("button"); item.type = "button"; item.className = `recent-job is-${job.status}`;
       item.innerHTML = `<i></i><div><strong>${escapeHtml(job.original_filename)}</strong><span>${escapeHtml(t(`job.status.${job.status}`))} · ${job.id.slice(0, 8)}</span></div>`;
       item.addEventListener("click", () => openJob(job));
@@ -1400,12 +1494,12 @@ function bindEvents() {
     });
   });
   $("#browseButton").addEventListener("click", () => $("#audioInput").click());
-  $("#audioInput").addEventListener("change", (event) => setAudioFile(event.target.files[0]));
+  $("#audioInput").addEventListener("change", (event) => setAudioFiles(event.target.files));
   $("#clearFile").addEventListener("click", (event) => { event.stopPropagation(); clearAudioFile(); });
   const drop = $("#dropZone");
   ["dragenter", "dragover"].forEach((name) => drop.addEventListener(name, (event) => { event.preventDefault(); drop.classList.add("is-dragging"); }));
   ["dragleave", "drop"].forEach((name) => drop.addEventListener(name, (event) => { event.preventDefault(); drop.classList.remove("is-dragging"); }));
-  drop.addEventListener("drop", (event) => setAudioFile(event.dataTransfer.files[0]));
+  drop.addEventListener("drop", (event) => setAudioFiles(event.dataTransfer.files));
   drop.addEventListener("click", (event) => { if (!event.target.closest("button, input")) $("#audioInput").click(); });
   drop.addEventListener("keydown", (event) => {
     if (["Enter", " "].includes(event.key)) { event.preventDefault(); $("#audioInput").click(); }

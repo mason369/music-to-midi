@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-
 MODEL_PROFILE_RUNTIME_PROBE_SWITCH = "--model-profile-runtime-probe"
 
 
@@ -18,28 +17,30 @@ def run_model_profile_runtime_probe(profile_id: str) -> int:
     """
 
     if profile_id == "vocal_split":
-        from src.core.vocal_separator import _resolve_onnx_providers
+        from src.core.vocal_separator import _resolve_torch_device
         from src.utils.gpu_utils import get_device
         from src.utils.runtime_paths import activate_audio_separator_runtime
 
         activate_audio_separator_runtime()
         import librosa  # noqa: F401
-        import onnxruntime as ort
         import soundfile  # noqa: F401
         import torch  # noqa: F401
         import yaml  # noqa: F401
         from audio_separator.separator.uvr_lib_v5.roformer.bs_roformer import (
             BSRoformer,  # noqa: F401
         )
+        from audio_separator.separator.architectures.mdxc_separator import (
+            MDXCSeparator,  # noqa: F401
+        )
 
         device = get_device(prefer_gpu=True, gpu_index=0)
-        selected_providers = _resolve_onnx_providers(device, ort)
+        selected_device = _resolve_torch_device(device)
         print(
             json.dumps(
                 {
                     "device": device,
-                    "available_providers": ort.get_available_providers(),
-                    "selected_providers": selected_providers,
+                    "selected_device": str(selected_device),
+                    "models": ["Leap XE", "Leap Instrumental"],
                 }
             )
         )

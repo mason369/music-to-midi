@@ -410,7 +410,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
         self.assertNotIn("head=", blocks_arguments)
         self.assertIn(
             'demo.launch(share=True, server_name="0.0.0.0", server_port=7860, '
-            "allowed_paths=[str(COLAB_OUTPUT_ROOT)], theme=COLAB_THEME, "
+            "allowed_paths=gradio_allowed_paths(COLAB_OUTPUT_ROOT), theme=COLAB_THEME, "
             "css=COLAB_CSS, favicon_path=str(APP_ICON_PATH), "
             "head=mixer_head() + muscriptor_result_head())",
             source_text,
@@ -657,7 +657,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             set(colab_i18n["en_US"]),
         )
         for professional_phrase in (
-            "Leap XE 90-band vocals + BS-PolarFormer 62-band accompaniment",
+            "Leap XE 90-band vocals + BS-RoFormer Leap Instrumental 62-band accompaniment",
             "BS-RoFormer SW Fixed",
             "bass/drums/guitar/piano/vocals/other",
             "CC64",
@@ -669,7 +669,7 @@ class TestColabNotebookDependencies(unittest.TestCase):
             with self.subTest(professional_phrase=professional_phrase):
                 self.assertNotIn(professional_phrase, text_table)
                 if professional_phrase in {
-                    "Leap XE 90-band vocals + BS-PolarFormer 62-band accompaniment",
+                    "Leap XE 90-band vocals + BS-RoFormer Leap Instrumental 62-band accompaniment",
                     "BS-RoFormer SW Fixed",
                     "bass/drums/guitar/piano/vocals/other",
                     "CC64",

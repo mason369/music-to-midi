@@ -1,5 +1,7 @@
 # Music to MIDI Converter (AI Audio to MIDI)
 
+[Projects, workflow profiles and resuming](projects.en.md)
+
 <p align="center">
   <a href="../README.md">中文</a> | English
 </p>
@@ -116,7 +118,7 @@ The application supports turning a vocal line, piano recording, full mix, or sep
 | Area | Current behavior |
 |------|------------------|
 | Full mix | `SMART` sends the song to YourMT3+, MIROS, or MuScriptor Large / Medium / Small and exports MIDI with notes, drums, and instrument groups. The default is the official YourMT3+ `YPTF.MoE+Multi (noPS)` checkpoint. |
-| Separation | `VOCAL_SPLIT` produces vocals and accompaniment WAV files with Leap XE 90-band and PolarFormer. `SIX_STEM_SPLIT` produces `bass / drums / guitar / piano / vocals / other` WAV files with `BS-Rofo-SW-Fixed.ckpt`. MIDI conversion starts per track from the result workbench. |
+| Separation | `VOCAL_SPLIT` produces vocals and accompaniment WAV files with Leap XE 90-band and Leap Instrumental. `SIX_STEM_SPLIT` produces `bass / drums / guitar / piano / vocals / other` WAV files with `BS-Rofo-SW-Fixed.ckpt`. MIDI conversion starts per track from the result workbench. |
 | Per-track routes | Each separated WAV can use five YourMT3+ checkpoints, MIROS, MuScriptor Large / Medium / Small, or one of four piano models, for 13 routes in total. |
 | Piano | `PIANO_TRANSKUN`, `PIANO_TRANSKUN_V2_AUG`, `PIANO_ARIA_AMT`, and `PIANO_BYTEDANCE_PEDAL` use TransKun default V2, the official V2 Aug checkpoint, Aria-AMT, or ByteDance's pedal-aware model. |
 | MuScriptor selection | An empty instrument list enables model detection. A selection is passed to the official `instruments` and `prelude_forcing` path, masks unselected tokens during generation, and is checked against streamed events and final MIDI. |
@@ -146,11 +148,11 @@ Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; PolarFormer; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; FluidSynth; and pinned MuseScore Studio 4.7.4 | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
-| `run.ps1` / `run_xpu.ps1` / `run.sh` | Checks actual accelerator execution, all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources and CPU fallback are reported explicitly. |
+| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; Leap Instrumental; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; FluidSynth; and pinned MuseScore Studio 4.7.4 | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
+| `run.ps1` / `run_xpu.ps1` / `run.sh` | Checks actual accelerator execution, all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources and CPU fallback are reported explicitly. |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | Installs an isolated NVIDIA PyTorch 2.7 or Intel XPU PyTorch 2.11 runtime, NumPy 1.26, audio-separator 0.44.1, the identity-verified official MuScriptor v0.3.0 runtime, and every required model/runtime asset | NVIDIA uses `venv` + CUDA 12.8; Windows Intel uses `venv-xpu` + native PyTorch XPU + OpenVINO GPU. Mixed runtimes are rejected. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging checks only | These jobs do not produce a portable package. Bundle validation requires complete model files with matching identities. |
-| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, engraving, and runtime asset | The 30-component gate currently records 26 `VERIFIED` and four explicitly documented `OWNER_ACCEPTED` items. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
+| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, engraving, and runtime asset | The 30-component gate currently records 25 `VERIFIED`, four explicitly documented `OWNER_ACCEPTED` items and one `BLOCKED` item (Leap Instrumental); portable release is blocked pending its redistribution record. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
 | `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large / Medium / Small; the per-track menu contains 13 routes in total. |
 
 ## Processing Modes
@@ -158,7 +160,7 @@ Current synchronization coverage:
 | Mode | Processing Flow | Main Output | Notes |
 |------|-----------------|-------------|-------|
 | `SMART` | Audio -> selected YourMT3+ / MIROS / MuScriptor Large, Medium, or Small -> MIDI | `<song>.mid` | No source separation. A non-empty MuScriptor instrument selection is a real decoding constraint. |
-| `VOCAL_SPLIT` | Audio -> Leap XE vocals + PolarFormer accompaniment -> two WAV tracks -> explicit per-track MIDI | `<song>_vocals.wav`, `<song>_accompaniment.wav`; per-track MIDI on request | Separation does not auto-transcribe. Each WAV independently selects one of 13 routes. |
+| `VOCAL_SPLIT` | Audio -> Leap XE vocals + Leap Instrumental accompaniment -> two WAV tracks -> explicit per-track MIDI | `<song>_vocals.wav`, `<song>_accompaniment.wav`; per-track MIDI on request | Separation does not auto-transcribe. Each WAV independently selects one of 13 routes. |
 | `SIX_STEM_SPLIT` | Audio -> `BS-Rofo-SW-Fixed.ckpt` -> six WAV tracks -> explicit per-track MIDI | `<song>_<stem>.wav`; per-track MIDI on request | Each WAV independently selects its route and whether to convert; MIDI is not auto-merged. |
 | `PIANO_TRANSKUN` | Audio -> TransKun default V2 model -> MIDI | `<song>_piano_transkun.mid` | Pure-piano route using the checkpoint resources bundled with the PyPI package. |
 | `PIANO_TRANSKUN_V2_AUG` | Audio -> official TransKun V2 Aug checkpoint -> MIDI | `<song>_piano_transkun_v2_aug.mid` | Independent mode with a separately downloaded and verified checkpoint; it is not a fallback for default V2. |
@@ -208,7 +210,7 @@ The exact files depend on the selected mode and the per-track conversions the us
 
 ### YourMT3+
 
-YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
 
 The source runtime depends on:
 
@@ -288,12 +290,12 @@ MIROS also needs its upstream runtime dependencies. `requirements.txt` installs 
 
 The downloader checks out a pinned `amt-os/ai4m-miros` source commit and applies controlled compatibility patches. `pretrained_msd.pt` is fetched from the official Hugging Face `minzwon/MusicFM` repository, while `last.ckpt` still follows the official Google Drive file ID used by upstream `main.py`. GitHub Actions release packaging does not depend on the live Google Drive quota: it streams the already packaged and verified `external/ai4m-miros` directory from this repository's `v1.0.16` Linux portable release assets. If those portable assets are missing, extraction fails, or the checkpoint container is incomplete, the release job stops and reports the error.
 
-### Vocal Separation: Leap XE + PolarFormer
+### Vocal Separation: Leap XE + Leap Instrumental
 
 `VOCAL_SPLIT` uses two independent separation models on the original mix:
 
 - [BS-RoFormer Leap XE](https://huggingface.co/pcunwa/BS-Roformer-Leap) uses `Xe/bs_leap_xe_voc.ckpt` with `Xe/leap_xe_config_voc.yaml` to produce vocals.
-- [BS PolarFormer](https://huggingface.co/bgkb/bs_polarformer) uses the official `bs_polarformer_fp16.onnx` with `model_bs_polarformer_float16.yaml` to produce accompaniment.
+- [BS-RoFormer Leap Instrumental](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) uses `bs_roformer_leap_inst.ckpt` with the original `bs_leap_inst_conf.yaml`, pinned by revision, size and SHA-256, to directly predict the accompaniment stem `other` through native PyTorch FP32 demix in audio-separator 0.44.1.
 
 The canonical separated outputs are `vocals` and `accompaniment`. Each enters the track workbench with 13 explicit routes: five YourMT3+ checkpoints, MIROS, MuScriptor Large / Medium / Small, and four piano-specialized backends. Each model processes the original mix. If either separation fails, the task stops and reports the error.
 
@@ -337,7 +339,7 @@ models/transkun_v2_aug
 
 ### Aria-AMT
 
-Aria-AMT is another dedicated piano backend. The upstream README documents the `aria-amt transcribe` CLI; this project's wrapper currently calls `amt.run transcribe` through `src/core/aria_amt_transcriber.py`. The default checkpoint is:
+Aria-AMT is another dedicated piano backend. The wrapper in `src/core/aria_amt_transcriber.py` uses the shared single-file adapter around official inference and the MIDI writer. Linux source installations execute it in a dedicated `src.core.aria_amt_worker` process, so model failures return to the project queue without nested upstream batch workers. Docker and portable builds prepare the three directories read by the official AudioTransform before installation files become read-only. The default checkpoint is:
 
 ```text
 piano-medium-double-1.0.safetensors
@@ -413,10 +415,10 @@ This section separates public benchmark claims from project integration status. 
 | TransKun V2 Aug | Piano-specialized | `PIANO_TRANSKUN_V2_AUG` | Official augmented checkpoint; scores depend on the checkpoint used | Separate route using a pinned checkpoint for comparison with default V2. |
 | Aria-AMT | Piano-specialized | `PIANO_ARIA_AMT` | Public checkpoint; no published F1 score under the same protocol | Integrated pure-piano A/B option. |
 | ByteDance Pedal | Piano-specialized / pedal-aware | `PIANO_BYTEDANCE_PEDAL` | MAESTRO note onset F1 / pedal onset F1 = 96.72% / 91.86% | Prefer when the output needs sustain pedal CC64. |
-| Leap XE + PolarFormer | Vocal/accompaniment separation | Pre-separation for `VOCAL_SPLIT` | The two public models target different outputs and should be evaluated separately | Leap XE produces vocals; PolarFormer produces accompaniment; both stems then use the selected transcription backend. |
+| Leap XE + Leap Instrumental | Vocal/accompaniment separation | Pre-separation for `VOCAL_SPLIT` | The two public models target different outputs and should be evaluated separately | Leap XE produces vocals; Leap Instrumental produces accompaniment; both stems then use the selected transcription backend. |
 | BS-RoFormer SW Fixed | Six-stem separation | Pre-separation for `SIX_STEM_SPLIT` | MVSEP 6-stem SDR protocol | `BS-Rofo-SW-Fixed.ckpt` produces six WAV stems; separation SDR is not end-to-end MIDI F1. |
 
-YourMT3+ / MuScriptor / MIROS are multi-instrument backends, TransKun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and Leap XE / PolarFormer / BS-RoFormer SW Fixed are source-separation backends. Their public metrics use different tasks and protocols, so one combined leaderboard would be invalid.
+YourMT3+ / MuScriptor / MIROS are multi-instrument backends, TransKun / Aria-AMT / ByteDance Pedal are piano-specialized backends, and Leap XE / Leap Instrumental / BS-RoFormer SW Fixed are source-separation backends. Their public metrics use different tasks and protocols, so one combined leaderboard would be invalid.
 
 #### MuScriptor and Frontier Watchlist (verified 2026-08-08)
 
@@ -487,9 +489,9 @@ Each platform has its own pinned compatibility envelope; cross-platform NumPy/To
 | Platform | Python / Torch | NumPy and GPU runtime | Release status |
 |----------|----------------|-----------------------|----------------|
 | Windows / NVIDIA desktop and portable target | Python 3.11-3.12; Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4; CUDA 12.8 wheels | Source launchers verify this combination; `release.yml` revalidates the closed third-party inventory, exact model identities, and finished portable smoke tests before publishing |
-| Windows / Intel XPU desktop and local portable target | Python 3.11-3.12; native Torch 2.11.0 XPU / torchaudio 2.11.0 XPU / torchvision 0.26.0 XPU | NumPy 1.26.4; `onnxruntime-openvino==1.24.1` + `openvino==2025.4.1`; the startup gate verifies FFT/STFT, BF16, and matrix probes remain on XPU, while PolarFormer uses `OpenVINOExecutionProvider` on `GPU.0` | The newest coherent PyTorch XPU trio covers Arc B-Series (Battlemage) and Core Ultra Series 3 (Panther Lake) in the official hardware matrix; Panther Lake requires Windows 11. Uses isolated `venv-xpu`; IPEX, CUDA ORT mixing, and CPU EP fallback are rejected. Official GitHub releases remain CUDA-only for now |
+| Windows / Intel XPU desktop and local portable target | Python 3.11-3.12; native Torch 2.11.0 XPU / torchaudio 2.11.0 XPU / torchvision 0.26.0 XPU | NumPy 1.26.4; `onnxruntime-openvino==1.24.1` + `openvino==2025.4.1`; the startup gate verifies FFT/STFT, BF16, and matrix probes remain on XPU, while the new Leap Instrumental uses PyTorch FP32 and has not yet been validated on XPU hardware | The newest coherent PyTorch XPU trio covers Arc B-Series (Battlemage) and Core Ultra Series 3 (Panther Lake) in the official hardware matrix; Panther Lake requires Windows 11. Uses isolated `venv-xpu`; IPEX, CUDA ORT mixing, and CPU EP fallback are rejected. Official GitHub releases remain CUDA-only for now |
 | Linux / NVIDIA source | Python 3.11+; Torch 2.7.0 / torchaudio 2.7.0 / torchvision 0.22.0 | NumPy 1.26.4; NVIDIA driver compatible with CUDA 12.8; `cu128` only | `install.sh` / `run.sh` verify the complete seven-mode runtime; `build.yml` performs source, test, and packaging checks only |
-| Linux / AMD/ROCm | No complete seven-mode compatibility runtime | PolarFormer requires ONNX Runtime `CUDAExecutionProvider` | Currently unsupported; the installer stops with a compatibility error |
+| Linux / AMD/ROCm | No complete seven-mode compatibility runtime | This replacement does not extend the validated hardware range | Currently unsupported; the installer stops with a compatibility error |
 | Hugging Face Space | Python 3.12.12; Torch 2.8.0 / torchaudio 2.8.0 / torchvision 0.23.0 | NumPy `>=2,<2.5`; ZeroGPU | Uses `space/requirements.txt`; the desktop NumPy 1.26 pin is not part of the Space compatibility set |
 | Google Colab | Current Colab Python and preinstalled Torch | Keeps preinstalled Torch; installs only pinned Web/runtime dependencies | Avoids replacing Torch and breaking its CUDA runtime |
 
@@ -530,7 +532,7 @@ Authentication uses a personal token with read access to all three gated reposit
 powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
-You can also double-click `run.bat`. `run.ps1` checks the virtual environment, Beat This `final0`, all five YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, and FluidSynth, then calls `install.ps1` if something is missing or invalid.
+You can also double-click `run.bat`. `run.ps1` checks the virtual environment, Beat This `final0`, all five YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, and FluidSynth, then calls `install.ps1` if something is missing or invalid.
 
 An Intel GPU uses the isolated native XPU environment:
 
@@ -541,9 +543,9 @@ powershell -ExecutionPolicy Bypass -File .\run_xpu.ps1
 
 Installation and every launch perform real `torch.xpu` matrix, FFT, STFT, and BF16 convolution operations while rejecting XPU-to-CPU operator fallback. They then run a minimal ONNX MatMul graph through `OpenVINOExecutionProvider` on `GPU.0` with CPU EP fallback disabled. ORT may list its built-in CPU provider, but `session.disable_cpu_ep_fallback=1` makes any CPU-assigned node fail session creation. A failed gate stops instead of switching to IPEX, DirectML, CUDA, or CPU.
 
-PolarFormer caps the model's 882000-sample window at 441000 by default to control peak device memory; this default completed a real two-model split on the 16 GiB NVIDIA baseline. `POLARFORMER_MAX_CHUNK_SIZE=220500` selects an explicitly lower peak, while `0` removes the cap. An OOM stops the task and displays the memory error.
+Leap Instrumental uses native FP32 demix in audio-separator 0.44.1 with the original configuration: `dim_t=1101`, a 563200-sample window and an 8-second stride. Short input is padded to one window and cropped to its original length. An OOM stops the task. The controlled artificial piano-plus-vocals mixture reproduced an accompaniment SI-SDR of 19.34015 dB; this is not an original-song reference, an official leaderboard score, or a guarantee across songs.
 
-On XPU, Leap XE retains the official full approximately 20-second audio window, all keys/values, checkpoint, and post-processing. Only the attention query axis is evaluated in fixed 128-row slices and concatenated. Every query still attends to the complete context, so this is a numerically equivalent inference-time memory bound rather than a shorter window, smaller model, or CPU fallback; accidental training-mode use fails explicitly. This path avoids relying on the XPU Flash Attention kernel, whose architecture coverage is narrower than the full PyTorch XPU hardware matrix, and completed a real two-track split on a 16 GB Arc 140T.
+On XPU, Leap XE retains the official full approximately 20-second audio window, all keys/values, checkpoint, and post-processing. Only the attention query axis is evaluated in fixed 128-row slices and concatenated. Every query still attends to the complete context, so this is a numerically equivalent inference-time memory bound rather than a shorter window, smaller model, or CPU fallback; accidental training-mode use fails explicitly. This path avoids relying on the XPU Flash Attention kernel, whose architecture coverage is narrower than the full PyTorch XPU hardware matrix, and completed a real two-track split on a 16 GB Arc 140T in the earlier version. That historical result does not include the new Leap Instrumental accompaniment route; its XPU hardware acceptance is still pending.
 
 ### Linux / WSL2
 
@@ -552,7 +554,7 @@ chmod +x run.sh
 ./run.sh
 ```
 
-`run.sh` checks the virtual environment, core imports, Beat This `final0`, YourMT3+ source and all five model modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, and FluidSynth, then calls `install.sh` if something is missing or invalid.
+`run.sh` checks the virtual environment, core imports, Beat This `final0`, YourMT3+ source and all five model modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, and FluidSynth, then calls `install.sh` if something is missing or invalid.
 
 ### Direct Source Run
 
@@ -604,7 +606,7 @@ pip install torch==2.7.0 torchaudio==2.7.0 torchvision==0.22.0 --index-url https
 
 `cu118` / CUDA 11 is outside the current one-click launcher and complete seven-mode acceptance contract; launchers stop and request a runtime update.
 
-The standard Windows Intel XPU installer is `install_xpu.ps1`. Manual preparation corresponds to the isolated `venv-xpu` and the exact versions in `requirements-xpu.txt`; overwriting CUDA wheels in `venv` breaks the environment-isolation contract. The project selects the newest coherent trio rather than the highest standalone Torch version: Torch XPU wheels currently extend beyond 2.11, but the newest matching torchaudio XPU wheel is 2.11, so the contract is `torch/torchaudio==2.11.0+xpu` plus `torchvision==0.26.0+xpu`. The [official PyTorch 2.11 matrix](https://docs.pytorch.org/docs/2.11/notes/get_start_xpu.html) includes Arc B-Series and Panther Lake / Core Ultra Series 3. PolarFormer uses [ONNX Runtime OpenVINO 1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1), aligned to OpenVINO 2025.4.1.
+The standard Windows Intel XPU installer is `install_xpu.ps1`. Manual preparation corresponds to the isolated `venv-xpu` and the exact versions in `requirements-xpu.txt`; overwriting CUDA wheels in `venv` breaks the environment-isolation contract. The project selects the newest coherent trio rather than the highest standalone Torch version: Torch XPU wheels currently extend beyond 2.11, but the newest matching torchaudio XPU wheel is 2.11, so the contract is `torch/torchaudio==2.11.0+xpu` plus `torchvision==0.26.0+xpu`. The [official PyTorch 2.11 matrix](https://docs.pytorch.org/docs/2.11/notes/get_start_xpu.html) includes Arc B-Series and Panther Lake / Core Ultra Series 3. [ONNX Runtime OpenVINO 1.24.1](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1) and OpenVINO 2025.4.1 remain part of the existing package dependency contract. The new Leap Instrumental route uses PyTorch FP32; actual inference has been validated on NVIDIA CUDA only, with XPU hardware acceptance still pending.
 
 Intel XPU has no project-level compatibility number directly equivalent to NVIDIA `sm_XX`. The stack discovers devices through oneAPI/Level Zero, and the normal JIT path lets the Intel Graphics Compiler generate code for the detected hardware. The real support boundary is therefore the pinned PyTorch release's hardware matrix plus its OS/driver requirements and this project's launch-time operator probes; an arbitrary Intel GPU is not automatically compatible.
 
@@ -614,9 +616,9 @@ The local Intel XPU Web backend starts a fresh processing process for every GPU 
 
 `torchaudio` 2.11 delegates `load/save` to TorchCodec, whose Windows wheels require full-shared FFmpeg DLLs. The project does not hide missing DLLs behind a fallback: public inputs are first converted to WAV by the bundled FFmpeg, then a pinned libsndfile PCM reader creates channels-first float32 tensors; resampling and inference remain on the validated XPU route.
 
-AMD/ROCm cannot currently run the complete seven-mode surface: the fixed separator contracts validate either NVIDIA `CUDAExecutionProvider` or Intel `OpenVINOExecutionProvider/GPU.0`, with no strict AMD GPU provider. The installer stops with a compatibility error.
+AMD/ROCm has not completed hardware acceptance for the full seven-mode workflow, so the installer still stops with a compatibility error. Moving accompaniment separation to PyTorch FP32 does not establish AMD support for the remaining models or the complete workflow.
 
-`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 30 third-party components: 26 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 0 are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
+`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 30 third-party components: 25 are `VERIFIED`, 4 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and 1 is `BLOCKED` (Leap Instrumental redistribution remains unresolved). Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 
@@ -636,7 +638,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
+The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
 
 ### 5. Prepare Separation and Piano Models
 
@@ -713,7 +715,7 @@ cd space
 python app.py
 ```
 
-The Space deployment bundles the project's verified, compatibility-patched `YourMT3/amt/src` tree, identical to the desktop and Colab source; it does not switch to mutable Hugging Face Space source at runtime. During conversion it checks or prepares only the resources required by the selected mode: the selected official YourMT3+ checkpoint or MIROS, BS-RoFormer SW Fixed, Leap XE, PolarFormer, TransKun V2 Aug, Aria-AMT, or ByteDance Pedal. Missing resources or identity mismatches are surfaced explicitly.
+The Space deployment bundles the project's verified, compatibility-patched `YourMT3/amt/src` tree, identical to the desktop and Colab source; it does not switch to mutable Hugging Face Space source at runtime. During conversion it checks or prepares only the resources required by the selected mode: the selected official YourMT3+ checkpoint or MIROS, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, or ByteDance Pedal. Missing resources or identity mismatches are surfaced explicitly.
 
 The ZeroGPU deployment is a short-clip demo, not a promise that full songs complete end to end. The [Hugging Face ZeroGPU documentation](https://huggingface.co/docs/hub/main/en/spaces-zerogpu) currently lists daily quotas of 2 GPU minutes for anonymous users and 5 minutes for logged-in free accounts. The conservative minimum request already exceeds the anonymous allowance after the platform's `large` GPU multiplier, so conversion currently requires sign-in. The Space estimates each mode/backend/model combination, applies the pinned `spaces==0.51.1` multiplier upper bound, and rejects requests above one 300-second logged-in free-account window before downloading models. The estimate is an admission ceiling, not a guarantee of remaining daily quota or queue capacity; Colab, the desktop build, or dedicated GPU hardware are better suited to long songs.
 
@@ -732,7 +734,7 @@ Failed Space requests delete their request directory immediately. Successful out
 
 The Windows CUDA package command produces the desktop App, Web backend, and Web frontend:
 
-The portable gate accepts components recorded as `VERIFIED` or explicitly `OWNER_ACCEPTED`. The current `THIRD_PARTY_NOTICES.md` records 25 verified and four owner-accepted components. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
+The portable gate accepts components recorded as `VERIFIED` or explicitly `OWNER_ACCEPTED`. The current `THIRD_PARTY_NOTICES.md` records 25 verified, four owner-accepted and one blocked component (Leap Instrumental); its unresolved redistribution record blocks portable release. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_web_executables.ps1
@@ -831,12 +833,12 @@ space/app.py                 # Gradio Web UI
 colab_notebook.ipynb         # Colab entry
 download_sota_models.py      # Beat This + five YourMT3 + MIROS + three MuScriptor + separation + four piano + playback assets
 download_vocal_model.py      # Leap XE vocals asset download
-download_accompaniment_model.py # PolarFormer accompaniment asset download
+download_accompaniment_model.py # Leap Instrumental accompaniment asset download
 download_multistem_model.py  # BS-RoFormer SW Fixed six-stem asset download
 download_transkun_v2_aug_model.py # TransKun V2 Aug download and validation
 download_aria_amt_model.py   # Aria-AMT model download
 download_bytedance_piano_model.py # ByteDance Pedal model download
-download_vocal_harmony_model.py # Historical compatibility entry for PolarFormer accompaniment
+download_vocal_harmony_model.py # Historical compatibility entry for Leap Instrumental accompaniment
 MusicToMidi.spec             # PyInstaller configuration
 ```
 

@@ -91,6 +91,7 @@ def execute_probe(args, report, save):
 
     from src.core.manual_midi import build_manual_midi_config
     from src.gui.main_window import MainWindow
+    from src.gui.widgets.project_panel import ProjectWorker
     from src.models.data_models import Config
 
     app = QApplication.instance() or QApplication([])
@@ -127,30 +128,35 @@ def execute_probe(args, report, save):
             output = args.output / f"route-{index:02d}"
             output.mkdir()
             window.output_dir_edit.setText(str(output))
-            window.dropzone.file_selected.emit(str(args.input))
+            window.dropzone.files_selected.emit([str(args.input)])
             wait_for_gui(window.start_btn.isEnabled, "开始按钮就绪", 30)
             started = time.monotonic()
             window.start_btn.click()
             worker = window.worker
-            if worker is None:
-                raise RuntimeError("真实开始按钮没有创建处理线程")
+            if not isinstance(worker, ProjectWorker):
+                raise RuntimeError("真实开始按钮没有创建项目处理线程")
             state = {}
-            worker.processing_finished.connect(lambda result: state.update(result=result))
-            worker.error_occurred.connect(lambda message: state.update(error=str(message)))
+            worker.completed.connect(lambda snapshot: state.update(snapshot=snapshot))
+            worker.failed.connect(lambda message: state.update(error=str(message)))
             case["stage"] = "converting"
             report["stage"] = "converting"
             save()
             wait_for_gui(lambda: window.worker is None, "处理线程结束")
             if state.get("error") or modal_errors:
                 raise RuntimeError(state.get("error") or modal_errors[-1])
-            if "result" not in state:
-                raise RuntimeError("处理线程结束但没有真实结果")
-            result = state["result"]
-            midi = mido.MidiFile(result.midi_path)
+            if "snapshot" not in state or state["snapshot"]["status"] != "succeeded":
+                raise RuntimeError(f"项目没有成功完成：{state}")
+            store = window.project_panel.store
+            song = window.project_panel.song()
+            step = song.checkpoints[song.primary_key]
+            if step.status != "succeeded":
+                raise RuntimeError(step.error or "项目检查点没有成功完成")
+            midi_path = store.verify(next(a for a in step.artifacts if a.kind == "midi"))
+            midi = mido.MidiFile(midi_path)
             notes = sum(m.type == "note_on" and m.velocity > 0 for tr in midi.tracks for m in tr)
             if notes <= 0:
                 raise RuntimeError("MIDI 没有有效音符")
-            case.update(stage="result_audio", notes=notes, midi=str(result.midi_path))
+            case.update(stage="result_audio", notes=notes, midi=str(midi_path))
             report["stage"] = "result_audio"
             save()
             editor = window.muscriptor_result_widget
@@ -161,6 +167,9 @@ def execute_probe(args, report, save):
                 raise RuntimeError("结果音频未就绪")
             if not editor._assets.live_transcription_wav.is_file():
                 raise RuntimeError("真实试听 WAV 不存在")
+            # This explicit offscreen diagnostic must not disturb desktop audio.
+            # The actual QAudioSink still starts and consumes the real PCM stream.
+            editor._playback_engine._sink.setVolume(0.0)
             editor.play_button.click()
             until = time.monotonic() + 0.15
             wait_for_gui(lambda: time.monotonic() >= until, "实际播放", 5)

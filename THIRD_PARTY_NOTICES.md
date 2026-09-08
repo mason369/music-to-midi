@@ -30,7 +30,7 @@ PORTABLE_COMPONENT: zfturbo_adapted_source | bundle=python/src/core/vocal_separa
 PORTABLE_COMPONENT: yourmt3_checkpoints | bundle=models/yourmt3_all | artifact=5-checkpoint-set | revision=5e66c1ea173a8186e0d20432b841d3180cc015b5 | license=Apache-2.0 | status=VERIFIED
 PORTABLE_COMPONENT: yourmt3_patched_source | bundle=python/amt | artifact=patched-source-tree | revision=manifest:94232c1f4a5f8f3a0f19bb5b466d638f80d9d2dba4628deb8d0c2ce2c5157b34 | license=Apache-2.0-with-patches | status=VERIFIED
 PORTABLE_COMPONENT: leap_xe | bundle=models/audio-separator | artifact=checkpoint+config | revision=4e47d6662ae82eaa8b4ac4329fe66099a843b48e | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
-PORTABLE_COMPONENT: polarformer | bundle=models/audio-separator | artifact=onnx+config | revision=9158719ee2173edd480a735764627526506fe4af | license=MIT | status=VERIFIED
+PORTABLE_COMPONENT: leap_instrumental | bundle=models/audio-separator | artifact=checkpoint+config | revision=4e47d6662ae82eaa8b4ac4329fe66099a843b48e | license=UNDECLARED-upstream | status=BLOCKED
 PORTABLE_COMPONENT: bs_roformer_sw_fixed | bundle=models/audio-separator | artifact=checkpoint+config | revision=370198fbb6997e3f5774778254698794e7b1267d | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: audio_separator | bundle=python/audio_separator | artifact=source+metadata | revision=0.44.1 | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: transkun_source | bundle=python/transkun | artifact=source+metadata | revision=2.0.1 | license=MIT | status=VERIFIED
@@ -155,13 +155,22 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
   it on request of the rights holder via the project issue tracker.  No license
   grant is claimed by this record.
 
-### BS PolarFormer accompaniment
+### BS-RoFormer Leap Instrumental accompaniment — BLOCKED for redistribution
 
-- Upstream: [bgkb/bs_polarformer](https://huggingface.co/bgkb/bs_polarformer/tree/9158719ee2173edd480a735764627526506fe4af)
-- Pinned revision: `9158719ee2173edd480a735764627526506fe4af`
-- Redistributed material: the PolarFormer ONNX model and configuration used for the
-  `VOCAL_SPLIT` accompaniment path.
-- Declared license: MIT (the pinned model card declares `license: mit`).
+- Upstream: [pcunwa/BS-Roformer-Leap](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e)
+- Pinned revision: `4e47d6662ae82eaa8b4ac4329fe66099a843b48e`.
+- Material: `bs_roformer_leap_inst.ckpt` and the original `bs_leap_inst_conf.yaml`.
+- Checkpoint SHA-256: `1459b5eb70d7e1a805d8d080cb0d1abfcd06dc3931daedecad59944a8f7a0a57`.
+- Config SHA-256: `2004e01f7019e9dd7bad44dd213b337dd055806811266f0f0ac925b3da33cb29`.
+- License status: **undeclared upstream**. The pinned README contains an image
+  only; no license grant is claimed. Verified against the pinned upstream on 2026-09-06.
+- The user's model replacement request authorizes local integration and testing.
+  It does not create a new maintainer redistribution record for this checkpoint.
+  Existing Leap XE owner acceptance refers to a different artifact.
+- Attribution and requests concerning this record may be submitted through the
+  [project issue tracker](https://github.com/mason369/music-to-midi/issues).
+
+RELEASE_BLOCKER_UNRESOLVED_LICENSE: leap_instrumental — obtain an explicit redistribution record or upstream license before publishing portable bundles.
 
 ### BS-RoFormer SW Fixed six-stem checkpoint — OWNER_ACCEPTED
 

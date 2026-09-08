@@ -48,16 +48,16 @@ def _prepare_valid_assets(tmp_path: Path, monkeypatch) -> dict[str, object]:
     polar_config = b"pinned-polarformer-config"
     files["polar_checkpoint"] = _write(
         audio_separator_dir,
-        validator.polarformer.POLARFORMER_ONNX_NAME,
+        validator.accompaniment.LEAP_INSTRUMENTAL_CHECKPOINT_NAME,
         polar_checkpoint,
     )
     files["polar_config"] = _write(
         audio_separator_dir,
-        validator.polarformer.POLARFORMER_CONFIG_NAME,
+        validator.accompaniment.LEAP_INSTRUMENTAL_CONFIG_NAME,
         polar_config,
     )
-    _patch_identity(monkeypatch, validator.polarformer, "POLARFORMER_ONNX", polar_checkpoint)
-    _patch_identity(monkeypatch, validator.polarformer, "POLARFORMER_CONFIG", polar_config)
+    _patch_identity(monkeypatch, validator.accompaniment, "LEAP_INSTRUMENTAL_CHECKPOINT", polar_checkpoint)
+    _patch_identity(monkeypatch, validator.accompaniment, "LEAP_INSTRUMENTAL_CONFIG", polar_config)
 
     yourmt3_keys = tuple(validator.yourmt3.OFFICIAL_YOURMT3_MODEL_KEYS)
     assert len(yourmt3_keys) == 5
@@ -192,7 +192,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
 
     assert set(validated) == {
         "leap_xe",
-        "polarformer",
+        "leap_instrumental",
         "yourmt3",
         "yourmt3_source",
         "aria_amt",
@@ -201,7 +201,7 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
         "miros",
     }
     assert len(validated["leap_xe"]) == 2
-    assert len(validated["polarformer"]) == 2
+    assert len(validated["leap_instrumental"]) == 2
     assert len(validated["yourmt3"]) == 5
     assert len(validated["yourmt3_source"]) == 1
     assert len(validated["aria_amt"]) == 1
@@ -210,16 +210,6 @@ def test_validator_accepts_every_pinned_portable_asset(tmp_path, monkeypatch):
     assert len(validated["miros"]) == 5
 
 
-def test_validator_rejects_retired_polarformer_fp32_asset(tmp_path, monkeypatch):
-    layout = _prepare_valid_assets(tmp_path, monkeypatch)
-    _write(
-        layout["audio_separator_dir"],
-        validator.polarformer.REMOVED_POLARFORMER_FP32_ONNX_NAME,
-        b"retired-fp32",
-    )
-
-    with pytest.raises(RuntimeError, match="Retired PolarFormer FP32 assets"):
-        _validate(layout)
 
 
 @pytest.mark.parametrize(
@@ -227,8 +217,8 @@ def test_validator_rejects_retired_polarformer_fp32_asset(tmp_path, monkeypatch)
     [
         ("leap_checkpoint", "Leap XE checkpoint SHA-256 mismatch"),
         ("leap_config", "Leap XE config SHA-256 mismatch"),
-        ("polar_checkpoint", "PolarFormer ONNX checkpoint SHA-256 mismatch"),
-        ("polar_config", "PolarFormer config SHA-256 mismatch"),
+        ("polar_checkpoint", "Leap Instrumental checkpoint SHA-256 mismatch"),
+        ("polar_config", "Leap Instrumental config SHA-256 mismatch"),
         ("yourmt3_0", "YourMT3 ymt3_plus checkpoint SHA-256 mismatch"),
         ("yourmt3_1", "YourMT3 yptf_single_nops checkpoint SHA-256 mismatch"),
         ("yourmt3_2", "YourMT3 yptf_multi_ps checkpoint SHA-256 mismatch"),
@@ -552,3 +542,72 @@ def test_linux_release_validates_staged_assets_before_pyinstaller():
         assert argument in release_workflow
     assert "download_multistem_model.py" in release_workflow[staged_validation:pyinstaller]
     assert "validate_transkun_v2_aug_model_files" in release_workflow[staged_validation:pyinstaller]
+
+
+@pytest.mark.parametrize("accelerator", ["cuda", "xpu"])
+@pytest.mark.parametrize("valid_selected_bundle", [True, False])
+def test_runtime_validator_checks_selected_musescore_without_substituting_system_install(
+    tmp_path, monkeypatch, accelerator, valid_selected_bundle
+):
+    _patch_valid_runtime_identities(monkeypatch, accelerator=accelerator)
+    selected = tmp_path / "selected bundle" / "bin" / "MuseScore4.exe"
+    checked = []
+
+    def validate_selected(executable=None):
+        checked.append(executable)
+        assert executable == selected, "The explicitly selected bundle must be validated"
+        if not valid_selected_bundle:
+            raise RuntimeError("Selected MuseScore license mismatch")
+        return selected
+
+    monkeypatch.setattr(
+        validator.musescore, "validate_pinned_musescore_distribution", validate_selected
+    )
+    if valid_selected_bundle:
+        identities = validator.validate_portable_runtime_identities(musescore_executable=selected)
+        assert identities["musescore-studio"] == validator.musescore.MUSESCORE_VERSION
+    else:
+        with pytest.raises(RuntimeError, match="Selected MuseScore license mismatch"):
+            validator.validate_portable_runtime_identities(musescore_executable=selected)
+    assert checked == [selected]
+
+
+def test_cli_validates_the_explicit_musescore_executable(tmp_path, monkeypatch, capsys):
+    layout = _prepare_valid_assets(tmp_path, monkeypatch)
+    _patch_valid_runtime_identities(monkeypatch)
+    selected = tmp_path / "staged distribution" / "AppRun"
+    checked = []
+
+    def validate_selected(executable=None):
+        checked.append(executable)
+        assert executable == selected
+        return selected
+
+    monkeypatch.setattr(
+        validator.musescore, "validate_pinned_musescore_distribution", validate_selected
+    )
+    arguments = []
+    for name in (
+        "audio_separator_dir", "yourmt3_dir", "yourmt3_source_dir", "aria_amt_dir",
+        "bytedance_piano_dir", "beat_this_dir", "miros_dir",
+    ):
+        arguments.extend(["--" + name.replace("_", "-"), str(layout[name])])
+    arguments.extend(["--musescore-executable", str(selected)])
+
+    assert validator.main(arguments) == 0
+    assert checked == [selected]
+    assert "passed strict pinned identity validation" in capsys.readouterr().out
+
+
+def test_portable_builds_bind_musescore_validation_to_the_selected_bundle():
+    root = Path(__file__).resolve().parents[1]
+    windows = (root / "build_portable.ps1").read_text(encoding="utf-8")
+    function = windows.split("function Assert-PortableModelIdentities {", 1)[1].split(
+        "function Remove-PathIfExists", 1
+    )[0]
+    assert '[string]$MuseScoreDir' in function
+    assert '--musescore-executable (Join-Path $MuseScoreDir "bin\\MuseScore4.exe")' in function
+    for stage in ("Source", "Bundle"):
+        assert f"-MirosDir $Miros{stage} `\n    -MuseScoreDir $MuseScore{stage} `" in windows
+    linux = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert '--musescore-executable "$BUILD_ASSET_ROOT/musescore/AppRun"' in linux

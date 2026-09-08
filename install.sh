@@ -553,12 +553,12 @@ if ! "$PYTHON" "${REPO_DIR}/download_vocal_model.py"; then
 fi
 success "Leap XE vocals model ready"
 
-info "Verifying/downloading PolarFormer accompaniment assets..."
+info "Verifying/downloading Leap Instrumental accompaniment assets..."
 
 if ! "$PYTHON" "${REPO_DIR}/download_accompaniment_model.py"; then
-    error "PolarFormer accompaniment model download or verification failed"
+    error "Leap Instrumental accompaniment model download or verification failed"
 fi
-success "PolarFormer accompaniment model ready"
+success "Leap Instrumental accompaniment model ready"
 
 info "Verifying/downloading TransKun V2 Aug assets..."
 
@@ -601,7 +601,7 @@ echo -e "  ${BOLD}已自动安装：${NC}"
 echo -e "  ${GREEN}✔${NC} Python 依赖"
 echo -e "  ${GREEN}✔${NC} YourMT3+ 官方模式模型权重"
 echo -e "  ${GREEN}✔${NC} BS-RoFormer SW Fixed 六声部模型"
-echo -e "  ${GREEN}✔${NC} Leap XE 人声 + PolarFormer 伴奏模型"
+echo -e "  ${GREEN}✔${NC} Leap XE 人声 + Leap Instrumental 伴奏模型"
 echo -e "  ${GREEN}✔${NC} TransKun V2 Aug 模型"
 echo -e "  ${GREEN}✔${NC} ByteDance Piano 带踏板模型"
 echo -e "  ${GREEN}✔${NC} MuScriptor Small/Medium/Large 固定权重与 MuseScore General SoundFont"

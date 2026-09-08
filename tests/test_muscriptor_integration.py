@@ -4073,7 +4073,7 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert '"defaultQuantizeGrid": "1/32"' in markup
     assert '"quantizeScopes": ["all_tracks", "selected_notes"]' in markup
     assert '"defaultQuantizeScope": "all_tracks"' in markup
-    assert '"previewApi": "./api/render_edited_midi_preview"' in markup
+    assert '"previewApi": "./gradio_api/api/render_edited_midi_preview"' in markup
     assert '"previewToken": "opaque-preview-token"' in markup
     assert '"originalUrl": "/gradio_api/file=C%3A/tmp/original-live.wav"' in markup
     assert '"program": 24' in markup
@@ -4117,7 +4117,7 @@ def test_every_browser_midi_workbench_exposes_current_edit_sheet_export():
 
     markup = build_muscriptor_result_html(state, lambda key: key, "en_US")
 
-    assert '"sheetApi": "./api/render_sheet_music_export"' in markup
+    assert '"sheetApi": "./gradio_api/api/render_sheet_music_export"' in markup
     assert '"sheetToken": "opaque-sheet-token"' in markup
     assert "muscriptor_result.download_sheet_music" in markup
     assert "ResultSession.prototype.downloadSheetMusic" in MUSCRIPTOR_RESULT_JS

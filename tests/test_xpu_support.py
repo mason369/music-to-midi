@@ -27,11 +27,6 @@ from src.core.beat_this_tracker import BeatThisTracker
 from src.core.bytedance_piano_transcriber import ByteDancePianoTranscriber
 from src.core.multi_stem_separator import STEM_KEYS, SixStemSeparator
 from src.core.transkun_transcriber import TranskunTranscriber
-from src.core.vocal_separator import (
-    _create_strict_onnx_session,
-    _describe_onnx_session,
-    _resolve_onnx_providers,
-)
 from src.core.yourmt3_transcriber import YourMT3Transcriber
 from src.models.data_models import Config
 
@@ -176,159 +171,16 @@ class _FakeOpenVinoOrt:
         return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
 
 
-def test_polarformer_xpu_uses_openvino_gpu_without_cpu_provider(tmp_path):
-    with patch(
-        "src.core.vocal_separator.initialize_openvino_gpu_runtime",
-        return_value=("CPU", "GPU"),
-    ) as initialize_openvino:
-        providers = _resolve_onnx_providers("xpu:0", _FakeOpenVinoOrt)
-    assert providers == [("OpenVINOExecutionProvider", {"device_type": "GPU.0"})]
-    initialize_openvino.assert_called_once_with()
-
-    session = _create_strict_onnx_session(
-        _FakeOpenVinoOrt,
-        tmp_path / "polarformer.onnx",
-        providers,
-        "xpu:0",
-    )
-
-    assert session.get_providers() == ["OpenVINOExecutionProvider"]
-    assert session.sess_options.entries == {"session.disable_cpu_ep_fallback": "1"}
-    assert session.providers == providers
-    assert session.fallback_disabled
-    assert _describe_onnx_session(session, "xpu:0") == (
-        "ONNX Runtime · OpenVINOExecutionProvider " "(GPU.0; CPU fallback disabled)"
-    )
 
 
-def test_polarformer_cuda_keeps_required_auxiliary_cpu_nodes(tmp_path):
-    class CudaSession(_FakeOrtSession):
-        @staticmethod
-        def get_providers():
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-
-    fake_ort = SimpleNamespace(
-        SessionOptions=_FakeSessionOptions,
-        InferenceSession=CudaSession,
-    )
-    providers = [("CUDAExecutionProvider", {"device_id": 0})]
-
-    session = _create_strict_onnx_session(
-        fake_ort,
-        tmp_path / "polarformer.onnx",
-        providers,
-        "cuda:0",
-    )
-
-    assert session.get_providers() == [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider",
-    ]
-    assert session.sess_options.entries == {}
-    assert session.providers == providers
-    assert not session.fallback_disabled
 
 
-def test_polarformer_cuda_uses_error_only_native_ort_logging(tmp_path):
-    class CudaSession(_FakeOrtSession):
-        @staticmethod
-        def get_providers():
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-
-    fake_ort = SimpleNamespace(
-        SessionOptions=_FakeSessionOptions,
-        InferenceSession=CudaSession,
-    )
-    session = _create_strict_onnx_session(
-        fake_ort,
-        tmp_path / "polarformer.onnx",
-        [("CUDAExecutionProvider", {"device_id": 0})],
-        "cuda:0",
-    )
-
-    assert session.sess_options.log_severity_level == 3
-    assert session.get_providers() == [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider",
-    ]
 
 
-def test_polarformer_xpu_rejects_missing_openvino_and_cpu_append(tmp_path):
-    missing = SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"])
-    with pytest.raises(RuntimeError, match="OpenVINOExecutionProvider"):
-        _resolve_onnx_providers("xpu:0", missing)
-
-    class CpuAppendingSession(_FakeOrtSession):
-        @staticmethod
-        def get_providers():
-            return ["CPUExecutionProvider", "OpenVINOExecutionProvider"]
-
-    fake_ort = SimpleNamespace(
-        SessionOptions=_FakeSessionOptions,
-        InferenceSession=CpuAppendingSession,
-    )
-    with pytest.raises(RuntimeError, match="unexpected provider|provider contract"):
-        _create_strict_onnx_session(
-            fake_ort,
-            tmp_path / "polarformer.onnx",
-            [("OpenVINOExecutionProvider", {"device_type": "GPU.0"})],
-            "xpu:0",
-        )
 
 
-def test_polarformer_xpu_accepts_registered_cpu_provider_when_fallback_is_disabled(
-    tmp_path,
-):
-    class OrtRegisteredCpuSession(_FakeOrtSession):
-        @staticmethod
-        def get_providers():
-            return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
-
-    fake_ort = SimpleNamespace(
-        SessionOptions=_FakeSessionOptions,
-        InferenceSession=OrtRegisteredCpuSession,
-    )
-    providers = [("OpenVINOExecutionProvider", {"device_type": "GPU.0"})]
-
-    session = _create_strict_onnx_session(
-        fake_ort,
-        tmp_path / "polarformer.onnx",
-        providers,
-        "xpu:0",
-    )
-
-    assert session.get_providers() == [
-        "OpenVINOExecutionProvider",
-        "CPUExecutionProvider",
-    ]
-    assert session.sess_options.entries == {"session.disable_cpu_ep_fallback": "1"}
-    assert session.fallback_disabled
-    assert _describe_onnx_session(session, "xpu:0") == (
-        "ONNX Runtime · OpenVINOExecutionProvider " "(GPU.0; CPU fallback disabled)"
-    )
 
 
-def test_polarformer_xpu_requires_runtime_fallback_disable_api(tmp_path):
-    class NoRuntimeFallbackSession:
-        def __init__(self, _path, *, sess_options, providers):
-            self.sess_options = sess_options
-            self.providers = providers
-
-        @staticmethod
-        def get_providers():
-            return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
-
-    fake_ort = SimpleNamespace(
-        SessionOptions=_FakeSessionOptions,
-        InferenceSession=NoRuntimeFallbackSession,
-    )
-    with pytest.raises(RuntimeError, match="disable_fallback"):
-        _create_strict_onnx_session(
-            fake_ort,
-            tmp_path / "polarformer.onnx",
-            [("OpenVINOExecutionProvider", {"device_type": "GPU.0"})],
-            "xpu:0",
-        )
 
 
 def test_openvino_runtime_initialization_requires_a_real_gpu(monkeypatch):

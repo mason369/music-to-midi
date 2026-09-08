@@ -172,7 +172,7 @@ MUSIC_TO_MIDI_ENABLED_PROFILES=yourmt3:yptf_moe_multi_nops,piano_transkun
 | `piano_transkun_v2_aug` | TransKun V2 Aug |
 | `piano_aria_amt` | Aria-AMT |
 | `piano_bytedance_pedal` | ByteDance Piano Pedal |
-| `vocal_split` | Leap XE vocals + PolarFormer accompaniment |
+| `vocal_split` | Leap XE vocals + Leap Instrumental accompaniment |
 | `six_stem_split` | BS-RoFormer SW Fixed six-stem separation |
 
 After changing the list, these commands prepare the additional profiles and restart the stack:

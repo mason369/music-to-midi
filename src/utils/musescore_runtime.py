@@ -50,7 +50,11 @@ MUSESCORE_LICENSE_URL = (
 MUSESCORE_LICENSE_BYTES = 36_493
 MUSESCORE_LICENSE_SHA256 = "73e75f61f0dfce4fd83ad1f3f45d1d6f9ea8cdfd21a92d7a9216d47e5b3bbb88"
 
-_VERSION_PATTERN = re.compile(r"\b(\d+)\.(\d+)(?:\.(\d+))?")
+_VERSION_PATTERN = re.compile(
+    r"^[ \t]*MuseScore(?:[234]|[ \t]+Studio)?[ \t]+(?:version[ \t]+)?"
+    r"(\d+)\.(\d+)(?:\.(\d+))?\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 _BINARY_NAMES = (
     "MuseScore4",
     "musescore4",
@@ -401,7 +405,9 @@ def download_musescore_runtime(*, printer=print) -> Path:
             else _prepare_linux_runtime(temp_root, printer=printer)
         )
         staged = temp_root / "staged-runtime"
-        shutil.copytree(distribution_root, staged)
+        # AppDirs contain relative links (including usr -> .). Preserve their
+        # layout instead of recursively copying link targets or dropping links.
+        shutil.copytree(distribution_root, staged, symlinks=True)
         staged_executable = (
             staged / "bin" / "MuseScore4.exe" if os.name == "nt" else staged / "AppRun"
         )
