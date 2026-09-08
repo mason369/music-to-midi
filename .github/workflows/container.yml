@@ -124,13 +124,13 @@ jobs:
               music-to-midi-backend:ci \
               -m src.cli routes --json > /tmp/cli-routes.json
             python - <<'PY'
-            import json
+          import json
 
-            with open("/tmp/cli-routes.json", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if payload.get("count") != 13 or len(payload.get("routes", [])) != 13:
-                raise SystemExit(f"container CLI route contract mismatch: {payload!r}")
-            PY
+          with open("/tmp/cli-routes.json", encoding="utf-8") as handle:
+              payload = json.load(handle)
+          if payload.get("count") != 13 or len(payload.get("routes", [])) != 13:
+              raise SystemExit(f"container CLI route contract mismatch: {payload!r}")
+          PY
             docker run --rm --entrypoint /bin/bash \
               music-to-midi-backend:ci \
               -c 'test -s /app/THIRD_PARTY_SBOM.txt && test "$(id -u)" = 10001'
