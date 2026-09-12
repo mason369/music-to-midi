@@ -202,6 +202,13 @@ def test_gateway_is_pinned_non_root_same_origin_tls_and_argon2id_protected():
 def test_default_selfhost_compose_is_versioned_loopback_only_and_model_external():
     compose = _yaml("compose.yaml")
     project_version = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
+    assert f"v{project_version}" in _read(".env.selfhost.example")
+    production_template = _read(".env.production.example")
+    for role in ("BACKEND", "GATEWAY"):
+        assert (
+            f"{role}_IMAGE=ghcr.io/mason369/music-to-midi-{role.lower()}:v{project_version}"
+            in production_template
+        )
     services = compose["services"]
     backend = services["backend"]
     model_init = services["model-init"]
