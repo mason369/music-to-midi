@@ -30,7 +30,7 @@ PORTABLE_COMPONENT: zfturbo_adapted_source | bundle=python/src/core/vocal_separa
 PORTABLE_COMPONENT: yourmt3_checkpoints | bundle=models/yourmt3_all | artifact=5-checkpoint-set | revision=5e66c1ea173a8186e0d20432b841d3180cc015b5 | license=Apache-2.0 | status=VERIFIED
 PORTABLE_COMPONENT: yourmt3_patched_source | bundle=python/amt | artifact=patched-source-tree | revision=manifest:94232c1f4a5f8f3a0f19bb5b466d638f80d9d2dba4628deb8d0c2ce2c5157b34 | license=Apache-2.0-with-patches | status=VERIFIED
 PORTABLE_COMPONENT: leap_xe | bundle=models/audio-separator | artifact=checkpoint+config | revision=4e47d6662ae82eaa8b4ac4329fe66099a843b48e | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
-PORTABLE_COMPONENT: leap_instrumental | bundle=models/audio-separator | artifact=checkpoint+config | revision=4e47d6662ae82eaa8b4ac4329fe66099a843b48e | license=UNDECLARED-upstream | status=BLOCKED
+PORTABLE_COMPONENT: leap_instrumental | bundle=models/audio-separator | artifact=checkpoint+config | revision=4e47d6662ae82eaa8b4ac4329fe66099a843b48e | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: bs_roformer_sw_fixed | bundle=models/audio-separator | artifact=checkpoint+config | revision=370198fbb6997e3f5774778254698794e7b1267d | license=UNDECLARED-upstream | status=OWNER_ACCEPTED
 PORTABLE_COMPONENT: audio_separator | bundle=python/audio_separator | artifact=source+metadata | revision=0.44.1 | license=MIT | status=VERIFIED
 PORTABLE_COMPONENT: transkun_source | bundle=python/transkun | artifact=source+metadata | revision=2.0.1 | license=MIT | status=VERIFIED
@@ -59,6 +59,7 @@ PORTABLE_COMPONENT: frozen_dependency_set | bundle=python+native-runtime | artif
 ```
 
 OWNER_ACCEPTED_NOTICE: leap_xe
+OWNER_ACCEPTED_NOTICE: leap_instrumental
 OWNER_ACCEPTED_NOTICE: bs_roformer_sw_fixed
 OWNER_ACCEPTED_NOTICE: miros_source
 OWNER_ACCEPTED_NOTICE: miros_finetuned
@@ -155,7 +156,7 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
   it on request of the rights holder via the project issue tracker.  No license
   grant is claimed by this record.
 
-### BS-RoFormer Leap Instrumental accompaniment — BLOCKED for redistribution
+### BS-RoFormer Leap Instrumental accompaniment — OWNER_ACCEPTED
 
 - Upstream: [pcunwa/BS-Roformer-Leap](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e)
 - Pinned revision: `4e47d6662ae82eaa8b4ac4329fe66099a843b48e`.
@@ -164,13 +165,14 @@ OWNER_ACCEPTED_NOTICE: miros_finetuned
 - Config SHA-256: `2004e01f7019e9dd7bad44dd213b337dd055806811266f0f0ac925b3da33cb29`.
 - License status: **undeclared upstream**. The pinned README contains an image
   only; no license grant is claimed. Verified against the pinned upstream on 2026-09-06.
-- The user's model replacement request authorizes local integration and testing.
-  It does not create a new maintainer redistribution record for this checkpoint.
-  Existing Leap XE owner acceptance refers to a different artifact.
+- Distribution record (2026-09-12): maintainer mason369 accepts redistribution of
+  this pinned checkpoint and original configuration under their own responsibility,
+  with full attribution to pcunwa/BS-Roformer-Leap. The maintainer will remove the
+  artifacts on request of the rights holder through the project issue tracker.
+  This acceptance is specific to Leap Instrumental; it does not rely on the
+  separate Leap XE record and does not claim an upstream license grant.
 - Attribution and requests concerning this record may be submitted through the
   [project issue tracker](https://github.com/mason369/music-to-midi/issues).
-
-RELEASE_BLOCKER_UNRESOLVED_LICENSE: leap_instrumental — obtain an explicit redistribution record or upstream license before publishing portable bundles.
 
 ### BS-RoFormer SW Fixed six-stem checkpoint — OWNER_ACCEPTED
 

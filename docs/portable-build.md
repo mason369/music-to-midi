@@ -2,7 +2,7 @@
 
 目录式 `exe` 便携版随包提供 Python 环境，解压后即可启动。
 
-当前源码的伴奏模型已替换为 Leap Instrumental，但尚未生成或验收新的便携成品。[第三方清单](../THIRD_PARTY_NOTICES.md) 中该权重的再分发记录为 `BLOCKED`，正式发布校验会停止。
+当前源码的伴奏模型为 Leap Instrumental。[第三方清单](../THIRD_PARTY_NOTICES.md) 已记录该固定权重及原始配置的独立 `OWNER_ACCEPTED` 分发决定；完整包仍须通过组件清单、资源身份与成品自检，产物验收状态以对应版本 Actions 结果为准。
 
 ## 一键打包
 

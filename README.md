@@ -799,7 +799,7 @@ Intel XPU 没有可直接等同 NVIDIA `sm_XX` 的项目级兼容版本号。该
 
 AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停止并说明兼容性问题。本次将伴奏分离改为 PyTorch FP32，不代表其余模型和完整工作流已获得 AMD 支持。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -914,7 +914,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、1 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，官方 release 会在构建前显式阻断。
+当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
 
 Windows CUDA 完整三包构建（桌面 App、Web 后端、Web 前端）：
 

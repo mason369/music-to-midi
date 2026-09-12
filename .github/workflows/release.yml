@@ -1576,6 +1576,12 @@ jobs:
 
           ### ${TAG} 主要更新
 
+          #### 持久化工程、多文件与结果导出
+          - 桌面、CLI、Gradio 和独立 Web/API 保存工程输入、工作流配置、逐轨模型选择、进度与已验证结果；支持多文件导入、显式处理、取消、工程归档，以及恢复已完成的分离和转写阶段。
+          - 新增原生批处理 CLI、逐乐器 WAV 与乐谱导出；完整包提供 MuseScore 运行时和 SoundFont 管理。
+          - 修复伴奏模型集成、结果恢复、长路径、Aria 后台进程、MuseScore AppImage 和便携运行时问题。
+          - Leap Instrumental 的固定权重和原始配置已有独立维护者分发接受记录；这不代表上游授予了许可证，来源、哈希和撤销联系地址见包内第三方声明。
+
           #### 原曲 BPM、目标 BPM 与真实播放速度
           - 原曲 BPM 与目标 BPM 现在是两个独立状态：即使设置了自定义目标 BPM，应用仍会先自动识别原曲速度，并以“目标 BPM ÷ 原曲 BPM”同步控制原音与 MIDI 的实际播放倍率。
           - BPM 与速度控件双向联动。调整 BPM 会立即换算速度，调整速度也会反算 BPM；播放过程中修改同样即时生效，不再恢复为后端占位值或错误地保持 1.000x。
@@ -1680,6 +1686,12 @@ jobs:
           ## Music to MIDI Converter ${TAG}
 
           ### Highlights
+
+          #### Persistent projects, multiple files, and result exports
+          - Desktop, CLI, Gradio, and standalone Web/API preserve project inputs, workflow profiles, per-track model choices, progress, and verified outputs. Multiple-file import, explicit processing, cancellation, project archives, and resuming completed separation/transcription stages are supported.
+          - Add native batch CLI, per-instrument WAV and sheet-music exports, the bundled MuseScore runtime, and SoundFont management.
+          - Fix accompaniment integration, result restoration, long paths, Aria workers, MuseScore AppImage handling, and portable runtime behavior.
+          - The pinned Leap Instrumental checkpoint and original configuration now have their own maintainer distribution acceptance record. This does not claim an upstream license grant; see the bundled third-party notices for attribution, hashes, and the takedown contact.
 
           #### Source BPM, target BPM, and real playback speed
           - Source BPM and project BPM are now independent. Audio and MIDI playback use the real \`project BPM / detected BPM\` ratio, and BPM and speed controls remain synchronized in both directions.

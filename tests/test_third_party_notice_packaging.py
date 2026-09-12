@@ -139,8 +139,9 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
     notice = _read("THIRD_PARTY_NOTICES.md")
     workflow = _read(".github/workflows/release.yml")
 
-    # Local replacement does not automatically authorize redistribution of new weights.
-    assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE: leap_instrumental" in notice
+    # Every undeclared artifact requires its own explicit maintainer record.
+    assert "RELEASE_BLOCKER_UNRESOLVED_LICENSE:" not in notice
+    assert "Distribution record (2026-09-12): maintainer mason369" in notice
     assert "artifact=checkpoint+config" in notice
 
     rows = [line for line in notice.splitlines() if line.startswith("PORTABLE_COMPONENT: ")]
@@ -151,6 +152,7 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
     }
     assert owner_accepted == {
         "leap_xe",
+        "leap_instrumental",
         "bs_roformer_sw_fixed",
         "miros_source",
         "miros_finetuned",
@@ -160,7 +162,7 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
         assert f"OWNER_ACCEPTED_NOTICE: {component_id}" in notice
 
     blocked = {line.split(" |", 1)[0].split(": ", 1)[1] for line in rows if line.endswith(" | status=BLOCKED")}
-    assert blocked == {"leap_instrumental"}
+    assert blocked == set()
 
     # Owner-accepted records keep full attribution and the takedown route.
     assert "undeclared upstream" in notice

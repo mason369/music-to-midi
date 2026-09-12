@@ -370,7 +370,7 @@ YourMT3+ 和 MIROS 保留官方 writer 的音符输出，并补充速度信息�
 | accompaniment 模型 | [BS-RoFormer Leap Instrumental](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e)：`bs_roformer_leap_inst.ckpt` + 原始 `bs_leap_inst_conf.yaml`，大小与 SHA-256 严格校验 |
 | 运行方式 | 两路均使用 PyTorch 与 audio-separator；Leap Instrumental 使用该库原生 FP32 demix，直接输出 other 伴奏轨 |
 | 模型准备 | `download_sota_models.py` 会准备并校验两组资源；也可分别运行 `download_vocal_model.py` 与 `download_accompaniment_model.py` |
-| 打包行为 | 打包契约包含两组 Leap 资源；新增 Leap Instrumental 的再分发记录为 `BLOCKED`，发布校验会停止。运行时缺模型或校验失败会明确报错 |
+| 打包行为 | 打包契约包含两组 Leap 资源；Leap Instrumental 已有独立 `OWNER_ACCEPTED` 分发记录，完整包继续执行严格发布校验。运行时缺模型或校验失败会明确报错 |
 | 输出选项 | 分离阶段输出规范的 `vocals` 与 `accompaniment` WAV；逐轨 MIDI 仅在用户勾选路线并点击转换后生成，不自动合并 |
 
 两个分离模型各自对原混音推理。分离失败时任务停止；后续逐轨转写失败时保留已有 WAV，并显示该音轨的错误。
@@ -613,7 +613,7 @@ Intel XPU 的本地 Web 后端会为每个 GPU 作业启动一个全新的处理
 
 AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停止并说明兼容性问题。本次将伴奏分离改为 PyTorch FP32，不代表其余模型和完整工作流已获得 AMD 支持。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、4 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -727,7 +727,7 @@ Space 失败请求会立即删除请求目录；成功结果保留给 Gradio 下
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、4 项 `OWNER_ACCEPTED`、1 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，官方 release 会在构建前显式阻断。
+当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
 
 Windows CUDA 桌面 App、Web 后端、Web 前端三包：
 
