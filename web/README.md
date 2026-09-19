@@ -1,5 +1,9 @@
 # 独立 Web 前端与推理后端
 
+每个 MIDI 结果的“所有声部 MIDI（ZIP）”一次下载全部乐器的独立 MIDI。对应 API：`GET /api/v1/jobs/{job_id}/midi-stems/{artifact_id}?language=zh_CN`；恢复的项目结果使用 `/api/v1/project-results/{result_id}/midi-stems/{artifact_id}`。`language` 支持 `zh_CN`、`en_US`。保留源 MIDI 的 tempo map、拍号、控制事件、音符起止 tick 与音色，且不修改源文件。Docker 与便携 Web 使用同一接口。该界面没有 MIDI 钢琴卷帘或 MIDI 声部独奏状态，因此不提供结果编辑器专用的可听组导出、和弦轨和编辑器空格快捷键。
+
+Each MIDI result offers **All instrument MIDIs (ZIP)**. Use `GET /api/v1/jobs/{job_id}/midi-stems/{artifact_id}?language=en_US`, or `/api/v1/project-results/{result_id}/midi-stems/{artifact_id}` for restored project results. Both `zh_CN` and `en_US` are supported. Source tempo maps, meter, controllers, note ticks and programs are preserved. Docker and portable Web use the same endpoints. This client has no MIDI piano-roll/solo state, so editor-specific audible-group exports, chord audition and editor keyboard shortcuts do not apply here.
+
 [项目、工作流与批处理恢复](../docs/projects.md)
 
 `VOCAL_SPLIT` 使用共享后端：Leap XE 90-band 提取人声，标准 Leap Instrumental 62-band 通过 PyTorch FP32 直接预测伴奏；两个模型均读取原混音。主任务先交付两条 WAV，MIDI 由用户逐轨显式启动。Docker 与便携 Web 后端沿用同一模型配置和资源校验。

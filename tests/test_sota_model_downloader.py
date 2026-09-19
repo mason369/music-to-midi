@@ -68,6 +68,9 @@ class SotaModelDownloaderTests(unittest.TestCase):
                 "preflight_muscriptor_download_access",
             ) as muscriptor_preflight_mock,
             mock.patch.object(
+                download_sota_models, "prepare_chordmini", return_value=Path("/tmp/chordmini")
+            ) as chordmini_mock,
+            mock.patch.object(
                 download_sota_models,
                 "validate_default_transkun_runtime",
                 return_value=transkun_result,
@@ -141,6 +144,8 @@ class SotaModelDownloaderTests(unittest.TestCase):
             result = download_sota_models.download_sota_models()
 
         muscriptor_preflight_mock.assert_called_once_with()
+        chordmini_mock.assert_called_once_with()
+        self.assertEqual(result["chordmini"]["runtime"], Path("/tmp/chordmini"))
         transkun_mock.assert_called_once_with()
         yourmt3_mock.assert_called_once_with()
         miros_mock.assert_called_once_with()

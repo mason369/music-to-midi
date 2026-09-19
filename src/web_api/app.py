@@ -469,8 +469,10 @@ def create_app(
     )
     app.state.job_manager = job_manager
     from src.web_api.soundfonts import install_soundfont_routes
+    from src.web_api.midi_exports import install_midi_export_routes
 
     install_soundfont_routes(app, job_manager)
+    install_midi_export_routes(app, job_manager)
 
     @app.exception_handler(QueueCapacityError)
     async def queue_capacity_error(_request: Request, exc: QueueCapacityError) -> JSONResponse:

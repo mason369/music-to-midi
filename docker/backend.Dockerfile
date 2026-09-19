@@ -113,6 +113,7 @@ RUN python -m pip install --no-cache-dir \
 COPY pyproject.toml LICENSE README.md THIRD_PARTY_NOTICES.md ./
 COPY download_*.py ./
 COPY src ./src
+COPY resources/chordmini-source.json ./resources/chordmini-source.json
 COPY YourMT3 ./YourMT3
 COPY tools/generate_third_party_sbom.py ./tools/generate_third_party_sbom.py
 COPY docker/backend-entrypoint.sh docker/healthcheck.py ./docker/

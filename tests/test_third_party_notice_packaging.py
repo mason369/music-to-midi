@@ -106,6 +106,7 @@ def test_machine_inventory_is_closed_over_every_current_portable_component():
         "musicfm_pretrained",
         "miros_finetuned",
         "muscriptor_source",
+        "chordmini_btc",
         "beat_this_runtime_and_final0",
         "muscriptor_small_checkpoint",
         "muscriptor_medium_checkpoint",

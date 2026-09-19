@@ -1047,6 +1047,7 @@ function renderArtifacts(job) {
       <div><strong>${escapeHtml(artifact.name)}</strong><small>${escapeHtml(artifactLabel(artifact.kind))} · ${formatBytes(artifact.size)}</small></div>
       <div class="artifact-actions">
         <a href="${escapeHtml(artifactUrl(artifact))}" download>${escapeHtml(t("result.download"))} ↓</a>
+        ${artifact.kind === "midi" ? `<a href="${escapeHtml(`${state.apiBase}${resultEndpoint(job.id)}/midi-stems/${encodeURIComponent(artifact.id)}?language=${encodeURIComponent(state.language)}`)}" download>${escapeHtml(t("result.download_midi_stems"))} ↓</a>` : ""}
         ${artifact.kind === "midi" ? `<button type="button" data-sheet-source="${escapeHtml(artifact.id)}">${escapeHtml(t("result.generate_sheet_music"))}</button>` : ""}
       </div>
     </div>`);

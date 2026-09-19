@@ -2,6 +2,8 @@
 
 [项目、工作流配置与跨会话续跑](docs/projects.md)
 
+[更新说明](CHANGELOG.md)
+
 <p align="center">
   中文 | <a href="./docs/README.md">English</a>
 </p>
@@ -164,7 +166,7 @@ MusicToMidiCLI batch /data/audio --recursive --json
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | 启动前检查加速器实际执行、Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源或 CPU 回退当作可运行状态。 |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | 安装隔离的 NVIDIA PyTorch 2.7 或 Intel XPU PyTorch 2.11、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | NVIDIA 使用 `venv` + CUDA 12.8；Windows Intel 使用 `venv-xpu` + 原生 PyTorch XPU + OpenVINO GPU。两套互斥运行时不混装；`audio-separator` 使用 `--no-deps`。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
-| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与 MuseScore Studio | 发布条件是 30 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
+| `.github/workflows/release.yml` | 完整便携发布构建链；下载并严格校验全部官方 YourMT3+ 模式、MuScriptor Small / Medium / Large、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS 与 MuseScore Studio | 发布条件是 31 项第三方组件全部达到 `VERIFIED` 或附具名责任记录的 `OWNER_ACCEPTED`；条件不满足时构建立刻停止。目标 GPU 运行时为 PyTorch 2.7 + CUDA 12.8。 |
 | `colab_notebook.ipynb` | 保留 Colab 预装 Torch，安装 pinned Web/runtime 依赖，并同步七种模式 | `SMART` 与逐轨工作台的完整路线均与桌面版同步。 |
 
 ## 处理模式
@@ -282,7 +284,12 @@ python download_musescore_runtime.py
 
 界面和官方公开演示保持同一功能语义：可搜索的标签多选与清除、空选自动检测、
 实时转写进度/音符、以 MIDI 为主时钟的可拖动播放进度条、钢琴卷帘、默认全部轨道的量化范围与五档显式量化网格、播放/暂停、跟随播放头、原音↔MIDI 混合、Stereo、
-逐乐器静音/独奏，以及 MIDI、乐谱 ZIP、合成 WAV、原音左声道/MIDI 右声道立体声下载。
+逐乐器静音/多选独奏，以及 MIDI、乐谱 ZIP、合成 WAV、原音左声道/MIDI 右声道立体声下载。
+新结果默认全部声部可见、可听；独奏可同时选中多个声部，取消独奏后保留各声部原来的静音设置。
+MIDI 下载提供全部声部合并、当前可听声部合并、全部声部分别打包 ZIP 三个选项，均使用当前编辑结果和工程 BPM；ZIP 不受静音/独奏影响。
+在编辑器内按空格播放/暂停，Shift+空格或“停止并回到开头”重置播放位置；输入文字或数值时不拦截空格。
+桌面钢琴卷帘使用与 TelkNet 默认工具一致的 ChordMini BTC，从原始音频识别和弦。和弦与小节网格共用时间轴，支持点击单独试听、缩放和滚动同步，并同步 MuScriptor 的开头小节偏移。更改工程 BPM 后仍与音符、小节对齐；编辑 MIDI 不改写原音和弦。首次运行前执行 `python download_chordmini_model.py`（完整准备命令也包含它），便携包内置固定源码和权重。
+独立 Web/API、Docker 和便携 Web 的 MIDI 结果提供逐声部 MIDI ZIP 下载。详细交互、导出保留项与交付面范围见[结果编辑器说明](docs/soundfont-and-sheet-music.md)。
 试听音频的来源：逐乐器播放来自最终 MIDI 经官方 MuseScore General
 SoundFont 与 FluidSynth 合成，不是无效按钮或 UI 模拟。
 
@@ -799,7 +806,7 @@ Intel XPU 没有可直接等同 NVIDIA `sm_XX` 的项目级兼容版本号。该
 
 AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停止并说明兼容性问题。本次将伴奏分离改为 PyTorch FP32，不代表其余模型和完整工作流已获得 AMD 支持。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 31 项第三方组件：26 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -914,7 +921,7 @@ Space 的失败请求会立即删除专属输出目录；成功结果会保留�
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
+当前 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 的 31 项闭集清单为 26 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
 
 Windows CUDA 完整三包构建（桌面 App、Web 后端、Web 前端）：
 

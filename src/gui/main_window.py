@@ -1219,6 +1219,7 @@ class MainWindow(QMainWindow):
             backend_label=backend_label,
             muscriptor_groups=muscriptor_groups,
             source_track_name=source_track_name,
+            gpu_device=self.config.gpu_device,
         )
         workbench.playing_changed.connect(self._on_midi_workbench_playing_changed)
         workbench.transcribe_another_requested.connect(

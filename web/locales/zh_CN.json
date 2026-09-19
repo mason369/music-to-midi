@@ -138,6 +138,7 @@
   "result.seconds": "{value} 秒",
   "result.download": "下载",
   "result.generate_sheet_music": "生成并下载乐谱",
+  "result.download_midi_stems": "所有声部 MIDI（ZIP）",
   "result.generating_sheet_music": "正在生成乐谱…",
   "result.sheet_music_ready": "乐谱 ZIP 已生成并开始下载。",
   "result.artifact.audio_track": "分离音轨 WAV",

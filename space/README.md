@@ -82,6 +82,10 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 
 ## 功能与交互
 
+MIDI 结果默认全部声部可见、可听；支持多个声部同时独奏。下载可选择全部声部合并、当前可听声部合并，或一键逐声部导出 MIDI ZIP，使用当前编辑音符和工程 BPM。空格播放/暂停，Shift+空格停止并回到开头，输入文字或数值时不触发快捷键。
+
+MIDI results start with all instruments visible and audible. Multiple instruments can be soloed together. Export all instruments, the audible group, or one MIDI per instrument in a ZIP using current edits and project BPM. Space plays/pauses; Shift+Space stops and rewinds, except while entering text or numbers.
+
 | 功能 | 行为 |
 |------|------|
 | 多乐器转写 | `SMART` 可选择 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small；YourMT3+ 默认 `YPTF.MoE+Multi (noPS)`，并提供五种官方 checkpoint。 |
@@ -139,7 +143,7 @@ MuScriptor Small / Medium / Large 是三个独立选项。所选档位失败、�
 
 Space 的 Torch 2.8 / NumPy 2 环境是独立部署契约，不能用桌面版 Torch 2.7 / NumPy 1.26 依赖覆盖。Leap Instrumental 使用 PyTorch 原生 FP32 推理。完整七模式目前仍只验收 NVIDIA CUDA；尚未据此扩大 AMD/ROCm 支持范围。
 
-Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 30 项闭集清单为 25 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，发布校验会显式停止。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
+Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 31 项闭集清单为 26 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，发布校验会显式停止。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
 
 ## 链接
 

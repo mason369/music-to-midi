@@ -192,6 +192,14 @@ miros_source_dir = _resolve_existing_dir(
     os.path.join(ROOT_DIR, "ai4m-miros"),
     os.path.join(ROOT_DIR, ".tmp", "ai4m-miros"),
 )
+chordmini_source_dir = _resolve_existing_dir(
+    os.environ.get("MUSIC_TO_MIDI_BUNDLE_CHORDMINI_DIR"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "chordmini", "aa6e3a8d7b017f082fd2aaff9329d5c26af49c03"),
+)
+from src.utils.chordmini_runtime import validate_chordmini
+if not chordmini_source_dir:
+    raise RuntimeError("ChordMini BTC runtime missing; run python download_chordmini_model.py")
+validate_chordmini(chordmini_source_dir)
 muscriptor_small_models_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR"),
     os.path.join(ROOT_DIR, "build", "portable_assets", "muscriptor_small"),
@@ -274,6 +282,7 @@ datas = [
     # 翻译文件
     ('src/i18n/zh_CN.json', 'src/i18n'),
     ('src/i18n/en_US.json', 'src/i18n'),
+    ('resources/chordmini-source.json', 'resources'),
     # 资源文件（图标等）
     ('resources/icons', 'resources/icons'),
     # Project and embedded third-party license notices.
@@ -305,6 +314,7 @@ datas += _collect_tree(beat_this_models_dir, "models/beat_this")
 datas += _collect_tree(transkun_v2_aug_models_dir, "models/transkun_v2_aug")
 datas += _collect_tree(yourmt3_models_dir, "models/yourmt3_all")
 datas += _collect_tree(miros_source_dir, "external/ai4m-miros")
+datas += _collect_tree(chordmini_source_dir, "models/chordmini")
 datas += _collect_tree(muscriptor_small_models_dir, "models/muscriptor_small")
 datas += _collect_tree(muscriptor_medium_models_dir, "models/muscriptor_medium")
 datas += _collect_tree(muscriptor_large_models_dir, "models/muscriptor_large")

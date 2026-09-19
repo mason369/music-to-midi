@@ -28,6 +28,8 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
     QAbstractSlider,
+    QAbstractSpinBox,
+    QApplication,
     QBoxLayout,
     QCheckBox,
     QComboBox,
@@ -35,7 +37,9 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -44,6 +48,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStyle,
     QStyleOptionSlider,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -56,6 +61,7 @@ from src.core.midi_quantization import (
     MIDI_QUANTIZE_GRIDS,
     MIDI_QUANTIZE_SCOPES,
 )
+from src.core.midi_stem_export import export_midi_selection, export_midi_stems_zip
 from src.core.midi_tempo import validated_midi_time_signature
 from src.core.muscriptor_result_assets import (
     DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
@@ -74,6 +80,7 @@ from src.core.muscriptor_result_assets import (
 from src.core.sheet_music import SheetMusicExportResult
 from src.gui.layouts import FlowLayout
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
+from src.gui.widgets.midi_chord_lane import ChordAuditioner, MidiChordLane
 from src.gui.widgets.soundfont_panel import SoundFontPanel
 from src.gui.widgets.wheel_safe_controls import (
     NoWheelComboBox,
@@ -386,6 +393,8 @@ class _SeekSlider(QSlider):
 
 class _PianoRollCanvas(QWidget):
     seek_requested = pyqtSignal(float)
+    content_changed = pyqtSignal()
+    view_changed = pyqtSignal()
     edit_committed = pyqtSignal(object, object)
     selection_changed = pyqtSignal(object)
     add_note_requested = pyqtSignal(float, int)
@@ -512,6 +521,7 @@ class _PianoRollCanvas(QWidget):
         self._tile_cache.clear()
         self._update_size()
         self.update()
+        self.content_changed.emit()
 
     @property
     def notes(self) -> tuple[MuscriptorRollNote, ...]:
@@ -621,6 +631,7 @@ class _PianoRollCanvas(QWidget):
         self._daw_time_signature = signature
         self._tile_cache.clear()
         self.update()
+        self.content_changed.emit()
 
     def set_beat_grid(
         self,
@@ -725,6 +736,7 @@ class _PianoRollCanvas(QWidget):
         self._tile_cache.clear()
         self._update_size()
         self.update()
+        self.view_changed.emit()
 
     def set_render_offset(self, pixels: float) -> None:
         offset = float(pixels)
@@ -734,6 +746,7 @@ class _PianoRollCanvas(QWidget):
             return
         self._render_offset_px = offset
         self.update()
+        self.view_changed.emit()
 
     def _update_size(self) -> None:
         width = int(self._keyboard_width + max(10.0, self._duration) * self._pixels_per_second + 80)
@@ -1690,6 +1703,12 @@ class _InstrumentRow(QFrame):
         )
         self.mute_button.setIcon(self.style().standardIcon(standard_icon))
         self.mute_button.setText("")
+        self.mute_button.setToolTip(
+            t("muscriptor_result.unmute" if muted else "muscriptor_result.mute")
+        )
+        self.mute_button.setAccessibleName(
+            t("muscriptor_result.unmute" if muted else "muscriptor_result.mute")
+        )
         self.name_label.setStyleSheet(
             "color: #626b73; text-decoration: line-through;"
             if not self.detected
@@ -1703,7 +1722,7 @@ class _InstrumentRow(QFrame):
         self.name_label.setText(_instrument_label(self.instrument))
         self.not_detected_label.setText(t("muscriptor_result.not_detected"))
         self.solo_button.setToolTip(t("muscriptor_result.solo"))
-        self.mute_button.setToolTip(t("muscriptor_result.mute"))
+        self.set_muted(self.mute_button.isChecked())
 
 
 class _WrappingControlsPanel(QWidget):
@@ -1762,9 +1781,11 @@ class MuscriptorResultWidget(QFrame):
         backend_label: str = "MuScriptor-large",
         muscriptor_groups: bool = True,
         source_track_name: str | None = None,
+        gpu_device: int = 0,
     ):
         super().__init__(parent)
         self.audio_path = str(Path(audio_path).resolve())
+        self.gpu_device = int(gpu_device)
         self.selected_instruments = list(selected_instruments)
         self.backend_label = str(backend_label)
         self.muscriptor_groups = bool(muscriptor_groups)
@@ -1781,6 +1802,7 @@ class MuscriptorResultWidget(QFrame):
         self._audio_export_worker: _MidiAudioExportWorker | None = None
         self._audio_export_is_stem = False
         self._soundfont_selection = None
+        self._chord_status = None
         self._sheet_export_worker: SheetMusicExportWorker | None = None
         self._deferred_preview: tuple[int, MuscriptorPreviewAssets] | None = None
         self._deferred_final_assets: MuscriptorPlaybackAssets | None = None
@@ -1836,7 +1858,8 @@ class MuscriptorResultWidget(QFrame):
         self._bpm_user_overridden = False
         self._last_tempo_editor: str | None = None
         self._muted: set[str] = set()
-        self._soloed: str | None = None
+        self._soloed: set[str] = set()
+        self._roll_view_initialized = False
         self._instrument_rows: dict[str, _InstrumentRow] = {}
         self._normal_sources: dict[str, Path] = {}
         self._stereo_playback_available = False
@@ -1970,6 +1993,10 @@ class MuscriptorResultWidget(QFrame):
         self.play_button.setEnabled(False)
         self.play_button.clicked.connect(self._toggle_playback)
         controls.addWidget(self.play_button)
+        self.stop_button = QPushButton()
+        self.stop_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_button.clicked.connect(self.stop)
+        controls.addWidget(self.stop_button)
         self.follow_checkbox = QCheckBox()
         self.follow_checkbox.setChecked(True)
         controls.addWidget(self.follow_checkbox)
@@ -2288,7 +2315,19 @@ class MuscriptorResultWidget(QFrame):
             self._on_roll_manual_navigation
         )
         self.follow_checkbox.toggled.connect(self._on_follow_toggled)
-        content.addWidget(self.roll_scroll, 4)
+        roll_with_chords = QWidget()
+        roll_layout = QVBoxLayout(roll_with_chords)
+        roll_layout.setContentsMargins(0, 0, 0, 0)
+        roll_layout.setSpacing(0)
+        self.chord_lane = MidiChordLane(self.roll, self.roll_scroll, roll_with_chords)
+        self.chord_auditioner = ChordAuditioner(self._preview_root / "chords", self)
+        self.chord_lane.audition_requested.connect(self._audition_chord)
+        self.chord_auditioner.failed.connect(self._on_chord_failed)
+        self.chord_auditioner.ready.connect(self._on_chord_ready)
+        self.chord_auditioner.finished.connect(self._finish_chord_status)
+        roll_layout.addWidget(self.chord_lane)
+        roll_layout.addWidget(self.roll_scroll, 1)
+        content.addWidget(roll_with_chords, 4)
 
         instrument_panel = QFrame()
         instrument_panel.setObjectName("muscriptorInstrumentPanel")
@@ -2344,6 +2383,8 @@ class MuscriptorResultWidget(QFrame):
         self.download_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.download_menu = QMenu(self.download_button)
         self.download_midi_action = self.download_menu.addAction("")
+        self.download_audible_midi_action = self.download_menu.addAction("")
+        self.download_midi_stems_action = self.download_menu.addAction("")
         self.download_sheet_music_action = self.download_menu.addAction("")
         self.download_transcription_menu = self.download_menu.addMenu("")
         self.download_transcription_hq_action = self.download_transcription_menu.addAction("")
@@ -2358,6 +2399,10 @@ class MuscriptorResultWidget(QFrame):
         self.download_stems_compat_action.setEnabled(False)
         self.download_stereo_action.setEnabled(False)
         self.download_midi_action.triggered.connect(lambda: self._save_asset("midi"))
+        self.download_audible_midi_action.triggered.connect(
+            lambda: self._save_asset("midi_audible")
+        )
+        self.download_midi_stems_action.triggered.connect(lambda: self._save_asset("midi_stems"))
         self.download_sheet_music_action.triggered.connect(self._start_sheet_music_export)
         self.download_transcription_hq_action.triggered.connect(
             lambda: self._start_midi_audio_export(DEFAULT_MIDI_AUDIO_EXPORT_PRESET)
@@ -2392,6 +2437,8 @@ class MuscriptorResultWidget(QFrame):
         self.progress_label.setText(t("muscriptor_result.progress_waiting"))
         self.playback_status_label.setText(t("muscriptor_result.preview_waiting"))
         self.result_controls_panel.installEventFilter(self)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        QApplication.instance().installEventFilter(self)
         self._sync_responsive_layout()
 
     def _sync_responsive_layout(self) -> None:
@@ -2416,6 +2463,23 @@ class MuscriptorResultWidget(QFrame):
             self._sync_responsive_layout()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space:
+            focus = QApplication.focusWidget()
+            in_editor = focus is self or (focus is not None and self.isAncestorOf(focus))
+            typing = isinstance(
+                focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)
+            )
+            if in_editor and self.isVisible() and not typing:
+                if event.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier,
+                    Qt.KeyboardModifier.ShiftModifier,
+                ):
+                    if not event.isAutoRepeat() and self.play_button.isEnabled():
+                        if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                            self.stop()
+                        else:
+                            self._toggle_playback()
+                    return True
         if watched is self.result_controls_panel and event.type() == QEvent.Type.LayoutRequest:
             self._sync_responsive_layout()
         return super().eventFilter(watched, event)
@@ -2523,6 +2587,12 @@ class MuscriptorResultWidget(QFrame):
 
     def finalize_result(self, result: ProcessingResult) -> None:
         self._finalizing = True
+        self._muted.clear()
+        self._soloed.clear()
+        self._roll_view_initialized = False
+        for instrument in tuple(self.roll._muted):
+            self.roll.set_instrument_muted(instrument, False)
+        self._sync_instrument_controls()
         self.slow_hint_label.hide()
         self._preview_pending = None
         if self._preview_worker is not None and self._preview_worker.isRunning():
@@ -2551,10 +2621,12 @@ class MuscriptorResultWidget(QFrame):
             )
         self._original_audio_midi_path = Path(playback_midi_path).resolve()
         self._active_audio_midi_path = self._original_audio_midi_path
+        self.chord_lane.source_offset = 0.0
         if self.muscriptor_groups and result.beat_info is not None:
             from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
 
             bar_offset = read_muscriptor_bar_offset_seconds(playback_midi_path)
+            self.chord_lane.source_offset = bar_offset
             beats_per_bar = None
             if result.beat_info.time_signature is not None:
                 numerator, denominator = result.beat_info.time_signature
@@ -2602,6 +2674,7 @@ class MuscriptorResultWidget(QFrame):
         worker.finished.connect(worker.deleteLater)
         self._asset_worker = worker
         worker.start()
+        self.chord_lane.analyze_audio(self.audio_path, self.gpu_device)
 
     def mark_failed(self, error: str) -> None:
         """Stop future snapshots while preserving an already rendered preview."""
@@ -2760,6 +2833,7 @@ class MuscriptorResultWidget(QFrame):
         if generation <= self._preview_applied_generation:
             return
         self.roll.set_notes(payload.notes, duration=payload.duration)
+        QTimer.singleShot(0, self._focus_initial_note_range)
         position_ms = self._position_ms
         self._dispose_dynamic_players()
         self._configure_synchronized_playback(
@@ -2774,8 +2848,7 @@ class MuscriptorResultWidget(QFrame):
         self._preview_duration = payload.duration
         self._detected = list(dict.fromkeys(note.instrument for note in payload.notes))
         self._muted.intersection_update(self._detected)
-        if self._soloed not in self._detected:
-            self._soloed = None
+        self._soloed.intersection_update(self._detected)
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
         self._set_playback_duration(self._preview_duration)
@@ -2892,6 +2965,7 @@ class MuscriptorResultWidget(QFrame):
                 self._original_audio_midi_path = candidate
                 self._active_audio_midi_path = candidate
         self.roll.set_notes(assets.notes, duration=assets.duration)
+        QTimer.singleShot(0, self._focus_initial_note_range)
         self._original_assets = assets
         self._replace_playback_assets(assets, detected_notes=assets.notes)
         self._begin_editor_session(assets.notes, assets.duration)
@@ -2922,8 +2996,7 @@ class MuscriptorResultWidget(QFrame):
         )
         self._detected = list(dict.fromkeys(note.instrument for note in detected_notes))
         self._muted.intersection_update(self._detected)
-        if self._soloed not in self._detected:
-            self._soloed = None
+        self._soloed.intersection_update(self._detected)
         self._rebuild_instrument_rows()
         self.play_button.setEnabled(True)
         self._set_playback_duration(assets.duration)
@@ -2938,6 +3011,20 @@ class MuscriptorResultWidget(QFrame):
         self._playback_engine.seek(self._position_ms / 1000.0)
         self._apply_mix()
         self._update_play_label()
+
+    def _focus_initial_note_range(self) -> None:
+        """Start in the actual instrument register, not an empty C8 viewport."""
+        if self._shutting_down or self._roll_view_initialized or not self.roll.notes:
+            return
+        pitches = [note.pitch for note in self.roll.notes if 21 <= note.pitch <= 108]
+        if not pitches:
+            return
+        middle = (min(pitches) + max(pitches)) / 2.0
+        y = (108 - middle) * self.roll._row_height
+        self.roll_scroll.verticalScrollBar().setValue(
+            max(0, round(y - self.roll_scroll.viewport().height() / 2.0))
+        )
+        self._roll_view_initialized = True
 
     def _begin_editor_session(
         self,
@@ -3727,6 +3814,8 @@ class MuscriptorResultWidget(QFrame):
         self._apply_deferred_after_playback_stop()
 
     def _toggle_playback(self) -> None:
+        self.chord_auditioner.stop()
+        self._finish_chord_status()
         if not self._playback_engine.is_configured:
             raise RuntimeError("MuScriptor playable audio is not ready")
         self._apply_mix()
@@ -3911,6 +4000,39 @@ class MuscriptorResultWidget(QFrame):
         if was_playing:
             self.playing_changed.emit(False)
         self._apply_deferred_after_playback_stop()
+
+    def stop(self) -> None:
+        """Stop both auditions and transport, then return every position to the start."""
+        self.chord_auditioner.stop()
+        self._finish_chord_status()
+        self.pause()
+        self.seek(0.0)
+        self._commit_roll_render_offset()
+        self.roll_scroll.horizontalScrollBar().setValue(0)
+
+    def _audition_chord(self, chord) -> None:
+        self.pause()
+        duration = max(0.15, min(4.0, (chord.end - chord.start) / self._result_playback_rate()))
+        self._set_chord_status("muscriptor_result.chord_loading", chord=chord.label)
+        self.chord_auditioner.play(chord, duration, self._soundfont_selection)
+
+    def _set_chord_status(self, key, **values) -> None:
+        text = t(key, **values)
+        self._chord_status = (key, values, text)
+        self.playback_status_label.setText(text)
+
+    def _on_chord_ready(self) -> None:
+        self._set_chord_status("muscriptor_result.chord_playing")
+
+    def _finish_chord_status(self) -> None:
+        if self._chord_status is not None:
+            # Do not replace a newer export or render status sharing this label.
+            if self.playback_status_label.text() == self._chord_status[2]:
+                self.playback_status_label.setText(t("muscriptor_result.final_audio_ready"))
+            self._chord_status = None
+
+    def _on_chord_failed(self, error) -> None:
+        self._set_chord_status("muscriptor_result.chord_failed", error=_compact_editor_error(error))
 
     def _on_playback_scrub_started(self) -> None:
         self._transport_scrubbing = True
@@ -4207,12 +4329,14 @@ class MuscriptorResultWidget(QFrame):
         self._playback_engine.set_mix_state(
             mix=mix,
             stereo=stereo,
-            muted=frozenset(self._muted),
+            muted=frozenset(self._effective_muted()),
         )
+
+    def _effective_muted(self) -> set[str]:
+        return self._muted | (set(self._detected) - self._soloed if self._soloed else set())
 
     def _toggle_mute(self, instrument: str) -> None:
         self._activate_editor_instrument(instrument)
-        self._soloed = None
         if instrument in self._muted:
             self._muted.remove(instrument)
         else:
@@ -4221,19 +4345,18 @@ class MuscriptorResultWidget(QFrame):
 
     def _toggle_solo(self, instrument: str) -> None:
         self._activate_editor_instrument(instrument)
-        if self._soloed == instrument:
-            self._soloed = None
-            self._muted.clear()
+        if instrument in self._soloed:
+            self._soloed.remove(instrument)
         else:
-            self._soloed = instrument
-            self._muted = set(self._detected) - {instrument}
+            self._soloed.add(instrument)
         self._sync_instrument_controls()
 
     def _sync_instrument_controls(self) -> None:
+        effective_muted = self._effective_muted()
         for instrument, row in self._instrument_rows.items():
-            muted = instrument in self._muted
-            row.set_muted(muted)
-            row.set_soloed(self._soloed == instrument)
+            muted = instrument in effective_muted
+            row.set_muted(instrument in self._muted)
+            row.set_soloed(instrument in self._soloed)
             row.set_active(instrument == self._active_edit_instrument)
             self.roll.set_instrument_muted(instrument, muted)
         self._apply_mix()
@@ -4512,6 +4635,9 @@ class MuscriptorResultWidget(QFrame):
     def _save_asset(self, kind: str) -> None:
         target_bpm: float | None = None
         edited = False
+        if kind in {"midi_audible", "midi_stems"}:
+            self._save_instrument_midi(kind)
+            return
         if kind == "midi":
             source = Path(self._midi_path)
             target_bpm = self._commit_result_tempo_edit()
@@ -4563,6 +4689,59 @@ class MuscriptorResultWidget(QFrame):
                 )
             else:
                 shutil.copy2(source, destination)
+
+    def _save_instrument_midi(self, kind: str) -> None:
+        """Snapshot the current editor; batch export always includes every instrument."""
+        try:
+            bpm = self._commit_result_tempo_edit()
+            reference = self._detected_bpm
+            if reference is None:
+                raise ValueError("Detected/reference BPM is unavailable for MIDI export")
+            notes = self._edited_notes
+            archive = kind == "midi_stems"
+            if not archive:
+                muted = self._effective_muted()
+                notes = tuple(note for note in notes if note.instrument not in muted)
+            if not notes:
+                self.playback_status_label.setText(t("muscriptor_result.midi_selection_empty"))
+                return
+            suffix = "stems.zip" if archive else "audible.mid"
+            destination, _ = QFileDialog.getSaveFileName(
+                self,
+                t("muscriptor_result.download"),
+                f"{Path(self._midi_path).stem}_{bpm:.1f}BPM_{suffix}",
+                "ZIP (*.zip)" if archive else "MIDI (*.mid)",
+            )
+            if not destination:
+                return
+            if archive:
+                published, count = export_midi_stems_zip(
+                    self._midi_path,
+                    destination,
+                    notes,
+                    reference_bpm=reference,
+                    target_bpm=bpm,
+                    repeat_tempo=self.muscriptor_groups,
+                    instrument_label=_instrument_label,
+                )
+            else:
+                published = export_midi_selection(
+                    self._midi_path,
+                    destination,
+                    notes,
+                    reference_bpm=reference,
+                    target_bpm=bpm,
+                    repeat_tempo=self.muscriptor_groups,
+                )
+                count = len({note.instrument for note in notes})
+            self.playback_status_label.setText(
+                t("muscriptor_result.midi_instruments_saved", count=count, path=str(published))
+            )
+        except Exception as exc:
+            logger.exception("Instrument MIDI export failed")
+            self.playback_status_label.setText(
+                t("muscriptor_result.editor_export_failed", error=_compact_editor_error(exc))
+            )
 
     def _start_sheet_music_export(self) -> None:
         """Snapshot the current edited MIDI and engrave it outside the UI thread."""
@@ -4686,8 +4865,21 @@ class MuscriptorResultWidget(QFrame):
         self.play_button.setText(
             t("muscriptor_result.pause") if self._playing else t("muscriptor_result.play")
         )
+        self.stop_button.setEnabled(self.play_button.isEnabled())
 
     def update_translations(self) -> None:
+        if self._chord_status is not None:
+            key, values, previous_text = self._chord_status
+            if self.playback_status_label.text() == previous_text:
+                self._set_chord_status(key, **values)
+            else:
+                self._chord_status = None
+        self.stop_button.setText(t("muscriptor_result.stop_rewind"))
+        self.stop_button.setToolTip(t("muscriptor_result.transport_shortcuts"))
+        self.play_button.setToolTip(t("muscriptor_result.transport_shortcuts"))
+        self.download_audible_midi_action.setText(t("muscriptor_result.export_audible_midi"))
+        self.download_midi_stems_action.setText(t("muscriptor_result.export_midi_stems"))
+        self.chord_lane.update_translations()
         self.source_label.setText(
             t(
                 "muscriptor_result.linked_source",
@@ -4733,6 +4925,10 @@ class MuscriptorResultWidget(QFrame):
         self.edit_quantize_grid_label.setToolTip(quantize_grid_tooltip)
         self.edit_quantize_grid_combo.setToolTip(quantize_grid_tooltip)
         self.edit_instrument_label.setText(t("muscriptor_result.editor_instrument"))
+        for index in range(self.edit_instrument_combo.count()):
+            self.edit_instrument_combo.setItemText(
+                index, _instrument_label(self.edit_instrument_combo.itemData(index))
+            )
         self.edit_velocity_label.setText(t("muscriptor_result.editor_velocity"))
         self.roll_zoom_label.setText(t("muscriptor_result.editor_view_zoom"))
         self.roll_zoom_spin.setToolTip(t("muscriptor_result.editor_view_zoom_tooltip"))
@@ -4767,6 +4963,9 @@ class MuscriptorResultWidget(QFrame):
         if self._shutting_down:
             return
         self._shutting_down = True
+        QApplication.instance().removeEventFilter(self)
+        self.chord_lane.shutdown()
+        self.chord_auditioner.shutdown()
         self.soundfont_panel.shutdown()
         self._preview_pending = None
         self._edit_asset_pending = None

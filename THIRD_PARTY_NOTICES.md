@@ -56,6 +56,7 @@ PORTABLE_COMPONENT: onnxruntime_gpu | bundle=python/onnxruntime | artifact=sourc
 PORTABLE_COMPONENT: pyqt6_runtime | bundle=python/PyQt6+Qt6 | artifact=source+native-runtime | revision=requirements-range | license=GPL-3.0 | status=VERIFIED
 PORTABLE_COMPONENT: ffmpeg_runtime | bundle=tools/ffmpeg | artifact=ffmpeg+ffprobe | revision=recorded-at-build | license=LGPL-or-GPL-per-build-audit | status=VERIFIED
 PORTABLE_COMPONENT: frozen_dependency_set | bundle=python+native-runtime | artifact=all-other-frozen-dependencies | revision=build-environment | license=SBOM-attached | status=VERIFIED
+PORTABLE_COMPONENT: chordmini_btc | bundle=models/chordmini | artifact=unmodified-source+config+btc_model_best.pth+LICENSE | revision=aa6e3a8d7b017f082fd2aaff9329d5c26af49c03 | license=MIT | status=VERIFIED
 ```
 
 OWNER_ACCEPTED_NOTICE: leap_xe
@@ -65,6 +66,22 @@ OWNER_ACCEPTED_NOTICE: miros_source
 OWNER_ACCEPTED_NOTICE: miros_finetuned
 
 ## Verified declarations and owner-accepted artifacts
+
+### ChordMini BTC source-audio chord recognition
+
+- Upstream: [ptnghia-j/ChordMini](https://github.com/ptnghia-j/ChordMini/tree/aa6e3a8d7b017f082fd2aaff9329d5c26af49c03).
+  The pinned repository declares [MIT](https://github.com/ptnghia-j/ChordMini/blob/aa6e3a8d7b017f082fd2aaff9329d5c26af49c03/LICENSE),
+  copyright (c) 2026 ChordMini contributors. The unmodified source, README,
+  configuration, and full license accompany the bundled BTC CL (full) checkpoint.
+  No Omnizart or teacher checkpoint is bundled by this feature.
+- `checkpoints/btc_model_best.pth`: 35,942,692 bytes; SHA-256
+  `e0a12ca6d881f81e01dfb459b4836ec7dac8d8f87b0170a412b5807256b3a1fc`.
+  Per-file identities are recorded in `resources/chordmini-source.json`; source
+  preparation, inference and portable staging verify them. The project's existing
+  PyTorch/runtime licenses continue to apply independently.
+- Attribution and correction/takedown requests can be made through the upstream
+  repository's issue tracker or this project's issue tracker. Recording this
+  component does not override any other component's release restrictions.
 
 ### MuScriptor public runtime, three gated checkpoints, and demo playback assets
 

@@ -65,6 +65,7 @@ jobs:
             musicfm_pretrained
             miros_finetuned
             muscriptor_source
+            chordmini_btc
             beat_this_runtime_and_final0
             muscriptor_small_checkpoint
             muscriptor_medium_checkpoint

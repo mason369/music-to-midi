@@ -193,9 +193,11 @@ def install_project_routes(
     app.include_router(router)
     from src.projects.results import ProjectResults
     from src.web_api.soundfonts import install_soundfont_routes
+    from src.web_api.midi_exports import install_midi_export_routes
     from src.core.sheet_music import SheetMusicExportError
 
     results = ProjectResults(service)
+    install_midi_export_routes(app, results, prefix="/api/v1/project-results")
     install_soundfont_routes(
         app,
         results,

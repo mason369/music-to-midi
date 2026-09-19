@@ -486,6 +486,11 @@ def _run_miros_worker(argv=None) -> int:
 def main():
     """主入口函数"""
     multiprocessing.freeze_support()
+    if "--chordmini-worker" in sys.argv:
+        from src.core.chordmini_worker import run_chord_worker
+
+        worker_index = sys.argv.index("--chordmini-worker")
+        sys.exit(run_chord_worker(sys.argv[worker_index + 1 :]))
     if "--self-test-gui-conversion" in sys.argv:
         from src.gui_conversion_probe import run_gui_conversion_probe
 

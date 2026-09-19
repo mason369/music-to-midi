@@ -341,8 +341,9 @@ def test_solo_and_instrument_row_keep_active_editor_instrument_synchronized(tmp_
 
         assert widget._active_edit_instrument == "clean_electric_guitar"
         assert widget.edit_instrument_combo.currentData() == "clean_electric_guitar"
-        assert widget._soloed == "clean_electric_guitar"
-        assert widget._muted == {"acoustic_guitar"}
+        assert widget._soloed == {"clean_electric_guitar"}
+        assert widget._muted == set()
+        assert widget._effective_muted() == {"acoustic_guitar"}
         assert "#4a9eff" in widget._instrument_rows["clean_electric_guitar"].styleSheet()
         assert widget._edited_notes == before
     finally:

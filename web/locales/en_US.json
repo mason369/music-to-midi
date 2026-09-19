@@ -138,6 +138,7 @@
   "result.seconds": "{value} sec",
   "result.download": "Download",
   "result.generate_sheet_music": "Generate and download score",
+  "result.download_midi_stems": "All instrument MIDIs (ZIP)",
   "result.generating_sheet_music": "Generating score…",
   "result.sheet_music_ready": "The score ZIP is ready and its download has started.",
   "result.artifact.audio_track": "Separated track WAV",

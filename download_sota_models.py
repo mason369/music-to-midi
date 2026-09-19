@@ -21,6 +21,7 @@ from src.core.transkun_transcriber import (
     TranskunTranscriber,
 )
 from src.models.data_models import MuscriptorModel
+from src.utils.chordmini_runtime import prepare_chordmini
 from src.utils.fluidsynth_runtime import download_fluidsynth_windows
 from src.utils.muscriptor_downloader import (
     preflight_muscriptor_download_access,
@@ -173,6 +174,10 @@ def download_sota_models() -> dict[str, object]:
     muscriptor_soundfont = download_muscriptor_soundfont()
     print(f"ready: {muscriptor_soundfont}")
 
+    print("\nPreparing pinned ChordMini BTC chord analysis...")
+    chordmini_runtime = prepare_chordmini()
+    print(f"ready: {chordmini_runtime}")
+
     print("\nVerifying the real FluidSynth playback runtime...")
     fluidsynth_executable = download_fluidsynth_windows()
     print(f"ready: {fluidsynth_executable}")
@@ -182,6 +187,7 @@ def download_sota_models() -> dict[str, object]:
     print(f"ready: {musescore_executable}")
 
     return {
+        "chordmini": {"runtime": chordmini_runtime},
         "transkun": transkun_runtime,
         "beat_this": {
             "checkpoint": beat_this_checkpoint,

@@ -2,6 +2,10 @@
 
 目录式 `exe` 便携版随包提供 Python 环境，解压后即可启动。
 
+Windows 分卷必须全部下载到同一个目录，并保留原始文件名。从 `.wim.001` 解压一次即可，解压工具会自动读取后续分卷；“只点第一卷解压”是正常步骤，不代表只使用了第一卷。不要逐卷分别解压，也不要只下载第一卷。7-Zip 26.02 是已验证工具；360 压缩等软件需要支持该分卷格式，并且解压过程不能出现缺卷、CRC 或数据错误。其不同版本是否恢复 WIM 硬链接尚未逐一验收，不能仅凭能启动就断言整包资源完整。
+
+All Windows volumes belong in the same folder with their original filenames. Extract from `.wim.001` once; the extractor reads subsequent volumes automatically. Do not extract each volume separately or download only the first one. 7-Zip 26.02 is the verified extractor. Compatible tools such as 360 Compression must complete without missing-volume, CRC or data errors; their WIM hard-link restoration has not been verified across versions.
+
 当前源码的伴奏模型为 Leap Instrumental。[第三方清单](../THIRD_PARTY_NOTICES.md) 已记录该固定权重及原始配置的独立 `OWNER_ACCEPTED` 分发决定；完整包仍须通过组件清单、资源身份与成品自检，产物验收状态以对应版本 Actions 结果为准。
 
 ## 一键打包
@@ -68,3 +72,10 @@ XPU 构建默认对同卷的暂存资源使用 NTFS 硬链接，跨卷资源逐�
 - 每个程序都需要 EXE 和同目录 `_internal`；复制整个目录即可保留完整运行文件
 - 首次运行时程序会优先读取 exe 邻近的 `models/` 和 `tools/ffmpeg/`
 - 日志和运行时缓存优先写入 EXE 邻近的 `runtime/`；该目录不可写时改用用户目录
+
+
+## ChordMini BTC / 和弦识别资源
+
+桌面结果窗口使用 ChordMini BTC，固定官方提交 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03`。完整模型准备脚本包含此资源；单独准备使用 `python download_chordmini_model.py`。构建前、暂存后与最终 App 目录均校验 `resources/chordmini-source.json` 中的源码、配置、README、LICENSE 和 BTC 权重身份，打包到 `models/chordmini`。`--chordmini-worker` 是可执行文件内部后台入口，隔离官方 `src` 命名空间，使用指定 NVIDIA GPU，与转写任务共享资源锁；模型失败不替换引擎。现有第三方发布门禁仍然有效，本次不发布安装包。
+
+The desktop result window uses ChordMini BTC at the pinned official revision above. Both `download_sota_models.py` and the standalone downloader prepare it. Source, staging and packaged App resources are verified against the per-file manifest and included under `models/chordmini`, with the upstream README and license. The internal `--chordmini-worker` entry isolates the upstream namespace and uses the selected NVIDIA device under the shared inference lock. Failed inference never substitutes another chord engine. All existing release gates remain in effect; this change does not publish a new package.

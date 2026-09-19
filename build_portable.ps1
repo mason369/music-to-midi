@@ -681,6 +681,12 @@ $BeatThisBundle = Join-Path $BuildAssetRoot "beat_this"
 $TransKunV2AugBundle = Join-Path $BuildAssetRoot "transkun_v2_aug"
 $MirosBundle = Join-Path $BuildAssetRoot "ai4m-miros"
 $MuscriptorSmallBundle = Join-Path $BuildAssetRoot "muscriptor_small"
+$ChordMiniBundle = Join-Path $BuildAssetRoot "chordmini"
+$chordMiniSourceText = & $Python -c "from src.utils.chordmini_runtime import get_chordmini_runtime; print(get_chordmini_runtime())"
+if ($LASTEXITCODE -ne 0) {
+    throw "Pinned ChordMini BTC resources failed identity validation. Run download_chordmini_model.py."
+}
+$ChordMiniSource = [string]($chordMiniSourceText | Select-Object -Last 1)
 $MuscriptorMediumBundle = Join-Path $BuildAssetRoot "muscriptor_medium"
 $MuscriptorLargeBundle = Join-Path $BuildAssetRoot "muscriptor_large"
 $MuscriptorAssetsBundle = Join-Path $BuildAssetRoot "muscriptor_assets"
@@ -724,6 +730,9 @@ if ($pythonExitCode -ne 0) {
     throw "Invalid TransKun V2 Aug assets in portable bundle: $TransKunV2AugBundle"
 }
 Copy-Tree -Source $MirosSource -Destination $MirosBundle -Label "ai4m-miros source" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+Copy-Tree -Source $ChordMiniSource -Destination $ChordMiniBundle -Label "ChordMini BTC runtime" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
+& $Python -c 'import sys; from pathlib import Path; from src.utils.chordmini_runtime import validate_chordmini; validate_chordmini(Path(sys.argv[1]))' $ChordMiniBundle
+if ($LASTEXITCODE -ne 0) { throw "Staged ChordMini BTC identity validation failed." }
 Copy-Tree -Source $MuscriptorSmallSource -Destination $MuscriptorSmallBundle -Label "MuScriptor-small model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $MuscriptorMediumSource -Destination $MuscriptorMediumBundle -Label "MuScriptor-medium model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
 Copy-Tree -Source $MuscriptorLargeSource -Destination $MuscriptorLargeBundle -Label "MuScriptor-large model" -Required -HardlinkSameVolume:$HardlinkAssetStaging | Out-Null
@@ -814,6 +823,7 @@ $env:MUSIC_TO_MIDI_BUNDLE_BYTEDANCE_PIANO_DIR = $ByteDancePianoBundle
 $env:MUSIC_TO_MIDI_BUNDLE_BEAT_THIS_DIR = $BeatThisBundle
 $env:MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR = $TransKunV2AugBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MIROS_DIR = $MirosBundle
+$env:MUSIC_TO_MIDI_BUNDLE_CHORDMINI_DIR = $ChordMiniBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR = $MuscriptorSmallBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR = $MuscriptorMediumBundle
 $env:MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR = $MuscriptorLargeBundle
@@ -858,6 +868,7 @@ try {
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_TRANSKUN_V2_AUG_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MIROS_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_SMALL_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_CHORDMINI_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_MEDIUM_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_LARGE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\MUSIC_TO_MIDI_BUNDLE_MUSCRIPTOR_DIR -ErrorAction SilentlyContinue
@@ -954,6 +965,8 @@ from src.utils.muscriptor_downloader import (
 )
 
 models_root = Path(r'$DistDir') / '_internal' / 'models'
+from src.utils.chordmini_runtime import validate_chordmini
+validate_chordmini(models_root / 'chordmini')
 for model_size, artifact in MUSCRIPTOR_ARTIFACTS.items():
     model_dir = models_root / f'muscriptor_{model_size}'
     validate_file_identity(model_dir / MUSCRIPTOR_MODEL_FILENAME, expected_size=artifact.model_bytes, expected_sha256=artifact.model_sha256, label=f'packaged MuScriptor-{model_size} model')

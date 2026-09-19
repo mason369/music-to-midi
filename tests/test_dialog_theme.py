@@ -79,7 +79,8 @@ def test_every_desktop_static_file_dialog_uses_the_native_system_dialog():
             ):
                 calls.append((path, node))
 
-    assert len(calls) == 9
+    # Includes the shared MIDI selection / per-instrument ZIP save dialog.
+    assert len(calls) == 10
     for path, call in calls:
         for keyword in call.keywords:
             if keyword.arg != "options":

@@ -168,6 +168,13 @@ def build_muscriptor_result_html(
                 "error_details",
                 "play",
                 "pause",
+                "stop_rewind",
+                "transport_shortcuts",
+                "unmute",
+                "export_audible_midi",
+                "export_midi_stems",
+                "midi_selection_empty",
+                "midi_instruments_saved",
                 "player_failed",
                 "editor_input_invalid",
                 "follow",
@@ -966,7 +973,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.starting = false;
     this.playRequestId = 0;
     this.muted = new Set();
-    this.solo = null;
+    this.solo = new Set();
     this.mix = 0.75;
     this.stereo = false;
     this.follow = true;
@@ -1142,7 +1149,22 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.play = button(strings.play);
     this.play.disabled = true;
     this.play.onclick = function () { self.toggle(); };
+    this.play.title = strings.transport_shortcuts;
     bar.appendChild(this.play);
+    this.stopButton = button(strings.stop_rewind, strings.transport_shortcuts);
+    this.stopButton.onclick = function () { self.stop(); };
+    bar.appendChild(this.stopButton);
+    this.host.tabIndex = 0;
+    this.root.addEventListener("keydown", function (event) {
+      if (event.code !== "Space" || event.ctrlKey || event.altKey || event.metaKey) return;
+      var target = event.target;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat && !self.play.disabled) {
+        if (event.shiftKey) self.stop(); else self.toggle();
+      }
+    }, true);
     var follow = button(strings.follow);
     follow.classList.add("active");
     follow.onclick = function () {
@@ -1294,6 +1316,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     var editedMidi = button(strings.export_edited_midi);
     editedMidi.onclick = function () { self.downloadEditedMidi(); };
     downloads.appendChild(editedMidi);
+    var audibleMidi = button(strings.export_audible_midi);
+    audibleMidi.onclick = function () { self.downloadInstrumentMidi(false); };
+    downloads.appendChild(audibleMidi);
+    var midiStems = button(strings.export_midi_stems);
+    midiStems.onclick = function () { self.downloadInstrumentMidi(true); };
+    downloads.appendChild(midiStems);
     this.sheetMusicButton = button(strings.download_sheet_music);
     this.sheetMusicButton.onclick = function () { self.downloadSheetMusic(); };
     downloads.appendChild(this.sheetMusicButton);
@@ -1390,10 +1418,8 @@ MUSCRIPTOR_RESULT_JS = r"""
       if (instrument.soloButton) instrument.soloButton.disabled = !detected;
       if (instrument.muteButton) instrument.muteButton.disabled = !detected;
       if (!detected) self.muted.delete(instrument.id);
+      if (!detected) self.solo.delete(instrument.id);
     });
-    if (this.solo && !Object.prototype.hasOwnProperty.call(instrumentUrls, this.solo)) {
-      this.solo = null;
-    }
     this.syncRows();
   };
   ResultSession.prototype.applyPlaybackPreview = function (preview, nextBuffers, statusText) {
@@ -1851,10 +1877,18 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.position = clamp(seconds, 0, this.m.duration);
     if (wasPlaying) this.requestPlayback(); else this.layoutPlayhead();
   };
+  ResultSession.prototype.stop = function () {
+    this.pause();
+    this.position = 0;
+    if (this.scroll) this.scroll.scrollLeft = 0;
+    this.layoutPlayhead();
+  };
   ResultSession.prototype.handleExternalPlayback = function (event) {
     if (event.detail && event.detail.owner !== this.ownerId) this.pause();
   };
-  ResultSession.prototype.audible = function (id) { return !this.muted.has(id); };
+  ResultSession.prototype.audible = function (id) {
+    return !this.muted.has(id) && (!this.solo.size || this.solo.has(id));
+  };
   ResultSession.prototype.applyMix = function () {
     var context = ctx(), time = context.currentTime, self = this;
     if (this.gains.original) {
@@ -1873,22 +1907,15 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.toggleMute = function (id) {
     this.activateInstrument(id);
-    this.solo = null;
     if (this.muted.has(id)) this.muted.delete(id); else this.muted.add(id);
     this.syncRows();
   };
   ResultSession.prototype.toggleSolo = function (id) {
     this.activateInstrument(id);
-    if (this.solo === id) {
-      this.solo = null;
-      this.muted.clear();
+    if (this.solo.has(id)) {
+      this.solo.delete(id);
     } else {
-      this.solo = id;
-      this.muted = new Set(this.m.instruments.filter(function (instrument) {
-        return instrument.detected && instrument.id !== id;
-      }).map(function (instrument) {
-        return instrument.id;
-      }));
+      this.solo.add(id);
     }
     this.syncRows();
   };
@@ -1896,12 +1923,16 @@ MUSCRIPTOR_RESULT_JS = r"""
     var self = this;
     this.m.instruments.forEach(function (instrument) {
       if (!instrument.detected) return;
-      var muted = self.muted.has(instrument.id);
+      var muted = !self.audible(instrument.id);
       instrument.row.classList.toggle("active-instrument", self.activeInstrument === instrument.id);
       instrument.row.classList.toggle("muted", muted);
-      instrument.soloButton.classList.toggle("active", self.solo === instrument.id);
-      instrument.muteButton.classList.toggle("active", muted);
-      instrument.muteButton.textContent = "🔊";
+      instrument.soloButton.classList.toggle("active", self.solo.has(instrument.id));
+      instrument.soloButton.setAttribute("aria-pressed", String(self.solo.has(instrument.id)));
+      instrument.muteButton.classList.toggle("active", self.muted.has(instrument.id));
+      instrument.muteButton.setAttribute("aria-pressed", String(self.muted.has(instrument.id)));
+      instrument.muteButton.textContent = self.muted.has(instrument.id) ? "🔇" : "🔊";
+      instrument.muteButton.title = self.muted.has(instrument.id) ? self.m.strings.unmute : self.m.strings.mute;
+      instrument.muteButton.setAttribute("aria-label", instrument.muteButton.title);
     });
     this.applyMix();
     this.drawStatic();
@@ -1941,6 +1972,12 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.canvas.width = Math.round(width * dpr);
     this.canvas.height = Math.round(HEIGHT * dpr);
     this.dpr = dpr;
+    if (!this.initialNoteRangeFocused && this.scroll.clientHeight > 0 && this.m.notes.length) {
+      var low = 108, high = 21;
+      this.m.notes.forEach(function (note) { low = Math.min(low, note.pitch); high = Math.max(high, note.pitch); });
+      this.scroll.scrollTop = Math.max(0, (108 - (low + high) / 2) * ROW - this.scroll.clientHeight / 2);
+      this.initialNoteRangeFocused = true;
+    }
     this.drawStatic();
     this.layoutPlayhead();
   };
@@ -2093,7 +2130,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       var noteY = (108 - note.pitch) * ROW + 1;
       var noteWidth = Math.max(2, (note.end - note.start) * self.pps);
       var instrument = self.m.instruments.find(function (item) { return item.id === note.instrument; });
-      painter.globalAlpha = self.muted.has(note.instrument) ? 0.12 : 1;
+      painter.globalAlpha = self.audible(note.instrument) ? 1 : 0.12;
       painter.fillStyle = instrument ? instrument.color : "#4a9eff";
       painter.fillRect(x, noteY, noteWidth, ROW - 2);
       if (self.selectedIndices.has(index)) {
@@ -2820,6 +2857,9 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.fetchEditedMidiBytes = function () {
     var self = this;
+    var notes = this.m.notes.map(function (note) { return Object.assign({}, note); });
+    var targetBpm = this.targetBpm, referenceBpm = Number(this.m.referenceBpm);
+    var repeatTempo = Boolean(this.m.repeatTempoPerNoteTrack);
     return fetch(this.m.downloads.midi, { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status + " " + self.m.downloads.midi);
@@ -2828,10 +2868,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       .then(function (arrayBuffer) {
         return buildEditedSmf(
           arrayBuffer,
-          self.m.notes,
-          self.targetBpm,
-          Number(self.m.referenceBpm),
-          Boolean(self.m.repeatTempoPerNoteTrack)
+          notes, targetBpm, referenceBpm, repeatTempo
         );
       });
   };
@@ -2843,6 +2880,90 @@ MUSCRIPTOR_RESULT_JS = r"""
     }
     return btoa(binary);
   }
+  function buildMidiZip(members) {
+    // Stored ZIP with UTF-8 names; one download also works with browser popup blocking.
+    var local = [], central = [], offset = 0, centralSize = 0;
+    function header(length) { return new Uint8Array(length); }
+    function crc32(bytes) {
+      var crc = 0xffffffff;
+      for (var i = 0; i < bytes.length; i++) {
+        crc ^= bytes[i];
+        for (var bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+      }
+      return (crc ^ 0xffffffff) >>> 0;
+    }
+    if (!members.length || members.length > 65535) throw new Error("Invalid MIDI archive member count");
+    members.forEach(function (member) {
+      var name = new TextEncoder().encode(member.name), bytes = member.bytes, crc = crc32(bytes);
+      var h = header(30), v = new DataView(h.buffer);
+      v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true);
+      v.setUint16(6, 0x800, true); v.setUint16(12, 33, true);
+      v.setUint32(14, crc, true); v.setUint32(18, bytes.length, true); v.setUint32(22, bytes.length, true);
+      v.setUint16(26, name.length, true);
+      local.push(h, name, bytes);
+      var c = header(46), cv = new DataView(c.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+      cv.setUint16(8, 0x800, true); cv.setUint16(14, 33, true);
+      cv.setUint32(16, crc, true); cv.setUint32(20, bytes.length, true); cv.setUint32(24, bytes.length, true);
+      cv.setUint16(28, name.length, true); cv.setUint32(42, offset, true);
+      central.push(c, name);
+      centralSize += c.length + name.length;
+      offset += h.length + name.length + bytes.length;
+      if (offset + centralSize > 0xffffffff) throw new Error("MIDI archive exceeds ZIP size limit");
+    });
+    var end = header(22), ev = new DataView(end.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, members.length, true); ev.setUint16(10, members.length, true);
+    ev.setUint32(12, centralSize, true); ev.setUint32(16, offset, true);
+    return new Blob(local.concat(central, [end]), {type:"application/zip"});
+  }
+  ResultSession.prototype.downloadInstrumentMidi = function (archive) {
+    var self = this, notes, targetBpm;
+    try {
+      this.commitBpm();
+      targetBpm = this.targetBpm;
+      notes = this.m.notes.filter(function (note) { return archive || self.audible(note.instrument); })
+        .map(function (note) { return Object.assign({}, note); });
+      if (!notes.length) { this.status.textContent = this.m.strings.midi_selection_empty; return; }
+    } catch (error) {
+      this.status.textContent = this.m.strings.editor_export_failed.replace("{error}", this.errorText(error));
+      return;
+    }
+    var referenceBpm = Number(this.m.referenceBpm), repeatTempo = Boolean(this.m.repeatTempoPerNoteTrack);
+    var labels = {};
+    this.m.instruments.forEach(function (instrument) { labels[instrument.id] = instrument.label; });
+    var groups = new Map();
+    notes.forEach(function (note) {
+      if (!groups.has(note.instrument)) groups.set(note.instrument, []);
+      groups.get(note.instrument).push(note);
+    });
+    var filename = "music-to-midi-" + (archive ? "stems-" : "audible-") + targetBpm.toFixed(1) + "BPM" + (archive ? ".zip" : ".mid");
+    return fetch(this.m.downloads.midi, {cache:"no-store"}).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.arrayBuffer();
+    }).then(function (source) {
+      var blob;
+      if (archive) {
+        var members = [], index = 0;
+        groups.forEach(function (selected, instrument) {
+          var label = String(labels[instrument] || instrument).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/^[ .]+|[ .]+$/g, "").slice(0, 80) || "instrument";
+          var name = String(++index).padStart(2, "0") + "-" + label + "-" + targetBpm.toFixed(1) + "BPM.mid";
+          members.push({name:name, bytes:buildEditedSmf(source, selected, targetBpm, referenceBpm, repeatTempo)});
+        });
+        blob = buildMidiZip(members);
+      } else {
+        blob = new Blob([buildEditedSmf(source, notes, targetBpm, referenceBpm, repeatTempo)], {type:"audio/midi"});
+      }
+      if (self.disposed) return;
+      var url = URL.createObjectURL(blob), anchor = document.createElement("a");
+      anchor.href = url; anchor.download = filename;
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      self.status.textContent = self.m.strings.midi_instruments_saved.replace("{count}", String(groups.size)).replace("{path}", filename);
+    }).catch(function (error) {
+      self.status.textContent = self.m.strings.editor_export_failed.replace("{error}", self.errorText(error));
+    });
+  };
   ResultSession.prototype.downloadEditedMidi = function () {
     var self = this;
     try {
@@ -2945,6 +3066,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     cancelAnimationFrame(this.drawRaf);
   };
   window.musicToMidiMidiEditorRuntime = Object.freeze({
+    buildMidiZip: buildMidiZip,
     buildEditedSmf: buildEditedSmf,
     projectPlaybackRate: projectPlaybackRate
   });

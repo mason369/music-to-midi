@@ -2,6 +2,10 @@
 
 [Projects, workflow profiles and resuming](projects.en.md)
 
+[Changelog](../CHANGELOG.md)
+
+MIDI result editors start with every instrument visible and audible. Solo supports multiple instruments while preserving manual mutes. Export all instruments together, only the audible instruments together, or every instrument in a separate MIDI inside one ZIP. Space plays/pauses; Shift+Space stops and rewinds without intercepting text or numeric input. The desktop piano roll also has a ChordMini BTC chord lane recognized from source audio, aligned with the bar grid, with clickable SoundFont audition. Standalone Web/API result downloads support instrument MIDI ZIPs too. See the [result editor guide](soundfont-and-sheet-music.md).
+
 <p align="center">
   <a href="../README.md">中文</a> | English
 </p>
@@ -152,7 +156,7 @@ Current synchronization coverage:
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | Checks actual accelerator execution, all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources and CPU fallback are reported explicitly. |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | Installs an isolated NVIDIA PyTorch 2.7 or Intel XPU PyTorch 2.11 runtime, NumPy 1.26, audio-separator 0.44.1, the identity-verified official MuScriptor v0.3.0 runtime, and every required model/runtime asset | NVIDIA uses `venv` + CUDA 12.8; Windows Intel uses `venv-xpu` + native PyTorch XPU + OpenVINO GPU. Mixed runtimes are rejected. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging checks only | These jobs do not produce a portable package. Bundle validation requires complete model files with matching identities. |
-| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, engraving, and runtime asset | The 30-component gate currently records 25 `VERIFIED`, five explicitly documented `OWNER_ACCEPTED` items and no `BLOCKED` items; Leap Instrumental has its own maintainer distribution record. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
+| `.github/workflows/release.yml` | The complete portable-build pipeline; it downloads and strictly verifies every YourMT3+, separator, MIROS, MuScriptor, TransKun, Aria-AMT, ByteDance, playback, engraving, and runtime asset | The 30-component gate currently records 26 `VERIFIED`, five explicitly documented `OWNER_ACCEPTED` items and no `BLOCKED` items; Leap Instrumental has its own maintainer distribution record. The target GPU runtime is PyTorch 2.7 + CUDA 12.8; an owner acceptance is a revocable distribution decision, not a claim that upstream granted a license. |
 | `colab_notebook.ipynb` | Keeps Colab's preinstalled Torch, installs pinned Web/runtime dependencies, and synchronizes all seven modes | `SMART` and the per-track workbench expose YourMT3+, MIROS, and MuScriptor Large / Medium / Small; the per-track menu contains 13 routes in total. |
 
 ## Processing Modes
@@ -618,7 +622,7 @@ The local Intel XPU Web backend starts a fresh processing process for every GPU 
 
 AMD/ROCm has not completed hardware acceptance for the full seven-mode workflow, so the installer still stops with a compatibility error. Moving accompaniment separation to PyTorch FP32 does not establish AMD support for the remaining models or the complete workflow.
 
-`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 30 third-party components: 25 are `VERIFIED`, 5 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and none are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
+`release.yml` produces a CUDA 12.8 GPU portable build only; it does not publish a CPU variant. The current closed inventory contains 31 third-party components: 26 are `VERIFIED`, 5 are `OWNER_ACCEPTED` with named maintainer responsibility and a revocation contact, and none are `BLOCKED`. Every release revalidates that inventory, model identities, the SBOM, the packaged FFmpeg build, and the finished application smoke test; any failed requirement stops the release. Push/PR `build.yml` jobs validate source, tests, and packaging contracts but produce no portable artifact. For local source development, CPU-only PyTorch remains a manual choice with slower inference and different dependency compatibility.
 
 ### 3. Install Project Dependencies
 

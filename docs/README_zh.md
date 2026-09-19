@@ -2,6 +2,10 @@
 
 [项目、工作流配置与跨会话续跑](projects.md)
 
+[更新说明](../CHANGELOG.md)
+
+结果编辑器默认显示并播放全部 MIDI 声部，支持多声部同时独奏、全部/当前可听声部合并导出，以及所有声部分别导出 ZIP。空格播放/暂停，Shift+空格停止并回到开头。桌面 MIDI 窗口上方提供从原始音频识别、与小节同步的 ChordMini BTC 和弦，点击可单独试听。独立 Web/API 的结果下载也支持逐声部 MIDI ZIP。详见[结果编辑器说明](soundfont-and-sheet-music.md)。
+
 <p align="center">
   中文 | <a href="./README.md">English</a>
 </p>
@@ -613,7 +617,7 @@ Intel XPU 的本地 Web 后端会为每个 GPU 作业启动一个全新的处理
 
 AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停止并说明兼容性问题。本次将伴奏分离改为 PyTorch FP32，不代表其余模型和完整工作流已获得 AMD 支持。
 
-`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 30 项第三方组件：25 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
+`release.yml` 只生成 CUDA 12.8 GPU 便携版，不生成 CPU 版。当前闭集清单包含 31 项第三方组件：26 项 `VERIFIED`、5 项附维护者具名责任与撤销联系记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；工作流仍会在每次发布前重新校验清单、模型身份、SBOM、FFmpeg 构建信息和成品自检，任何一项不满足即停止。push / PR 的 `build.yml` 仅验证源码、测试与打包契约，不生成便携成品。本地源码开发如需 CPU-only PyTorch，应自行承担模型速度和依赖兼容性差异。
 
 ### 3. 安装项目依赖
 
@@ -727,7 +731,7 @@ Space 失败请求会立即删除请求目录；成功结果保留给 Gradio 下
 
 ## 便携版打包
 
-当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 30 项闭集清单为 25 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
+当前 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 的 31 项闭集清单为 26 项 `VERIFIED`、5 项 `OWNER_ACCEPTED`、0 项 `BLOCKED`。`OWNER_ACCEPTED` 表示上游未声明许可时由维护者具名承担再分发决定，并不等同于获得上游授权；Leap Instrumental 已有独立的维护者分发接受记录，官方 release 仍会在构建前严格校验全部组件。
 
 Windows CUDA 桌面 App、Web 后端、Web 前端三包：
 
