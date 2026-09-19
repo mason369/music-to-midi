@@ -1,5 +1,25 @@
 # 更新说明 / Changelog
 
+## 未发布 / Unreleased — 2026-09-20
+
+### 中文
+
+- 修复本地桌面和弦栏在跟随播放时逐段跳动：卷帘每帧的小数像素位移直接触发和弦重绘，不再不断重启 80 毫秒内容刷新计时器，也不再依赖 12 像素滚动条步进才更新。
+- 保留和弦与小节内容变化的延迟重算，持续滚动时新的小节布局仍能生效；和弦识别、原生时间边界和试听行为保持原有契约。
+- 新增 7 个回归用例，覆盖中英文、0.5×/1×/4× 缩放下滚动条未变化时的实际重绘，以及连续滚动中的小节布局更新；旧实现全部失败，修复后通过。
+- 使用反馈中的 7357 音符、约 243.5 秒结果测量真实桌面绘制：默认缩放下和弦刷新由约 7.7 帧/秒提高到约 62.5 帧/秒，典型帧间隔由约 128 毫秒降至约 16 毫秒。该数据为本机测量，不代表所有设备的固定帧率。
+- 实际声卡播放在 0.5×/1×/4× 视图缩放、100/125/150 BPM 下测得约 59–62 帧/秒；暂停、手动滚动、缩放、重新跟随、前后跳转、点击和弦试听及停止归零均通过。结果编辑、和弦、响应式布局、跨平台与打包契约、国际化共 476 项相关测试通过，中英文均完成实际界面检查。
+- 桌面与便携 App 共用此组件；Space/Colab 没有桌面和弦栏，独立 Web/API、Docker 与便携 Web 没有该钢琴卷帘，因而不涉及这条 Qt 刷新链路。同步两种语言的 README 与和弦架构文档。
+
+### English
+
+- Fixed the desktop chord lane jumping during playback follow. Each frame of fractional piano-roll motion now requests a chord repaint directly, instead of repeatedly restarting the 80 ms content refresh timer or waiting for a 12-pixel scrollbar step.
+- Retained delayed rebuilds for chord and bar content changes. New bar layouts can take effect during continuous scrolling; chord recognition, native time boundaries and audition behavior retain their existing contracts.
+- Added 7 regression cases covering actual repaints without scrollbar changes in both languages at 0.5×/1×/4× zoom, plus bar-layout updates during continuous scrolling. All fail on the old implementation and pass with the fix.
+- Measured the actual desktop renderer using the reported 7357-note result, approximately 243.5 seconds long. At default zoom, chord updates increased from about 7.7 to 62.5 frames per second, with the typical frame interval dropping from about 128 ms to 16 ms. These are local measurements, not a fixed frame-rate guarantee for every device.
+- Actual audio-device playback measured approximately 59–62 frames per second at 0.5×/1×/4× view zoom and 100/125/150 BPM. Pause, manual scrolling, zoom, follow re-entry, forward/backward seeks, chord audition and stop/rewind passed. All 476 related result-editor, chord, responsive-layout, platform, packaging-contract and localization tests passed, with actual interface checks in both languages.
+- Desktop and portable App share this component. Space/Colab have no desktop chord lane; standalone Web/API, Docker and portable Web have no such piano roll, so this Qt refresh path does not apply to them. Updated READMEs and chord architecture documentation in both supported languages.
+
 ## 未发布 / Unreleased — 2026-09-19
 
 ### 中文

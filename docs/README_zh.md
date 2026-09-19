@@ -4,7 +4,7 @@
 
 [更新说明](../CHANGELOG.md)
 
-结果编辑器默认显示并播放全部 MIDI 声部，支持多声部同时独奏、全部/当前可听声部合并导出，以及所有声部分别导出 ZIP。空格播放/暂停，Shift+空格停止并回到开头。桌面 MIDI 窗口上方提供从原始音频识别、与小节同步的 ChordMini BTC 和弦，点击可单独试听。独立 Web/API 的结果下载也支持逐声部 MIDI ZIP。详见[结果编辑器说明](soundfont-and-sheet-music.md)。
+结果编辑器默认显示并播放全部 MIDI 声部，支持多声部同时独奏、全部/当前可听声部合并导出，以及所有声部分别导出 ZIP。空格播放/暂停，Shift+空格停止并回到开头。桌面 MIDI 窗口上方提供从原始音频识别、与小节同步的 ChordMini BTC 和弦，播放跟随、缩放和滚动均随卷帘逐帧同步，点击可单独试听。独立 Web/API 的结果下载也支持逐声部 MIDI ZIP。详见[结果编辑器说明](soundfont-and-sheet-music.md)。
 
 <p align="center">
   中文 | <a href="./README.md">English</a>

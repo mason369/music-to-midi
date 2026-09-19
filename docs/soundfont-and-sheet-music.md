@@ -8,6 +8,7 @@
 - 空格播放/暂停，Shift+空格或停止按钮停止并回到零点，同时重置进度条、播放头和水平视图；文本、数值输入和下拉框保留键盘原行为。快捷键仅作用于当前获得焦点的结果编辑器。
 - 本地桌面和弦轨使用与 TelkNet 默认工具相同的 **ChordMini BTC**，固定官方源码 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03` 和 `btc_model_best.pth`。原音按原采样率、原声道解码为 PCM32，再交给官方特征提取与推理；170 类完整标签涵盖 14 种和弦性质及 N/X，无和弦/不确定区间不试听。保留原生边界，只在小节处分割显示，MuScriptor 开头补齐偏移同步到和弦。小节、和弦、音符共用参考 BPM 和拍号；工程变速不会导致三者漂移，编辑 MIDI 不会改写原音和弦。后台分析可取消并与转写共用 GPU 锁；失败显示原因、点击重试，不替换为 MIDI 估计或 Omnizart。
 - 点击和弦暂停整曲并通过当前 SoundFont 单独试听。取消、快速连续点击、停止和关闭编辑器会取消旧请求，防止较慢的旧试听覆盖新选择。
+- 和弦栏直接响应卷帘每一帧的横向位移与缩放，包含两次滚动条步进之间的小数像素位移；仅和弦、小节等内容变化使用延迟重算。持续播放不会推迟和弦绘制或阻止新的小节布局生效。
 
 | 交付面 | 多选独奏、可听组导出、批量 MIDI、快捷键 | 和弦轨 |
 |---|---|---|
@@ -23,7 +24,8 @@ flowchart LR
     Audio[原始音频 / 所选 stem WAV] --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
     Worker --> Native[原音秒坐标和弦 + 固定模型身份缓存]
     Native --> Chords[时间偏移与小节显示 → 桌面和弦轨 → FluidSynth 试听]
-    Editor --> Chords
+    Editor --> View[逐帧位移与缩放 / Per-frame view motion]
+    View --> Chords
     MIDI --> API[midi_exports → 保留源 tempo map 与事件 tick → Web/API ZIP]
 ```
 
@@ -34,6 +36,8 @@ New results start with all instruments audible and visible. Solo is additive; ma
 Space plays/pauses; Shift+Space or Stop and rewind returns transport and horizontal view to zero. Text, numeric and select inputs retain normal keyboard behavior. Only the focused result editor receives transport shortcuts. The desktop uses TelkNet’s default ChordMini BTC recipe on source audio, with the exact pinned source and BTC checkpoint. Native-rate, original-channel PCM32 decoding precedes the official feature frontend. All 170 classes, including seventh/suspended qualities and N/X, retain their original boundaries. Bar splits affect display only; MuScriptor lead-in offsets and project tempo changes remain aligned. MIDI edits do not alter source-audio chords. Background inference shares the accelerator lock, supports cancellation and reports failures with click-to-retry; it never falls back to MIDI templates or Omnizart. Chord recognition remains a model prediction, not a guarantee of score accuracy.
 
 Space and Colab share the browser mixer/export/transport implementation. Chord display is desktop-only as requested. Standalone Web/API, Docker and portable Web offer instrument ZIP downloads for both jobs and restored project results, preserving the source tempo map and event ticks. They have no MIDI editor/solo state, so editor-specific shortcuts and audible-group exports do not apply. Those browser surfaces retain their existing SoundFont/FluidSynth dependencies. Only desktop chord analysis requires the additional pinned ChordMini BTC resources.
+
+The chord lane repaints with each frame of horizontal motion or zoom, including fractional pixel movement between scrollbar steps. Only chord and bar content changes use a delayed rebuild. Continuous playback therefore neither delays chord drawing nor prevents a new bar layout from taking effect.
 
 ## 使用音色库
 

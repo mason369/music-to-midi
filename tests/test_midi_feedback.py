@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import mido
 import pytest
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QEvent, QObject, QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QFileDialog
 
@@ -244,6 +244,64 @@ def test_chord_lane_alignment_after_zoom_scroll_and_bpm_change(result_widget):
         pos=w.chord_lane.chord_rect(chord).center().toPoint(),
     )
     assert chosen == [chord]
+
+
+@pytest.mark.parametrize("language", ["zh_CN", "en_US"])
+@pytest.mark.parametrize("pixels_per_second", [46.0, 92.0, 368.0])
+def test_chord_lane_repaints_fractional_follow_without_scrollbar_changes(
+    result_widget, language, pixels_per_second
+):
+    w = result_widget
+    set_language(language)
+    w.update_translations()
+    w.roll.set_notes(chord_notes((60, 64, 67), end=240), duration=240)
+    w.roll.set_pixels_per_second(pixels_per_second)
+    w.chord_lane._source_chords = (MidiChord(0, 240, "C", (60, 64, 67)),)
+    w.chord_lane.refresh()
+    w._follow_roll_to_position(40, allow_backward=True)
+    QTest.qWait(100)
+
+    class PaintRecorder(QObject):
+        def __init__(self):
+            super().__init__(w.chord_lane)
+            self.positions = []
+
+        def eventFilter(self, watched, event):  # noqa: N802
+            if event.type() == QEvent.Type.Paint:
+                self.positions.append(w.chord_lane.chord_rect(w.chord_lane.chords[30]).left())
+            return False
+
+    recorder = PaintRecorder()
+    w.chord_lane.installEventFilter(recorder)
+    scrollbar = w.roll_scroll.horizontalScrollBar()
+    base = scrollbar.value()
+    try:
+        for frame in range(6):
+            paint_count = len(recorder.positions)
+            w.roll.set_render_offset(0.3 + frame * 0.35)
+            QTest.qWait(1)
+            assert scrollbar.value() == base
+            assert len(recorder.positions) > paint_count
+            assert recorder.positions[-1] == pytest.approx(
+                w.chord_lane.chord_rect(w.chord_lane.chords[30]).left()
+            )
+        assert recorder.positions == sorted(recorder.positions, reverse=True)
+    finally:
+        w.chord_lane.removeEventFilter(recorder)
+        set_language("zh_CN")
+
+
+def test_continuous_chord_scroll_does_not_delay_new_bar_layout(result_widget):
+    w = result_widget
+    w.chord_lane._source_chords = (MidiChord(0, 6, "C", (60, 64, 67)),)
+    w.chord_lane.refresh()
+    QTest.qWait(100)
+    assert w.chord_lane.chords[0].end == pytest.approx(1.5)
+    w.roll.set_daw_grid(80, (3, 4))
+    for frame in range(36):
+        w.roll.set_render_offset(0.3 + frame * 0.35)
+        QTest.qWait(5)
+    assert w.chord_lane.chords[0].end == pytest.approx(2.25)
 
 
 def test_browser_group_solo_and_stop_cancel_pending_playback(tmp_path):

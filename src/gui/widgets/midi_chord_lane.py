@@ -66,7 +66,10 @@ class MidiChordLane(QWidget):
         self._refresh_timer.setInterval(80)
         self._refresh_timer.timeout.connect(self.refresh)
         roll.content_changed.connect(self.schedule_refresh)
-        roll.view_changed.connect(self.schedule_refresh)
+        # Follow playback moves by fractional pixels between coarse scrollbar
+        # steps. Repaint in the same frame as the roll; restarting the content
+        # debounce here starves refreshes until the scrollbar jumps again.
+        roll.view_changed.connect(self.update)
         scroll.horizontalScrollBar().valueChanged.connect(self.update)
         self.update_translations()
 

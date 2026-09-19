@@ -288,7 +288,7 @@ python download_musescore_runtime.py
 新结果默认全部声部可见、可听；独奏可同时选中多个声部，取消独奏后保留各声部原来的静音设置。
 MIDI 下载提供全部声部合并、当前可听声部合并、全部声部分别打包 ZIP 三个选项，均使用当前编辑结果和工程 BPM；ZIP 不受静音/独奏影响。
 在编辑器内按空格播放/暂停，Shift+空格或“停止并回到开头”重置播放位置；输入文字或数值时不拦截空格。
-桌面钢琴卷帘使用与 TelkNet 默认工具一致的 ChordMini BTC，从原始音频识别和弦。和弦与小节网格共用时间轴，支持点击单独试听、缩放和滚动同步，并同步 MuScriptor 的开头小节偏移。更改工程 BPM 后仍与音符、小节对齐；编辑 MIDI 不改写原音和弦。首次运行前执行 `python download_chordmini_model.py`（完整准备命令也包含它），便携包内置固定源码和权重。
+桌面钢琴卷帘使用与 TelkNet 默认工具一致的 ChordMini BTC，从原始音频识别和弦。和弦与小节网格共用时间轴，支持点击单独试听，播放跟随、缩放和滚动均随卷帘逐帧同步，并同步 MuScriptor 的开头小节偏移。更改工程 BPM 后仍与音符、小节对齐；编辑 MIDI 不改写原音和弦。首次运行前执行 `python download_chordmini_model.py`（完整准备命令也包含它），便携包内置固定源码和权重。
 独立 Web/API、Docker 和便携 Web 的 MIDI 结果提供逐声部 MIDI ZIP 下载。详细交互、导出保留项与交付面范围见[结果编辑器说明](docs/soundfont-and-sheet-music.md)。
 试听音频的来源：逐乐器播放来自最终 MIDI 经官方 MuseScore General
 SoundFont 与 FluidSynth 合成，不是无效按钮或 UI 模拟。
