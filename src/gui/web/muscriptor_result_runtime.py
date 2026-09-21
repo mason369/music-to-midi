@@ -177,6 +177,7 @@ def build_muscriptor_result_html(
                 "midi_instruments_saved",
                 "player_failed",
                 "editor_input_invalid",
+                "note_hover",
                 "follow",
                 "tempo_unset",
                 "tempo_detected",
@@ -323,7 +324,10 @@ MUSCRIPTOR_RESULT_CSS = r"""
 .msr-roll-world { position:relative; min-height:616px; }
 .msr-roll-viewport { position:sticky; left:0; height:616px; overflow:hidden; }
 .msr-roll { display:block; cursor:crosshair; }
-.msr-playhead { position:absolute; top:0; bottom:0; width:2px; background:#fff; pointer-events:none; will-change:transform; }
+.msr-note-feedback { position:absolute; left:0; top:0; pointer-events:none; }
+.msr-note-tooltip { position:fixed; z-index:10000; pointer-events:none; white-space:pre-line; max-width:calc(100vw - 24px); padding:9px 12px; border:1px solid #557993; border-radius:6px; background:#142239; color:#e2f3ff; font:12px/1.6 system-ui,sans-serif; box-shadow:0 4px 18px #0006; }
+.msr-note-tooltip[hidden] { display:none; }
+.msr-playhead { position:absolute; top:0; bottom:0; width:2px; background:#75e5f5; pointer-events:none; will-change:transform; }
 .msr-instruments { border:1px solid #365f8d; border-radius:6px; background:#16213e; padding:12px; align-self:start; }
 .msr-instruments h3 { margin:0 0 10px; }
 .msr-row { display:flex; align-items:center; gap:8px; padding:6px 4px; }
@@ -985,6 +989,9 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.editing = false;
     this.selectedIndex = null;
     this.selectedIndices = new Set();
+    this.hoveredIndex = null;
+    this.hoverPointer = null;
+    this.feedbackNotes = [];
     this.drag = null;
     this.undoStack = [];
     this.redoStack = [];
@@ -1262,6 +1269,14 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.canvas.tabIndex = 0;
     this.playhead = el("div", "msr-playhead");
     viewport.appendChild(this.canvas);
+    this.feedbackCanvas = el("canvas", "msr-note-feedback");
+    this.feedbackCanvas.setAttribute("aria-hidden", "true");
+    viewport.appendChild(this.feedbackCanvas);
+    this.noteTooltip = el("div", "msr-note-tooltip");
+    this.noteTooltip.id = this.ownerId + "-note-tooltip";
+    this.noteTooltip.setAttribute("role", "tooltip");
+    this.noteTooltip.hidden = true;
+    viewport.appendChild(this.noteTooltip);
     viewport.appendChild(this.playhead);
     world.appendChild(viewport);
     scroll.appendChild(world);
@@ -1270,6 +1285,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.viewport = viewport;
     this.canvas.onpointerdown = function (event) { self.onPointerDown(event); };
     this.canvas.onpointermove = function (event) { self.onPointerMove(event); };
+    this.canvas.onpointerleave = function () { self.updateNoteHover(null); };
     this.canvas.onpointerup = function (event) { self.onPointerUp(event); };
     this.canvas.onpointercancel = function (event) { self.onPointerUp(event); };
     this.canvas.ondblclick = function (event) { self.onDoubleClick(event); };
@@ -1971,6 +1987,10 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.canvas.style.height = HEIGHT + "px";
     this.canvas.width = Math.round(width * dpr);
     this.canvas.height = Math.round(HEIGHT * dpr);
+    this.feedbackCanvas.style.width = width + "px";
+    this.feedbackCanvas.style.height = HEIGHT + "px";
+    this.feedbackCanvas.width = this.canvas.width;
+    this.feedbackCanvas.height = this.canvas.height;
     this.dpr = dpr;
     if (!this.initialNoteRangeFocused && this.scroll.clientHeight > 0 && this.m.notes.length) {
       var low = 108, high = 21;
@@ -2124,8 +2144,10 @@ MUSCRIPTOR_RESULT_JS = r"""
       painter.fillText((downbeatIndex + 1) + ".1", downbeatX + 3, 11);
     }
     painter.lineWidth = 1;
+    this.feedbackNotes = [];
     this.m.notes.forEach(function (note, index) {
       if (note.pitch < 21 || note.pitch > 108 || note.end < start || note.start > end) return;
+      self.feedbackNotes.push({note: note, index: index});
       var x = LEFT + note.start * self.pps - scrollX;
       var noteY = (108 - note.pitch) * ROW + 1;
       var noteWidth = Math.max(2, (note.end - note.start) * self.pps);
@@ -2151,6 +2173,53 @@ MUSCRIPTOR_RESULT_JS = r"""
       painter.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
       painter.setLineDash([]);
     }
+    this.updateNoteHover(this.hoverPointer);
+    this.drawNoteFeedback();
+  };
+  ResultSession.prototype.drawNoteFeedback = function () {
+    if (!this.feedbackCanvas) return;
+    var painter = this.feedbackCanvas.getContext("2d"), dpr = this.dpr || 1, self = this;
+    painter.setTransform(dpr, 0, 0, dpr, 0, 0);
+    painter.clearRect(0, 0, this.feedbackCanvas.width / dpr, HEIGHT);
+    (this.feedbackNotes || []).forEach(function (item) {
+      var note = item.note, hovered = item.index === self.hoveredIndex;
+      var active = note.start <= self.position && self.position < note.end && self.audible(note.instrument);
+      if (!active && !hovered) return;
+      var x = LEFT + note.start * self.pps - self.scroll.scrollLeft;
+      var y = (108 - note.pitch) * ROW + 1, width = Math.max(2, (note.end - note.start) * self.pps);
+      painter.fillStyle = hovered ? "rgba(255,255,255,.37)" : "rgba(255,255,255,.27)";
+      painter.fillRect(x, y, width, ROW - 2);
+      painter.strokeStyle = hovered ? "#d8faff" : "#b9e7f5";
+      painter.lineWidth = 1.5;
+      painter.strokeRect(x - .5, y - .5, width + 1, ROW - 1);
+      if (self.selectedIndices.has(item.index)) {
+        painter.strokeStyle = item.index === self.selectedIndex ? "#ffffff" : "#b7d9ff";
+        painter.strokeRect(x, y, width, ROW - 2);
+      }
+    });
+  };
+  ResultSession.prototype.updateNoteHover = function (pointer) {
+    if (!this.noteTooltip) return;
+    this.hoverPointer = pointer;
+    var point = pointer ? this.pointerCoordinates(pointer) : null;
+    var index = point && !this.drag && point.logicalX >= LEFT ? this.noteAt(point.logicalX, point.y) : null;
+    this.hoveredIndex = index;
+    this.noteTooltip.hidden = index === null;
+    if (index === null) {
+      this.canvas.removeAttribute("aria-describedby");
+    } else {
+      var note = this.m.notes[index];
+      var instrument = this.m.instruments.find(function (item) { return item.id === note.instrument; });
+      var names = ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
+      var values = {pitch:names[note.pitch % 12] + (Math.floor(note.pitch / 12) - 1), midi:note.pitch,
+        instrument:instrument ? instrument.label : note.instrument, velocity:note.velocity,
+        start:note.start.toFixed(2), end:note.end.toFixed(2), duration:(note.end-note.start).toFixed(2)};
+      this.noteTooltip.textContent = this.m.strings.note_hover.replace(/\{(\w+)\}/g, function (_, key) { return values[key]; });
+      this.canvas.setAttribute("aria-describedby", this.noteTooltip.id);
+      this.noteTooltip.style.left = Math.max(8, Math.min(pointer.clientX + 14, window.innerWidth - this.noteTooltip.offsetWidth - 8)) + "px";
+      this.noteTooltip.style.top = Math.max(8, Math.min(pointer.clientY + 16, window.innerHeight - this.noteTooltip.offsetHeight - 8)) + "px";
+    }
+    this.drawNoteFeedback();
   };
   ResultSession.prototype.layoutPlayhead = function () {
     if (!this.playhead) return;
@@ -2159,6 +2228,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.playhead.style.visibility = (x >= LEFT && x <= this.scroll.clientWidth) ? "visible" : "hidden";
     this.clock.textContent = this.position.toFixed(1) + "s";
     if (this.progress) this.progress.value = String(this.position);
+    this.drawNoteFeedback();
   };
   ResultSession.prototype.pointerCoordinates = function (event) {
     var rect = this.canvas.getBoundingClientRect();
@@ -2265,6 +2335,10 @@ MUSCRIPTOR_RESULT_JS = r"""
     event.preventDefault();
   };
   ResultSession.prototype.onPointerMove = function (event) {
+    if (!this.drag) {
+      this.updateNoteHover({clientX:event.clientX, clientY:event.clientY});
+      return;
+    }
     if (!this.drag || this.drag.pointerId !== event.pointerId) return;
     if (this.drag.mode === "marquee") {
       var marqueePoint = this.pointerCoordinates(event);

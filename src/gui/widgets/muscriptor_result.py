@@ -25,7 +25,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
+from PyQt6.QtGui import QColor, QCursor, QFont, QKeySequence, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
     QAbstractSlider,
     QAbstractSpinBox,
@@ -395,6 +395,7 @@ class _PianoRollCanvas(QWidget):
     seek_requested = pyqtSignal(float)
     content_changed = pyqtSignal()
     view_changed = pyqtSignal()
+    position_changed = pyqtSignal()
     edit_committed = pyqtSignal(object, object)
     selection_changed = pyqtSignal(object)
     add_note_requested = pyqtSignal(float, int)
@@ -422,6 +423,7 @@ class _PianoRollCanvas(QWidget):
         self._row_height = 7
         self._editable = False
         self._selected_index: int | None = None
+        self._hovered_index: int | None = None
         self._selected_indices: set[int] = set()
         self._grid_seconds = 0.125
         self._daw_reference_bpm: float | None = None
@@ -438,6 +440,8 @@ class _PianoRollCanvas(QWidget):
         self._marquee_base: set[int] = set()
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        self.view_changed.connect(self._refresh_note_hover)
         self.setMinimumHeight(88 * self._row_height)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._update_size()
@@ -495,6 +499,8 @@ class _PianoRollCanvas(QWidget):
         # Commit only after every invariant has passed so a rejected async
         # payload cannot leave half-applied roll state behind.
         self._notes = normalized
+        self._hovered_index = None
+        self.setToolTip("")
         self._notes_by_start = notes_by_start
         self._note_indices_by_start = indices_by_start
         self._note_starts = note_starts
@@ -688,6 +694,7 @@ class _PianoRollCanvas(QWidget):
         if abs(position - self._position) < 1e-9:
             return
         previous_x = self.x_for_time_float(self._position) - self._render_offset_px
+        previous_active = self._active_note_indices()
         self._position = position
         current_x = self.x_for_time_float(self._position) - self._render_offset_px
         # Repaint fractional movement too. At zoomed-out scales one 16 ms frame
@@ -696,6 +703,9 @@ class _PianoRollCanvas(QWidget):
         dirty_left = max(0, math.floor(min(previous_x, current_x)) - 3)
         dirty_right = min(self.width(), math.ceil(max(previous_x, current_x)) + 3)
         self.update(dirty_left, 0, max(1, dirty_right - dirty_left + 1), self.height())
+        for index in previous_active.symmetric_difference(self._active_note_indices()):
+            self._update_note_region(index)
+        self.position_changed.emit()
 
     @property
     def position(self) -> float:
@@ -774,6 +784,23 @@ class _PianoRollCanvas(QWidget):
         if next_tile * _ROLL_TILE_WIDTH < self.width():
             self._static_tile(next_tile)
 
+        active = self._active_note_indices()
+        feedback = active | ({self._hovered_index} if self._hovered_index is not None else set())
+        for index in sorted(feedback):
+            note = self._notes[index]
+            rect = self._note_rect(note)
+            if rect.right() < logical_left or rect.left() > logical_right:
+                continue
+            color = QColor(self._colors.get(note.instrument, QColor("#4a9eff")))
+            fill = QColor("#ffffff")
+            fill.setAlpha(95 if index == self._hovered_index else 70)
+            painter.fillRect(rect, fill)
+            painter.setPen(
+                QPen(QColor("#d8faff") if index == self._hovered_index else color.lighter(165), 1.5)
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect.adjusted(-0.5, -0.5, 0.5, 0.5))
+
         for index in self._visible_selected_indices(logical_left, logical_right):
             selected = self._notes[index]
             if not 21 <= selected.pitch <= 108:
@@ -806,11 +833,77 @@ class _PianoRollCanvas(QWidget):
 
         playhead_x = self.x_for_time_float(self._position)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        playhead_pen = QPen(QColor("#ffffff"))
+        playhead_pen = QPen(QColor("#75e5f5"))
         playhead_pen.setWidthF(1.5)
         playhead_pen.setCosmetic(True)
         painter.setPen(playhead_pen)
         painter.drawLine(QLineF(playhead_x, 0.0, playhead_x, float(self.height())))
+
+    def _note_rect(self, note):
+        left = self.x_for_time_float(note.start)
+        return QRectF(
+            left,
+            (108 - note.pitch) * self._row_height + 1,
+            max(2.0, self.x_for_time_float(note.end) - left),
+            max(2, self._row_height - 2),
+        )
+
+    def _active_note_indices(self):
+        first = bisect_right(self._note_prefix_max_ends, self._position)
+        last = bisect_right(self._note_starts, self._position)
+        return {
+            index
+            for index in self._note_indices_by_start[first:last]
+            if self._notes[index].end > self._position
+            and 21 <= self._notes[index].pitch <= 108
+            and self._notes[index].instrument not in self._muted
+        }
+
+    def _update_note_region(self, index):
+        rect = self._note_rect(self._notes[index]).translated(-self._render_offset_px, 0)
+        self.update(rect.adjusted(-3, -3, 3, 3).toAlignedRect())
+
+    def _set_note_hover(self, index):
+        if index != self._hovered_index:
+            for changed in (self._hovered_index, index):
+                if changed is not None:
+                    self._update_note_region(changed)
+            self._hovered_index = index
+        if index is None:
+            self.setToolTip("")
+            return
+        note = self._notes[index]
+        pitch = ("C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B")[note.pitch % 12]
+        self.setToolTip(
+            t(
+                "muscriptor_result.note_hover",
+                pitch=f"{pitch}{note.pitch // 12 - 1}",
+                midi=note.pitch,
+                instrument=_instrument_label(note.instrument),
+                velocity=note.velocity,
+                start=f"{note.start:.2f}",
+                end=f"{note.end:.2f}",
+                duration=f"{note.end - note.start:.2f}",
+            )
+        )
+
+    def _refresh_note_hover(self):
+        point = self.mapFromGlobal(QCursor.pos())
+        logical_x = point.x() + self._render_offset_px
+        index = (
+            self._note_index_at(logical_x, point.y())
+            if self.underMouse() and logical_x >= self._keyboard_width
+            else None
+        )
+        self._set_note_hover(index)
+
+    def moveEvent(self, event):  # noqa: N802
+        self._refresh_note_hover()
+        super().moveEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._set_note_hover(None)
+        super().leaveEvent(event)
 
     def _visible_selected_indices(
         self, logical_left: float, logical_right: float
@@ -1278,6 +1371,13 @@ class _PianoRollCanvas(QWidget):
             self._replace_selected_notes(replacements)
             event.accept()
             return
+        if self._drag_mode is None:
+            logical_x = event.position().x() + self._render_offset_px
+            self._set_note_hover(
+                self._note_index_at(logical_x, event.position().y())
+                if logical_x >= self._keyboard_width
+                else None
+            )
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802

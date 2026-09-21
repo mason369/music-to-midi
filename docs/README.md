@@ -6,6 +6,8 @@
 
 MIDI result editors start with every instrument visible and audible. Solo supports multiple instruments while preserving manual mutes. Export all instruments together, only the audible instruments together, or every instrument in a separate MIDI inside one ZIP. Space plays/pauses; Shift+Space stops and rewinds without intercepting text or numeric input. The desktop piano roll also has a ChordMini BTC chord lane recognized from source audio, aligned with the bar grid, with clickable SoundFont audition. Playback follow, zoom and scrolling update the chord lane in the same frame as the piano roll. Standalone Web/API result downloads support instrument MIDI ZIPs too. See the [result editor guide](soundfont-and-sheet-music.md).
 
+Chord colors identify roots and the current interval follows the playhead. Short intervals keep full labels in staggered callouts anchored to their true timing. Desktop, Space and Colab highlight MIDI notes at the playhead and show pitch, instrument, velocity and timing on hover. Muted instruments do not receive playback highlights; editing selections remain independent.
+
 <p align="center">
   <a href="../README.md">中文</a> | English
 </p>

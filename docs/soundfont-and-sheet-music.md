@@ -9,6 +9,8 @@
 - 本地桌面和弦轨使用与 TelkNet 默认工具相同的 **ChordMini BTC**，固定官方源码 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03` 和 `btc_model_best.pth`。原音按原采样率、原声道解码为 PCM32，再交给官方特征提取与推理；170 类完整标签涵盖 14 种和弦性质及 N/X，无和弦/不确定区间不试听。保留原生边界，只在小节处分割显示，MuScriptor 开头补齐偏移同步到和弦。小节、和弦、音符共用参考 BPM 和拍号；工程变速不会导致三者漂移，编辑 MIDI 不会改写原音和弦。后台分析可取消并与转写共用 GPU 锁；失败显示原因、点击重试，不替换为 MIDI 估计或 Omnizart。
 - 点击和弦暂停整曲并通过当前 SoundFont 单独试听。取消、快速连续点击、停止和关闭编辑器会取消旧请求，防止较慢的旧试听覆盖新选择。
 - 和弦栏直接响应卷帘每一帧的横向位移与缩放，包含两次滚动条步进之间的小数像素位移；仅和弦、小节等内容变化使用延迟重算。持续播放不会推迟和弦绘制或阻止新的小节布局生效。
+- 和弦按根音保持一致配色，名称使用紧凑音乐记法（如 `C♯m7`），原始模型标签保留在悬停详情中。当前片段高亮，悬停加亮边框；短片段不截断名称，而是用错开的完整标签与引线指向真实时间块，标签也可点击试听。N/X 使用中性色且不试听。标签避让只影响绘制，播放期间保留标签行高度，避免卷帘上下跳动。
+- 桌面、Space 和 Colab 的音符在播放头所在时间区间高亮；暂停和跳转后仍显示当前位置，区间采用起点包含、终点不包含。静音/非独奏声部不显示播放高亮。悬停显示音高、MIDI 编号、声部、力度、起止时间和时长，不改变选择或音符数据。桌面在原缓存瓦片上叠加反馈，仅重绘进入/离开高亮的音符；浏览器用独立透明 Canvas 绘制可见音符反馈，复用现有编辑与播放流程。
 
 | 交付面 | 多选独奏、可听组导出、批量 MIDI、快捷键 | 和弦轨 |
 |---|---|---|
@@ -23,9 +25,11 @@ flowchart LR
     Editor --> Export[midi_editor 校验 → 合并 MIDI / 声部 ZIP]
     Audio[原始音频 / 所选 stem WAV] --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
     Worker --> Native[原音秒坐标和弦 + 固定模型身份缓存]
-    Native --> Chords[时间偏移与小节显示 → 桌面和弦轨 → FluidSynth 试听]
+    Native --> Chords[时间偏移与小节显示 → 彩色和弦与完整避让标签 → FluidSynth 试听]
     Editor --> View[逐帧位移与缩放 / Per-frame view motion]
     View --> Chords
+    View --> Feedback[播放位置 / 悬停 → 音符反馈层与详情]
+    Editor --> Feedback
     MIDI --> API[midi_exports → 保留源 tempo map 与事件 tick → Web/API ZIP]
 ```
 
@@ -38,6 +42,10 @@ Space plays/pauses; Shift+Space or Stop and rewind returns transport and horizon
 Space and Colab share the browser mixer/export/transport implementation. Chord display is desktop-only as requested. Standalone Web/API, Docker and portable Web offer instrument ZIP downloads for both jobs and restored project results, preserving the source tempo map and event ticks. They have no MIDI editor/solo state, so editor-specific shortcuts and audible-group exports do not apply. Those browser surfaces retain their existing SoundFont/FluidSynth dependencies. Only desktop chord analysis requires the additional pinned ChordMini BTC resources.
 
 The chord lane repaints with each frame of horizontal motion or zoom, including fractional pixel movement between scrollbar steps. Only chord and bar content changes use a delayed rebuild. Continuous playback therefore neither delays chord drawing nor prevents a new bar layout from taking effect.
+
+Chord colors remain stable by root. Compact notation such as `C♯m7` preserves the full model label in hover details. The current interval and hovered blocks receive separate highlights. Short intervals use full, staggered labels with leaders to their true timing; labels also support audition. N/X remain neutral and silent. Label placement never alters model boundaries, and reserved row height prevents vertical jumps while scrolling.
+
+Desktop, Space and Colab highlight MIDI notes at the current playhead position, including after pause or seek, using half-open time intervals. Muted or excluded solo instruments do not receive playback highlights. Hover details show pitch, MIDI number, instrument, velocity, start, end and duration without modifying selection or note data. Desktop feedback overlays cached tiles and invalidates changed note regions; browsers use a separate transparent canvas over visible notes. Existing editing and playback controls retain their behavior.
 
 ## 使用音色库
 

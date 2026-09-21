@@ -1,5 +1,55 @@
 # 更新说明 / Changelog
 
+## 未发布 / Unreleased — 2026-09-21
+
+### 中文
+
+#### 和弦显示与短片段
+
+- 桌面和弦栏改为按根音区分的 12 色低饱和圆角区块，等音根音保持同色；当前和弦使用更亮的填色与顶边，悬停突出边框，播放头统一为青色。
+- 完整保留 ChordMini 的 170 类和弦含义，以紧凑记谱显示升降号、大小调、七和弦及其他扩展类型；转位标签将低音级数转换为正确拼写的低音音名，悬停仍可查看模型原始标签和起止时间。
+- 修复短和弦被压成省略号或无字细条的问题：空间不足时在区块上方自动错行显示完整名称，并用引线连接对应片段；标签可点击试听。保持片段真实起止边界，不拉宽短片段覆盖后续和弦。
+- 缩放、窗口宽度变化与横向滚动时重新安排标签并避让；滚动中保留行高，减少钢琴卷帘上下跳动。无和弦和未知标签使用中性色且不发声，保留小节切分、工程 BPM 与源音频时间偏移对齐。
+- 即使关闭播放跟随，当前和弦高亮仍随播放位置更新；通过时间索引与可见区域裁剪减少绘制开销。
+
+#### MIDI 音符反馈
+
+- 桌面、Space 与 Colab 结果编辑器增加当前位置的 MIDI 音符高亮，随播放、暂停和跳转更新，并遵守静音及独奏后的可听声部状态。
+- 音符悬停时突出显示，并提供音高、MIDI 编号、声部、力度、起止时间和时长。浏览器提示自动保持在视口内，支持窄屏换行；反馈层不拦截原有选区、拖动与编辑操作。
+- 桌面使用音符时间索引及局部重绘，保留既有缓存瓦片；Space/Colab 共用透明反馈画布，只绘制可见音符的反馈。显示与悬停不修改音符、时值、选区或导出数据。
+
+#### 国际化、文档与验证
+
+- 同步 `zh_CN` 与 `en_US` 的和弦提示及音符详情，检查全部 619 个翻译键、键集合、占位符和新增文案回退；更新两种语言的 README、界面说明与和弦/音符反馈架构图。
+- 新增 22 个和弦及桌面反馈用例、2 个浏览器运行时反馈用例，覆盖完整标签与引线命中、170 类记谱、等音配色、时间边界、偏移、播放状态、静音、悬停及数据不变性。连同既有编辑、响应式、跨平台、API、Docker、便携包和启动入口回归，共 519 个不同测试通过。
+- 使用真实歌曲、7357 个 MIDI 音符和 232 个原音和弦区间完成桌面实际播放、暂停、跳转、滚动、缩放和有声试听验收；在 0.5×/1×/4× 缩放与 100/125/150 BPM 组合下，本机测得约 60.5–62.2 帧/秒。短片段标签完整、互不重叠且可命中正确片段。
+- 本地 Gradio 加载 Space/Colab 正式共享运行时，通过真实浏览器验证中英文悬停、播放到结束、暂停及跳转高亮和 320px 窄视口边界，未出现浏览器错误或警告。
+- 桌面、便携 App 与可执行 App 复用 Qt 组件；Space/Colab 同步 MIDI 反馈，和弦栏仍沿用桌面范围。独立 Web/API、Docker 与便携 Web 没有该钢琴卷帘，按 API、部署和打包契约验证。本轮没有生成新发行包或部署远端 Space/Colab。
+
+### English
+
+#### Chord display and short segments
+
+- Restyled the desktop chord lane with rounded blocks in 12 muted root-note colors; enharmonic roots share a color. The current chord has a brighter fill and top edge, hovering emphasizes its border, and the playhead is cyan.
+- Preserved the meaning of all 170 ChordMini classes while displaying compact accidentals, major/minor qualities, seventh chords and other extensions. Inversion labels convert bass degrees to correctly spelled bass-note names; tooltips retain the original model label and time interval.
+- Fixed short chords collapsing into ellipses or unlabeled slivers. When a name does not fit, its complete label is placed in staggered rows above the blocks, with a leader line to the corresponding segment; the label also supports click-to-audition. Native time boundaries remain intact without widening a short segment over its neighbor.
+- Labels are rearranged to avoid collisions during zoom, resizing and horizontal scrolling. Row height is retained while scrolling to reduce vertical piano-roll movement. No-chord and unknown labels remain neutral and silent, preserving bar splits, project-BPM alignment and source-audio offsets.
+- Current-chord highlighting now follows playback position even with playback follow disabled. Time indexes and visible-region clipping reduce rendering work.
+
+#### MIDI note feedback
+
+- Desktop, Space and Colab result editors now highlight MIDI notes at the current position during playback, pause and seeking, respecting audible parts after mute and solo selections.
+- Hovering emphasizes a note and shows its pitch, MIDI number, part, velocity, start/end times and duration. Browser tooltips stay within the viewport and wrap on narrow screens; the feedback layer leaves existing selection, dragging and editing interactions available.
+- Desktop uses note-time indexes and localized repaints while retaining cached tiles. Space/Colab share a transparent feedback canvas that renders feedback only for visible notes. Display and hover feedback do not modify notes, timing, selections or exported data.
+
+#### Localization, documentation and validation
+
+- Updated chord hints and note details for `zh_CN` and `en_US`, checking all 619 translation keys, key completeness, placeholders and new-text fallbacks. Updated READMEs, interface documentation and the chord/note feedback architecture diagram in both languages.
+- Added 22 chord/desktop feedback cases and 2 browser-runtime feedback cases covering complete labels and leader-line targets, all 170 notations, enharmonic colors, time boundaries, offsets, playback state, mute, hover and unchanged data. Together with existing editor, responsive-layout, platform, API, Docker, portable-package and launcher regressions, 519 distinct tests passed.
+- Used an actual song with 7357 MIDI notes and 232 source-audio chord intervals for desktop playback, pause, seeking, scrolling, zoom and audible chord audition. Local measurements reached approximately 60.5–62.2 frames per second across the tested 0.5×/1×/4× zoom and 100/125/150 BPM combinations. Short-segment labels were complete, non-overlapping and mapped to the correct segments.
+- Loaded the production Space/Colab shared runtime in local Gradio and used a real browser to verify Chinese/English hover details, playback to the end, pause/seek highlighting and tooltip bounds at a 320px viewport, with no browser errors or warnings.
+- Desktop, portable App and executable App share the Qt components. Space/Colab receive MIDI feedback; the chord lane retains its desktop scope. Standalone Web/API, Docker and portable Web have no such piano roll and were checked through API, deployment and packaging contracts. This change did not produce new release packages or deploy remote Space/Colab instances.
+
 ## 未发布 / Unreleased — 2026-09-20
 
 ### 中文
