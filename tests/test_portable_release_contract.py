@@ -1,10 +1,32 @@
 import unittest
+import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PortableReleaseContractTests(unittest.TestCase):
+    def test_pyinstaller_spec_imports_project_in_isolated_interpreter(self):
+        spec_path = REPO_ROOT / "MusicToMidi.spec"
+        script = (
+            "import pathlib, sys\n"
+            "path = pathlib.Path(sys.argv[1]).resolve()\n"
+            "source = path.read_text(encoding='utf-8')\n"
+            "prefix = source.split('if not chordmini_source_dir:', 1)[0]\n"
+            "namespace = {'SPEC': str(path)}\n"
+            "exec(compile(prefix, str(path), 'exec'), namespace)\n"
+            "assert namespace['ROOT_DIR'] in sys.path\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script, str(spec_path)],
+            cwd=REPO_ROOT.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_pyinstaller_spec_removes_only_conflicting_pyqt_vc_runtime_copies(self):
         spec = (REPO_ROOT / "MusicToMidi.spec").read_text(encoding="utf-8")
 

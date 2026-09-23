@@ -13,6 +13,8 @@ from PyInstaller.utils.hooks import copy_metadata
 
 # 项目根目录
 ROOT_DIR = os.path.dirname(os.path.abspath(SPEC))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 USER_HOME = str(Path.home())
 ACCELERATOR = os.environ.get("MUSIC_TO_MIDI_ACCELERATOR", "cuda").strip().lower()
 if ACCELERATOR not in {"cuda", "xpu"}:

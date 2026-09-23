@@ -8,10 +8,12 @@
 - Space 源码同步补齐模型就绪探针模块及对应变更触发路径，修复镜像构建后因缺少 `src.model_profile_runtime_probe` 而启动失败的问题。
 - Space 同步包增加页面启动使用的品牌图标；同步工作流自身变化也会触发重新部署，避免缺文件修复无法自动生效。
 - ZeroGPU 平台将 `spaces==0.51.3` 作为构建依赖注入；Space 自身改为接受兼容版本范围，避免与平台注入版本冲突。
+- 修复 Linux PyInstaller 构建时新增的 ChordMini 校验导入找不到项目 `src` 包；spec 现在先加入仓库根路径，并使用隔离进程回归验证。
 - The Space image installs `gradio[mcp,oauth]==6.17.3`, whose MCP extra requires Pydantic 2.11.10–2.12.5. Updated the Space-specific pins to `pydantic==2.12.5` and its matching `pydantic-core==2.41.5`, resolving the dependency conflict from 2.10.6. Colab uses a separate environment and is unchanged.
 - Included the model-readiness probe module and its change trigger in the Space source sync, fixing startup failure after image build when `src.model_profile_runtime_probe` was absent.
 - Included the brand icon required at Space startup, and made changes to the sync workflow itself trigger redeployment.
 - The ZeroGPU builder injects `spaces==0.51.3`; the Space dependency now accepts the compatible range rather than conflicting with the platform-selected version.
+- Fixed a Linux PyInstaller failure where the new ChordMini validation import could not locate the project `src` package. The spec now adds the repository root first, with an isolated-process regression check.
 
 **2026-09-21 更新 / Update**
 
