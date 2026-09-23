@@ -2,6 +2,11 @@
 
 ## v1.8.0 — 2026-09-23
 
+**2026-09-23 发布修复 / Release fix**
+
+- Space 镜像构建会额外安装 `gradio[mcp,oauth]==6.17.3`；其 MCP 扩展要求 Pydantic 2.11.10–2.12.5。将 Space 专用依赖调整为 `pydantic==2.12.5` 与对应的 `pydantic-core==2.41.5`，解除此前 2.10.6 导致的解析冲突；Colab 独立运行环境不受影响。
+- The Space image installs `gradio[mcp,oauth]==6.17.3`, whose MCP extra requires Pydantic 2.11.10–2.12.5. Updated the Space-specific pins to `pydantic==2.12.5` and its matching `pydantic-core==2.41.5`, resolving the dependency conflict from 2.10.6. Colab uses a separate environment and is unchanged.
+
 **2026-09-21 更新 / Update**
 
 ### 中文

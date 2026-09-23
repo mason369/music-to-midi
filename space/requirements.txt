@@ -68,8 +68,8 @@ gradio==6.17.3
 fastapi==0.136.3
 starlette==1.6.0
 uvicorn[standard]>=0.48.0,<1
-pydantic==2.10.6
-pydantic-core==2.27.2
+pydantic==2.12.5
+pydantic-core==2.41.5
 
 # ZeroGPU 支持
 spaces==0.51.1

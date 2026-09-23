@@ -105,8 +105,8 @@ def test_space_ui_exposes_restored_modes_and_dependencies():
     assert "fastapi==0.136.3" in requirements_text
     assert "starlette==1.6.0" in requirements_text
     assert "uvicorn[standard]>=0.48.0,<1" in requirements_text
-    assert "pydantic==2.10.6" in requirements_text
-    assert "pydantic-core==2.27.2" in requirements_text
+    assert "pydantic==2.12.5" in requirements_text
+    assert "pydantic-core==2.41.5" in requirements_text
     assert "piano-transcription-inference==0.0.6" in requirements_text
     assert "transkun==2.0.1" in requirements_text
     assert "ncls==0.0.68" in requirements_text
