@@ -224,6 +224,12 @@ class CiWorkflowContractTests(unittest.TestCase):
         self.assertIn("- 'src/gui/web/**'", workflow)
         self.assertIn('cp src/gui/__init__.py "$WORK/src/gui/"', workflow)
         self.assertIn('cp -r src/gui/web "$WORK/src/gui/"', workflow)
+        self.assertIn("- 'resources/icons/**'", workflow)
+        self.assertIn('cp -r resources/icons "$WORK/resources/"', workflow)
+        self.assertIn(
+            '"resources" / "icons" / "app_icon.png"',
+            (REPO_ROOT / "src" / "gui" / "web" / "brand_assets.py").read_text(encoding="utf-8"),
+        )
         self.assertNotIn('rm -rf "$WORK/src/gui"', workflow)
 
 

@@ -6,8 +6,10 @@
 
 - Space 镜像构建会额外安装 `gradio[mcp,oauth]==6.17.3`；其 MCP 扩展要求 Pydantic 2.11.10–2.12.5。将 Space 专用依赖调整为 `pydantic==2.12.5` 与对应的 `pydantic-core==2.41.5`，解除此前 2.10.6 导致的解析冲突；Colab 独立运行环境不受影响。
 - Space 源码同步补齐模型就绪探针模块及对应变更触发路径，修复镜像构建后因缺少 `src.model_profile_runtime_probe` 而启动失败的问题。
+- Space 同步包增加页面启动使用的品牌图标；同步工作流自身变化也会触发重新部署，避免缺文件修复无法自动生效。
 - The Space image installs `gradio[mcp,oauth]==6.17.3`, whose MCP extra requires Pydantic 2.11.10–2.12.5. Updated the Space-specific pins to `pydantic==2.12.5` and its matching `pydantic-core==2.41.5`, resolving the dependency conflict from 2.10.6. Colab uses a separate environment and is unchanged.
 - Included the model-readiness probe module and its change trigger in the Space source sync, fixing startup failure after image build when `src.model_profile_runtime_probe` was absent.
+- Included the brand icon required at Space startup, and made changes to the sync workflow itself trigger redeployment.
 
 **2026-09-21 更新 / Update**
 

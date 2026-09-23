@@ -21,6 +21,7 @@ on:
       - 'download_sota_models.py'
       - 'download_chordmini_model.py'
       - 'resources/chordmini-source.json'
+      - 'resources/icons/**'
       - 'download_beat_this_model.py'
       - 'download_multistem_model.py'
       - 'download_vocal_model.py'
@@ -70,6 +71,7 @@ jobs:
           cp download_chordmini_model.py "$WORK/"
           mkdir -p "$WORK/resources"
           cp resources/chordmini-source.json "$WORK/resources/"
+          cp -r resources/icons "$WORK/resources/"
           cp download_beat_this_model.py "$WORK/"
           cp download_multistem_model.py "$WORK/"
           cp download_vocal_model.py "$WORK/"
