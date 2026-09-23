@@ -10,7 +10,10 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_pyinstaller_spec_imports_project_in_isolated_interpreter(self):
         spec_path = REPO_ROOT / "MusicToMidi.spec"
         script = (
-            "import pathlib, sys\n"
+            "import pathlib, sys, types\n"
+            "for name in ('PyInstaller', 'PyInstaller.utils', 'PyInstaller.utils.hooks'):\n"
+            "    sys.modules[name] = types.ModuleType(name)\n"
+            "sys.modules['PyInstaller.utils.hooks'].copy_metadata = lambda *args, **kwargs: []\n"
             "path = pathlib.Path(sys.argv[1]).resolve()\n"
             "source = path.read_text(encoding='utf-8')\n"
             "prefix = source.split('if not chordmini_source_dir:', 1)[0]\n"
