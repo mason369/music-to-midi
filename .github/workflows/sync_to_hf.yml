@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
     paths:
+      - '.github/workflows/sync_to_hf.yml'
       - 'src/core/**'
       - 'src/__init__.py'
       - 'src/models/**'
