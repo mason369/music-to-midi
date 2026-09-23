@@ -135,7 +135,7 @@ MuScriptor Small / Medium / Large 是三个独立选项。所选档位失败、�
 | 层 | 版本或组件 |
 |----|------------|
 | Space 运行时 | Python 3.12.12、Torch 2.8.0、torchaudio 2.8.0、torchvision 0.23.0、NumPy `>=2,<2.5` |
-| ZeroGPU / Web | `spaces==0.51.1`、Gradio 6.17.3、Pydantic 2.12.5 |
+| ZeroGPU / Web | `spaces>=0.51.3,<1`（具体版本由 Space 平台安装）、Gradio 6.17.3、Pydantic 2.12.5 |
 | 分离运行时 | `audio-separator==0.44.1`、`onnxruntime-gpu==1.23.2` |
 | 转写引擎 | YourMT3+、MIROS、MuScriptor Large / Medium / Small、TransKun V2 / V2 Aug、Aria-AMT、ByteDance Pedal |
 | 分离模型 | Leap XE vocals、Leap Instrumental accompaniment、BS-RoFormer SW Fixed |

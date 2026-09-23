@@ -141,7 +141,7 @@ def test_space_disables_gradio_auto_wrap_and_detects_the_actual_zerogpu_runtime(
         '"yes"'
         not in source[source.index("try:\n    import spaces") : source.index("import gradio as gr")]
     )
-    assert "spaces==0.51.1" in requirements
+    assert "spaces>=0.51.3,<1" in requirements
     assert "pydantic==2.12.5" in requirements
     assert "pydantic-core==2.41.5" in requirements
     assert "_patched_json_schema" not in source

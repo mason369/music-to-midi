@@ -2015,8 +2015,8 @@ def _separate_impl(
 
 
 ZERO_GPU_FREE_ACCOUNT_BUDGET_SECONDS = 300
-# spaces==0.51.1 applies a 1.5 duration factor to the default Blackwell
-# ``large`` allocation.  Treat that as the pinned-package upper bound so the
+# The ZeroGPU service applies a 1.5 duration factor to the default Blackwell
+# ``large`` allocation.  Treat that as the admitted upper bound so the
 # dynamic request cannot exceed one logged-in free-account window; H200's 1.0
 # factor is therefore admitted conservatively.
 ZERO_GPU_LARGE_DURATION_FACTOR = 1.5
