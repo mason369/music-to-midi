@@ -1,6 +1,8 @@
 # 更新说明 / Changelog
 
-## 未发布 / Unreleased — 2026-09-21
+## v1.8.0 — 2026-09-23
+
+**2026-09-21 更新 / Update**
 
 ### 中文
 
@@ -50,7 +52,7 @@
 - Loaded the production Space/Colab shared runtime in local Gradio and used a real browser to verify Chinese/English hover details, playback to the end, pause/seek highlighting and tooltip bounds at a 320px viewport, with no browser errors or warnings.
 - Desktop, portable App and executable App share the Qt components. Space/Colab receive MIDI feedback; the chord lane retains its desktop scope. Standalone Web/API, Docker and portable Web have no such piano roll and were checked through API, deployment and packaging contracts. This change did not produce new release packages or deploy remote Space/Colab instances.
 
-## 未发布 / Unreleased — 2026-09-20
+**2026-09-20 更新 / Update**
 
 ### 中文
 
@@ -70,7 +72,7 @@
 - Actual audio-device playback measured approximately 59–62 frames per second at 0.5×/1×/4× view zoom and 100/125/150 BPM. Pause, manual scrolling, zoom, follow re-entry, forward/backward seeks, chord audition and stop/rewind passed. All 476 related result-editor, chord, responsive-layout, platform, packaging-contract and localization tests passed, with actual interface checks in both languages.
 - Desktop and portable App share this component. Space/Colab have no desktop chord lane; standalone Web/API, Docker and portable Web have no such piano roll, so this Qt refresh path does not apply to them. Updated READMEs and chord architecture documentation in both supported languages.
 
-## 未发布 / Unreleased — 2026-09-19
+**2026-09-19 更新 / Update**
 
 ### 中文
 

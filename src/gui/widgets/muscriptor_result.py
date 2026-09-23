@@ -839,15 +839,6 @@ class _PianoRollCanvas(QWidget):
         painter.setPen(playhead_pen)
         painter.drawLine(QLineF(playhead_x, 0.0, playhead_x, float(self.height())))
 
-    def _note_rect(self, note):
-        left = self.x_for_time_float(note.start)
-        return QRectF(
-            left,
-            (108 - note.pitch) * self._row_height + 1,
-            max(2.0, self.x_for_time_float(note.end) - left),
-            max(2, self._row_height - 2),
-        )
-
     def _active_note_indices(self):
         first = bisect_right(self._note_prefix_max_ends, self._position)
         last = bisect_right(self._note_starts, self._position)

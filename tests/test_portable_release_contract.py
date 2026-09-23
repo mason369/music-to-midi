@@ -180,7 +180,7 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_notes_describe_gpu_compatibility_without_overpromising_specific_generations(
         self,
     ):
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / "docs" / "releases" / "v1.8.0.md").read_text(encoding="utf-8")
 
         self.assertIn("与内置 PyTorch/CUDA 兼容的 NVIDIA 显卡", workflow)
         self.assertIn("当前显卡与内置 PyTorch/CUDA 不兼容", workflow)
@@ -546,14 +546,18 @@ class PortableReleaseContractTests(unittest.TestCase):
 
     def test_release_workflow_updates_existing_release_notes(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        notes = (REPO_ROOT / "docs" / "releases" / "v1.8.0.md").read_text(encoding="utf-8")
 
         self.assertIn("更新 Release 说明", workflow)
         self.assertIn("gh release edit", workflow)
         self.assertIn("--notes-file release-notes.md", workflow)
-        self.assertIn("## 音乐转MIDI转换器 ${TAG}", workflow)
-        self.assertIn("## Music to MIDI Converter ${TAG}", workflow)
-        self.assertIn("不能匿名全自动下载", workflow)
-        self.assertIn("anonymous fully automatic download is not available", workflow)
+        self.assertIn('NOTES_PATH="docs/releases/${TAG}.md"', workflow)
+        self.assertIn('test -s "$NOTES_PATH"', workflow)
+        self.assertIn('cp "$NOTES_PATH" release-notes.md', workflow)
+        self.assertIn("## 音乐转 MIDI v1.8.0", notes)
+        self.assertIn("## Music to MIDI v1.8.0", notes)
+        self.assertIn("不能匿名全自动下载", notes)
+        self.assertIn("anonymous fully automatic download is not available", notes)
         self.assertLess(
             workflow.index("更新 Release 说明"),
             workflow.index("上传资源到 Release"),
@@ -568,37 +572,27 @@ class PortableReleaseContractTests(unittest.TestCase):
 
     def test_release_notes_describe_split_archives_generically(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
-        for expected_update in (
-            "MuScriptor Small / Medium / Large：v0.3.0 节拍对齐与长音频高质量推理",
-            "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
-            "卷帘拍线/强拍/小节底色",
-            "MuseScore 音符轨 tempo",
-            r"\`SMART\` 模式",
-            "生成阶段的硬约束",
-            "按 5 秒分片边转写边预览",
-            "播放范围严格限制在已经生成的 MIDI",
-            "所有转 MIDI 路线统一使用钢琴卷帘与音轨控制",
-            r"\`Ctrl/Alt + 滚轮\`",
-            r"\`Shift + 滚轮\`",
-            "Hugging Face Space 和 Colab 同步七种处理模式",
+        notes = (REPO_ROOT / "docs" / "releases" / "v1.8.0.md").read_text(encoding="utf-8")
+        for expected in (
+            "全部声部的 MIDI ZIP",
+            "ChordMini BTC",
+            "Space / Colab",
+            "WinRAR 不支持 WIM",
+            "WinRAR does not support WIM",
+            "打开 `.wim.001`，解压至 NTFS",
+            "七种既有处理模式",
         ):
-            self.assertIn(expected_update, workflow)
-        self.assertIn("MusicToMidi-Windows-GPU-Portable.wim.*", workflow)
-        self.assertIn("MusicToMidi-Windows-WebFrontend-Portable.zip", workflow)
-        self.assertNotIn("MusicToMidi-Windows-GPU-App-Portable.*", workflow)
-        self.assertNotIn("MusicToMidi-Windows-GPU-WebBackend-Portable.*", workflow)
-        self.assertIn("MusicToMidi-Linux-GPU-Portable.tar.gz.part*", workflow)
-        self.assertIn("MusicToMidi-Linux-WebFrontend-Portable.tar.gz", workflow)
-        self.assertNotIn("MusicToMidi-Linux-GPU-App-Portable.*", workflow)
+            self.assertIn(expected, notes)
+        for filename in (
+            "MusicToMidi-Windows-GPU-Portable.wim.*",
+            "MusicToMidi-Windows-WebFrontend-Portable.zip",
+            "MusicToMidi-Linux-GPU-Portable.tar.gz.part*",
+            "MusicToMidi-Linux-WebFrontend-Portable.tar.gz",
+        ):
+            self.assertIn(filename, notes)
         self.assertIn("Linux unified archive restored App, WebBackend, and WebFrontend", workflow)
         self.assertNotIn("MusicToMidi-Windows-CPU-Portable.*", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU-Portable.*", workflow)
-        self.assertIn("从 \\`.wim.001\\` 解压到 NTFS", workflow)
-        self.assertIn("三个同级独立目录", workflow)
-        self.assertIn("当前包含 7 种处理模式", workflow)
-        self.assertNotIn("旧版 6 种处理模式", workflow)
-        self.assertIn("ByteDance Pedal", workflow)
 
     def test_build_portable_collects_miros_bundle_assets(self):
         script = (REPO_ROOT / "build_portable.ps1").read_text(encoding="utf-8")
