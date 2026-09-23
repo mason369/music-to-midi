@@ -155,7 +155,8 @@ def test_source_delivery_includes_project_dependency_tree():
     root = Path(__file__).parents[1]
     sync = (root / ".github/workflows/sync_to_hf.yml").read_text(encoding="utf-8")
     assert "core models utils i18n projects web_api" in sync
-    assert "src/model_profiles.py src/web_contract.py" in sync
+    assert "- 'src/model_profile_runtime_probe.py'" in sync
+    assert "src/model_profiles.py src/model_profile_runtime_probe.py src/web_contract.py" in sync
     spec = (root / "MusicToMidi.spec").read_text(encoding="utf-8")
     assert "'src.projects.cli'" in spec
     assert "'src.gui.widgets.project_panel'" in spec
