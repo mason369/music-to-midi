@@ -1,5 +1,16 @@
 # 更新说明 / Changelog
 
+## 未发布 / Unreleased — 2026-10-02
+
+- 修复桌面结果页下载 MIDI 时，导出异常被重新抛回 Qt 动作回调而导致程序闪退的问题（#13）。下载入口统一覆盖 BPM/资源检查、保存对话框和 MIDI/立体声 WAV 写入异常；失败显示既有本地化错误提示，并将完整调用栈写入日志，保留当前结果供修正问题后重试。取消保存及成功导出的 MIDI 音符、工程 BPM、事件和原始文件处理保持原有行为。
+- 增加独立 Qt 子进程回归，覆盖目录冲突、源 MIDI 缺失、参考 BPM 缺失、保存对话框错误、立体声源文件缺失和资源未就绪；中英文均验证失败后进程存活、现有文件不被破坏、日志含真实原因，以及随后成功重试，另验证取消保存不写文件或报告错误。
+- 本轮共 356 个不同测试通过：118 个 MuScriptor/结果工作台测试、28 个编辑器动作测试、14 个中英文下载进程回归，以及 196 个国际化、Web/API、Space/Colab、Docker、部署与便携/可执行入口契约测试。
+- 同步中英文 README、结果编辑器说明与下载异常处理架构图。桌面源码、便携 App 与可执行 App 共享修复；Space/Colab 和独立 Web/API、Docker、便携 Web 不调用此 Qt 下载入口，按各自的下载、部署与打包契约回归检查。本次不发布新的发行包；MuScriptor 多乐器中途闪退尚待反馈者的版本、配置与日志，未将本修复声称为其解决方案。
+- Fixed desktop MIDI-download errors escaping back into a Qt action and terminating the application (#13). The action now handles BPM/asset checks, file-dialog failures and MIDI/stereo WAV writes, displays the existing localized error, logs the full traceback and retains the result for retry. Cancellation and successful exports retain their existing note, project-tempo, event and source-file behavior.
+- Added isolated Qt-process regressions for destination-directory conflicts, missing source MIDI, missing reference BPM, file-dialog errors, missing stereo audio and unavailable assets. Both supported languages verify process survival, preservation of existing files, complete failure diagnostics and a successful retry, plus cancellation without writes or errors.
+- Passed 356 distinct tests: 118 MuScriptor/result-workbench tests, 28 editor-action tests, 14 bilingual download-process regressions and 196 i18n, Web/API, Space/Colab, Docker, deployment and portable/executable-entry contract tests.
+- Updated both language READMEs, the result-editor guide and the download-error architecture diagram. Source, portable and executable desktop entries share the fix; Space/Colab and standalone Web/API, Docker and portable Web use separate download paths and are checked through their delivery contracts. No new release bundle is published here. The reported MuScriptor multi-instrument crash still requires the reporter's version, settings and logs.
+
 ## v1.8.0 — 2026-09-23
 
 **2026-09-23 发布修复 / Release fix**

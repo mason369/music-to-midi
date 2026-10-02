@@ -5,6 +5,7 @@
 - 新结果默认所有声部可见、可听；重新打开结果不继承上一结果的静音或独奏。S 可多选，两条贝斯可一起试听、一起导出；手动静音优先于独奏，退出独奏后恢复原静音设置。
 - “全部声部合并导出 MIDI”导出当前完整编辑；“当前可听声部合并导出 MIDI”应用静音和多选独奏；“所有声部分别导出 MIDI（ZIP）”不受试听选择影响，每个乐器一个带编号、名称和 BPM 的文件。同一乐器按编辑器声部归组，不按文件中的空元数据轨生成多余 MIDI。
 - 编辑器导出沿用 `midi_editor.export_edited_midi` 的音符、tempo、拍号、CC64、pitch bend 和其他事件校验。ZIP 完整校验后才替换目标文件，原 MIDI 保持不变；没有可听声部时明确提示，不生成空文件。
+- 桌面 MIDI/立体声 WAV 下载在 Qt 动作边界处理异常：资源检查、保存对话框和写文件失败均记录完整调用栈并显示现有中英文错误提示，保留结果以便修正问题后重试。取消保存不写文件；导出失败不会通过 Qt 回调继续抛出异常。便携 App 和可执行 App 复用此组件；Space/Colab 的浏览器下载与独立 Web/API 的文件响应不经过 Qt 回调。
 - 空格播放/暂停，Shift+空格或停止按钮停止并回到零点，同时重置进度条、播放头和水平视图；文本、数值输入和下拉框保留键盘原行为。快捷键仅作用于当前获得焦点的结果编辑器。
 - 本地桌面和弦轨使用与 TelkNet 默认工具相同的 **ChordMini BTC**，固定官方源码 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03` 和 `btc_model_best.pth`。原音按原采样率、原声道解码为 PCM32，再交给官方特征提取与推理；170 类完整标签涵盖 14 种和弦性质及 N/X，无和弦/不确定区间不试听。保留原生边界，只在小节处分割显示，MuScriptor 开头补齐偏移同步到和弦。小节、和弦、音符共用参考 BPM 和拍号；工程变速不会导致三者漂移，编辑 MIDI 不会改写原音和弦。后台分析可取消并与转写共用 GPU 锁；失败显示原因、点击重试，不替换为 MIDI 估计或 Omnizart。
 - 点击和弦暂停整曲并通过当前 SoundFont 单独试听。取消、快速连续点击、停止和关闭编辑器会取消旧请求，防止较慢的旧试听覆盖新选择。
@@ -23,6 +24,8 @@ flowchart LR
     MIDI[模型 MIDI 与当前编辑音符] --> Editor[桌面 / Space / Colab 结果编辑器]
     Editor --> Mix[手动静音 + 多选独奏 → 试听与可听组导出]
     Editor --> Export[midi_editor 校验 → 合并 MIDI / 声部 ZIP]
+    Export --> Download[桌面 Qt 下载动作 / Desktop Qt download action]
+    Download --> Failure[失败记录调用栈 + 显示原因 + 保留结果以便重试 / Log failure, report cause and allow retry]
     Audio[原始音频 / 所选 stem WAV] --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
     Worker --> Native[原音秒坐标和弦 + 固定模型身份缓存]
     Native --> Chords[时间偏移与小节显示 → 彩色和弦与完整避让标签 → FluidSynth 试听]
@@ -34,6 +37,8 @@ flowchart LR
 ```
 
 ## MIDI instruments, chords and transport
+
+Desktop MIDI and stereo WAV downloads handle failures at the Qt action boundary. Asset checks, file dialogs and writes log full tracebacks and display the existing Chinese or English error message, leaving the result available for retry. Cancelling the dialog writes nothing; errors do not escape back into Qt. Portable desktop and executable App entries share this widget. Space/Colab browser downloads and standalone Web/API file responses do not use the Qt callback.
 
 New results start with all instruments audible and visible. Solo is additive; manual mutes remain independent and take priority. Export all current notes, only the audible group, or all instruments as separate numbered MIDI files in one ZIP. Batch export ignores monitor selection and preserves the current project BPM and edits. Empty selections report an error instead of replacing a file.
 

@@ -12,6 +12,8 @@
 
 当前版本同步七种处理模式：完整混音多乐器转写、人声/伴奏 WAV 分离、六声部 WAV 分离，以及 TransKun 默认 V2 / TransKun V2 Aug / Aria-AMT / ByteDance Pedal 四条钢琴专用转写流程。两个分离模式会生成 WAV 分轨；分离完成后，每条音轨都可在同一结果工作台选择 13 条 MIDI 路线之一。多乐器 AMT、stem separation、钢琴转 MIDI 和 BPM/tempo 元数据都在这套工作流中处理。
 
+桌面下载 MIDI 或立体声 WAV 失败时会显示原因并记录完整错误，当前转换结果仍可继续使用；修正路径、文件占用或权限问题后可以重试。日志位于 `~/.music-to-midi/logs/`；便携版优先使用程序旁的 `runtime/logs/`。
+
 ## 命令行与批处理
 
 CLI 与独立 Web API 共用同一个 `InferenceEngine` 和核心流水线。最简单的调用只需要输入文件；输出默认放在项目或便携包旁的 `MidiOutput/CLI`：

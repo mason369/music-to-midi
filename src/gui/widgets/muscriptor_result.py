@@ -4724,49 +4724,42 @@ class MuscriptorResultWidget(QFrame):
         return Path(published_path), committed_bpm, edited
 
     def _save_asset(self, kind: str) -> None:
-        target_bpm: float | None = None
-        edited = False
-        if kind in {"midi_audible", "midi_stems"}:
-            self._save_instrument_midi(kind)
-            return
-        if kind == "midi":
-            source = Path(self._midi_path)
-            target_bpm = self._commit_result_tempo_edit()
-            edited = bool(self._original_edit_notes) and (
-                self._edited_notes != self._original_edit_notes
+        try:
+            target_bpm: float | None = None
+            edited = False
+            if kind in {"midi_audible", "midi_stems"}:
+                self._save_instrument_midi(kind)
+                return
+            if kind == "midi":
+                source = Path(self._midi_path)
+                target_bpm = self._commit_result_tempo_edit()
+                edited = bool(self._original_edit_notes) and (
+                    self._edited_notes != self._original_edit_notes
+                )
+                edit_suffix = "_edited" if edited else ""
+                filter_text = "MIDI (*.mid)"
+                suggested_name = f"{source.stem}{edit_suffix}_{target_bpm:.1f}BPM{source.suffix}"
+            elif kind == "stereo" and self._assets is not None:
+                source = self._assets.stereo_mix_wav
+                filter_text = "WAV (*.wav)"
+                suggested_name = source.name
+            else:
+                raise RuntimeError(f"MuScriptor download asset is not ready: {kind}")
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                t("muscriptor_result.download"),
+                suggested_name,
+                filter_text,
             )
-            edit_suffix = "_edited" if edited else ""
-            filter_text = "MIDI (*.mid)"
-            suggested_name = f"{source.stem}{edit_suffix}_{target_bpm:.1f}BPM{source.suffix}"
-        elif kind == "stereo" and self._assets is not None:
-            source = self._assets.stereo_mix_wav
-            filter_text = "WAV (*.wav)"
-            suggested_name = source.name
-        else:
-            raise RuntimeError(f"MuScriptor download asset is not ready: {kind}")
-        destination, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            t("muscriptor_result.download"),
-            suggested_name,
-            filter_text,
-        )
-        if destination:
+            if not destination:
+                return
             if kind == "midi":
                 if target_bpm is None:
                     raise RuntimeError("Result BPM was not committed before MIDI download")
-                try:
-                    published_path, target_bpm, edited = self._publish_current_midi(
-                        destination,
-                        target_bpm=target_bpm,
-                    )
-                except Exception as exc:
-                    self.playback_status_label.setText(
-                        t(
-                            "muscriptor_result.editor_export_failed",
-                            error=_compact_editor_error(exc),
-                        )
-                    )
-                    raise
+                published_path, target_bpm, edited = self._publish_current_midi(
+                    destination,
+                    target_bpm=target_bpm,
+                )
                 self.playback_status_label.setText(
                     t(
                         (
@@ -4780,6 +4773,11 @@ class MuscriptorResultWidget(QFrame):
                 )
             else:
                 shutil.copy2(source, destination)
+        except Exception as exc:
+            logger.exception("Result asset download failed (kind=%s)", kind)
+            self.playback_status_label.setText(
+                t("muscriptor_result.editor_export_failed", error=_compact_editor_error(exc))
+            )
 
     def _save_instrument_midi(self, kind: str) -> None:
         """Snapshot the current editor; batch export always includes every instrument."""
