@@ -9,6 +9,9 @@
 - 空格播放/暂停，Shift+空格或停止按钮停止并回到零点，同时重置进度条、播放头和水平视图；文本、数值输入和下拉框保留键盘原行为。快捷键仅作用于当前获得焦点的结果编辑器。
 - 本地桌面和弦轨使用与 TelkNet 默认工具相同的 **ChordMini BTC**，固定官方源码 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03` 和 `btc_model_best.pth`。原音按原采样率、原声道解码为 PCM32，再交给官方特征提取与推理；170 类完整标签涵盖 14 种和弦性质及 N/X，无和弦/不确定区间不试听。保留原生边界，只在小节处分割显示，MuScriptor 开头补齐偏移同步到和弦。小节、和弦、音符共用参考 BPM 和拍号；工程变速不会导致三者漂移，编辑 MIDI 不会改写原音和弦。后台分析可取消并与转写共用 GPU 锁；失败显示原因、点击重试，不替换为 MIDI 估计或 Omnizart。
 - 点击和弦暂停整曲并通过当前 SoundFont 单独试听。取消、快速连续点击、停止和关闭编辑器会取消旧请求，防止较慢的旧试听覆盖新选择。
+- 和弦栏上方的“和弦随曲播放”首次默认关闭，0～200% 独立音量默认 100%，并以固定应用名的用户级 INI 记住两项设置。关闭随播仍可点击试听；0% 静音两种试听，静音时点击和弦不会暂停歌曲。200% 提供实际音频增益，点击试听与随播采用相同的响度校准和音量标尺。控制条在窄窗口自动换行，支持键盘调整、中英文切换和明确的准备/失败/重试状态。
+- `chord_audio` 从原始和弦区间和 MuScriptor 开头偏移生成一次完整 SoundFont 音轨，保留长和弦和转位，N/X 区间不发声；显示用小节分块不进入发声调度。`ChordMonitor` 在用户启用时后台准备音轨，用代次检查丢弃过期结果；静音/关闭随播取消未完成请求，换音色清除旧音轨，失败需要明确重试。已完成音轨在当前结果内复用，切换音量无需重新合成。
+- 和弦 PCM 接入 `SynchronizedPcmPlayer`，与原音、MIDI 和声部混音共用帧坐标及一个音频输出。暂停、跳转、BPM、倍速和从中途播放因此统一生效。音量最多用 20 ms 平滑过渡；叠加时采用双声道联动的 10 ms 前视峰值保护（PCM 已在内存中，无需额外播放延迟），避免高音量硬削波。关闭和弦且过渡结束后，原音/MIDI 混音路径保持原始样本。此设置只控制监听，不更改识别和弦、转写 MIDI、编辑历史或任何导出。
 - 和弦栏直接响应卷帘每一帧的横向位移与缩放，包含两次滚动条步进之间的小数像素位移；仅和弦、小节等内容变化使用延迟重算。持续播放不会推迟和弦绘制或阻止新的小节布局生效。
 - 和弦按根音保持一致配色，名称使用紧凑音乐记法（如 `C♯m7`），原始模型标签保留在悬停详情中。当前片段高亮，悬停加亮边框；短片段不截断名称，而是用错开的完整标签与引线指向真实时间块，标签也可点击试听。N/X 使用中性色且不试听。标签避让只影响绘制，播放期间保留标签行高度，避免卷帘上下跳动。
 - 桌面、Space 和 Colab 的音符在播放头所在时间区间高亮；暂停和跳转后仍显示当前位置，区间采用起点包含、终点不包含。静音/非独奏声部不显示播放高亮。悬停显示音高、MIDI 编号、声部、力度、起止时间和时长，不改变选择或音符数据。桌面在原缓存瓦片上叠加反馈，仅重绘进入/离开高亮的音符；浏览器用独立透明 Canvas 绘制可见音符反馈，复用现有编辑与播放流程。
@@ -28,7 +31,12 @@ flowchart LR
     Download --> Failure[失败记录调用栈 + 显示原因 + 保留结果以便重试 / Log failure, report cause and allow retry]
     Audio[原始音频 / 所选 stem WAV] --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
     Worker --> Native[原音秒坐标和弦 + 固定模型身份缓存]
-    Native --> Chords[时间偏移与小节显示 → 彩色和弦与完整避让标签 → FluidSynth 试听]
+    Native --> Chords[时间偏移与小节显示 → 彩色和弦与完整避让标签]
+    Native --> Monitor[原始区间 + 时间偏移 → 可取消 FluidSynth 音轨 → 响度校准]
+    Controls[随播开关 / 0～200% 音量 / 偏好记忆] --> Monitor
+    Monitor --> Clock[单一 PCM 时钟 + 原音 / MIDI → 平滑增益与峰值保护]
+    Chords --> Audition[点击 → 暂停歌曲 → 同音量标尺单独试听]
+    Controls --> Audition
     Editor --> View[逐帧位移与缩放 / Per-frame view motion]
     View --> Chords
     View --> Feedback[播放位置 / 悬停 → 音符反馈层与详情]
@@ -45,6 +53,10 @@ New results start with all instruments audible and visible. Solo is additive; ma
 Space plays/pauses; Shift+Space or Stop and rewind returns transport and horizontal view to zero. Text, numeric and select inputs retain normal keyboard behavior. Only the focused result editor receives transport shortcuts. The desktop uses TelkNet’s default ChordMini BTC recipe on source audio, with the exact pinned source and BTC checkpoint. Native-rate, original-channel PCM32 decoding precedes the official feature frontend. All 170 classes, including seventh/suspended qualities and N/X, retain their original boundaries. Bar splits affect display only; MuScriptor lead-in offsets and project tempo changes remain aligned. MIDI edits do not alter source-audio chords. Background inference shares the accelerator lock, supports cancellation and reports failures with click-to-retry; it never falls back to MIDI templates or Omnizart. Chord recognition remains a model prediction, not a guarantee of score accuracy.
 
 Space and Colab share the browser mixer/export/transport implementation. Chord display is desktop-only as requested. Standalone Web/API, Docker and portable Web offer instrument ZIP downloads for both jobs and restored project results, preserving the source tempo map and event ticks. They have no MIDI editor/solo state, so editor-specific shortcuts and audible-group exports do not apply. Those browser surfaces retain their existing SoundFont/FluidSynth dependencies. Only desktop chord analysis requires the additional pinned ChordMini BTC resources.
+
+Desktop chord controls provide **Chords follow song** (initially off) and **0–200% chord volume** (initially 100%), persisted in a user INI under a stable application name. Follow off still allows click auditions; 0% mutes both, and clicking while muted does not pause the song. 200% applies real audio gain, using the same loudness calibration and volume scale for accompaniment and click auditions. The controls wrap in narrow windows, support keyboard input and both locales, and report preparation failures with an explicit retry.
+
+`chord_audio` renders native chord intervals and the MuScriptor lead-in offset into SoundFont PCM; visual bar splits never retrigger notes and N/X remains silent. `ChordMonitor` prepares audio on demand in a cancellable worker, rejects stale generations, caches the current result and invalidates it when the SoundFont changes. Muting or disabling follow cancels pending work. The PCM joins the existing `SynchronizedPcmPlayer` frame axis and single output, so pause, seek, project BPM and speed apply equally. Gain ramps take at most 20 ms. Stereo-linked 10 ms lookahead peak protection uses the already loaded PCM without adding transport latency. Once disabled and the ramp ends, the original/MIDI mix is sample-identical. Preferences affect monitoring only, not chord recognition, MIDI, edit history or exports. Portable and executable desktop Apps use these same modules; the browser/API delivery surfaces do not expose the desktop chord lane.
 
 The chord lane repaints with each frame of horizontal motion or zoom, including fractional pixel movement between scrollbar steps. Only chord and bar content changes use a delayed rebuild. Continuous playback therefore neither delays chord drawing nor prevents a new bar layout from taking effect.
 

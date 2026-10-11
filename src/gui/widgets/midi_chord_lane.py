@@ -7,13 +7,14 @@ from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
-import mido
+import soundfile as sf
 from PyQt6 import sip
 from PyQt6.QtCore import (
     QLineF,
     QObject,
     QPoint,
     QPointF,
+    QPropertyAnimation,
     QRectF,
     Qt,
     QThread,
@@ -26,8 +27,8 @@ from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import QWidget
 
 from src.core.chord_analysis import analyze_audio_chords
+from src.core.chord_audio import CHORD_MAX_VOLUME, CHORD_SAMPLE_RATE, render_chord_pcm
 from src.core.midi_chords import ROOTS, MidiChord, read_chord_record, split_chords_at_bars
-from src.core.muscriptor_result_assets import render_midi_audio_export
 from src.i18n.translator import t
 
 _CHORD_COLORS = (
@@ -109,6 +110,7 @@ class _ChordAnalysisWorker(QThread):
 
 class MidiChordLane(QWidget):
     audition_requested = pyqtSignal(object)
+    chords_changed = pyqtSignal()
 
     def __init__(self, roll, scroll, parent=None):
         super().__init__(parent)
@@ -177,6 +179,7 @@ class MidiChordLane(QWidget):
         self.state, self.error = "chord_analyzing", ""
         self.record = None
         self._source_chords = self.chords = ()
+        self.chords_changed.emit()
         worker = _ChordAnalysisWorker(audio_path, gpu_device, self)
         self.worker = worker
         worker.ready.connect(self.set_record)
@@ -196,11 +199,13 @@ class MidiChordLane(QWidget):
         self.record = record
         self.state = "chord_empty"
         self.refresh()
+        self.chords_changed.emit()
 
     def _analysis_failed(self, error):
         if not self.closed:
             self.state, self.error = "chord_analysis_failed", error
             self.update()
+            self.chords_changed.emit()
 
     def _analysis_finished(self):
         worker, self.worker = self.worker, None
@@ -500,32 +505,20 @@ class _ChordRenderWorker(QThread):
 
     def run(self):
         try:
-            source = self.destination.with_suffix(".mid")
-            midi = mido.MidiFile()
-            track = mido.MidiTrack()
-            midi.tracks.append(track)
-            track.append(mido.MetaMessage("set_tempo", tempo=500_000))
-            track.append(mido.Message("program_change", program=0))
-            for pitch in self.chord.pitches:
-                track.append(mido.Message("note_on", note=pitch, velocity=82))
-            for index, pitch in enumerate(self.chord.pitches):
-                track.append(
-                    mido.Message(
-                        "note_off",
-                        note=pitch,
-                        velocity=0,
-                        time=round(self.duration * 960) if index == 0 else 0,
-                    )
-                )
-            midi.save(source)
-            render_midi_audio_export(
-                source,
-                self.destination,
-                "pcm16_44100",
+            samples = render_chord_pcm(
+                (replace(self.chord, start=0.0, end=self.duration),),
+                round(self.duration * CHORD_SAMPLE_RATE),
+                self.destination.parent,
                 cancel_check=self.isInterruptionRequested,
-                soundfont_selection=self.selection,
+                selection=self.selection,
             )
             if not self.isInterruptionRequested():
+                sf.write(
+                    self.destination,
+                    samples * (CHORD_MAX_VOLUME / 100.0),
+                    CHORD_SAMPLE_RATE,
+                    subtype="PCM_24",
+                )
                 self.ready.emit(str(self.destination))
         except InterruptedError:
             pass
@@ -543,6 +536,9 @@ class ChordAuditioner(QObject):
         self.cache = cache
         self.cache.mkdir(parents=True, exist_ok=True)
         self.output = QAudioOutput(self)
+        self.output.setVolume(100 / CHORD_MAX_VOLUME)
+        self._volume_animation = QPropertyAnimation(self.output, b"volume", self)
+        self._volume_animation.setDuration(20)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.output)
         self.player.errorOccurred.connect(lambda *_: self.failed.emit(self.player.errorString()))
@@ -553,6 +549,14 @@ class ChordAuditioner(QObject):
         self.closed = False
         self._cache_key = None
         self._cache_path = None
+
+    def set_volume(self, volume: int):
+        if not 0 <= volume <= CHORD_MAX_VOLUME:
+            raise ValueError(f"Invalid chord audition volume: {volume!r}")
+        self._volume_animation.stop()
+        self._volume_animation.setStartValue(self.output.volume())
+        self._volume_animation.setEndValue(volume / CHORD_MAX_VOLUME)
+        self._volume_animation.start()
 
     def _on_media_status(self, status):
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
@@ -612,6 +616,7 @@ class ChordAuditioner(QObject):
             return
         self.closed = True
         self.stop()
+        self._volume_animation.stop()
         if self.worker is not None:
             self.worker.wait()
         self.player.setSource(QUrl())

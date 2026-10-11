@@ -1,5 +1,16 @@
 # 更新说明 / Changelog
 
+## 未发布 / Unreleased — 2026-10-11
+
+- 桌面和弦栏新增“和弦随曲播放”和 0～200% 独立音量。首次默认关闭随播、音量 100%，两项偏好持久保存；关闭随播仍支持点击和弦单独试听，0% 静音两种试听，静音时点击不会暂停歌曲。窄窗口自动换行，中英文文案、键盘操作、准备状态与失败重试同步适配。
+- 和弦随播按 ChordMini 原始区间与 MuScriptor 开头偏移合成 SoundFont PCM，接入原音/MIDI 的单一音频时钟，统一暂停、跳转、工程 BPM 和倍速。长和弦不因小节显示切分重复发声，N/X 区间保持静音。音量无需重复合成，200% 实际增强输出；响度校准、最长 20 ms 增益过渡与双声道联动前视峰值保护用于试听，原 MIDI、编辑历史及导出保持原样。
+- 后台合成支持取消、缓存与代次校验。关闭随播、静音、切换音色和关闭结果页会阻止过期音频接入；错误显示真实原因并允许明确重试。便携 App / 可执行 App 共用桌面实现；Space、Colab、独立 Web/API、Docker、便携 Web 没有和弦栏，保留各自的交付契约。
+- 本轮共 674 个不同测试通过，覆盖和弦音频、同步走带、结果编辑器、下载导出、响应式布局、国际化，以及 Space/Colab、Web/API、Docker、部署和便携/可执行入口契约。中英文两套语言各 633 个键完成解析、完整性和占位符一致性检查；两种语言均在真实 Windows Qt 窗口与本机 FluidSynth / 音频设备上验证随播、跳转、变速、静音及点击试听。本次未重新打包或发布。
+- Added desktop **Chords follow song** and independent **0–200% chord volume**, initially off/100% with persistent preferences. Follow off preserves click auditions; 0% mutes both without pausing the song on a muted click. Controls wrap in narrow windows and support keyboard input, both locales, preparation states and explicit failure retry.
+- Chord accompaniment renders native ChordMini intervals and the MuScriptor lead-in offset onto the existing original/MIDI audio clock. Pause, seek, project BPM and speed stay aligned; visual bar splits do not retrigger sustained chords and N/X stays silent. Volume changes reuse audio, with real 200% boost, loudness calibration, gain ramps of at most 20 ms and stereo-linked lookahead peak protection. Monitoring does not alter MIDI, edit history or exports.
+- Background synthesis supports cancellation, caching and generation checks. Disabling follow, muting, changing SoundFonts and closing results reject stale audio. Errors retain their cause and can be retried. Portable/executable desktop Apps share the implementation; Space, Colab, standalone Web/API, Docker and portable Web retain their separate delivery contracts without a chord lane.
+- Validation passed 674 distinct tests covering chord audio, synchronized transport, the result editor, downloads and exports, responsive layouts, localization, and the Space/Colab, Web/API, Docker, deployment and portable/executable entry contracts. Both supported locales passed parsing, completeness and placeholder checks across all 633 keys. Both were also exercised in real Windows Qt windows with local FluidSynth and an audio output device for follow playback, seek, speed, mute and click auditions. No release package was rebuilt or published.
+
 ## 未发布 / Unreleased — 2026-10-02
 
 - 修复桌面结果页下载 MIDI 时，导出异常被重新抛回 Qt 动作回调而导致程序闪退的问题（#13）。下载入口统一覆盖 BPM/资源检查、保存对话框和 MIDI/立体声 WAV 写入异常；失败显示既有本地化错误提示，并将完整调用栈写入日志，保留当前结果供修正问题后重试。取消保存及成功导出的 MIDI 音符、工程 BPM、事件和原始文件处理保持原有行为。

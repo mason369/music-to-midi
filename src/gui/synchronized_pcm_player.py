@@ -11,11 +11,14 @@ import numpy as np
 import soundfile as sf
 from PyQt6.QtCore import QIODevice, QObject, pyqtSignal
 from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
+from scipy.ndimage import minimum_filter1d, uniform_filter1d
 
 _SAMPLE_RATE = 44_100
 _CHANNEL_COUNT = 2
 _BYTES_PER_OUTPUT_FRAME = _CHANNEL_COUNT * 2
 _OUTPUT_BUFFER_FRAMES = 2_048
+_CHORD_RAMP_FRAMES = 882
+_LIMITER_RADIUS = 220
 
 
 def _load_aligned_mono_pcm(
@@ -79,6 +82,11 @@ class _AlignedPcmMixDevice(QIODevice):
         self._mix = 0.5
         self._stereo = False
         self._muted: frozenset[str] = frozenset()
+        self._chord_bus: np.ndarray | None = None
+        self._chord_gain = 0.0
+        self._chord_target_gain = 0.0
+        self._limiter_gain = 1.0
+        self._limiter_history = np.ones(2 * _LIMITER_RADIUS, dtype="float64")
         self._lock = threading.RLock()
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
@@ -106,6 +114,26 @@ class _AlignedPcmMixDevice(QIODevice):
             raise ValueError(f"Invalid synchronized playback position: {position_frames!r}")
         with self._lock:
             self._position_frames = min(float(self.frame_count), max(0.0, position))
+            self._limiter_history.fill(1.0)
+            self._limiter_gain = 1.0
+
+    def set_chord_bus(self, samples: np.ndarray | None) -> None:
+        if samples is not None:
+            if samples.shape != (self.frame_count, 2) or not np.isfinite(samples).all():
+                raise ValueError("Chord PCM must be finite stereo on the transport frame axis")
+        with self._lock:
+            if samples is not self._chord_bus:
+                self._chord_bus = samples
+                self._chord_gain = 0.0
+                self._limiter_history.fill(1.0)
+                self._limiter_gain = 1.0
+
+    def set_chord_volume(self, volume: int) -> None:
+        value = float(volume)
+        if not math.isfinite(value) or not 0 <= value <= 200:
+            raise ValueError(f"Invalid chord monitoring volume: {volume!r}")
+        with self._lock:
+            self._chord_target_gain = value / 100.0
 
     def set_playback_rate(self, playback_rate: float) -> None:
         rate = float(playback_rate)
@@ -188,8 +216,12 @@ class _AlignedPcmMixDevice(QIODevice):
                 int(requested_frames),
                 int(math.ceil(remaining_source_frames / self._playback_rate)),
             )
+            with_chords = self._chord_bus is not None and (
+                self._chord_gain > 0 or self._chord_target_gain > 0 or self._limiter_gain < 1
+            )
+            render_frames = output_frames + (2 * _LIMITER_RADIUS if with_chords else 0)
             positions = self._position_frames + self._playback_rate * np.arange(
-                output_frames,
+                render_frames,
                 dtype="float64",
             )
             positions = np.minimum(positions, self.frame_count - 1)
@@ -204,7 +236,7 @@ class _AlignedPcmMixDevice(QIODevice):
                 fractions,
             )
             if self._muted:
-                midi = np.zeros(output_frames, dtype="float32")
+                midi = np.zeros(render_frames, dtype="float32")
                 for instrument, bus in self._instrument_buses.items():
                     if instrument not in self._muted:
                         midi += self._sample_bus(
@@ -226,6 +258,41 @@ class _AlignedPcmMixDevice(QIODevice):
             else:
                 mono = original * (1.0 - self._mix) + midi * self._mix
                 stereo = np.column_stack((mono, mono))
+            if with_chords:
+                chord = (
+                    self._chord_bus[base_indices]
+                    + (self._chord_bus[next_indices] - self._chord_bus[base_indices])
+                    * fractions[:, None]
+                )
+                steps = (2.0 / _CHORD_RAMP_FRAMES) * np.arange(1, render_frames + 1)
+                gains = self._chord_gain + np.clip(
+                    self._chord_target_gain - self._chord_gain, -steps, steps
+                )
+                self._chord_gain = float(gains[output_frames - 1])
+                stereo += chord * gains[:, None]
+                peaks = np.max(np.abs(stereo), axis=1)
+                required = np.where(
+                    gains > 0, np.minimum(1.0, 0.98 / np.maximum(peaks, 1e-12)), 1.0
+                )
+                history = np.concatenate((self._limiter_history, required))
+                # Every averaged minimum includes the current sample's bound.
+                # The 10 ms lookahead therefore smooths gain without clipping or delay.
+                size = 2 * _LIMITER_RADIUS + 1
+                envelope = uniform_filter1d(
+                    minimum_filter1d(history, size=size, mode="nearest"),
+                    size=size,
+                    mode="nearest",
+                )
+                start = len(self._limiter_history)
+                limited = np.empty(output_frames)
+                gain = self._limiter_gain
+                step = 1 / (2 * _LIMITER_RADIUS)
+                for index, desired in enumerate(envelope[start : start + output_frames]):
+                    gain = min(required[index], gain + max(-step, min(step, desired - gain)))
+                    limited[index] = gain
+                self._limiter_gain = gain
+                stereo = stereo[:output_frames] * limited[:, None]
+                self._limiter_history = history[output_frames : output_frames + start].copy()
             pcm = np.rint(np.clip(stereo, -1.0, 1.0) * 32_767.0).astype("<i2")
             self._position_frames = min(
                 float(self.frame_count),
@@ -344,6 +411,18 @@ class SynchronizedPcmPlayer(QObject):
         }
         self._source.set_instrument_buses(loaded)
         self._instrument_buses_loaded = True
+
+    def set_chord_bus(self, samples: np.ndarray | None) -> None:
+        if self._source is not None:
+            self._source.set_chord_bus(samples)
+            if self._suspended:
+                self._discard_buffer_at_current_position()
+
+    def set_chord_volume(self, volume: int) -> None:
+        if self._source is not None:
+            self._source.set_chord_volume(volume)
+            if self._suspended:
+                self._discard_buffer_at_current_position()
 
     def set_mix_state(
         self,
@@ -492,11 +571,7 @@ class SynchronizedPcmPlayer(QObject):
                     "Synchronized audio output stopped with an error: " f"{error.name}"
                 )
             return
-        if (
-            state == QAudio.State.IdleState
-            and self._source.atEnd()
-            and not self._finished_emitted
-        ):
+        if state == QAudio.State.IdleState and self._source.atEnd() and not self._finished_emitted:
             # Qt enters IdleState after its pull-mode QIODevice has no more
             # data. Some backends publish processedUSecs() slightly behind
             # that terminal state and do not emit another state transition,

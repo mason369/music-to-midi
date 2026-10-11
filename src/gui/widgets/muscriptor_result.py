@@ -78,8 +78,10 @@ from src.core.muscriptor_result_assets import (
     render_midi_stem_audio_export,
 )
 from src.core.sheet_music import SheetMusicExportResult
+from src.gui.chord_monitor import ChordMonitor
 from src.gui.layouts import FlowLayout
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
+from src.gui.widgets.chord_playback_controls import ChordPlaybackControls
 from src.gui.widgets.midi_chord_lane import ChordAuditioner, MidiChordLane
 from src.gui.widgets.soundfont_panel import SoundFontPanel
 from src.gui.widgets.wheel_safe_controls import (
@@ -2412,10 +2414,22 @@ class MuscriptorResultWidget(QFrame):
         roll_layout.setSpacing(0)
         self.chord_lane = MidiChordLane(self.roll, self.roll_scroll, roll_with_chords)
         self.chord_auditioner = ChordAuditioner(self._preview_root / "chords", self)
+        self.chord_controls = ChordPlaybackControls(roll_with_chords)
+        self.chord_monitor = ChordMonitor(
+            self._playback_engine, self._preview_root / "chord-monitor", self
+        )
+        self.chord_monitor.state_changed.connect(self.chord_controls.set_state)
+        self.chord_controls.changed.connect(self._on_chord_controls_changed)
+        self.chord_controls.retry_requested.connect(self.chord_monitor.retry)
+        self.chord_lane.chords_changed.connect(self._configure_chord_monitor)
+        self._on_chord_controls_changed(
+            self.chord_controls.follow.isChecked(), self.chord_controls.value.value()
+        )
         self.chord_lane.audition_requested.connect(self._audition_chord)
         self.chord_auditioner.failed.connect(self._on_chord_failed)
         self.chord_auditioner.ready.connect(self._on_chord_ready)
         self.chord_auditioner.finished.connect(self._finish_chord_status)
+        roll_layout.addWidget(self.chord_controls)
         roll_layout.addWidget(self.chord_lane)
         roll_layout.addWidget(self.roll_scroll, 1)
         content.addWidget(roll_with_chords, 4)
@@ -3025,6 +3039,25 @@ class MuscriptorResultWidget(QFrame):
         )
         self._normal_sources = dict(instrument_wavs)
         self._stereo_playback_available = bool(stereo_available)
+        self._configure_chord_monitor()
+
+    def _configure_chord_monitor(self) -> None:
+        if self._shutting_down:
+            return
+        self.chord_monitor.configure(
+            self.chord_lane._source_chords,
+            self.chord_lane.source_offset,
+            self._soundfont_selection,
+        )
+        if self.chord_lane.state == "chord_analysis_failed":
+            self.chord_controls.set_state("analysis_failed", self.chord_lane.error)
+
+    def _on_chord_controls_changed(self, enabled: bool, volume: int) -> None:
+        self.chord_auditioner.set_volume(volume)
+        if volume == 0:
+            self.chord_auditioner.stop()
+            self._finish_chord_status()
+        self.chord_monitor.set_controls(enabled, volume)
 
     def _on_asset_progress(self, progress: float, message: str) -> None:
         if self._shutting_down:
@@ -3280,8 +3313,11 @@ class MuscriptorResultWidget(QFrame):
             self._sync_editor_controls()
 
     def _apply_soundfont(self, selection) -> None:
+        self.chord_auditioner.stop()
+        self._finish_chord_status()
         self._soundfont_selection = selection
         self._queue_editor_audio_render(self._edited_notes, self._edited_notes, force=True)
+        self._configure_chord_monitor()
 
     def _queue_editor_audio_render(
         self,
@@ -4102,6 +4138,9 @@ class MuscriptorResultWidget(QFrame):
         self.roll_scroll.horizontalScrollBar().setValue(0)
 
     def _audition_chord(self, chord) -> None:
+        if self.chord_controls.value.value() == 0:
+            self.chord_controls.set_state("muted")
+            return
         self.pause()
         duration = max(0.15, min(4.0, (chord.end - chord.start) / self._result_playback_rate()))
         self._set_chord_status("muscriptor_result.chord_loading", chord=chord.label)
@@ -4969,6 +5008,7 @@ class MuscriptorResultWidget(QFrame):
         self.download_audible_midi_action.setText(t("muscriptor_result.export_audible_midi"))
         self.download_midi_stems_action.setText(t("muscriptor_result.export_midi_stems"))
         self.chord_lane.update_translations()
+        self.chord_controls.update_translations()
         self.source_label.setText(
             t(
                 "muscriptor_result.linked_source",
@@ -5053,6 +5093,8 @@ class MuscriptorResultWidget(QFrame):
             return
         self._shutting_down = True
         QApplication.instance().removeEventFilter(self)
+        self.chord_controls.save()
+        self.chord_monitor.shutdown()
         self.chord_lane.shutdown()
         self.chord_auditioner.shutdown()
         self.soundfont_panel.shutdown()
