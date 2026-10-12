@@ -1483,7 +1483,10 @@ def _aria_amt_runtime_available():
 def ensure_aria_amt_runtime():
     """Install the pinned Aria-AMT code without letting it replace Space PyTorch."""
     from src.utils.subprocess_utils import hidden_subprocess_kwargs
-    from src.core.aria_amt_transcriber import get_aria_amt_runtime_unavailable_reason
+    from src.core.aria_amt_transcriber import (
+        ARIA_UTILS_SOURCE_REQUIREMENT,
+        get_aria_amt_runtime_unavailable_reason,
+    )
 
     if _aria_amt_runtime_available():
         return
@@ -1505,6 +1508,7 @@ def ensure_aria_amt_runtime():
             "--no-deps",
             "--force-reinstall",
             ARIA_AMT_RUNTIME_REQUIREMENT,
+            ARIA_UTILS_SOURCE_REQUIREMENT,
         ],
         check=False,
         stdout=subprocess.PIPE,

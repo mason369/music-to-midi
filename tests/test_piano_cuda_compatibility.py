@@ -196,6 +196,10 @@ class PianoCudaCompatibilityTests(unittest.TestCase):
                     return_value=None,
                 ),
                 patch("src.core.aria_amt_transcriber.prepare_aria_audio_assets"),
+                patch(
+                    "src.core.aria_amt_transcriber.torchaudio.info",
+                    return_value=types.SimpleNamespace(num_frames=16000, sample_rate=16000),
+                ),
                 patch.object(
                     transcriber,
                     "_load_aria_model",

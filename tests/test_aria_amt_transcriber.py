@@ -17,6 +17,7 @@ from src.core.aria_amt_transcriber import (
     ARIA_AMT_CHECKPOINT_URL,
     ARIA_AMT_SOURCE_ARCHIVE_URL,
     ARIA_AMT_SOURCE_REVISION,
+    ARIA_UTILS_SOURCE_ARCHIVE_URL,
     AriaAmtTranscriber,
     get_aria_amt_runtime_unavailable_reason,
 )
@@ -168,6 +169,15 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             self.assertFalse(AriaAmtTranscriber.is_available())
 
     def test_runtime_identity_accepts_only_the_pinned_source_commit(self):
+        def distributions(amt_distribution):
+            return lambda package: (
+                amt_distribution
+                if package == "aria-amt"
+                else types.SimpleNamespace(
+                    read_text=lambda name: json.dumps({"url": ARIA_UTILS_SOURCE_ARCHIVE_URL})
+                )
+            )
+
         class FakeDistribution:
             @staticmethod
             def read_text(name):
@@ -189,7 +199,7 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             ),
             patch(
                 "src.core.aria_amt_transcriber.metadata.distribution",
-                return_value=FakeDistribution(),
+                side_effect=distributions(FakeDistribution()),
             ),
         ):
             self.assertEqual(get_aria_amt_runtime_unavailable_reason(), "")
@@ -211,7 +221,7 @@ class AriaAmtTranscriberTests(unittest.TestCase):
             ),
             patch(
                 "src.core.aria_amt_transcriber.metadata.distribution",
-                return_value=ArchiveDistribution(),
+                side_effect=distributions(ArchiveDistribution()),
             ),
         ):
             self.assertEqual(get_aria_amt_runtime_unavailable_reason(), "")
@@ -437,8 +447,14 @@ class AriaAmtTranscriberTests(unittest.TestCase):
         waveform = torch.arange(0, 8, dtype=torch.float32).unsqueeze(0)
         with (
             patch(
-                "src.core.aria_amt_transcriber.load_audio_tensor",
-                return_value=(waveform, 4),
+                "soundfile.info",
+                return_value=types.SimpleNamespace(frames=8, samplerate=4, channels=1),
+            ),
+            patch(
+                "src.core.aria_amt_transcriber.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, stdout=waveform.numpy().tobytes(), stderr=b""
+                ),
             ),
             patch(
                 "src.core.aria_amt_transcriber.torchaudio.io",

@@ -119,6 +119,7 @@ pasted-text*
 !/docs/soundfont-and-sheet-music.md
 !/docs/projects.md
 !/docs/projects.en.md
+!/docs/piano-transcription.md
 !/docs/releases/
 !/docs/releases/*.md
 .tmp/ai4m-miros/

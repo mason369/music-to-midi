@@ -327,6 +327,7 @@ datas += _collect_tree(ffmpeg_dir, "tools/ffmpeg")
 datas += aria_amt_config_datas
 datas += copy_metadata('audio-separator')
 datas += copy_metadata('aria-amt')
+datas += copy_metadata('ariautils')
 datas += copy_metadata('piano-transcription-inference')
 datas += copy_metadata('beat-this')
 datas += copy_metadata('transkun')

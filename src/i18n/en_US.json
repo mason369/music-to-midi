@@ -698,6 +698,11 @@
     "failed": "Transcription failed: {error}",
     "cancelled": "Transcription cancelled; no complete MIDI was generated"
   },
+  "aria_amt": {
+    "incomplete": "Official Aria-AMT overlapping windows could not recover {start}–{end} seconds. Incomplete MIDI output was stopped. Original error: {error}",
+    "context_exhausted": "Aria-AMT reached the official token limit before completing this window.",
+    "dependency_mismatch": "The Aria-AMT MIDI dependency ariautils is missing or has the wrong source revision. Run the installer again. Required official source: {requirement}"
+  },
   "theme": {
     "light": "Light",
     "dark": "Dark",

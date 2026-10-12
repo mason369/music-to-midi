@@ -47,7 +47,7 @@ setuptools==80.10.2
 # PyTorch/torchaudio runtime is in place. Upstream currently declares
 # torchaudio<=2.5, which conflicts with the CUDA 12.8 runtime required
 # for RTX 50-series GPUs.
-ariautils @ https://github.com/EleutherAI/aria-utils/archive/93da092204e5b1189ed8e0259f6156266fd086a7.zip
+ariautils @ https://github.com/EleutherAI/aria-utils/archive/7c815755c6889a784b6a1b3343e9e8daa3e7d128.zip
 safetensors>=0.4.0,<1
 orjson>=3.9.0,<4
 piano-transcription-inference==0.0.6

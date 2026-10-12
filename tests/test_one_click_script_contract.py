@@ -405,7 +405,7 @@ class OneClickScriptContractTests(unittest.TestCase):
         self.assertNotIn("aria-amt @", active_requirements)
         self.assertIn(
             "ariautils @ https://github.com/EleutherAI/aria-utils/archive/"
-            "93da092204e5b1189ed8e0259f6156266fd086a7.zip",
+            "7c815755c6889a784b6a1b3343e9e8daa3e7d128.zip",
             active_requirements,
         )
         self.assertIn("safetensors>=0.4.0,<1", active_requirements)

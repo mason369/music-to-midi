@@ -258,6 +258,8 @@ models/transkun_v2_aug
 
 ### Aria-AMT
 
+Aria 音频预处理遵循官方长短音频分支：短音频先合并声道再用 torchaudio 重采样；长音频使用已有 FFmpeg 按原声道重采样为 float32，再合并声道。跨窗口拼接沿用官方恢复流程：非法序列由下一个既有重叠窗口重新生成；连续失败或结尾失败留下未恢复区间时停止输出，并报告具体秒数。模型、权重、精度、解码及 MIDI writer 保持官方实现，不修改 token，也不增加推理重试。MIDI 依赖固定为官方 `ariautils` 提交 `7c815755c6889a784b6a1b3343e9e8daa3e7d128`，包含上游同起点与零时值音符修正，运行时同时校验安装来源。稀疏钢琴 BPM 估计汇总短乐句的真实拍间隔，长空白不计入证据。复现对照、性能测量及跨平台验收边界见[钢琴转写故障分析](piano-transcription.md)。
+
 Aria-AMT 是另一条钢琴专用后端。项目通过 `src/core/aria_amt_transcriber.py` 统一调用官方单文件推理和 MIDI writer；Linux 源码版使用独立的 `src.core.aria_amt_worker` 进程，将模型错误直接返回项目队列。Docker 和便携包会提前准备官方 AudioTransform 读取的三个目录，支持运行时安装目录只读。默认 checkpoint 为：
 
 ```text

@@ -349,6 +349,8 @@ models/transkun_v2_aug
 
 ### Aria-AMT
 
+Aria preprocessing follows the official duration branches: short audio is averaged before torchaudio resampling; long audio is resampled to float32 in its original channels with the existing FFmpeg executable, then averaged. Window stitching follows official recovery: the next scheduled overlapping window regenerates an invalid sequence. Consecutive or final failures that leave an unrecovered interval stop output and report its timestamps. Model, weights, precision, decoding and MIDI writing remain official, without token edits or extra inference retries. The MIDI dependency is pinned to official ariautils revision `7c815755c6889a784b6a1b3343e9e8daa3e7d128`, including upstream same-start and zero-duration note fixes, with runtime installation-source validation. Sparse-piano BPM fitting pools real intervals across short phrases without treating long silence as evidence. See [piano transcription investigation](piano-transcription.md#english) for comparisons, measured overhead and platform validation limits.
+
 Aria-AMT is another dedicated piano backend. The wrapper in `src/core/aria_amt_transcriber.py` uses the shared single-file adapter around official inference and the MIDI writer. Linux source installations execute it in a dedicated `src.core.aria_amt_worker` process, so model failures return to the project queue without nested upstream batch workers. Docker and portable builds prepare the three directories read by the official AudioTransform before installation files become read-only. The default checkpoint is:
 
 ```text

@@ -698,6 +698,11 @@
     "failed": "转写失败：{error}",
     "cancelled": "转写已取消，未生成完整 MIDI"
   },
+  "aria_amt": {
+    "incomplete": "Aria-AMT 官方重叠窗口未能恢复 {start}–{end} 秒，已停止输出不完整 MIDI。原始错误：{error}",
+    "context_exhausted": "Aria-AMT 达到官方 token 上限，当前窗口未完成转写。",
+    "dependency_mismatch": "Aria-AMT 的 MIDI 依赖 ariautils 未安装或源码版本不匹配，请重新运行安装脚本。所需官方源码：{requirement}"
+  },
   "theme": {
     "light": "浅色",
     "dark": "深色",

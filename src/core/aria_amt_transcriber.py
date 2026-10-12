@@ -12,17 +12,21 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from importlib import metadata
+from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional
 
 import torchaudio
 
-from src.i18n.translator import Translator
+from src.i18n.translator import Translator, t
 from src.models.data_models import Config
 from src.utils.subprocess_utils import hidden_subprocess_kwargs
 from src.core.muscriptor_result_assets import read_midi_roll_notes
 from src.core.transcription_stream import snapshot_event
+from src.core.aria_amt_sequence import AriaSequenceStitcher
 from src.utils.audio_utils import load_audio_tensor
 from src.utils.aria_amt_runtime import prepare_aria_audio_assets
 from src.utils.artifact_identity import validate_file_identity
@@ -35,7 +39,7 @@ from src.utils.gpu_utils import (
     rewrite_cuda_runtime_error,
 )
 from src.utils.midi_output import publish_midi_output
-from src.utils.runtime_paths import get_aria_amt_dir, is_frozen_app
+from src.utils.runtime_paths import get_aria_amt_dir, get_ffmpeg_executable, is_frozen_app
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,11 @@ ARIA_AMT_SOURCE_ARCHIVE_URL = (
     "https://github.com/EleutherAI/aria-amt/archive/" f"{ARIA_AMT_SOURCE_REVISION}.zip"
 )
 ARIA_AMT_SOURCE_REQUIREMENT = f"aria-amt @ {ARIA_AMT_SOURCE_ARCHIVE_URL}"
+ARIA_UTILS_SOURCE_REVISION = "7c815755c6889a784b6a1b3343e9e8daa3e7d128"
+ARIA_UTILS_SOURCE_ARCHIVE_URL = (
+    f"https://github.com/EleutherAI/aria-utils/archive/{ARIA_UTILS_SOURCE_REVISION}.zip"
+)
+ARIA_UTILS_SOURCE_REQUIREMENT = f"ariautils @ {ARIA_UTILS_SOURCE_ARCHIVE_URL}"
 ARIA_AMT_CHECKPOINT_REVISION = "8cc4cf5c83b47f2689ac256a947b2a57c17a4c8b"
 ARIA_AMT_CHECKPOINT_URL = (
     "https://huggingface.co/datasets/loubb/aria-midi/resolve/"
@@ -272,8 +281,23 @@ def _process_aria_segments_on_device(
         ]
 
 
+def _get_aria_utils_runtime_unavailable_reason() -> str:
+    try:
+        distribution = metadata.distribution("ariautils")
+        direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+        vcs_info = direct_url.get("vcs_info") or {}
+        if vcs_info:
+            if vcs_info.get("commit_id") == ARIA_UTILS_SOURCE_REVISION:
+                return ""
+        elif direct_url.get("url") == ARIA_UTILS_SOURCE_ARCHIVE_URL:
+            return ""
+    except (metadata.PackageNotFoundError, TypeError, ValueError, AttributeError):
+        pass
+    return t("aria_amt.dependency_mismatch", requirement=ARIA_UTILS_SOURCE_REQUIREMENT)
+
+
 def get_aria_amt_runtime_unavailable_reason() -> str:
-    """Return why the installed Aria-AMT source is not the pinned revision."""
+    """Return why the Aria-AMT model or MIDI runtime source is not pinned."""
 
     try:
         if importlib.util.find_spec("amt.run") is None:
@@ -304,9 +328,9 @@ def get_aria_amt_runtime_unavailable_reason() -> str:
     vcs_info = direct_url.get("vcs_info") or {}
     if vcs_info:
         if vcs_info.get("commit_id") == ARIA_AMT_SOURCE_REVISION:
-            return ""
+            return _get_aria_utils_runtime_unavailable_reason()
     elif direct_url.get("url") == ARIA_AMT_SOURCE_ARCHIVE_URL:
-        return ""
+        return _get_aria_utils_runtime_unavailable_reason()
 
     observed_commit = vcs_info.get("commit_id") or "unknown"
     observed_url = direct_url.get("url") or "unknown"
@@ -459,23 +483,60 @@ class AriaAmtTranscriber:
         chunk_len_seconds: int,
         stride_factor: int,
     ):
+        import numpy as np
+        import soundfile as sf
         import torch
         import torch.nn.functional as torch_functional
 
-        waveform, original_sample_rate = load_audio_tensor(input_path)
-        waveform = waveform.mean(0)
-        if original_sample_rate != sample_rate:
-            waveform = torchaudio.functional.resample(
-                waveform,
-                orig_freq=original_sample_rate,
-                new_freq=sample_rate,
-            )
-
+        audio_info = sf.info(str(input_path))
         chunk_samples = int(sample_rate * chunk_len_seconds)
         stride_samples = int(chunk_samples // stride_factor)
-        if len(waveform) <= chunk_samples:
+        if audio_info.frames / audio_info.samplerate <= chunk_len_seconds:
+            waveform, original_sample_rate = load_audio_tensor(input_path)
+            waveform = waveform.mean(0)
+            if original_sample_rate != sample_rate:
+                waveform = torchaudio.functional.resample(
+                    waveform,
+                    orig_freq=original_sample_rate,
+                    new_freq=sample_rate,
+                )
             yield torch_functional.pad(waveform, (0, chunk_samples - len(waveform)))
             return
+
+        # Match official StreamReader's filter and channel order using the
+        # bundled executable; Windows need not load shared FFmpeg DLLs.
+        decoded = subprocess.run(
+            [
+                get_ffmpeg_executable(),
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-i",
+                str(input_path),
+                "-map",
+                "0:a:0",
+                "-af",
+                f"aresample={sample_rate},aformat=sample_fmts=flt",
+                "-c:a",
+                "pcm_f32le",
+                "-f",
+                "f32le",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            **hidden_subprocess_kwargs(),
+        )
+        if decoded.returncode != 0:
+            raise RuntimeError(
+                "Aria-AMT audio decoding failed: "
+                + decoded.stderr.decode("utf-8", errors="replace").strip()
+            )
+        if not decoded.stdout or len(decoded.stdout) % (audio_info.channels * 4):
+            raise RuntimeError("Aria-AMT audio decoder returned incomplete float32 frames")
+        frames = np.frombuffer(decoded.stdout, dtype="<f4").reshape(-1, audio_info.channels)
+        waveform = torch.from_numpy(frames.copy()).mean(1)
 
         buffer = torch.tensor([], dtype=torch.float32)
         for start in range(0, len(waveform), stride_samples):
@@ -516,7 +577,19 @@ class AriaAmtTranscriber:
             from amt.config import load_config
             from amt.inference import transcribe as transcribe_module
 
-            model, tokenizer = self._load_aria_model()
+            audio_config = load_config()["audio"]
+            audio_segments = iter(
+                self._iter_windows_wav_segments(
+                    input_path=input_path,
+                    sample_rate=audio_config["sample_rate"],
+                    chunk_len_seconds=audio_config["chunk_len"],
+                    stride_factor=transcribe_module.STRIDE_FACTOR,
+                )
+            )
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="aria-audio") as audio_loader:
+                first_window = audio_loader.submit(next, audio_segments, None)
+                model, tokenizer = self._load_aria_model()
+                first_audio_segment = first_window.result()
             cache_dtype = torch.float
             if device.startswith("cuda"):
                 checker = getattr(torch.cuda, "is_bf16_supported", None)
@@ -546,13 +619,11 @@ class AriaAmtTranscriber:
                 audio_transform = audio_transform.to(device)
                 ensure_module_on_device(model, device, "Aria-AMT model")
                 ensure_module_on_device(audio_transform, device, "Aria-AMT audio transform")
-            audio_config = load_config()["audio"]
             event_callback = getattr(self, "_event_callback", None)
-            duration_seconds = 0.0
+            audio_info = torchaudio.info(str(input_path))
+            duration_seconds = audio_info.num_frames / float(audio_info.sample_rate)
             total_windows = 0
             if event_callback is not None:
-                audio_info = torchaudio.info(str(input_path))
-                duration_seconds = audio_info.num_frames / float(audio_info.sample_rate)
                 chunk_seconds = float(audio_config["chunk_len"])
                 stride_seconds = chunk_seconds / float(transcribe_module.STRIDE_FACTOR)
                 if duration_seconds <= chunk_seconds:
@@ -564,27 +635,30 @@ class AriaAmtTranscriber:
                         stride_count - int(transcribe_module.STRIDE_FACTOR) + 2,
                     )
 
-            sequence = [tokenizer.bos_tok]
-            concat_sequence = [tokenizer.bos_tok]
-            for index, audio_segment in enumerate(
-                self._iter_windows_wav_segments(
-                    input_path=input_path,
-                    sample_rate=audio_config["sample_rate"],
-                    chunk_len_seconds=audio_config["chunk_len"],
-                    stride_factor=transcribe_module.STRIDE_FACTOR,
-                )
-            ):
+            stitcher = AriaSequenceStitcher(
+                transcribe_module,
+                tokenizer,
+                duration_seconds,
+                self._pt,
+            )
+            segments = (
+                chain((first_audio_segment,), audio_segments)
+                if first_audio_segment is not None
+                else ()
+            )
+            for index, audio_segment in enumerate(segments):
                 if self._cancelled:
                     raise InterruptedError("Aria-AMT 转写处理已取消")
+                stitcher.check_window(index)
 
                 if progress_callback:
                     progress_callback(
                         0.10 + min(index, 8) * 0.08, self._pt("progress.running_aria_amt")
                     )
 
-                init_index = len(sequence)
                 silent_intervals = transcribe_module._get_silent_intervals(audio_segment)
-                segment_tasks = [((audio_segment, sequence), 0)]
+                input_sequence = deepcopy(stitcher.sequence)
+                segment_tasks = [((audio_segment, stitcher.sequence), 0)]
                 if device.startswith("xpu"):
                     (sequence,) = _process_aria_segments_on_device(
                         tasks=segment_tasks,
@@ -602,6 +676,9 @@ class AriaAmtTranscriber:
                         tokenizer=tokenizer,
                         logger=logger,
                     )
+                if self._cancelled:
+                    raise InterruptedError("Aria-AMT 转写处理已取消")
+                context_exhausted = len(sequence) >= transcribe_module.MAX_BLOCK_LEN
                 adjusted_sequence = transcribe_module._process_silent_intervals(
                     sequence,
                     intervals=silent_intervals,
@@ -609,19 +686,13 @@ class AriaAmtTranscriber:
                 )
                 if len(adjusted_sequence) < len(sequence) - 15:
                     sequence = adjusted_sequence
-                next_sequence = transcribe_module._truncate_seq(
+                if not stitcher.append(
+                    index,
                     sequence,
-                    transcribe_module.CHUNK_LEN_MS,
-                    transcribe_module.LEN_MS - transcribe_module.CHUNK_LEN_MS,
-                )
-
-                if sequence[-1] == tokenizer.eos_tok:
-                    sequence = sequence[:-1]
-                concat_sequence += transcribe_module._shift_onset(
-                    sequence[init_index:],
-                    index * transcribe_module.CHUNK_LEN_MS,
-                )
-                sequence = [tokenizer.bos_tok] if len(next_sequence) == 1 else next_sequence
+                    input_sequence,
+                    context_exhausted=context_exhausted,
+                ):
+                    continue
 
                 if event_callback is not None:
                     completed = index + 1
@@ -639,7 +710,7 @@ class AriaAmtTranscriber:
                     try:
                         self._save_token_sequence_as_midi(
                             tokenizer,
-                            concat_sequence,
+                            stitcher.concat_sequence,
                             preview_path,
                         )
                     except RuntimeError as exc:
@@ -670,12 +741,13 @@ class AriaAmtTranscriber:
                         )
                     )
 
-            if len(concat_sequence) < 10:
+            stitcher.finish()
+            if len(stitcher.concat_sequence) < 10:
                 raise RuntimeError("Aria-AMT 推理结果为空或过短，未生成可保存的 MIDI")
 
             self._save_token_sequence_as_midi(
                 tokenizer,
-                concat_sequence,
+                stitcher.concat_sequence,
                 temp_dir / f"{input_path.stem}.mid",
             )
         except InterruptedError:
