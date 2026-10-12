@@ -1,23 +1,31 @@
 # 更新说明 / Changelog
 
-## 未发布 / Unreleased — 2026-10-12
+## v1.9.0 — 2026-10-12
 
+- 运行时与项目元数据统一为 1.9.0，Docker 自托管/生产 Compose、环境模板和生产安装脚本同步使用 `v1.9.0` 镜像。新增完整中英文发布说明，包含自 v1.8.0 以来的功能、修复、下载方式、实测结果与保留限制。
+- Runtime and project metadata are aligned at 1.9.0; self-host/production Compose files, environment examples and production setup select `v1.9.0` images. Full Chinese/English release notes cover features and fixes since v1.8.0, downloads, verification and remaining limitations.
 - MuScriptor 导入音频和新增分轨默认保留空乐器条件，不再由文件名推断曲目编制；桌面、Space、Colab 与独立 Web 同步，手动及项目中保存的选择继续生效。中英文说明明确全选不等于自动识别。官方 35 类条件生成退化未改动模型或解码处理。
 - 修正 MuScriptor 在官方 writer 写出前误报“禁用 onset 校正、零小节偏移”的日志。现在观测官方最终 BeatGrid 的原始返回值，文件成功发布后报告 onset delay、小节偏移和净偏移；写出前保持待计算，复用实例清空旧值，失败不发送完成信息。保持官方 MIDI 字节一致，没有增加推理、重试或音符分析。
 - 修正稀疏钢琴 BPM 对短乐句的误判：汇总真实乐句内拍间隔，不把长空白当作连续拍点；保留节拍可信度与变速证据，不新增节拍检测或转写。
 - Aria 长短音频预处理对齐官方分支，并让首窗读取与模型加载并行。复用官方已有重叠窗口恢复非法序列，未恢复区间明确报错，禁止将缺失时段的 MIDI 当成完整结果。
 - Aria MIDI 依赖固定到官方 `ariautils` 提交 `7c815755c6889a784b6a1b3343e9e8daa3e7d128`，使用上游对同起点和零时值音符的修正；根目录、Space 与 Colab 安装约束同步，Space 修复安装同时覆盖两个 Aria 包，PyInstaller 收集依赖来源元数据。未加入自定义 token 约束、项目级音符修补或模型精度变更。新增错误文案覆盖全部语言 `zh_CN`、`en_US`。
+- 发布前全仓后台回归 **1,783 项通过、3 项真实音频设备验收跳过**，覆盖桌面、Space/Colab、Web/API、Docker、便携/可执行与发布入口。真实 Large 五乐器 20 秒样本输出 405 音符、无 token 上限警告，MIDI 与官方 writer 对照字节一致；此前 20 秒/317 秒真实事件重放亦一致。当前 Aria 最终 GPU 与官方对照证据、性能及边界见[钢琴分析](docs/piano-transcription.md)，时间轴数值和验收范围见[MuScriptor 分析](docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+- 复核现有 31 项组件清单（26 VERIFIED、5 OWNER_ACCEPTED）并纠正 AGENTS 中过期描述；许可证与维护者接受记录未修改。当前固定运行时身份检查通过；`pip check` 仍有安装脚本已记录的 Aria/torchaudio 与 audio-separator/NumPy 声明冲突。以上本机核验不代替安装包、镜像或云端应用的构建与部署验收，发布结果以对应 Actions 和 Release 为准；官方已知生成问题与未完成的设备验收不作解决声明。
 - MuScriptor imports and new stems now leave instrument conditioning empty by default across desktop, Space, Colab and standalone Web. Filenames no longer impose conditions; explicit and saved selections remain effective. Both locales explain that selecting all instruments is not automatic detection. The upstream 35-condition generation issue is unchanged.
 - MuScriptor timing telemetry now observes the unchanged official writer's final BeatGrid and reports onset delay, bar offset and net shift after successful publication. Pending values are unknown, reused instances reset their timing, and failed writing emits no completion. MIDI bytes are preserved with no extra inference, retries or note-analysis pass.
 - Sparse piano tempo fitting now pools real within-phrase intervals and retains uncertainty and variable-tempo evidence without inventing beats across silence or adding beat detection or transcription passes.
 - Aria preprocessing follows its official short/long audio branches; first-window reading overlaps model loading. Existing official overlapping windows recover invalid sequences when possible; unrecovered intervals fail explicitly instead of publishing incomplete output.
 - Aria's MIDI dependency is pinned to unmodified official ariautils `7c815755c6889a784b6a1b3343e9e8daa3e7d128`, including upstream fixes for same-start and zero-duration notes. Root, Space and Colab constraints agree; Space repairs both Aria packages and PyInstaller includes source metadata. No custom token constraints, project-level note repairs or precision changes were introduced. New errors cover all supported locales, `zh_CN` and `en_US`.
+- Full background regression: **1,783 passed, 3 physical audio-device checks skipped**, covering desktop, Space/Colab, Web/API, Docker, portable/executable and release contracts. A fresh 20-second Large/five-instrument GPU run produced 405 notes without token-limit warnings and byte-identical output to the official writer. Recorded 20-second and 317-second event replays also matched. Detailed Aria and MuScriptor evidence and performance boundaries are linked above.
+- The existing 31-component inventory (26 VERIFIED, 5 OWNER_ACCEPTED) and pinned local runtime identities passed review; stale AGENTS wording was corrected without changing license or acceptance records. Two documented pip metadata conflicts remain in the intentional desktop runtime. Local source checks do not replace package, image or cloud deployment acceptance; publication status belongs to the corresponding Actions and Release. Known upstream generation limits and unverified hardware cases remain unresolved.
+
 - 补充完整流行歌曲实测：240.9836 秒原曲经 MuScriptor Large 官方自动识别输出 8 轨、6,560 个音符，无 token 上限警告；RTX 4070 Ti SUPER 上含加载与节拍分析耗时 337.439 秒。三首歌曲各取 5 秒，35 类条件下均未生成可用音符，其中两次达到 2,000 token 上限；不宣称所有歌曲必现，也不将五分钟当成安全阈值。上限按每个 5 秒窗口计算，317 秒循环样本的既有验证不代表最长支持时长。
 - 在独立 Torch/torchaudio 2.5.0+cu124 诊断环境运行完整官方 Aria 流程，同一 240.9836 秒钢琴音频在第 8 窗仍产生非法序列，下一窗恢复后输出 6,213 条有效音符。应用现有 2.7.0+cu128 环境与模型保持原样；其已验收结果为 6,598 条有效音符。不同环境的音符数量不是质量评分，官方非法序列不能声称根治。依赖声明冲突按维护者决定保留。
 - Additional full-song test: official automatic conditioning with MuScriptor Large completed a 240.9836-second pop recording with 8 tracks and 6,560 notes, without token-limit warnings. Total time including loading and beat analysis was 337.439 seconds on an RTX 4070 Ti SUPER. Three distinct five-second excerpts produced no usable notes with all 35 conditions; two exhausted the 2,000-token limit. The limit applies per five-second window, not per song. Neither universal failure nor a five-minute safe threshold is claimed; the earlier 317-second loop is not a maximum-duration benchmark.
 - A separate Torch/torchaudio 2.5.0+cu124 diagnostic environment reproduced an invalid Aria sequence at window 8 through the complete official pipeline. Its next window recovered, yielding 6,213 valid notes for the 240.9836-second piano recording. The application's 2.7.0+cu128 environment and models remain unchanged, with 6,598 valid notes in its accepted run. Note-count differences are not quality scores; upstream invalid sequences are not claimed fixed. Dependency metadata conflicts remain by maintainer decision.
 
-## 未发布 / Unreleased — 2026-10-11
+### 2026-10-11 — 和弦监听 / Chord playback
+
 
 - 桌面和弦栏新增“和弦随曲播放”和 0～200% 独立音量。首次默认关闭随播、音量 100%，两项偏好持久保存；关闭随播仍支持点击和弦单独试听，0% 静音两种试听，静音时点击不会暂停歌曲。窄窗口自动换行，中英文文案、键盘操作、准备状态与失败重试同步适配。
 - 和弦随播按 ChordMini 原始区间与 MuScriptor 开头偏移合成 SoundFont PCM，接入原音/MIDI 的单一音频时钟，统一暂停、跳转、工程 BPM 和倍速。长和弦不因小节显示切分重复发声，N/X 区间保持静音。音量无需重复合成，200% 实际增强输出；响度校准、最长 20 ms 增益过渡与双声道联动前视峰值保护用于试听，原 MIDI、编辑历史及导出保持原样。
@@ -28,7 +36,7 @@
 - Background synthesis supports cancellation, caching and generation checks. Disabling follow, muting, changing SoundFonts and closing results reject stale audio. Errors retain their cause and can be retried. Portable/executable desktop Apps share the implementation; Space, Colab, standalone Web/API, Docker and portable Web retain their separate delivery contracts without a chord lane.
 - Validation passed 674 distinct tests covering chord audio, synchronized transport, the result editor, downloads and exports, responsive layouts, localization, and the Space/Colab, Web/API, Docker, deployment and portable/executable entry contracts. Both supported locales passed parsing, completeness and placeholder checks across all 633 keys. Both were also exercised in real Windows Qt windows with local FluidSynth and an audio output device for follow playback, seek, speed, mute and click auditions. No release package was rebuilt or published.
 
-## 未发布 / Unreleased — 2026-10-02
+### 2026-10-02 — 导出错误处理 / Export error handling
 
 - 修复桌面结果页下载 MIDI 时，导出异常被重新抛回 Qt 动作回调而导致程序闪退的问题（#13）。下载入口统一覆盖 BPM/资源检查、保存对话框和 MIDI/立体声 WAV 写入异常；失败显示既有本地化错误提示，并将完整调用栈写入日志，保留当前结果供修正问题后重试。取消保存及成功导出的 MIDI 音符、工程 BPM、事件和原始文件处理保持原有行为。
 - 增加独立 Qt 子进程回归，覆盖目录冲突、源 MIDI 缺失、参考 BPM 缺失、保存对话框错误、立体声源文件缺失和资源未就绪；中英文均验证失败后进程存活、现有文件不被破坏、日志含真实原因，以及随后成功重试，另验证取消保存不写文件或报告错误。
