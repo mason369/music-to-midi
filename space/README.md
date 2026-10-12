@@ -72,7 +72,7 @@ Hugging Face 卡片顶部的 `models` / `datasets` 元数据列出这个 Space �
 | YourMT3+ 五个 checkpoint | [`mimbres/YourMT3`](https://huggingface.co/mimbres/YourMT3/tree/5e66c1ea173a8186e0d20432b841d3180cc015b5) @ `5e66c1ea173a8186e0d20432b841d3180cc015b5` | 默认多乐器路线及五个逐轨选择项 | 固定 Space revision 声明 Apache-2.0；启动时使用该 revision 与项目的受控兼容补丁 |
 | MIROS + MusicFM | [`amt-os/ai4m-miros`](https://github.com/amt-os/ai4m-miros/tree/668a0aa6357bb3f09e767c9ece378956c2ffd182)；[`minzwon/MusicFM`](https://huggingface.co/minzwon/MusicFM/tree/546287d5e3e9ea5b42a4135d1dbca96ac12a0a9c) | 2025 AMT Challenge 路线的完整混音/逐轨多乐器转写 | MusicFM 声明 MIT；MIROS 源码与 fine-tuned checkpoint 上游未声明许可，项目保留完整归属与维护者责任记录；这些记录不构成上游许可授予 |
 | Leap XE vocals | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 vocals WAV | 上游未声明许可；完整边界见第三方声明 |
-| Leap Instrumental accompaniment | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 accompaniment WAV | 上游未声明许可；新增权重的便携包发布记录待维护者确认 |
+| Leap Instrumental accompaniment | [`pcunwa/BS-Roformer-Leap`](https://huggingface.co/pcunwa/BS-Roformer-Leap/tree/4e47d6662ae82eaa8b4ac4329fe66099a843b48e) | `VOCAL_SPLIT` 的 accompaniment WAV | 上游未声明许可；已有独立的维护者分发接受记录，不等于上游授权 |
 | BS-RoFormer SW Fixed | [`noblebarkrr/mvsepless_resources`](https://huggingface.co/noblebarkrr/mvsepless_resources/tree/370198fbb6997e3f5774778254698794e7b1267d) | `SIX_STEM_SPLIT` 的六条 WAV | 上游未声明许可；分离质量使用 SDR 类指标，与 MIDI F1 分开记录 |
 | TransKun V2 / V2 Aug | [`Yujia-Yan/Transkun`](https://github.com/Yujia-Yan/Transkun)；`transkun==2.0.1` 与官方 V2 Aug 文件 | 两条独立钢琴路线 | 包内 V2 资源随 MIT 包发布；V2 Aug 按官方项目发布记录单独固定，两条路线分别加载各自 checkpoint |
 | Aria-AMT | [`EleutherAI/aria-amt`](https://github.com/EleutherAI/aria-amt/tree/a1ab73fc901d1759ec3bc173c146b3c6a3040261)；[`loubb/aria-midi`](https://huggingface.co/datasets/loubb/aria-midi/tree/8cc4cf5c83b47f2689ac256a947b2a57c17a4c8b) | 钢琴专用逐轨/直接转写 | 源码 Apache-2.0；checkpoint 为 CC BY-NC-SA 4.0，保持非商用和原许可 |
@@ -89,7 +89,7 @@ MIDI results start with all instruments visible and audible. Multiple instrument
 | 功能 | 行为 |
 |------|------|
 | 多乐器转写 | `SMART` 可选择 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small；YourMT3+ 默认 `YPTF.MoE+Multi (noPS)`，并提供五种官方 checkpoint。 |
-| MuScriptor 乐器选择 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也屏蔽未选乐器 token，全选不等于自动识别；事件流和最终 MIDI 继续校验。条件生成的已知限制见 [模型研究](../docs/muscriptor-model.md#2026-10-12-条件生成复核)。 |
+| MuScriptor 乐器选择 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也屏蔽未选乐器 token，全选不等于自动识别；事件流和最终 MIDI 继续校验。条件生成的已知限制见 [模型研究](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md#2026-10-12-条件生成复核)。 |
 | 音源分离 | Leap XE 90-band 与 Leap Instrumental 生成 vocals、accompaniment 两条 WAV；`BS-Rofo-SW-Fixed.ckpt` 生成 bass、drums、guitar、piano、vocals、other 六条 WAV。 |
 | 逐轨 MIDI | 每条波形音轨都可试听、下载或添加本地音频。勾选“转 MIDI”、从 13 个模型中选择一个，再点击该行“开始转换”；一次只处理该音轨。 |
 | 钢琴模式 | 四个钢琴模式直接生成一个 MIDI；ByteDance Pedal 保留延音踏板 CC64。 |
@@ -102,7 +102,11 @@ MIDI results start with all instruments visible and audible. Multiple instrument
 
 ## MuScriptor Large 公开评价
 
-共享核心的时间轴日志现记录官方 writer 实际采用的 onset 校正、小节偏移及净时间偏移；写出前保持待计算，不再误报禁用或零偏移。此次修正不改变 MIDI 字节或增加推理次数，详见[时间轴核验](../docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+MuScriptor instrument conditions are empty by default for official automatic detection. Importing audio or adding stems never infers conditions from filenames. Select only instruments known to be present: selections condition generation and exclude other instrument tokens. Selecting all is not automatic detection; explicit and saved selections, event checks and final MIDI checks remain effective. See the [conditioning findings and limits](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md#2026-10-12-条件生成复核).
+
+共享核心的时间轴日志现记录官方 writer 实际采用的 onset 校正、小节偏移及净时间偏移；写出前保持待计算，不再误报禁用或零偏移。此次修正不改变 MIDI 字节或增加推理次数，详见[时间轴核验](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+
+The shared core logs the onset correction, bar offset and net shift actually used by the official writer. Timing remains pending until writing completes; MIDI bytes and inference counts are unchanged. See the [timing verification](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验).
 
 [官方模型卡](https://huggingface.co/MuScriptor/muscriptor-large)在作者自建的 372 首多乐器 `D_Test` 上报告 Onset / Frame / Offset / Drums / Multi F1 为 **60.4 / 72.4 / 48.6 / 49.6 / 47.8**；同表 YourMT3+ Multi F1 为 21.9。这些分数并非 Space 本地实测，也不能外推到所有数据集：论文的 8 个公共跨域集里 Multi F1 高于 YourMT3+ 的有 6 个，另 2 个较低。模型不输出 velocity，权重采用 CC BY-NC 4.0 非商用许可。
 
@@ -145,7 +149,9 @@ MuScriptor Small / Medium / Large 是三个独立选项。所选档位失败、�
 
 Space 的 Torch 2.8 / NumPy 2 环境是独立部署契约，不能用桌面版 Torch 2.7 / NumPy 1.26 依赖覆盖。Leap Instrumental 使用 PyTorch 原生 FP32 推理。完整七模式目前仍只验收 NVIDIA CUDA；尚未据此扩大 AMD/ROCm 支持范围。
 
-Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 31 项闭集清单为 26 项 `VERIFIED`、4 项附维护者具名责任记录的 `OWNER_ACCEPTED`、1 项 `BLOCKED`；当前 Leap Instrumental 的再分发记录为 `BLOCKED`，发布校验会显式停止。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
+Space 源码同步不等于取得第三方模型的额外授权。当前 portable release 的 31 项闭集清单为 26 项 `VERIFIED`、5 项附维护者具名责任记录的 `OWNER_ACCEPTED`、0 项 `BLOCKED`；Leap Instrumental 已有独立的维护者分发接受记录，但不等同于上游授权。发布仍严格校验全部组件。Space 运行时下载的公开制品继续受各上游许可与平台条款约束；MuScriptor Small / Medium / Large 的访问条件包含各自的 Hugging Face 模型条款授权。
+
+Syncing Space source grants no additional third-party model rights. The portable inventory contains 31 components: 26 `VERIFIED`, five `OWNER_ACCEPTED` with named maintainer responsibility records, and none `BLOCKED`. Leap Instrumental has its own maintainer distribution acceptance; upstream still declares no license, and acceptance does not grant one. Every component remains subject to release validation. Runtime downloads retain upstream licenses and platform terms, including the separate Hugging Face access approvals for MuScriptor Small, Medium and Large.
 
 ## 链接
 

@@ -2,6 +2,8 @@
 
 ## v1.9.0 — 2026-10-12
 
+- Space 说明中的模型研究链接改为 GitHub 绝对地址，避免同步到 Hugging Face 后指向不存在的 docs 目录；补齐本次乐器条件、时间轴说明的英文内容，并将 Space 与英文 README 的组件数量/状态纠正为既有清单的 31 项、26 VERIFIED、5 OWNER_ACCEPTED、0 BLOCKED。未修改任何许可证或维护者接受记录。
+- Space model-investigation links now use absolute GitHub URLs so the synchronized card does not reference a missing docs directory. English conditioning and timing explanations are included, and Space/English README inventory wording now matches the existing 31 components: 26 VERIFIED, five OWNER_ACCEPTED, none BLOCKED. License and maintainer acceptance records are unchanged.
 - 运行时与项目元数据统一为 1.9.0，Docker 自托管/生产 Compose、环境模板和生产安装脚本同步使用 `v1.9.0` 镜像。新增完整中英文发布说明，包含自 v1.8.0 以来的功能、修复、下载方式、实测结果与保留限制。
 - Runtime and project metadata are aligned at 1.9.0; self-host/production Compose files, environment examples and production setup select `v1.9.0` images. Full Chinese/English release notes cover features and fixes since v1.8.0, downloads, verification and remaining limitations.
 - MuScriptor 导入音频和新增分轨默认保留空乐器条件，不再由文件名推断曲目编制；桌面、Space、Colab 与独立 Web 同步，手动及项目中保存的选择继续生效。中英文说明明确全选不等于自动识别。官方 35 类条件生成退化未改动模型或解码处理。
