@@ -29,6 +29,7 @@ MIN_SUSTAINED_CHANGE_BEATS = 8
 OCTAVE_FAMILY_TOLERANCE_RATIO = 0.10
 MIN_BEATS = 8
 MIN_GLOBAL_FIT_BEATS = 32
+MAX_SPARSE_ORDINAL_ERROR_BEATS = 0.25
 MIN_METER_AGREEMENT = 0.90
 MAX_FIXED_TEMPO_PHASE_ERROR_BEATS = 3.0 / 8.0
 MAX_PUBLISHED_FIXED_TEMPO_DISTANCE_SECONDS = 0.040
@@ -884,29 +885,33 @@ def normalize_beat_grid(beat_times: Sequence[float]) -> NormalizedBeatGrid:
 def _fit_sparse_observed_period(times: Sequence[float], reference_period: float) -> float:
     """Fit a shared slope with independent intercepts across observed runs.
 
-    Only short, unambiguous intervals establish local beat ordinals. Centering
-    each run removes its arbitrary phase; pooled least squares then estimates
-    the clock without giving synthetic gap-fill marks any statistical weight.
-    These cuts affect estimation only: no observed timestamps are removed from
-    the returned beat evidence or from adaptive-tempo validation.
+    Short phrases contribute independent observed intervals, not invented
+    ordinals across silence. Assign ordinals with a quarter-beat ambiguity
+    bound, then judge the fitted residual and uncertainty. Cutting runs at a
+    five-percent period deviation first biases the estimate toward the initial
+    frame-quantized median and can reject every short, otherwise coherent run.
+    No observations are removed from downstream beat/tempo-map validation.
     """
     import numpy as np
 
     values = np.asarray(times, dtype=float)
     intervals = np.diff(values)
     steps = np.maximum(1, np.rint(intervals / reference_period))
-    local_periods = intervals / steps
     ambiguous = (
         (intervals > 8 * reference_period)
         | (intervals < DUPLICATE_PERIOD_RATIO * reference_period)
-        | (abs(local_periods - reference_period) > DOMINANT_PERIOD_TOLERANCE_RATIO * reference_period)
+        | (
+            abs(intervals - steps * reference_period)
+            > MAX_SPARSE_ORDINAL_ERROR_BEATS * reference_period
+        )
     )
     runs = np.split(values, np.flatnonzero(ambiguous) + 1)
     ordinal_variance = 0.0
     ordinal_time_covariance = 0.0
     observed_count = 0
+    centered_runs = []
     for run in runs:
-        if len(run) < MIN_BEATS:
+        if len(run) < 2:
             continue
         ordinals = np.r_[0.0, np.cumsum(np.rint(np.diff(run) / reference_period))]
         x = ordinals - ordinals.mean()
@@ -914,12 +919,37 @@ def _fit_sparse_observed_period(times: Sequence[float], reference_period: float)
         ordinal_variance += float(x @ x)
         ordinal_time_covariance += float(x @ y)
         observed_count += len(run)
-    if observed_count < MIN_BEATS or ordinal_variance <= 0:
+        centered_runs.append((x, y))
+    observed_intervals = observed_count - len(centered_runs)
+    if observed_intervals < MIN_BEATS - 1 or ordinal_variance <= 0:
         raise RuntimeError(
-            "Beat This has long undetected gaps without enough contiguous beat evidence; "
+            "Beat This has long undetected gaps without enough observed beat intervals; "
             "use the original mix as the tempo source"
         )
     period = ordinal_time_covariance / ordinal_variance
     if not _is_reviewed_tempo_period(period):
         raise RuntimeError("Beat This observed-run tempo is outside the reviewed range")
+    residual_degrees = observed_count - 2 * len(centered_runs)
+    if residual_degrees <= 0:
+        raise RuntimeError(
+            "Beat This has too few within-phrase observations to assess tempo uncertainty"
+        )
+    # Different phrases may have genuinely different tempi. Measure timing
+    # noise around each observed slope; the complete grid below decides fixed
+    # versus variable tempo instead of rejecting a well-observed tempo change.
+    squared_error = 0.0
+    for x, y in centered_runs:
+        local_period = float(x @ y) / float(x @ x)
+        residuals = y - local_period * x
+        squared_error += float(residuals @ residuals)
+    residual = math.sqrt(squared_error / observed_count)
+    period_standard_error = math.sqrt(squared_error / residual_degrees / ordinal_variance)
+    if (
+        residual > MAX_GLOBAL_FIT_RESIDUAL_RATIO * period
+        or 2 * period_standard_error > MAX_GLOBAL_FIT_DISAGREEMENT_RATIO * period
+    ):
+        raise RuntimeError(
+            "Beat This observed phrases do not establish a consistent tempo; "
+            "use the original mix as the tempo source"
+        )
     return _canonical_tempo_period_seconds(period)

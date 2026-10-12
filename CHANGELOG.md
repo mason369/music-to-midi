@@ -1,5 +1,10 @@
 # 更新说明 / Changelog
 
+## 未发布 / Unreleased — 2026-10-12
+
+- 修正稀疏钢琴 BPM 对短乐句的误判：汇总真实乐句内拍间隔，不把长空白当作连续拍点；保留节拍可信度与变速证据，不新增节拍检测或转写。
+- Sparse piano tempo fitting now pools real within-phrase intervals and retains uncertainty and variable-tempo evidence without inventing beats across silence or adding beat detection or transcription passes.
+
 ## 未发布 / Unreleased — 2026-10-11
 
 - 桌面和弦栏新增“和弦随曲播放”和 0～200% 独立音量。首次默认关闭随播、音量 100%，两项偏好持久保存；关闭随播仍支持点击和弦单独试听，0% 静音两种试听，静音时点击不会暂停歌曲。窄窗口自动换行，中英文文案、键盘操作、准备状态与失败重试同步适配。
