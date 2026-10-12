@@ -3,10 +3,12 @@
 ## 未发布 / Unreleased — 2026-10-12
 
 - MuScriptor 导入音频和新增分轨默认保留空乐器条件，不再由文件名推断曲目编制；桌面、Space、Colab 与独立 Web 同步，手动及项目中保存的选择继续生效。中英文说明明确全选不等于自动识别。官方 35 类条件生成退化未改动模型或解码处理。
+- 修正 MuScriptor 在官方 writer 写出前误报“禁用 onset 校正、零小节偏移”的日志。现在观测官方最终 BeatGrid 的原始返回值，文件成功发布后报告 onset delay、小节偏移和净偏移；写出前保持待计算，复用实例清空旧值，失败不发送完成信息。保持官方 MIDI 字节一致，没有增加推理、重试或音符分析。
 - 修正稀疏钢琴 BPM 对短乐句的误判：汇总真实乐句内拍间隔，不把长空白当作连续拍点；保留节拍可信度与变速证据，不新增节拍检测或转写。
 - Aria 长短音频预处理对齐官方分支，并让首窗读取与模型加载并行。复用官方已有重叠窗口恢复非法序列，未恢复区间明确报错，禁止将缺失时段的 MIDI 当成完整结果。
 - Aria MIDI 依赖固定到官方 `ariautils` 提交 `7c815755c6889a784b6a1b3343e9e8daa3e7d128`，使用上游对同起点和零时值音符的修正；根目录、Space 与 Colab 安装约束同步，Space 修复安装同时覆盖两个 Aria 包，PyInstaller 收集依赖来源元数据。未加入自定义 token 约束、项目级音符修补或模型精度变更。新增错误文案覆盖全部语言 `zh_CN`、`en_US`。
 - MuScriptor imports and new stems now leave instrument conditioning empty by default across desktop, Space, Colab and standalone Web. Filenames no longer impose conditions; explicit and saved selections remain effective. Both locales explain that selecting all instruments is not automatic detection. The upstream 35-condition generation issue is unchanged.
+- MuScriptor timing telemetry now observes the unchanged official writer's final BeatGrid and reports onset delay, bar offset and net shift after successful publication. Pending values are unknown, reused instances reset their timing, and failed writing emits no completion. MIDI bytes are preserved with no extra inference, retries or note-analysis pass.
 - Sparse piano tempo fitting now pools real within-phrase intervals and retains uncertainty and variable-tempo evidence without inventing beats across silence or adding beat detection or transcription passes.
 - Aria preprocessing follows its official short/long audio branches; first-window reading overlaps model loading. Existing official overlapping windows recover invalid sequences when possible; unrecovered intervals fail explicitly instead of publishing incomplete output.
 - Aria's MIDI dependency is pinned to unmodified official ariautils `7c815755c6889a784b6a1b3343e9e8daa3e7d128`, including upstream fixes for same-start and zero-duration notes. Root, Space and Colab constraints agree; Space repairs both Aria packages and PyInstaller includes source metadata. No custom token constraints, project-level note repairs or precision changes were introduced. New errors cover all supported locales, `zh_CN` and `en_US`.

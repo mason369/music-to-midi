@@ -102,6 +102,8 @@ MIDI results start with all instruments visible and audible. Multiple instrument
 
 ## MuScriptor Large 公开评价
 
+共享核心的时间轴日志现记录官方 writer 实际采用的 onset 校正、小节偏移及净时间偏移；写出前保持待计算，不再误报禁用或零偏移。此次修正不改变 MIDI 字节或增加推理次数，详见[时间轴核验](../docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+
 [官方模型卡](https://huggingface.co/MuScriptor/muscriptor-large)在作者自建的 372 首多乐器 `D_Test` 上报告 Onset / Frame / Offset / Drums / Multi F1 为 **60.4 / 72.4 / 48.6 / 49.6 / 47.8**；同表 YourMT3+ Multi F1 为 21.9。这些分数并非 Space 本地实测，也不能外推到所有数据集：论文的 8 个公共跨域集里 Multi F1 高于 YourMT3+ 的有 6 个，另 2 个较低。模型不输出 velocity，权重采用 CC BY-NC 4.0 非商用许可。
 
 Mirelo Studio 另有一个“使用更多数据训练”的私有版本；截至 2026-08-08 没有公开权重、revision 或同协议分数。本 Space 使用可固定和校验的公开 Large / Medium / Small 权重。完整分数与后续候选见仓库的 [`docs/muscriptor-model.md`](https://github.com/mason369/music-to-midi/blob/master/docs/muscriptor-model.md)。

@@ -256,6 +256,8 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
+运行日志现记录官方 MIDI writer 实际采用的 onset 校正、小节偏移及两者合成的净时间偏移；写出前保持“待计算”，不再误报为禁用校正或零偏移。此修复不改变 MIDI 字节，不增加模型推理或音符分析次数。后台实测与发布前检查见[时间轴核验](docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+
 项目严格固定上游官方 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，
 并对七个运行时源码文件执行 SHA-256 身份校验，不叠加未合并分支。全项目唯一的
 Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍直接传给 v0.3.0 BeatGrid：官方 onset

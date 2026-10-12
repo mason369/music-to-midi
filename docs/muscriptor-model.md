@@ -113,6 +113,10 @@ flowchart LR
     E --> W[官方 MIDI writer]
     G[项目 BeatGrid] --> W
     W --> M[MIDI]
+    W --> O[观察官方 bar_offset 返回值与最终 onset_delay]
+    M --> P[文件校验与发布]
+    O --> R[运行信息与日志]
+    P --> R
 ```
 
 实测环境为 RTX 4070 Ti SUPER 16 GB、Torch 2.7.0+cu128、Python 3.11.15，Large 使用上表固定权重和源码。模型保持官方精度和解码：`use_sampling=False`、`batch_size=1`、`beam_size=1`、`prelude_forcing=True`、CFG=1、每片段 2,000 token 上限。实验没有修改官方包，另将安装包全部 26 个 Python 源文件与固定提交逐一进行 SHA-256 对照，全部一致。20 秒音频 SHA-256 为 `cca0f6b60e73c81d9f34cdcc620676508e9526b309ccf81119b62c778a94a36d`；317 秒样本由同一片段循环构造，**不是 Issue #13 提问者的原音频，也不代表复杂曲式长曲测试**。
@@ -149,6 +153,25 @@ flowchart LR
 
 本次界面文案覆盖 `zh_CN`、`en_US`：共享目录每语言 633 键，独立 Web 每语言 271 键，解析、键集合和占位符一致；界面均检查两种语言。英文既有 `space.status.stem_midi_count_suffix` 空后缀属于原有目录内容，与本次文案无关。
 
+五类条件的项目 MIDI 比 `beat_grid=None` 的官方原始时间轴整体晚约 1.916 秒：项目网格的 `first_downbeat=0` 并未禁止 writer 计算 onset delay；writer 得到约 +3.4 ms 的 delay 后增加一整小节，并写入 `muscriptor:bar_offset=1.9194`。结果播放器读取该 marker，但包装层原来在写出前报告 `disabled_native_seconds` 和零 offset，与实际不符。后续修正见下一节；这里的项目 BeatGrid 仍来自统一 Beat This 流程，不声称与官方 CLI 重新检测整条节拍链位级一致。
+
+### 2026-10-12 时间轴日志修正与发布前核验
+
+根因是官方 `with_onset_delay()` 返回新的 BeatGrid，而包装层检查的是写出前的原网格。现在提供一个只观察返回值的 BeatGrid 子类：`bar_offset()` 原样调用官方父方法，记录 writer 在音符清理、onset 测量之后实际使用的 delay 与 offset，并原样返回 offset。官方 `dataclasses.replace()` 保留子类，因此观测发生在最终网格上。没有重写 onset 算法、重复整理音符、额外测量或修改官方包。项目原有网格输入、模型、精度、token 上限和解码参数保持原样。
+
+运行事件写出前为 `onset_phase_correction=pending`，各时间值为 `null`；成功写出并校验后为 `official_writer`，提供 `onset_delay_seconds`、`bar_offset_seconds`、`onset_correction_applied` 和 `midi_time_shift_seconds`。净偏移等于小节偏移减 onset delay，描述官方 writer 写出的时间轴；用户之后显式修改工程 BPM 的变速仍由既有 tempo 流程负责。复用转写器会清空上一首的时间值；writer 失败时不发送完成时间信息，不发布结果。
+
+同一 20 秒样本以 Large、官方链路和五类条件重新执行真实 GPU 转写：405 个音符、无 token 上限警告、正常结束；模型加载和节拍检测之外耗时 24.265 秒。记录的 onset delay 为 `0.003430587225529972 s`，bar offset 为 `1.9194170034818818 s`，净偏移为 `1.9159864162563518 s`。MIDI marker 按官方四位小数保存为 `1.9194`。把本次真实事件交给未修改的官方 writer 和普通 BeatGrid，输出与产品 **逐字节一致**，SHA-256 为 `6a1620312dc198f1f79ea0367bfe05ff91d184d8392e335da092e3f75fe79ca6`。
+
+另重放此前留存的 20 秒自动、20 秒五类和 317 秒自动识别真实事件，三组观测前后的 MIDI 字节全部相同。317 秒这一项是已有 GPU 事件的 writer 回归，不是再次运行 317 秒模型推理。新增 14 项真实 writer 测试覆盖正/负/零 onset、已知/未知拍号、官方/既有可选链路、重复音符清理、未闭合事件、转写器复用和写出失败，确认每次仍仅执行一次 onset 测量。20 秒五类 writer 交替运行各 30 次，中位数为原始 `4.621 ms`、观测版 `4.608 ms`；没有观察到实质耗时增加，不作所有机器或所有输入绝对零开销的保证。
+
+本轮对全部待发布改动进行全仓后台回归：**1,783 项通过，3 项跳过**。跳过的是中英文真实声卡和弦随播与 Windows 声卡暂停/跳转验收；本轮没有打开前台窗口或使用用户声卡。两个仍要求按文件名自动选择乐器的旧断言已同步为默认空选，并保留手动选择验证。覆盖桌面 Qt offscreen、共享推理与 tempo、Space/Colab、独立 Web/API、Docker、便携/可执行入口及发布契约；当前安装的官方 MuScriptor 全部 26 个 Python 文件再次与固定提交核对一致。中英文共享目录当前每语言 636 键、独立 Web 每语言 271 键，键与占位符一致。此前真实无头浏览器的上传、选择与转写证据仍见上一节。
+
+发布清单当前为 31 项（26 项 VERIFIED、5 项 OWNER_ACCEPTED），无 BLOCKED 条目；已修正 AGENTS 中过期的数量与状态描述，没有更改许可证或接受记录。当前本机固定运行时身份检查通过，但 `pip check` 仍报告两项既有声明冲突：Aria 要求 torchaudio ≤2.5，而桌面固定为 2.7.0+cu128；audio-separator 要求 NumPy ≥2，而桌面固定为 1.26.4。这与安装脚本已有 `--no-deps` 兼容组合一致，不为消除提示而更换计算环境。第三方模块仍有 AMP 弃用提示，未把它当作崩溃，也没有屏蔽新增异常。
+
+以上为发布前源码验收记录。全仓测试和本机实测不代替新 Windows/Linux 安装包、Docker 镜像及远端 Space/Colab 的构建与部署验收；打包发布结果以对应版本的 Actions 和 Release 为准。35 类官方生成退化按要求保留，Aria 官方恢复仍可能遇到无法补回的区间并明确失败，不能宣称所有音频再无错误。测试记录在本机临时目录 `music-to-midi-muscriptor-investigation-20261012/` 的 `release-pytest-final.xml`、`timeline-validation.json` 和 `final-audit.json`。
+
+English: timing telemetry now observes the unchanged upstream writer's final BeatGrid and is emitted only after successful publication. The real 20-second Large/five-instrument run and three recorded-event replays produced byte-identical MIDI with and without observation. No model, precision, decoding policy or analysis count changed. Full background regression passed 1,783 tests; three physical audio-device checks were skipped. Both supported locales were checked (636 shared keys and 271 standalone Web keys each). Package/deployment contracts and the 31-component inventory passed. These are pre-release source checks; artifact and deployment acceptance must be established by the corresponding Actions and Release. The known upstream 35-condition issue and unrecoverable Aria sequences remain explicit limitations.
 
 ### 完整歌曲与时长边界补测 / Full-song and duration follow-up
 

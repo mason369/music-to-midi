@@ -177,6 +177,8 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
+运行日志现记录官方 MIDI writer 实际采用的 onset 校正、小节偏移及两者合成的净时间偏移；写出前保持“待计算”，不再误报为禁用校正或零偏移。此修复不改变 MIDI 字节，不增加模型推理或音符分析次数。后台实测与发布前检查见[时间轴核验](muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
+
 项目严格固定上游官方 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，并对七个运行时源码文件执行 SHA-256 身份校验，不叠加未合并分支。全项目唯一的 Beat This `final0` 分析把完整拍点、BPM、可靠拍号和首个强拍传给官方 v0.3.0 BeatGrid；官方 onset 相位估计只在满足样本数与集中度阈值时校正，否则明确记录 0 校正。项目不启动第二套节拍检测，也不接受占位 120 BPM。tempo 归一化后复制到每个含音符轨以兼容 MuseScore，桌面、Space 和 Colab 使用相同网格显示拍线、强拍和交替小节。
 
 三档 gated 权重分别固定为 [`muscriptor-large`](https://huggingface.co/MuScriptor/muscriptor-large) revision `8809fdfbed2affa7ade94a7059e746e3880720e7`、[`muscriptor-medium`](https://huggingface.co/MuScriptor/muscriptor-medium) revision `f32236969308476e01fd3aae67357de5feb05a2d`、[`muscriptor-small`](https://huggingface.co/MuScriptor/muscriptor-small) revision `8c127f603b807520fa465c838e9bfee8a91ada4e`。三者均采用 CC BY-NC 4.0 并附额外合法使用条件；有效授权来自同一个 Hugging Face 账户在浏览器中逐项接受三个仓库的条款，随后登录 CLI。`hf auth login` 不能代替网页接受条款，源码安装、Colab 与自行部署 Space 也无法匿名全自动下载：

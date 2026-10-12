@@ -59,8 +59,8 @@ class MuscriptorTranscriber:
         self._beat_info: BeatInfo | None = None
         self._translator = Translator(getattr(self.config, "language", Translator.DEFAULT_LANGUAGE))
         self.last_detected_instruments: list[str] = []
-        self.last_bar_offset_seconds = 0.0
-        self.last_onset_delay_seconds = 0.0
+        self.last_bar_offset_seconds: float | None = None
+        self.last_onset_delay_seconds: float | None = None
 
     @staticmethod
     def _runtime_unavailable_reason() -> str:
@@ -210,18 +210,26 @@ class MuscriptorTranscriber:
                 "MuScriptor onset correction requires at least two finite, "
                 "strictly increasing project beat times"
             )
-        # Upstream interprets first_downbeat as permission to delay every note
-        # until MIDI bar 1 reaches that phase. TelkNet's reviewed contract keeps
-        # the model-native seconds and applies tempo/meter metadata afterwards.
+
+        # Observe the writer's final grid after its note cleanup and onset
+        # measurement. Upstream dataclasses.replace preserves this subclass.
+        class ObservedBeatGrid(BeatGrid):
+            def bar_offset(grid, min_shift: float = 0.0) -> float:
+                offset = super().bar_offset(min_shift)
+                if grid.onset_delay is not None:
+                    self.last_onset_delay_seconds = float(grid.onset_delay)
+                    self.last_bar_offset_seconds = float(offset)
+                return offset
+
         first_downbeat = 0.0
-        grid = BeatGrid(
+        grid = ObservedBeatGrid(
             bpm=bpm,
             beats_per_bar=beats_per_bar,
             first_downbeat=first_downbeat,
             beats=beats,
         )
-        self.last_bar_offset_seconds = float(grid.bar_offset())
-        self.last_onset_delay_seconds = 0.0
+        self.last_bar_offset_seconds = None
+        self.last_onset_delay_seconds = None
         return grid
 
     def cancel(self) -> None:
@@ -332,7 +340,10 @@ class MuscriptorTranscriber:
                     "beat_grid_first_downbeat": float(beat_grid.first_downbeat),
                     "beat_grid_count": int(len(beat_grid.beats)),
                     "onset_phase_correction": "pending",
-                    "bar_offset_seconds": self.last_bar_offset_seconds,
+                    "onset_delay_seconds": None,
+                    "onset_correction_applied": None,
+                    "bar_offset_seconds": None,
+                    "midi_time_shift_seconds": None,
                 }
             )
             self._emit_event(dict(self._runtime_details))
@@ -424,36 +435,15 @@ class MuscriptorTranscriber:
                 "MuScriptor loaded model has no valid processing-chain identity: "
                 f"{processing_chain!r}"
             )
-        self.last_onset_delay_seconds = 0.0
-        self.last_bar_offset_seconds = float(beat_grid.bar_offset())
-        if abs(self.last_bar_offset_seconds) > 1e-9:
-            raise RuntimeError(
-                "MuScriptor native-timeline serialization retained a non-zero "
-                f"bar offset: {self.last_bar_offset_seconds}"
-            )
-        if self._runtime_details is not None:
-            self._runtime_details.update(
-                {
-                    "onset_phase_correction": "disabled_native_seconds",
-                    "onset_delay_seconds": 0.0,
-                    "onset_correction_applied": False,
-                    "bar_offset_seconds": self.last_bar_offset_seconds,
-                    "chunk_boundary_continuity": chunk_boundary_continuity,
-                    "boundary_notes_merged": boundary_notes_merged,
-                }
-            )
-            self._emit_event(dict(self._runtime_details))
-        logger.info(
-            "MuScriptor native timeline: chain=%s, onset correction disabled, "
-            "bar_offset=%.4f s, exact boundary notes merged=%d",
-            processing_chain,
-            self.last_bar_offset_seconds,
-            boundary_notes_merged,
-        )
         midi_bytes = model.events_to_midi_bytes(
             iter(final_events),
             beat_grid=beat_grid,
         )
+        if self.last_onset_delay_seconds is None or self.last_bar_offset_seconds is None:
+            raise RuntimeError(
+                "MuScriptor official MIDI writer did not report its final BeatGrid timing"
+            )
+        midi_time_shift = self.last_bar_offset_seconds - self.last_onset_delay_seconds
         temporary = unique_midi_temp_path(output_path, "muscriptor-official")
         try:
             temporary.write_bytes(midi_bytes)
@@ -465,6 +455,29 @@ class MuscriptorTranscriber:
             )
         finally:
             remove_temporary_midi(temporary)
+
+        if self._runtime_details is not None:
+            self._runtime_details.update(
+                {
+                    "onset_phase_correction": "official_writer",
+                    "onset_delay_seconds": self.last_onset_delay_seconds,
+                    "onset_correction_applied": self.last_onset_delay_seconds != 0.0,
+                    "bar_offset_seconds": self.last_bar_offset_seconds,
+                    "midi_time_shift_seconds": midi_time_shift,
+                    "chunk_boundary_continuity": chunk_boundary_continuity,
+                    "boundary_notes_merged": boundary_notes_merged,
+                }
+            )
+            self._emit_event(dict(self._runtime_details))
+        logger.info(
+            "MuScriptor official writer timeline: chain=%s, onset_delay=%+.6f s, "
+            "bar_offset=%.6f s, net_shift=%+.6f s, exact boundary notes merged=%d",
+            processing_chain,
+            self.last_onset_delay_seconds,
+            self.last_bar_offset_seconds,
+            midi_time_shift,
+            boundary_notes_merged,
+        )
 
         if progress_callback is not None:
             progress_callback(1.0, self._translator.t("progress.muscriptor_complete"))

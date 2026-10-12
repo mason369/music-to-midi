@@ -440,7 +440,7 @@ def _install_fake_event_module(monkeypatch):
         def with_onset_delay(self, onsets):
             unique_onsets = {round(float(value), 3) for value in onsets}
             delay = 0.012 if len(unique_onsets) >= 40 else 0.0
-            return BeatGrid(
+            return type(self)(
                 bpm=self.bpm,
                 beats_per_bar=self.beats_per_bar,
                 first_downbeat=self.first_downbeat,
@@ -576,6 +576,8 @@ def test_transcriber_passes_official_hard_mask_and_publishes_only_valid_midi(
             assert beat_grid.first_downbeat == pytest.approx(0.0)
             assert beat_grid.beats.tolist() == pytest.approx([0.0, 0.5, 1.0, 1.5])
             assert beat_grid.onset_delay is None
+            final_grid = beat_grid.with_onset_delay([start.start_time])
+            final_grid.bar_offset(min_shift=final_grid.onset_delay)
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -632,6 +634,8 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
         def events_to_midi_bytes(self, events, *, beat_grid=None):
             assert len(list(events)) == 1
             assert beat_grid is not None
+            final_grid = beat_grid.with_onset_delay([])
+            final_grid.bar_offset(min_shift=final_grid.onset_delay)
             return _midi_bytes()
 
     audio = tmp_path / "input.wav"
@@ -666,10 +670,12 @@ def test_transcriber_emits_verified_runtime_details_and_uses_inference_mode(
     assert received[0]["onset_phase_correction"] == "pending"
     assert received[1] == {"type": "progress", "completed": 1, "total": 1}
     assert received[2] == transcriber._runtime_details
-    assert received[2]["onset_phase_correction"] == "disabled_native_seconds"
+    assert received[0]["bar_offset_seconds"] is None
+    assert received[2]["onset_phase_correction"] == "official_writer"
     assert received[2]["onset_delay_seconds"] == pytest.approx(0.0)
     assert received[2]["onset_correction_applied"] is False
     assert received[2]["bar_offset_seconds"] == pytest.approx(0.0)
+    assert received[2]["midi_time_shift_seconds"] == pytest.approx(0.0)
     assert received[2]["chunk_boundary_continuity"] == ("exact_5s_three_frame_note_continuity_v1")
     assert received[2]["boundary_notes_merged"] == 0
 
@@ -697,6 +703,8 @@ def test_transcriber_applies_official_onset_phase_before_midi_writer(
         def events_to_midi_bytes(self, streamed, *, beat_grid=None):
             assert len(list(streamed)) == len(events)
             self.written_grid = beat_grid
+            final_grid = beat_grid.with_onset_delay([start.start_time for start in starts])
+            final_grid.bar_offset(min_shift=final_grid.onset_delay)
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
@@ -715,8 +723,8 @@ def test_transcriber_applies_official_onset_phase_before_midi_writer(
     transcriber.transcribe_to_midi(str(audio), str(output))
 
     assert transcriber._model.written_grid.onset_delay is None
-    assert transcriber.last_onset_delay_seconds == pytest.approx(0.0)
-    assert transcriber.last_bar_offset_seconds == pytest.approx(0.0)
+    assert transcriber.last_onset_delay_seconds == pytest.approx(0.012)
+    assert transcriber.last_bar_offset_seconds == pytest.approx(2.0)
 
 
 def test_transcriber_refuses_backend_event_outside_selected_instruments(
@@ -771,6 +779,8 @@ def test_transcriber_batches_dense_note_events_before_each_progress_anchor(
         def events_to_midi_bytes(self, events, *, beat_grid=None):
             assert len(list(events)) == 7
             assert beat_grid is not None
+            final_grid = beat_grid.with_onset_delay([first.start_time, second.start_time])
+            final_grid.bar_offset(min_shift=final_grid.onset_delay)
             return _midi_bytes(0)
 
     audio = tmp_path / "input.wav"
