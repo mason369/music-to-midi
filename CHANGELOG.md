@@ -2,13 +2,17 @@
 
 ## 未发布 / Unreleased — 2026-10-12
 
+- MuScriptor 导入音频和新增分轨默认保留空乐器条件，不再由文件名推断曲目编制；桌面、Space、Colab 与独立 Web 同步，手动及项目中保存的选择继续生效。中英文说明明确全选不等于自动识别。官方 35 类条件生成退化未改动模型或解码处理。
 - 修正稀疏钢琴 BPM 对短乐句的误判：汇总真实乐句内拍间隔，不把长空白当作连续拍点；保留节拍可信度与变速证据，不新增节拍检测或转写。
 - Aria 长短音频预处理对齐官方分支，并让首窗读取与模型加载并行。复用官方已有重叠窗口恢复非法序列，未恢复区间明确报错，禁止将缺失时段的 MIDI 当成完整结果。
 - Aria MIDI 依赖固定到官方 `ariautils` 提交 `7c815755c6889a784b6a1b3343e9e8daa3e7d128`，使用上游对同起点和零时值音符的修正；根目录、Space 与 Colab 安装约束同步，Space 修复安装同时覆盖两个 Aria 包，PyInstaller 收集依赖来源元数据。未加入自定义 token 约束、项目级音符修补或模型精度变更。新增错误文案覆盖全部语言 `zh_CN`、`en_US`。
+- MuScriptor imports and new stems now leave instrument conditioning empty by default across desktop, Space, Colab and standalone Web. Filenames no longer impose conditions; explicit and saved selections remain effective. Both locales explain that selecting all instruments is not automatic detection. The upstream 35-condition generation issue is unchanged.
 - Sparse piano tempo fitting now pools real within-phrase intervals and retains uncertainty and variable-tempo evidence without inventing beats across silence or adding beat detection or transcription passes.
 - Aria preprocessing follows its official short/long audio branches; first-window reading overlaps model loading. Existing official overlapping windows recover invalid sequences when possible; unrecovered intervals fail explicitly instead of publishing incomplete output.
 - Aria's MIDI dependency is pinned to unmodified official ariautils `7c815755c6889a784b6a1b3343e9e8daa3e7d128`, including upstream fixes for same-start and zero-duration notes. Root, Space and Colab constraints agree; Space repairs both Aria packages and PyInstaller includes source metadata. No custom token constraints, project-level note repairs or precision changes were introduced. New errors cover all supported locales, `zh_CN` and `en_US`.
+- 补充完整流行歌曲实测：240.9836 秒原曲经 MuScriptor Large 官方自动识别输出 8 轨、6,560 个音符，无 token 上限警告；RTX 4070 Ti SUPER 上含加载与节拍分析耗时 337.439 秒。三首歌曲各取 5 秒，35 类条件下均未生成可用音符，其中两次达到 2,000 token 上限；不宣称所有歌曲必现，也不将五分钟当成安全阈值。上限按每个 5 秒窗口计算，317 秒循环样本的既有验证不代表最长支持时长。
 - 在独立 Torch/torchaudio 2.5.0+cu124 诊断环境运行完整官方 Aria 流程，同一 240.9836 秒钢琴音频在第 8 窗仍产生非法序列，下一窗恢复后输出 6,213 条有效音符。应用现有 2.7.0+cu128 环境与模型保持原样；其已验收结果为 6,598 条有效音符。不同环境的音符数量不是质量评分，官方非法序列不能声称根治。依赖声明冲突按维护者决定保留。
+- Additional full-song test: official automatic conditioning with MuScriptor Large completed a 240.9836-second pop recording with 8 tracks and 6,560 notes, without token-limit warnings. Total time including loading and beat analysis was 337.439 seconds on an RTX 4070 Ti SUPER. Three distinct five-second excerpts produced no usable notes with all 35 conditions; two exhausted the 2,000-token limit. The limit applies per five-second window, not per song. Neither universal failure nor a five-minute safe threshold is claimed; the earlier 317-second loop is not a maximum-duration benchmark.
 - A separate Torch/torchaudio 2.5.0+cu124 diagnostic environment reproduced an invalid Aria sequence at window 8 through the complete official pipeline. Its next window recovered, yielding 6,213 valid notes for the 240.9836-second piano recording. The application's 2.7.0+cu128 environment and models remain unchanged, with 6,598 valid notes in its accepted run. Note-count differences are not quality scores; upstream invalid sequences are not claimed fixed. Dependency metadata conflicts remain by maintainer decision.
 
 ## 未发布 / Unreleased — 2026-10-11

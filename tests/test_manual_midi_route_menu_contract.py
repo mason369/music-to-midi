@@ -213,6 +213,10 @@ def test_export_metadata_stem_preselects_the_visible_muscriptor_hard_mask(
         qapp.processEvents()
 
         assert row.muscriptor_instrument_selector.isVisibleTo(row)
+        assert row.selected_muscriptor_instruments() == []
+        row.muscriptor_instrument_selector.set_selected_instruments(
+            ["acoustic_guitar", "clean_electric_guitar", "distorted_electric_guitar"]
+        )
         assert row.selected_muscriptor_instruments() == [
             "acoustic_guitar",
             "clean_electric_guitar",

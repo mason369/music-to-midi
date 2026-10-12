@@ -100,11 +100,7 @@ def test_new_input_clears_stale_result_and_returns_to_setup(window):
     assert window.workspace_tabs.currentIndex() == 0
     assert not window.workspace_tabs.isTabEnabled(1)
     assert window._last_result is None
-    assert window.track_panel.get_muscriptor_instruments() == [
-        "acoustic_guitar",
-        "clean_electric_guitar",
-        "distorted_electric_guitar",
-    ]
+    assert window.track_panel.get_muscriptor_instruments() == []
 
 
 @pytest.mark.parametrize("language", ["zh_CN", "en_US"])

@@ -76,7 +76,7 @@
 | 完整混音 | `SMART` 读取整首音频，可选 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small，输出含音符、鼓点和 GM 乐器分组的 MIDI。默认 checkpoint 是 YourMT3+ 官方 `YPTF.MoE+Multi (noPS)`。 |
 | 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 Leap Instrumental 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
 | 钢琴转写 | `PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 和 `PIANO_BYTEDANCE_PEDAL` 分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。 |
-| MuScriptor 乐器约束 | 空选时由模型检测乐器；选中乐器后，模型只生成所选乐器。输出包含其他乐器时任务会报错。 |
+| MuScriptor 乐器约束 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也限制其他乐器输出，全选不等于自动识别。输出包含未选乐器时任务会报错。已知条件生成退化与实测边界见 [模型研究](muscriptor-model.md#2026-10-12-条件生成复核)。 |
 | 乐谱导出 | 每个 MIDI 结果（包括分离后逐轨转换）都可生成独立 ZIP；只对副本量化，不修改原 MIDI。ZIP 含量化 MIDI、MusicXML、总谱、逐乐器分谱及符合 4–9 弦识别条件的 Tab PDF。桌面、Space、Colab 使用当前编辑器网格，独立 Web/API 使用 `1/32`；MuseScore Studio 4 缺失或失败会直接报错。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。模型事件映射到音乐网格，但不做量化。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |

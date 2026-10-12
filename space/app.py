@@ -388,7 +388,6 @@ from src.models.data_models import (
 )
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_INSTRUMENTS,
-    infer_muscriptor_instruments_from_stem_name,
     muscriptor_instrument_label,
     validate_muscriptor_instruments,
 )
@@ -1185,7 +1184,7 @@ def _build_track_state(
                 "color": _TRACK_COLORS[index % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
-                "muscriptor_instruments": infer_muscriptor_instruments_from_stem_name(track_name),
+                "muscriptor_instruments": [],
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -2743,7 +2742,7 @@ def _add_audio_tracks(uploaded_files, track_state):
                 "color": _TRACK_COLORS[(len(tracks)) % len(_TRACK_COLORS)],
                 "midi_enabled": False,
                 "route": "",
-                "muscriptor_instruments": infer_muscriptor_instruments_from_stem_name(safe_stem),
+                "muscriptor_instruments": [],
                 "status": st("dialogs.complete.audio_tracks.manual_midi.not_selected"),
                 "midi_path": "",
             }
@@ -2872,15 +2871,6 @@ def update_tempo_controls(tempo_mode):
     if normalized not in {mode.value for mode in TempoMode}:
         raise RuntimeError(f"Unsupported tempo mode: {tempo_mode!r}")
     return gr.update(visible=normalized == TempoMode.FIXED_MANUAL.value)
-
-
-def suggest_muscriptor_instruments(audio_path, current_instruments):
-    """Prefill a removable hard constraint for an unambiguous stem upload."""
-
-    current = validate_muscriptor_instruments(current_instruments or [])
-    if current:
-        return gr.update()
-    return gr.update(value=infer_muscriptor_instruments_from_stem_name(audio_path))
 
 
 CUSTOM_CSS = """
@@ -3319,13 +3309,6 @@ with gr.Blocks(
         fn=update_tempo_controls,
         inputs=[tempo_mode],
         outputs=[custom_bpm],
-        api_visibility="private",
-        queue=False,
-    )
-    audio_input.change(
-        fn=suggest_muscriptor_instruments,
-        inputs=[audio_input, muscriptor_instruments],
-        outputs=[muscriptor_instruments],
         api_visibility="private",
         queue=False,
     )

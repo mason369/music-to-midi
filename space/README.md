@@ -89,7 +89,7 @@ MIDI results start with all instruments visible and audible. Multiple instrument
 | 功能 | 行为 |
 |------|------|
 | 多乐器转写 | `SMART` 可选择 YourMT3+、MIROS 或 MuScriptor Large / Medium / Small；YourMT3+ 默认 `YPTF.MoE+Multi (noPS)`，并提供五种官方 checkpoint。 |
-| MuScriptor 乐器选择 | 空选时由模型检测；非空选择在生成阶段屏蔽未选乐器 token，并校验事件流和最终 MIDI。 |
+| MuScriptor 乐器选择 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也屏蔽未选乐器 token，全选不等于自动识别；事件流和最终 MIDI 继续校验。条件生成的已知限制见 [模型研究](../docs/muscriptor-model.md#2026-10-12-条件生成复核)。 |
 | 音源分离 | Leap XE 90-band 与 Leap Instrumental 生成 vocals、accompaniment 两条 WAV；`BS-Rofo-SW-Fixed.ckpt` 生成 bass、drums、guitar、piano、vocals、other 六条 WAV。 |
 | 逐轨 MIDI | 每条波形音轨都可试听、下载或添加本地音频。勾选“转 MIDI”、从 13 个模型中选择一个，再点击该行“开始转换”；一次只处理该音轨。 |
 | 钢琴模式 | 四个钢琴模式直接生成一个 MIDI；ByteDance Pedal 保留延音踏板 CC64。 |

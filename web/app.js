@@ -60,7 +60,6 @@ const state = {
   playStartedAt: 0,
   raf: 0,
   zoom: 1,
-  autoMuscriptorInstruments: [],
 };
 
 function selectedValues(select) {
@@ -764,19 +763,6 @@ function setAudioFile(file) {
   $("#resultPageTab").disabled = true;
   if (state.sourceObjectUrl) URL.revokeObjectURL(state.sourceObjectUrl);
   state.audioFile = file; state.sourceObjectUrl = URL.createObjectURL(file);
-  const instrumentSelect = $("#muscriptorInstrumentsSelect");
-  const currentInstruments = selectedValues(instrumentSelect);
-  const mayReplaceAuto = currentInstruments.length === state.autoMuscriptorInstruments.length
-    && currentInstruments.every(
-      (value, index) => value === state.autoMuscriptorInstruments[index],
-    );
-  if (!currentInstruments.length || mayReplaceAuto) {
-    const inferred = inferMuscriptorInstruments(file.name);
-    setSelectedValues(instrumentSelect, inferred);
-    state.autoMuscriptorInstruments = inferred;
-  } else {
-    state.autoMuscriptorInstruments = [];
-  }
   $("#fileInspector").hidden = false;
   $("#fileName").textContent = file.name;
   $("#fileMeta").textContent = `${formatBytes(file.size)} · ${file.type || suffix.slice(1).toUpperCase()}`;
@@ -1143,14 +1129,11 @@ async function buildServerTracks(job) {
   redrawWaveforms();
 }
 function makeTrack(values) {
-  const inferredInstruments = inferMuscriptorInstruments(
-    values.name || values.fileName || values.localFile?.name || "",
-  );
   return {
     id: values.id || `local-${crypto.randomUUID()}`, name: values.name || t("track.local"), color: values.color || TRACK_COLORS[state.tracks.length % TRACK_COLORS.length],
     audioUrl: values.audioUrl || "", localFile: values.localFile || null, fileName: values.fileName || values.localFile?.name || "audio",
     parentJobId: values.parentJobId || null, serverTrackId: values.serverTrackId || null, buffer: null, loading: false,
-    muted: false, solo: false, gainDb: 0, offset: 0, midiEnabled: false, route: "", muscriptorInstruments: values.muscriptorInstruments || inferredInstruments, statusKey: "track.no_route", statusVars: {}, statusClass: "", midiJob: null, midiArtifact: null,
+    muted: false, solo: false, gainDb: 0, offset: 0, midiEnabled: false, route: "", muscriptorInstruments: values.muscriptorInstruments || [], statusKey: "track.no_route", statusVars: {}, statusClass: "", midiJob: null, midiArtifact: null,
   };
 }
 async function ensureAudioContext() {
@@ -1507,7 +1490,6 @@ function bindEvents() {
   });
   $("#modeSelect").addEventListener("change", (event) => selectMode(event.target.value));
   $("#backendSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
-  $("#muscriptorInstrumentsSelect").addEventListener("change", () => { state.autoMuscriptorInstruments = []; });
   $("#tempoModeSelect").addEventListener("change", () => { updateConditionalControls(); updateWorkflowGuide(); });
   $("#customBpm").addEventListener("input", updateWorkflowGuide);
   $("#quantizeNotes").addEventListener("change", updateConditionalControls);

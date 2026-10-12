@@ -19,7 +19,7 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 | 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.3.0`：2026-08-05 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。产品在运行时显式选择官方 `TranscriptionModel` 或下游 TelkNet Issue #74 子类；模型原生音符秒数不做 onset 相位平移，Beat This `final0` 只负责独立的速度/拍号元数据与卷帘拍线 |
+| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。产品默认使用官方 `TranscriptionModel`，另有显式可选的下游 TelkNet Issue #74 子类；项目向官方 writer 提供项目 BeatGrid。writer 可执行 onset 校正和小节对齐，不能据此声称最终 MIDI 保持模型原生秒数；见下方 2026-10-12 复核 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
 | Intel XPU 加载 | `safetensors==0.8.0` 官方 `pread`；先打开惰性文件句柄，再建立约 5.50 GiB 统一内存模型，随后按偏移逐张量复制；读取失败时停止加载 |
 
@@ -97,6 +97,70 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 | Large | 约 1.3B | **53.2** | **68.7** | **41.0** | **42.5** | **40.5** | 是，本项目当前使用 |
 
 同一消融设置下，提供正确乐器列表会把 Onset / Frame / Offset / Drums / Multi 从 `51.6 / 66.5 / 40.1 / 40.6 / 38.7` 提升到 `53.2 / 68.7 / 41.0 / 42.5 / 40.5`。本项目的乐器多选在模型生成阶段生效。
+
+### 2026-10-12 条件生成复核
+
+官方 `instruments` 同时影响条件向量和生成阶段的乐器 token 屏蔽，不只是输出轨道过滤器。留空才是官方不提供乐器条件的自动识别；把全部 35 个可选组传入并不等价于留空。论文的条件列表描述的是曲目中存在的乐器，不能把候选类别或文件名当作已确认编制。[官方推理实现](https://github.com/muscriptor/muscriptor/blob/d73147e75e5b9b0c0a79ebe154587db4fd603e0c/muscriptor/transcription_model.py)、[论文](https://arxiv.org/html/2607.08168v1)共同界定此语义。
+
+已修正桌面、Space、Colab、独立 Web 的输入接入：导入音频或新建分轨不再根据文件名自动填写硬条件。新轨道使用空列表，显式选择和项目中保存的选择继续按其工作流传递；既不把全选偷偷改成空选，也不自动缩减选择数量。API 原本即以空列表为默认值；Docker、便携 Web 与可执行桌面复用对应源码。
+
+```mermaid
+flowchart LR
+    A[音频或分离后的 WAV] --> C[项目配置]
+    U[用户明确选择的乐器；默认留空] --> C
+    C --> T[官方 TranscriptionModel.transcribe]
+    T --> E[官方事件流]
+    E --> W[官方 MIDI writer]
+    G[项目 BeatGrid] --> W
+    W --> M[MIDI]
+```
+
+实测环境为 RTX 4070 Ti SUPER 16 GB、Torch 2.7.0+cu128、Python 3.11.15，Large 使用上表固定权重和源码。模型保持官方精度和解码：`use_sampling=False`、`batch_size=1`、`beam_size=1`、`prelude_forcing=True`、CFG=1、每片段 2,000 token 上限。实验没有修改官方包，另将安装包全部 26 个 Python 源文件与固定提交逐一进行 SHA-256 对照，全部一致。20 秒音频 SHA-256 为 `cca0f6b60e73c81d9f34cdcc620676508e9526b309ccf81119b62c778a94a36d`；317 秒样本由同一片段循环构造，**不是 Issue #13 提问者的原音频，也不代表复杂曲式长曲测试**。
+
+先绕过本项目，直接调用官方模型与官方 MIDI writer。为单独比较生成，writer 显式使用 `beat_grid=None`；以下耗时不包含模型加载和 CLI 的完整节拍检测，不能称为官方 CLI 总耗时。
+
+| 输入 | 乐器条件 | 生成与序列化耗时 | token 上限警告 | 唯一音符 / 最终 MIDI 音符 | 输出类别 |
+|---|---|---:|---:|---:|---|
+| 20 秒 | 留空 | 17.422 秒 | 0 | 240 / 240 | 钢琴、长笛组 |
+| 20 秒 | 全部 35 类 | 171.532 秒 | 3 | 25 / 25 | 鼓 |
+| 20 秒 | 钢琴、原声吉他、电贝斯、弦乐合奏、鼓 | 24.078 秒 | 0 | 405 / 405 | 五类均出现 |
+| 317 秒循环样本 | 留空 | 379.672 秒 | 0 | 3,757 / 3,757 | 钢琴、长笛组 |
+
+全选 20 秒的原始事件有 660 个音符，但只有 25 个唯一音符；官方 writer 输出 25 个。退化在进入项目后处理前已经发生。此前项目同样本全选输出同样的 25 个鼓音符，317 秒全选运行也正常退出，未复现闪退。没有标注 MIDI，因此不能据轨道数或音符数声称哪组转写更准确，也不能保证自动识别在其他音频上没有遗漏。
+
+随后只输入最初 5 秒，在没有上一片段状态的条件下，分别对照条件向量和 token 屏蔽。两个解耦组合仅用于诊断，不是生产方案，也不是官方公共 API 提供的组合。
+
+| 首段实验 | token 数 | 唯一音符 | 结果 |
+|---|---:|---:|---|
+| 官方留空条件 | 178 | 53 | 正常结束，无上限警告 |
+| 官方 35 类条件 | 2,000 | 0 | 未产生 `tie`，重复鼓 token，触发上限 |
+| 35 类条件，但不屏蔽 token（诊断） | 2,000 | 0 | 与官方 35 类输入的 token 序列完全一致 |
+| 留空条件，但使用 35 类屏蔽集合（诊断） | 178 | 53 | 与官方留空输入的 token 序列完全一致 |
+| 官方五类条件 | 294 | 89 | 正常结束，无上限警告 |
+| 官方钢琴、长笛组条件 | 244 | 69 | 正常结束，无上限警告 |
+
+这把本样本的触发路径定位到乐器条件分支，排除了“必须经过长音频拼接才出错”和“全选的 token 屏蔽本身导致错误”。仍未证明训练分布、某个嵌入参数或某一行代码是唯一根因；不能据此臆改 conditioner 索引、权重、解码约束或 KV cache。2,000 上限是异常生成触发的边界，删除警告或提高上限都不是已证实的修复。
+
+截至本次核查，官方主分支 `7f213afecf23bd6a1b8672aa223690ee9807cefb` 相比固定版本的相关生成方法 AST（排除文档字符串）、`models/lm.py` 与 `tokenizer/mt3.py` 没有改变，未找到已合并的对应根治。[Issue #98](https://github.com/muscriptor/muscriptor/issues/98)也报告指定乐器与留空表现不同；[Issue #84 的维护者回复](https://github.com/muscriptor/muscriptor/issues/84#issuecomment-5313652769)说明续接既可累积错误又可减少换乐器，但本实验首段已出错，关闭续接不能解释首段问题。未合并的 [PR #58](https://github.com/muscriptor/muscriptor/pull/58)采用重叠和异常重启，会增加处理，未接入。本次修改也没有增加推理、重试、降低精度或换用较小模型。
+
+**尚未解决的边界**：用户明确传入 35 类条件时，仍保持官方输入与输出行为；本次接入修复不等于治愈该生成退化。Large 以外两档未做同音频质量对照。Issue #13 缺少原始崩溃音频与完整环境，现有正常退出结果不能否定其报告。
+
+输入修复的验证包括 16 项新增桌面/跨端回归、相关模型/播放/API/部署测试，共 393 个不同测试用例通过。桌面使用真实 Qt 控件并以 offscreen 运行；独立 Web 使用无头浏览器连接真实本机 API，将同一音频命名为 `piano.wav` 后执行 Large 标准链路，实际请求为空条件，26.9 秒完成，输出 209 个钢琴音符和 31 个长笛组音符，未出现 token 上限警告。保存后的显式选择经刷新保留。Space 与 Colab 界面均在本机 Gradio 中通过真实无头浏览器操作上传与乐器选择；Colab 只替换测试启动路径和监听端口，未运行安装单元或公开分享。以上不代表已在 HF ZeroGPU / Google Colab 云端重新部署或完成 Docker／便携包实机打包验收；后两者执行了源码复用与交付契约测试。
+
+本次界面文案覆盖 `zh_CN`、`en_US`：共享目录每语言 633 键，独立 Web 每语言 271 键，解析、键集合和占位符一致；界面均检查两种语言。英文既有 `space.status.stem_midi_count_suffix` 空后缀属于原有目录内容，与本次文案无关。
+
+
+### 完整歌曲与时长边界补测 / Full-song and duration follow-up
+
+同机以完整流行歌曲《Far far away》（240.9836 秒原始 MP3）运行项目当前 Large 官方链路，乐器条件留空。49 个窗口完成，输出 8 条乐器轨与 6,560 个音符，无 token 上限警告或闪退；所有音符开关配对、时值为正。含模型加载和节拍检测耗时 337.439 秒，其中转写与写出为 327.216 秒。文件 SHA-256 为 `abe6ba68e02c7bf21bf1089fb897da3fe7cfe962003f69aabaa02bc73fabd72b`。这不是识别准确率评测，没有人工标注真值。
+
+另对《Far far away》《群青》《Refrain》本机录音分别从 60 秒处截取 5 秒，使用相同官方模型对照自动与全部 35 类条件。自动分别输出 35、69、60 条配对有效音符，无上限警告。35 类均未生成音符，后两段触及 2,000 token 上限，第一段未触及；因此没有警告也不能当作成功，症状不只包括“剩下鼓轨”。片段对照使用官方 writer 的 `beat_grid=None` 以单独检查生成，不冒充整首官方 CLI 或产品端到端测试。
+
+官方 `max_gen_len=2000` 针对每个 5 秒窗口，包含该窗口的延续提示；五分钟约 60 窗，各自受限。没有固定的整曲五分钟限制，也不能从实测 4:01 原曲和 5:17 循环推出可靠的最大时长或所有短歌都正常。实际资源限制、平台时限和输入内容仍需分别验证。详细记录为 `duration-and-aria-followup.json`。
+
+English: the complete 240.9836-second original MP3 completed the current Large official chain with empty instrument conditioning: 49 windows, 8 instrument tracks, 6,560 positively timed and fully paired notes, no token-limit warnings or crash. Total time was 337.439 seconds including loading and beat detection, or 327.216 seconds for transcription and writing, on the same RTX 4070 Ti SUPER. MIDI SHA-256 is `abe6ba68e02c7bf21bf1089fb897da3fe7cfe962003f69aabaa02bc73fabd72b`; no annotated accuracy benchmark is implied.
+
+Three distinct five-second excerpts starting at 60 seconds produced 35, 69 and 60 valid notes with automatic conditioning, versus no notes with all 35 conditions. Only the latter two all-condition runs exhausted the token limit. These excerpt probes used the official writer with `beat_grid=None` to isolate generation. The 2,000-token limit applies to each five-second window, including its continuation prompt; it is not a whole-song duration quota. The four-minute original and earlier 317-second loop establish tested cases, not a guaranteed duration maximum or universal success for short songs.
 
 ## 7. Mirelo Studio 的“改进版本”是什么
 

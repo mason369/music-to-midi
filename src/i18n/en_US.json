@@ -147,7 +147,7 @@
       },
       "muscriptor_general_hint": "An empty instrument list enables automatic detection; a selection limits the output to those instruments.",
       "muscriptor_instruments_title": "What instruments are there in this track?",
-      "muscriptor_instruments_desc": "Leave empty for automatic detection, or select the instruments to include. Suggestions based on the filename can be changed.",
+      "muscriptor_instruments_desc": "Leave empty to detect any instrument. A manual selection conditions the model and excludes other instruments; select only instruments known to be in the recording. Selecting all is not automatic detection.",
       "muscriptor_instruments_clear": "Clear",
       "muscriptor_instruments_placeholder": "Add an instrument…",
       "yourmt3_model_label": "YourMT3+ Model Mode",

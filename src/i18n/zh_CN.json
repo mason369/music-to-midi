@@ -147,7 +147,7 @@
       },
       "muscriptor_general_hint": "乐器列表为空时自动识别；所选乐器会限制输出范围。",
       "muscriptor_instruments_title": "这首歌里用了哪些乐器？",
-      "muscriptor_instruments_desc": "留空自动识别；选中后只输出这些乐器。按文件名建议的乐器可修改。",
+      "muscriptor_instruments_desc": "留空由模型自动识别乐器。手动选择会向模型提供乐器条件，并限制其他乐器输出；仅选择曲中已确认的乐器。全选不等于自动识别。",
       "muscriptor_instruments_clear": "清除",
       "muscriptor_instruments_placeholder": "添加乐器…",
       "yourmt3_model_label": "YourMT3+ 模型模式",

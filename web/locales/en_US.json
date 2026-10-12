@@ -78,7 +78,7 @@
   "config.yourmt3_help": "Choose from five model variants",
   "config.muscriptor_help": "Choose Large, Medium, or Small",
   "config.muscriptor_instruments": "Output instruments",
-  "config.muscriptor_instruments_help": "Leave empty for automatic detection, or select the instruments to include. Suggestions based on the filename can be changed.",
+  "config.muscriptor_instruments_help": "Leave empty to detect any instrument. A manual selection conditions the model and excludes other instruments; select only instruments known to be in the recording. Selecting all is not automatic detection.",
   "config.muscriptor_chain": "MuScriptor segment handling",
   "config.muscriptor_chain_help": "Standard uses the model’s original segment handling. Sustain across segments joins sustained notes across segment boundaries. Tempo is set separately.",
   "config.track_layout": "MIDI track structure",
