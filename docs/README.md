@@ -28,6 +28,16 @@ Every completed MIDI, including an explicitly converted separation stem, can gen
 
 The Standard MIDI tempo, meter, and every non-tempo event are verified after publication. Correct interpretation in a DAW depends on tempo-map import being enabled. MuseScore 3/4 may classify an unquantized performance MIDI as human performance, run its own beat tracker, and replace the tempo shown on the notation page. That displayed value is produced by MuseScore's MIDI importer; the project does not quantize or move model notes merely to force a notation application to display the file tempo.
 
+## Online tools and practical guides
+
+To hear model examples or process files in a browser, try [TelkNet](https://telknet.cc/en/tools), maintained by the same author. Tool information, guides and demos are public; submitting server processing tasks on the website requires sign-in.
+
+- [Audio to MIDI guide](https://telknet.cc/en/solutions/audio-to-midi): choose a route for a full mix, piano or vocals, then check the transcribed notes.
+- [Six-stem separation guide](https://telknet.cc/en/solutions/six-stem-splitter): separate vocals, drums, bass, guitar, piano and other audio, audition the stems and import them into a DAW.
+- [MIDI text encoding repair](https://telknet.cc/en/solutions/midi-encoding-converter): repair garbled lyrics and track names in your browser while preserving notes and timing.
+
+Available website models and parameters are described on each tool page. For this repository's installation, desktop features and local model setup, follow the documentation below.
+
 ## Command Line and Batch Processing
 
 The native CLI uses the same `InferenceEngine` and core pipeline as the standalone Web API. The shortest command needs only an input file; output defaults to `MidiOutput/CLI` beside the project or portable package:

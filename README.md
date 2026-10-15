@@ -14,6 +14,16 @@
 
 桌面下载 MIDI 或立体声 WAV 失败时会显示原因并记录完整错误，当前转换结果仍可继续使用；修正路径、文件占用或权限问题后可以重试。日志位于 `~/.music-to-midi/logs/`；便携版优先使用程序旁的 `runtime/logs/`。
 
+## 在线工具与操作指南
+
+如果想先试听模型效果或直接在浏览器处理文件，可以使用同一作者维护的 [TelkNet](https://telknet.cc/zh/tools)。工具介绍、指南和演示可直接浏览；提交网站的服务器处理任务需要登录。
+
+- [音频转 MIDI 指南](https://telknet.cc/zh/solutions/audio-to-midi)：按完整混音、钢琴或人声选择路线，并检查转写后的音符。
+- [六轨分离指南](https://telknet.cc/zh/solutions/six-stem-splitter)：分离人声、鼓、贝斯、吉他、钢琴和其他音轨，试听后导入 DAW。
+- [MIDI 文字乱码修复](https://telknet.cc/zh/solutions/midi-encoding-converter)：在浏览器内修复歌词和轨道名称的编码，保留音符与节奏数据。
+
+网站提供的模型和参数以对应工具页为准；本仓库的安装、桌面功能与本地模型配置仍按下文说明使用。
+
 ## 命令行与批处理
 
 CLI 与独立 Web API 共用同一个 `InferenceEngine` 和核心流水线。最简单的调用只需要输入文件；输出默认放在项目或便携包旁的 `MidiOutput/CLI`：
