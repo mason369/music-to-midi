@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import threading
 import uuid
@@ -75,12 +77,24 @@ class ProjectResults:
                 step.artifacts.append(asset)
             store.save(document)
 
-    def generate_sheet_music(self, result_id, *, artifact_id, quantize_grid="1/32"):
-        from src.core.sheet_music import export_sheet_music_zip
+    def generate_sheet_music(
+        self,
+        result_id,
+        *,
+        artifact_id,
+        quantize_grid="1/32",
+        quantize_strength=1.0,
+        quantize_triplet=False,
+        quantize_auto=False,
+    ):
+        from src.core.sheet_music import export_sheet_music_zip, quantization_export_options
         from src.core.midi_quantization import MIDI_QUANTIZE_GRIDS
 
         if quantize_grid not in MIDI_QUANTIZE_GRIDS:
             raise ValueError("乐谱量化网格无效")
+        quantization = quantization_export_options(
+            quantize_strength, quantize_triplet, quantize_auto
+        )
         store, _, _, _, _ = self.context(result_id)
         with exclusive(store.run_lock):
             store, document, _, step, _ = self.context(result_id)
@@ -88,13 +102,22 @@ class ProjectResults:
             if original.kind != "midi":
                 raise ValueError("乐谱输入必须是 MIDI")
             identity = f"sheet_{original.sha256[:16]}_{quantize_grid.split('/')[1]}"
+            if quantization:
+                identity += (
+                    "_"
+                    + hashlib.sha256(
+                        json.dumps(quantization, sort_keys=True).encode()
+                    ).hexdigest()[:12]
+                )
             existing = next((a for a in step.artifacts if a.id == identity), None)
             if existing:
                 store.verify(existing)
             else:
                 target = source.parent / "sheet_music" / (identity + ".zip")
                 target.parent.mkdir(parents=True, exist_ok=True)
-                export_sheet_music_zip(source, target, quantize_grid=quantize_grid)
+                export_sheet_music_zip(
+                    source, target, quantize_grid=quantize_grid, **quantization
+                )
                 step.artifacts.append(
                     store.asset(
                         target,

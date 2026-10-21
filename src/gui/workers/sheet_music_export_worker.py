@@ -20,12 +20,19 @@ class SheetMusicExportWorker(QThread):
         midi_path: str,
         destination: str,
         quantize_grid: str,
+        quantization_options: dict | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.midi_path = str(midi_path)
         self.destination = str(destination)
         self.quantize_grid = str(quantize_grid)
+        defaults = dict(quantize_strength=1.0, quantize_triplet=False, quantize_auto=False)
+        self.quantization_options = {
+            key: value
+            for key, value in (quantization_options or {}).items()
+            if value != defaults[key]
+        }
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -38,6 +45,7 @@ class SheetMusicExportWorker(QThread):
                 self.destination,
                 quantize_grid=self.quantize_grid,
                 cancel_check=self._cancel_event.is_set,
+                **self.quantization_options,
             )
             self.succeeded.emit(result)
         except InterruptedError:

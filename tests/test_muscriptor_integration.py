@@ -37,6 +37,7 @@ from src.core.midi_tempo import (
     non_tempo_event_tick_fingerprint,
     non_tempo_event_time_fingerprint,
 )
+from src.core.midi_timing import PROJECT_RATE_MARKER, project_rate_marker
 from src.core.muscriptor_midi import validate_muscriptor_midi_constraint
 from src.core.muscriptor_result_assets import (
     MuscriptorPreviewAssets,
@@ -2513,6 +2514,14 @@ def test_custom_bpm_result_is_not_applied_twice_to_preview_or_download(tmp_path:
 
     preview_midi = mido.MidiFile(preview)
     downloaded_midi = mido.MidiFile(download)
+    assert project_rate_marker(preview_midi) == pytest.approx(1.0)
+    assert project_rate_marker(downloaded_midi) == pytest.approx(60.0 / 117.9)
+    for exported in (preview_midi, downloaded_midi):
+        for exported_track in exported.tracks:
+            for message in tuple(exported_track):
+                if message.type == "marker" and message.text.startswith(PROJECT_RATE_MARKER):
+                    assert message.time == 0
+                    exported_track.remove(message)
     assert non_tempo_event_tick_fingerprint(preview_midi) == source_ticks
     assert non_tempo_event_tick_fingerprint(downloaded_midi) == source_ticks
     assert preview_midi.length == pytest.approx(60.0 / 117.9, abs=0.001)
@@ -3587,6 +3596,12 @@ def test_midi_download_preserves_reference_ticks_and_changes_real_duration(
     )
 
     downloaded = mido.MidiFile(destination)
+    assert project_rate_marker(downloaded) == pytest.approx(77.9 / 117.9)
+    for exported_track in downloaded.tracks:
+        for message in tuple(exported_track):
+            if message.type == "marker" and message.text.startswith(PROJECT_RATE_MARKER):
+                assert message.time == 0
+                exported_track.remove(message)
     tempo_messages = [
         message
         for track in downloaded.tracks
@@ -4099,10 +4114,11 @@ def test_browser_midi_editor_manifest_and_runtime_preserve_full_note_identity():
     assert "renderEditedPreview" in MUSCRIPTOR_RESULT_JS
     assert "Invalid Beat This grid in piano-roll manifest" in MUSCRIPTOR_RESULT_JS
     assert "repeatTempoPerNoteTrack" in MUSCRIPTOR_RESULT_JS
-    assert "return 60 / referenceBpm * 4 / Number(match[1])" in MUSCRIPTOR_RESULT_JS
+    assert "gridSeconds = function (atSeconds, trackIndex, steps)" in MUSCRIPTOR_RESULT_JS
     assert "subdivisionSeconds = this.gridSeconds()" in MUSCRIPTOR_RESULT_JS
     assert "this.quantizeGridSelect" in MUSCRIPTOR_RESULT_JS
-    assert "quantizedDuration = Math.max(grid" in MUSCRIPTOR_RESULT_JS
+    assert "secondsToTick(note.start" in MUSCRIPTOR_RESULT_JS
+    assert "snappedEnd" in MUSCRIPTOR_RESULT_JS
     assert 'painter.fillText((downbeatIndex + 1) + ".1"' in MUSCRIPTOR_RESULT_JS
 
 

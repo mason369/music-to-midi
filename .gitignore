@@ -113,6 +113,7 @@ pasted-text*
 !/docs/
 /docs/*
 !/docs/muscriptor-model.md
+!/docs/midi-timing-export.md
 !/docs/docker-deployment.md
 !/docs/docker-deployment.en.md
 !/docs/portable-build.md

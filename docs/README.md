@@ -1,5 +1,7 @@
 # Music to MIDI Converter (AI Audio to MIDI)
 
+[Tempo maps, grid correction, quantization strength/triplets and export options](midi-timing-export.md#english) cover desktop, Space, Colab, Web/API, CLI, Docker and portable entries while retaining official MuScriptor 0.3.0 inference and the seven-mode dependency baseline.
+
 [Projects, workflow profiles and resuming](projects.en.md)
 
 [Changelog](../CHANGELOG.md)
@@ -11,6 +13,7 @@ MIDI result editors start with every instrument visible and audible. Solo suppor
 The desktop chord lane offers **Chords follow song** and an independent **0–200% chord volume**. Initial defaults are follow off and volume 100%; both preferences persist. With follow off, clicking a chord still auditions it. At 0%, both click auditions and accompaniment are muted. Chords share the song's audio clock for pause, seek, project BPM and speed changes. Native intervals govern playback, so bar splits never retrigger a sustained chord and N/X stays silent. Loudness calibration, smooth gain changes and peak protection affect monitoring only; MIDI and audio exports are unchanged. Portable and executable Apps share this implementation. Space, Colab, standalone Web/API, Docker and portable Web currently have no chord lane.
 
 Chord colors identify roots and the current interval follows the playhead. Short intervals keep full labels in staggered callouts anchored to their true timing. Desktop, Space and Colab highlight MIDI notes at the playhead and show pitch, instrument, velocity and timing on hover. Muted instruments do not receive playback highlights; editing selections remain independent.
+Chord analysis decodes native FLAC with a declared frame count to lossless PCM32, verifying the complete frame count and the embedded sample MD5 when present. Complete audio with trailing tags is supported. Damaged frames, truncation and checksum mismatches fail explicitly without skipping audio or inserting silence. Other formats and FLAC with an unknown declared length retain strict FFmpeg decoding.
 
 <p align="center">
   <a href="../README.md">中文</a> | English

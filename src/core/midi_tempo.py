@@ -31,7 +31,7 @@ def _bar_offset_value(message: mido.MetaMessage) -> float | None:
         value = float(raw)
     except ValueError as exc:
         raise RuntimeError(f"Invalid MuScriptor bar-offset marker: {text!r}") from exc
-    if not isfinite(value) or value < 0.0:
+    if not isfinite(value):
         raise RuntimeError(f"Invalid MuScriptor bar-offset marker: {text!r}")
     return value
 
@@ -78,7 +78,7 @@ def _rescale_bar_offset_message(
     if value is None:
         return message
     scaled = value * float(scale)
-    if not isfinite(scaled) or scaled < 0.0:
+    if not isfinite(scaled):
         raise RuntimeError(f"Invalid scaled MuScriptor bar offset: source={value}, scale={scale}")
     return message.copy(text=f"{_MUSCRIPTOR_BAR_OFFSET_PREFIX}{scaled:.4f}")
 

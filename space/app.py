@@ -1223,7 +1223,6 @@ def _build_midi_result_state(
     """Build the shared playable MIDI workbench for any transcription backend."""
     from src.core.midi_tempo import (
         read_muscriptor_bar_offset_seconds,
-        rewrite_midi_tempo_preserving_ticks,
         validated_midi_time_signature,
     )
     from src.core.muscriptor_result_assets import prepare_midi_playback_assets
@@ -1239,9 +1238,12 @@ def _build_midi_result_state(
     time_signature = validated_midi_time_signature(result.beat_info.time_signature or (4, 4))
     playback_dir = Path(output_dir).resolve()
     playback_dir.mkdir(parents=True, exist_ok=True)
-    playback_midi_path = rewrite_midi_tempo_preserving_ticks(
+    from src.core.midi_timing import midi_timeline_manifest, write_project_tempo_map
+
+    playback_midi_path = write_project_tempo_map(
         result.midi_path,
         playback_dir / "source-tempo-playback.mid",
+        reference_bpm,
         reference_bpm,
         label="Browser source-tempo playback MIDI",
     )
@@ -1272,6 +1274,7 @@ def _build_midi_result_state(
     selected = list(result.selected_instruments) if muscriptor_groups else detected
     return {
         "kind": "midi_result",
+        "timeline": midi_timeline_manifest(playback_midi_path, reference_bpm),
         "audio_path": str(Path(audio_path).resolve()),
         "playback_audio_path": str(assets.original_wav),
         "midi_path": str(Path(result.midi_path).resolve()),

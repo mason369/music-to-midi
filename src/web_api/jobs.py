@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.midi_quantization import DEFAULT_MIDI_QUANTIZE_GRID, MIDI_QUANTIZE_GRIDS
-from src.core.sheet_music import export_sheet_music_zip
+from src.core.sheet_music import export_sheet_music_zip, quantization_export_options
 from src.models.data_models import ProcessingProgress
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.schemas import JobStatus
@@ -412,12 +412,18 @@ class JobManager:
         *,
         artifact_id: str | None = None,
         quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+        quantize_strength: float = 1.0,
+        quantize_triplet: bool = False,
+        quantize_auto: bool = False,
     ) -> dict[str, Any]:
         """Generate and publish a score ZIP for one immutable MIDI artifact."""
 
         grid = str(quantize_grid)
         if grid not in MIDI_QUANTIZE_GRIDS:
             raise ValueError(f"unsupported sheet-music quantization grid: {grid!r}")
+        quantization = quantization_export_options(
+            quantize_strength, quantize_triplet, quantize_auto
+        )
         with self._sheet_music_lock:
             with self._lock:
                 record = self._require_job_locked(job_id)
@@ -442,7 +448,12 @@ class JobManager:
                     )
                 source_artifact = midi_artifacts[0]
                 source_path = self._artifact_path_locked(record, source_artifact)
-                identity = hashlib.sha256(source_artifact.id.encode("utf-8")).hexdigest()[:12]
+                settings_identity = (
+                    json.dumps(quantization, sort_keys=True) if quantization else ""
+                )
+                identity = hashlib.sha256(
+                    (source_artifact.id + settings_identity).encode("utf-8")
+                ).hexdigest()[:12]
                 denominator = grid.split("/", 1)[1]
                 sheet_artifact_id = f"sheet_music_{identity}_{denominator}"
                 existing = record.artifacts.get(sheet_artifact_id)
@@ -466,6 +477,7 @@ class JobManager:
                 source_path,
                 archive_path,
                 quantize_grid=grid,
+                **quantization,
             )
 
             with self._condition:

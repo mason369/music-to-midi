@@ -270,3 +270,39 @@ def test_project_midi_soundfont_context_survives_export_import(tmp_path):
         )
         == 2
     )
+
+
+def test_project_sheet_options_are_preserved_and_cached_independently(tmp_path, monkeypatch):
+    from src.core import sheet_music
+    from src.projects.results import ProjectResults
+    from src.projects.service import ProjectService
+
+    calls = []
+
+    def export(source, destination, **options):
+        calls.append(options)
+        Path(destination).write_bytes(b"PK\x03\x04project notation fixture")
+
+    monkeypatch.setattr(sheet_music, "export_sheet_music_zip", export)
+    service = ProjectService(tmp_path / "projects", Engine)
+    created = service.create("test")
+    store = service.store(created["storage_id"])
+    store.add([audio(tmp_path / "song.wav")])
+    ProjectRunner(store, Engine).run()
+    song = store.load().songs[0]
+    result_id = f"project-{created['storage_id']}-{song.id}-{song.primary_key}"
+    results = ProjectResults(service)
+    for strength in (0.5, 0.75, 0.5):
+        snapshot = results.generate_sheet_music(
+            result_id,
+            artifact_id="midi",
+            quantize_grid="1/16",
+            quantize_strength=strength,
+            quantize_triplet=True,
+            quantize_auto=True,
+        )
+    assert len(calls) == 2
+    assert calls[0] == dict(
+        quantize_grid="1/16", quantize_strength=0.5, quantize_triplet=True, quantize_auto=True
+    )
+    assert len([a for a in snapshot["artifacts"] if a["kind"] == "sheet_music"]) == 2

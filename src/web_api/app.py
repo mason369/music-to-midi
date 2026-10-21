@@ -747,12 +747,18 @@ def create_app(
         job_id: str,
         artifact_id: str | None = None,
         quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+        quantize_strength: float = 1.0,
+        quantize_triplet: bool = False,
+        quantize_auto: bool = False,
     ) -> dict:
         try:
             return job_manager.generate_sheet_music(
                 job_id,
                 artifact_id=artifact_id,
                 quantize_grid=quantize_grid,
+                quantize_strength=quantize_strength,
+                quantize_triplet=quantize_triplet,
+                quantize_auto=quantize_auto,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

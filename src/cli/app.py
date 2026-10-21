@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-from functools import partial
 import hashlib
 import json
 import os
@@ -26,6 +25,7 @@ from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_st
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol, Sequence, TextIO
@@ -241,6 +241,43 @@ def _add_output_options(parser: argparse.ArgumentParser, language: str) -> None:
 
 
 def _add_tempo_options(parser: argparse.ArgumentParser, language: str) -> None:
+    from src.i18n.translator import Translator
+
+    translate = Translator(language).t
+    for flag, key in (
+        ("--grid-bpm", "timing_bpm"),
+        ("--first-downbeat", "timing_first_downbeat"),
+        ("--beat-scale", "timing_beatscale"),
+        ("--fill-gaps", "timing_fill_gaps"),
+    ):
+        parser.add_argument(
+            flag, type=float, default=None, help=translate(f"muscriptor_result.{key}")
+        )
+    parser.add_argument(
+        "--beats-per-bar", type=int, help=translate("muscriptor_result.timing_meter")
+    )
+    parser.add_argument(
+        "--beat-unit",
+        type=int,
+        choices=(1, 2, 4, 8, 16, 32),
+        default=4,
+        help=translate("muscriptor_result.timing_meter"),
+    )
+    parser.add_argument(
+        "--quantize-strength",
+        type=float,
+        default=1.0,
+        help=translate("muscriptor_result.quantize_strength"),
+    )
+    for flag, key in (
+        ("--quantize-triplet", "quantize_triplet"),
+        ("--quantize-auto", "quantize_auto"),
+        ("--trim-leading-bars", "timing_trim"),
+        ("--smooth-tempo", "timing_smooth"),
+    ):
+        parser.add_argument(
+            flag, action="store_true", help=translate(f"muscriptor_result.{key}")
+        )
     parser.add_argument(
         "--tempo-mode",
         choices=_cli_choices(_enum_values(TempoMode)),
@@ -299,7 +336,9 @@ class _CliArgumentParser(argparse.ArgumentParser):
         self._positionals.title = "位置参数" if language == "zh_CN" else "positional arguments"
         self._optionals.title = "选项" if language == "zh_CN" else "options"
         self.add_argument(
-            "-h", "--help", action="help",
+            "-h",
+            "--help",
+            action="help",
             help="显示帮助并退出" if language == "zh_CN" else "Show help and exit",
         )
 
@@ -313,11 +352,14 @@ def build_parser(arguments: Sequence[str] | None = None) -> argparse.ArgumentPar
         description=_message(language, "description"),
     )
     parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
         help="显示版本并退出" if language == "zh_CN" else "Show version and exit",
     )
     subparsers = parser.add_subparsers(
-        dest="command", required=True,
+        dest="command",
+        required=True,
         parser_class=partial(_CliArgumentParser, language=language),
     )
     from src.projects.cli import add_parser as add_project_parser
@@ -423,10 +465,34 @@ def _validated_options(namespace: argparse.Namespace) -> dict:
         "custom_bpm": custom_bpm,
         "quantize_notes": namespace.quantize is not None,
         "quantize_grid": namespace.quantize or "1/32",
+        "quantize_strength": namespace.quantize_strength,
+        "quantize_triplet": namespace.quantize_triplet,
+        "quantize_auto": namespace.quantize_auto,
         "use_gpu": True,
         "gpu_device": namespace.gpu_device,
         "language": _normalize_language(namespace.language),
     }
+    if any(
+        (
+            namespace.grid_bpm is not None,
+            namespace.beats_per_bar is not None,
+            namespace.first_downbeat is not None,
+            namespace.beat_scale is not None,
+            namespace.fill_gaps is not None,
+            namespace.trim_leading_bars,
+            namespace.smooth_tempo,
+        )
+    ):
+        common["midi_export"] = dict(
+            bpm=namespace.grid_bpm,
+            beats_per_bar=namespace.beats_per_bar,
+            beat_unit=namespace.beat_unit,
+            first_downbeat=namespace.first_downbeat,
+            beat_scale=namespace.beat_scale if namespace.beat_scale is not None else 1.0,
+            fill_gaps=namespace.fill_gaps if namespace.fill_gaps is not None else 0.0,
+            trim_leading_bars=namespace.trim_leading_bars,
+            smooth_tempo=namespace.smooth_tempo,
+        )
     if namespace.job_kind == "manual_midi":
         if not is_muscriptor_midi_route(namespace.route) and (
             instruments or namespace.muscriptor_chain is not None
@@ -1027,13 +1093,17 @@ def _separation_tempo_source(source_path: Path) -> Path | None:
             options = manifest.get("options")
             if not isinstance(options, dict):
                 raise ValueError("invalid separation options")
-            if manifest.get("kind") != "primary" or options.get("processing_mode") not in split_modes:
+            if (
+                manifest.get("kind") != "primary"
+                or options.get("processing_mode") not in split_modes
+            ):
                 return None
             artifacts = manifest.get("artifacts")
             if not isinstance(artifacts, list):
                 raise ValueError("invalid separated track records")
             matches = [
-                artifact for artifact in artifacts
+                artifact
+                for artifact in artifacts
                 if isinstance(artifact, dict)
                 and isinstance(artifact.get("path"), str)
                 and (directory / artifact["path"]).resolve() == source_path
@@ -1049,7 +1119,9 @@ def _separation_tempo_source(source_path: Path) -> Path | None:
                 raise ValueError("missing original mixture identity")
             original_path = Path(original["path"]).expanduser().resolve()
             current = _source_identity(original_path)
-            if current["size"] != original.get("size") or current["sha256"] != original.get("sha256"):
+            if current["size"] != original.get("size") or current["sha256"] != original.get(
+                "sha256"
+            ):
                 raise ValueError("original mixture size or SHA-256 no longer matches its manifest")
             return original_path
         except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
@@ -1146,8 +1218,11 @@ def _json_output_context(stdout: TextIO, stderr: TextIO, *, json_mode: bool = Tr
     stdout.flush()
     stderr.flush()
     with os.fdopen(
-        os.dup(output_fd), "w", encoding=stdout.encoding or "utf-8",
-        errors=stdout.errors or "strict", buffering=1,
+        os.dup(output_fd),
+        "w",
+        encoding=stdout.encoding or "utf-8",
+        errors=stdout.errors or "strict",
+        buffering=1,
     ) as machine_output:
         event_output = _JsonEventStream(machine_output)
         try:
@@ -1224,7 +1299,8 @@ def _process_jobs(
                 options=options,
                 tempo_source=(
                     str(tempo_source_paths[planned_source] or planned_source)
-                    if namespace.job_kind == "manual_midi" else None
+                    if namespace.job_kind == "manual_midi"
+                    else None
                 ),
             )
         emitter.event("plan_summary", human_key="dry_summary", total=len(inputs))
@@ -1232,7 +1308,8 @@ def _process_jobs(
 
     tempo_source_identities = {
         path: _source_identity(path)
-        for path in set(tempo_source_paths.values()) if path is not None
+        for path in set(tempo_source_paths.values())
+        if path is not None
     }
     output_root.mkdir(parents=True, exist_ok=True)
     if not output_root.is_dir():
@@ -1641,8 +1718,12 @@ def main(
             if namespace.command == "project":
                 from src.projects.cli import run_command
 
-                return run_command(namespace, engine_factory=engine_factory, stdout=machine_output,
-                                   install_signal_handlers=install_signal_handlers)
+                return run_command(
+                    namespace,
+                    engine_factory=engine_factory,
+                    stdout=machine_output,
+                    install_signal_handlers=install_signal_handlers,
+                )
             return _process_jobs(
                 namespace,
                 engine_factory=engine_factory,

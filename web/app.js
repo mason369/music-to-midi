@@ -705,6 +705,9 @@ function updateConditionalControls() {
   $("#customBpm").disabled = !manualTempo;
   const quantizeEnabled = $("#quantizeNotes").checked;
   $("#quantizeGridSelect").disabled = !quantizeEnabled;
+  ["#quantizeStrength", "#quantizeTriplet", "#quantizeAuto"].forEach((selector) => {
+    $(selector).disabled = !quantizeEnabled;
+  });
   $("#quantizeGridField").classList.toggle("is-disabled", !quantizeEnabled);
   $("#routeDescription").textContent = t(`route.${state.selectedMode}`);
 }
@@ -775,6 +778,22 @@ function clearAudioFile() {
   state.audioFile = null; state.sourceObjectUrl = ""; $("#audioInput").value = "";
   $("#fileInspector").hidden = true; updateReadyState();
 }
+function buildMidiEnhancements() {
+  const strength = Number($("#quantizeStrength").value) / 100;
+  if (!Number.isFinite(strength) || strength < 0 || strength > 1) throw new Error(t("timing.quantize_strength"));
+  const optional = (selector) => $(selector).value.trim() === "" ? null : Number($(selector).value);
+  const settings = {
+    bpm: optional("#gridBpm"), beats_per_bar: optional("#gridMeter"), beat_unit: Number($("#gridBeatUnit").value),
+    first_downbeat: optional("#gridFirstDownbeat"), beat_scale: Number($("#gridBeatScale").value),
+    fill_gaps: Number($("#gridFillGaps").value), trim_leading_bars: $("#gridTrimBars").checked,
+    smooth_tempo: $("#gridSmoothTempo").checked,
+  };
+  return {quantize_strength:strength, quantize_triplet:$("#quantizeTriplet").checked,
+    quantize_auto:$("#quantizeAuto").checked,
+    midi_export:settings.bpm !== null || settings.beats_per_bar !== null || settings.first_downbeat !== null ||
+      settings.beat_scale !== 1 || settings.fill_gaps > 0 || settings.trim_leading_bars || settings.smooth_tempo ? settings : null};
+}
+
 function buildInferenceOptions() {
   const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
   const bpm = tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null;
@@ -791,6 +810,7 @@ function buildInferenceOptions() {
     custom_bpm: bpm,
     quantize_notes: $("#quantizeNotes").checked,
     quantize_grid: $("#quantizeGridSelect").value,
+    ...buildMidiEnhancements(),
     use_gpu: true,
     gpu_device: 0,
     language: state.language,
@@ -937,7 +957,10 @@ function triggerArtifactDownload(artifact) {
 async function generateSheetMusicForJob(jobId, midiArtifact) {
   const query = new URLSearchParams({
     artifact_id: midiArtifact.id,
-    quantize_grid: "1/32",
+    quantize_grid: $("#quantizeGridSelect").value || "1/32",
+    quantize_strength: Number($("#quantizeStrength").value) / 100,
+    quantize_triplet: $("#quantizeTriplet").checked,
+    quantize_auto: $("#quantizeAuto").checked,
   });
   const job = await api(`${resultEndpoint(jobId)}/sheet-music?${query}`, {
     method: "POST",
@@ -1281,7 +1304,7 @@ async function addLocalTracks(files) {
 async function convertTrackToMidi(track, button) {
   if (track.projectId) {
     const primary = buildInferenceOptions();
-    const options = { route: track.route, muscriptor_instruments: track.muscriptorInstruments || [], muscriptor_processing_chain: primary.muscriptor_processing_chain, tempo_mode: primary.tempo_mode, custom_bpm: primary.custom_bpm, quantize_notes: primary.quantize_notes, quantize_grid: primary.quantize_grid, use_gpu: true, gpu_device: primary.gpu_device, language: state.language };
+    const options = { route: track.route, muscriptor_instruments: track.muscriptorInstruments || [], muscriptor_processing_chain: primary.muscriptor_processing_chain, tempo_mode: primary.tempo_mode, custom_bpm: primary.custom_bpm, quantize_notes: primary.quantize_notes, quantize_grid: primary.quantize_grid, ...buildMidiEnhancements(), use_gpu: true, gpu_device: primary.gpu_device, language: state.language };
     if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
     await musicProjects.guard(() => musicProjects.convertTrack(track, options));
     return;
@@ -1301,7 +1324,7 @@ async function convertTrackToMidi(track, button) {
   }
   if (!track.midiEnabled || !track.route) { toast(t("track.select_route_first"), "error"); return; }
   const tempoMode = $("#tempoModeSelect").value || "fixed_auto";
-  const options = { route: track.route, muscriptor_instruments: isMuscriptorRoute(track.route) ? track.muscriptorInstruments : [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, quantize_notes: $("#quantizeNotes").checked, quantize_grid: $("#quantizeGridSelect").value, use_gpu: true, gpu_device: 0, language: state.language };
+  const options = { route: track.route, muscriptor_instruments: isMuscriptorRoute(track.route) ? track.muscriptorInstruments : [], muscriptor_processing_chain: $("#muscriptorProcessingChainSelect").value || "official", tempo_mode: tempoMode, custom_bpm: tempoMode === "fixed_manual" ? Number($("#customBpm").value) : null, quantize_notes: $("#quantizeNotes").checked, quantize_grid: $("#quantizeGridSelect").value, ...buildMidiEnhancements(), use_gpu: true, gpu_device: 0, language: state.language };
   button.disabled = true; updateTrackStatus(track, "track.submitting", {}, "is-working");
   try {
     let job;

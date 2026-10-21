@@ -142,6 +142,26 @@
               <small data-i18n="config.quantize_grid_help"></small>
             </label>
             <div class="field device-field">
+              <label><span data-i18n="timing.quantize_strength"></span>
+                <input id="quantizeStrength" type="number" min="0" max="100" value="100" step="1" />%
+              </label>
+              <label><input id="quantizeTriplet" type="checkbox" /><span data-i18n="timing.quantize_triplet"></span></label>
+              <label><input id="quantizeAuto" type="checkbox" /><span data-i18n="timing.quantize_auto"></span></label>
+            </div>
+            <details class="field">
+              <summary data-i18n="timing.timing_tools"></summary>
+              <p data-i18n="timing.timing_notice"></p>
+              <label><span data-i18n="timing.timing_bpm"></span><input id="gridBpm" type="number" min="4" max="400" step="0.001" /></label>
+              <label><span data-i18n="timing.timing_meter"></span><input id="gridMeter" type="number" min="1" max="255" />
+                <select id="gridBeatUnit"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option><option>32</option></select>
+              </label>
+              <label><span data-i18n="timing.timing_first_downbeat"></span><input id="gridFirstDownbeat" type="number" min="0" max="14400" step="0.001" /></label>
+              <label><span data-i18n="timing.timing_beatscale"></span><select id="gridBeatScale"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></label>
+              <label><span data-i18n="timing.timing_fill_gaps"></span><input id="gridFillGaps" type="number" min="0" max="4" value="0" step="0.125" /></label>
+              <label><input id="gridTrimBars" type="checkbox" /><span data-i18n="timing.timing_trim"></span></label>
+              <label><input id="gridSmoothTempo" type="checkbox" /><span data-i18n="timing.timing_smooth"></span></label>
+            </details>
+            <div class="field device-field">
               <span data-i18n="config.compute"></span>
               <strong id="computeDevice">—</strong>
               <small data-i18n="config.compute_help"></small>

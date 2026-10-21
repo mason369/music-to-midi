@@ -45,6 +45,19 @@ SHEET_MUSIC_MANIFEST_NAME = "sheet_music_manifest.json"
 SHEET_MUSIC_SCHEMA_VERSION = 1
 MUSESCORE_RUN_TIMEOUT_SECONDS = 120.0
 
+
+def quantization_export_options(strength=1.0, triplet=False, automatic=False):
+    """Validate notation settings and retain only nondefaults for stable caches."""
+    strength = float(strength)
+    if not math.isfinite(strength) or not 0 <= strength <= 1:
+        raise ValueError("Quantization strength must be between zero and one")
+    if not isinstance(triplet, bool) or not isinstance(automatic, bool):
+        raise ValueError("Triplet and automatic quantization settings must be boolean")
+    values = dict(quantize_strength=strength, quantize_triplet=triplet, quantize_auto=automatic)
+    defaults = dict(quantize_strength=1.0, quantize_triplet=False, quantize_auto=False)
+    return {key: value for key, value in values.items() if value != defaults[key]}
+
+
 _IMPORT_OPTIONS = """<?xml version="1.0" encoding="UTF-8"?>
 <MidiOptions>
   <QuantValue>2</QuantValue>
@@ -434,6 +447,9 @@ def export_sheet_music_zip(
     destination: str | Path,
     *,
     quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+    quantize_strength: float = 1.0,
+    quantize_triplet: bool = False,
+    quantize_auto: bool = False,
     musescore: str | Path | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> SheetMusicExportResult:
@@ -465,6 +481,9 @@ def export_sheet_music_zip(
                 quantized_midi,
                 str(quantize_grid),
                 label="sheet-music copy quantization",
+                strength=quantize_strength,
+                triplet=quantize_triplet,
+                automatic=quantize_auto,
             )
             if check_cancelled():
                 raise InterruptedError("Sheet-music export cancelled")
@@ -490,6 +509,9 @@ def export_sheet_music_zip(
                 "source_sha256": source_hash,
                 "quantize_grid": quantization.grid,
                 "grid_ticks": quantization.grid_ticks,
+                "quantize_strength": quantization.strength,
+                "quantize_triplet": quantization.triplet,
+                "quantize_auto": quantization.automatic,
                 "paired_note_count": quantization.paired_note_count,
                 "duration_seconds": duration,
                 "musescore_version": version_text,

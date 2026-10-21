@@ -93,3 +93,36 @@ s.commitEdit=function(){};
 s.quantizeSelected();assert.equal(s.m.notes[0].start,0);assert.equal(s.m.notes[0].end,.125);
 """,
     )
+
+
+def test_tempo_boundary_nudges_and_sub_ten_ms_triplets_keep_their_length(tmp_path):
+    run_javascript(
+        tmp_path,
+        r"""
+const s=session();s.editing=true;s.quantizeGrid='1/32';s.m.quantizeGrids=['1/32'];
+s.tripletInput={checked:true};s.selectedIndices=new Set([0]);
+s.m.timeline={tracks:[{division:480,sections:[[0,0,500000],[3840,4,1000000]]}]};
+s.m.notes=[{start:4,end:4.005,track_index:0,velocity:90}];s.commitEdit=function(){};
+assert.ok(Math.abs(s.gridSeconds(4,0,-1)+1/24)<1e-9);
+assert.ok(Math.abs(s.gridSeconds(4,0,1)-1/12)<1e-9);
+s.transformSelected('resize_time',-1);assert.equal(s.m.notes[0].end,4.005);
+s.transformSelected('move_time',-1);
+assert.ok(Math.abs(s.m.notes[0].start-(4-1/24))<1e-9);
+assert.ok(Math.abs(s.m.notes[0].end-s.m.notes[0].start-.005)<1e-9);
+""",
+    )
+
+
+def test_grid_correction_commits_pending_project_bpm_before_sending(tmp_path):
+    run_javascript(
+        tmp_path,
+        r"""
+const s=session();s.bpmInput={value:'180'};s.rateInput={value:'1.000'};s.drawStatic=function(){};
+s.m.strings.timing_failed='Failed: {error}';s.m.previewApi='/timing';s.m.previewToken='test';s.m.notes=[];
+let payload;global.fetch=function(url,options){payload=JSON.parse(JSON.parse(options.body).data[0]);return Promise.reject(new Error('fixture response'));};
+const button={disabled:false};s.applyTimingCorrection({bpm:90},button);
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(payload.project_rate,1.5);assert.equal(s.rateInput.value,'1.500');
+assert.equal(button.disabled,false);assert.equal(s.targetBpm,180);
+""",
+    )

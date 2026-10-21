@@ -20,8 +20,8 @@ from src.core.muscriptor_result_assets import (
     render_midi_audio_export,
     render_midi_stem_audio_export,
 )
-from src.gui.web.track_mixer_runtime import track_file_url
 from src.core.soundfont_library import import_soundfont, read_soundfont, soundfont_selection
+from src.gui.web.track_mixer_runtime import track_file_url
 
 _MAX_EDITED_NOTES = 200_000
 
@@ -184,6 +184,8 @@ class EditedMidiPreviewRegistry:
             raise RuntimeError("Browser MIDI preview token is invalid or expired")
         if not context.request_dir.is_dir():
             raise RuntimeError("Browser MIDI preview request has expired")
+        if payload.get("operation") == "timing":
+            return self.correct_timing(context, payload)
         notes = self._notes_from_payload(payload.get("notes"))
         canonical = json.dumps(
             [note.__dict__ for note in notes],
@@ -242,6 +244,102 @@ class EditedMidiPreviewRegistry:
             with self._lock:
                 self._cache[cache_key] = dict(result)
             return result
+
+    def correct_timing(self, context, payload):
+        from dataclasses import asdict
+
+        import mido
+
+        from src.core.midi_export_options import MidiExportOptions, apply_midi_export_options
+        from src.core.midi_tempo import validated_midi_bpm
+        from src.core.midi_timing import MidiTimeline, midi_timeline_manifest
+
+        notes = self._notes_from_payload(payload.get("notes"))
+        options = MidiExportOptions(**dict(payload.get("options") or {}))
+        reference = validated_midi_bpm(
+            options.bpm or context.reference_bpm * float(options.beat_scale),
+            "corrected reference",
+        )
+        validated_midi_bpm(
+            reference * float(payload.get("project_rate", 1)), "corrected project"
+        )
+        render_options = self._soundfont_options(str(payload.get("token") or ""), payload)
+        with self._render_lock:
+            directory = context.request_dir / "timing-corrections" / secrets.token_hex(12)
+            directory.mkdir(parents=True)
+            source = export_edited_midi(
+                context.source_midi_path,
+                directory / "current.mid",
+                notes,
+                reference_bpm=context.reference_bpm,
+                target_bpm=context.reference_bpm,
+            )
+            corrected = apply_midi_export_options(source, directory / "corrected.mid", options)
+            assets = prepare_midi_playback_assets(
+                corrected,
+                context.original_audio_path,
+                directory,
+                muscriptor_groups=context.muscriptor_groups,
+                **render_options,
+            )
+            token = self.register(
+                request_dir=context.request_dir,
+                source_midi_path=corrected,
+                original_audio_path=context.original_audio_path,
+                reference_bpm=reference,
+                muscriptor_groups=context.muscriptor_groups,
+                duration_seconds=assets.duration,
+            )
+            with self._lock:
+                for (old_token, identity), library in tuple(self._soundfonts.items()):
+                    if old_token == str(payload.get("token") or ""):
+                        self._soundfonts[(token, identity)] = library
+            parsed = mido.MidiFile(str(corrected))
+            timeline = MidiTimeline.from_midi(parsed)
+            signature = next(
+                (
+                    (m.numerator, m.denominator)
+                    for tr in parsed.tracks
+                    for m in tr
+                    if m.type == "time_signature"
+                ),
+                None,
+            )
+            last_tick = max(sum(m.time for m in tr) for tr in parsed.tracks)
+            beat_times = [
+                timeline.seconds_at_tick(tick)
+                for tick in range(0, last_tick + 1, parsed.ticks_per_beat)
+            ]
+            bar_ticks = (
+                round(signature[0] * 4 / signature[1] * parsed.ticks_per_beat)
+                if signature
+                else 0
+            )
+            return {
+                "notes": [asdict(note) for note in assets.notes],
+                "referenceBpm": reference,
+                "previewToken": token,
+                "timeline": midi_timeline_manifest(corrected, reference),
+                "midiUrl": track_file_url(str(corrected)),
+                "duration": assets.duration,
+                "originalUrl": track_file_url(str(assets.original_wav)),
+                "transcriptionUrl": track_file_url(str(assets.live_transcription_wav)),
+                "stereoUrl": track_file_url(str(assets.stereo_mix_wav)),
+                "instrumentUrls": {
+                    name: track_file_url(str(path))
+                    for name, path in assets.instrument_wavs.items()
+                },
+                "timeSignature": signature,
+                "beatTimes": beat_times,
+                "downbeats": (
+                    [
+                        timeline.seconds_at_tick(tick)
+                        for tick in range(0, last_tick + 1, max(1, bar_ticks))
+                    ]
+                    if bar_ticks
+                    else []
+                ),
+            }
 
     def export_audio(self, payload_json: str) -> dict[str, object]:
         """Publish a verified WAV for the exact browser note snapshot and preset."""

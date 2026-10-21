@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,9 +32,13 @@ class MidiQuantizationReport:
     grid: str
     grid_ticks: int
     paired_note_count: int
+    strength: float = 1.0
+    triplet: bool = False
+    automatic: bool = False
+    grid_step_ticks: float | None = None
 
 
-def quantize_grid_ticks(ticks_per_beat: int, grid: str) -> int:
+def quantize_grid_ticks(ticks_per_beat: int, grid: str, *, triplet: bool = False) -> int:
     """Return the integral tick width of one supported musical grid."""
 
     if (
@@ -45,7 +50,7 @@ def quantize_grid_ticks(ticks_per_beat: int, grid: str) -> int:
     denominator = _GRID_DENOMINATORS.get(str(grid))
     if denominator is None:
         raise ValueError(f"Unsupported MIDI quantization grid: {grid!r}")
-    return max(1, round(ticks_per_beat * 4 / denominator))
+    return max(1, round(ticks_per_beat * 4 / denominator * (2 / 3 if triplet else 1)))
 
 
 def _freeze(value: Any) -> Any:
@@ -104,7 +109,8 @@ def _paired_note_ticks(
 
 def _quantize_track(
     track: mido.MidiTrack,
-    grid_ticks: int,
+    grid_ticks: float,
+    strength: float = 1.0,
 ) -> tuple[mido.MidiTrack, int]:
     events: list[list[Any]] = []
     active: dict[tuple[int, int], list[int]] = defaultdict(list)
@@ -139,8 +145,16 @@ def _quantize_track(
             grid_ticks,
             round(duration / grid_ticks) * grid_ticks,
         )
-        events[start_index][0] = quantized_start
-        event[0] = quantized_start + quantized_duration
+        if strength > 0:
+            events[start_index][0] = round(
+                start_tick + strength * (quantized_start - start_tick)
+            )
+            event[0] = max(
+                events[start_index][0] + 1,
+                round(
+                    event_tick + strength * (quantized_start + quantized_duration - event_tick)
+                ),
+            )
         paired_note_count += 1
 
     final_event_tick = max((int(event[0]) for event in events), default=0)
@@ -168,6 +182,9 @@ def quantize_midi_notes(
     grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
     *,
     label: str = "MIDI note quantization",
+    strength: float = 1.0,
+    triplet: bool = False,
+    automatic: bool = False,
 ) -> MidiQuantizationReport:
     """Quantize paired note starts and durations and atomically replace ``midi_path``.
 
@@ -178,13 +195,26 @@ def quantize_midi_notes(
 
     source_path = validate_midi_output(midi_path, label).resolve()
     source = mido.MidiFile(str(source_path))
-    grid_ticks = quantize_grid_ticks(int(source.ticks_per_beat), grid)
+    if not math.isfinite(strength) or not 0 <= strength <= 1:
+        raise ValueError("Quantization strength must be between zero and one")
+    if automatic:
+        from src.core.midi_timing import MidiTimeline, detect_quantization_grid
+        from src.core.muscriptor_result_assets import read_midi_roll_notes
+
+        timelines = tuple(MidiTimeline.from_midi(source, i) for i in range(len(source.tracks)))
+        grid = detect_quantization_grid(
+            read_midi_roll_notes(source_path), timelines, triplet=triplet
+        )
+    grid_ticks = quantize_grid_ticks(int(source.ticks_per_beat), grid, triplet=triplet)
+    grid_step_ticks = (
+        source.ticks_per_beat * 4 / _GRID_DENOMINATORS[grid] * (2 / 3 if triplet else 1)
+    )
     source_non_notes, source_note_events = _event_fingerprints(source)
 
     rebuilt_tracks: list[mido.MidiTrack] = []
     paired_note_count = 0
     for track in source.tracks:
-        rebuilt, track_pairs = _quantize_track(track, grid_ticks)
+        rebuilt, track_pairs = _quantize_track(track, grid_step_ticks, strength)
         rebuilt_tracks.append(rebuilt)
         paired_note_count += track_pairs
     if paired_note_count <= 0:
@@ -219,9 +249,14 @@ def quantize_midi_notes(
         invalid_pairs = [
             (track_index, key, start_tick, end_tick)
             for track_index, key, start_tick, end_tick in verified_pairs
-            if start_tick % grid_ticks != 0
-            or end_tick - start_tick < grid_ticks
-            or (end_tick - start_tick) % grid_ticks != 0
+            if strength == 1.0
+            and (
+                abs(start_tick - round(round(start_tick / grid_step_ticks) * grid_step_ticks))
+                > 0
+                or abs(end_tick - round(round(end_tick / grid_step_ticks) * grid_step_ticks))
+                > 0
+                or end_tick <= start_tick
+            )
         ]
         if invalid_pairs:
             raise RuntimeError(
@@ -240,6 +275,10 @@ def quantize_midi_notes(
             grid=str(grid),
             grid_ticks=grid_ticks,
             paired_note_count=paired_note_count,
+            strength=float(strength),
+            triplet=bool(triplet),
+            automatic=bool(automatic),
+            grid_step_ticks=grid_step_ticks,
         )
     finally:
         remove_temporary_midi(temporary)

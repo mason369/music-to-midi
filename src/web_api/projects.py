@@ -207,11 +207,23 @@ def install_project_routes(
     )
 
     @app.post("/api/v1/project-results/{result_id}/sheet-music")
-    def project_sheet_music(result_id: str, artifact_id: str, quantize_grid: str = "1/32"):
+    def project_sheet_music(
+        result_id: str,
+        artifact_id: str,
+        quantize_grid: str = "1/32",
+        quantize_strength: float = 1.0,
+        quantize_triplet: bool = False,
+        quantize_auto: bool = False,
+    ):
         try:
             return call(
                 lambda: results.generate_sheet_music(
-                    result_id, artifact_id=artifact_id, quantize_grid=quantize_grid
+                    result_id,
+                    artifact_id=artifact_id,
+                    quantize_grid=quantize_grid,
+                    quantize_strength=quantize_strength,
+                    quantize_triplet=quantize_triplet,
+                    quantize_auto=quantize_auto,
                 )
             )
         except KeyError as exc:

@@ -102,6 +102,54 @@ def _summary(output_root: Path) -> dict:
     return json.loads(paths[0].read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("manual", [False, True])
+def test_new_timing_options_reach_primary_and_manual_engines(tmp_path, manual):
+    source = _audio(tmp_path / "input.wav")
+    engine = FakeEngine()
+    arguments = (
+        ["track-to-midi", str(source), "--route", "piano_transkun"] if manual else [str(source)]
+    )
+    arguments += [
+        "-o",
+        str(tmp_path / "result"),
+        "--grid-bpm",
+        "90",
+        "--beats-per-bar",
+        "3",
+        "--beat-unit",
+        "8",
+        "--first-downbeat",
+        "0.75",
+        "--beat-scale",
+        "2",
+        "--fill-gaps",
+        "0.125",
+        "--trim-leading-bars",
+        "--smooth-tempo",
+        "--quantize",
+        "1/16",
+        "--quantize-strength",
+        "0.5",
+        "--quantize-triplet",
+        "--quantize-auto",
+    ]
+    code, _, error = _run(arguments, engine)
+    assert code == 0, error
+    options = engine.calls[0]["options"]
+    assert options["quantize_strength"] == 0.5
+    assert options["quantize_triplet"] and options["quantize_auto"]
+    assert options["midi_export"] == dict(
+        bpm=90,
+        beats_per_bar=3,
+        beat_unit=8,
+        first_downbeat=0.75,
+        beat_scale=2.0,
+        fill_gaps=0.125,
+        trim_leading_bars=True,
+        smooth_tempo=True,
+    )
+
+
 def test_direct_path_shortcut_normalizes_product_options_and_writes_hash_manifest(tmp_path):
     source = _audio(tmp_path / "song.wav")
     output = tmp_path / "out"

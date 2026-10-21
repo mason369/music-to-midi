@@ -35,6 +35,26 @@ class JobStatus(str, Enum):
         return self in {self.SUCCEEDED, self.FAILED, self.CANCELLED}
 
 
+class MidiExportSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bpm: float | None = None
+    beats_per_bar: int | None = None
+    beat_unit: int = 4
+    first_downbeat: float | None = None
+    beat_scale: float = 1.0
+    fill_gaps: float = 0.0
+    trim_leading_bars: bool = False
+    smooth_tempo: bool = False
+
+    @model_validator(mode="after")
+    def validate_export_settings(self):
+        from src.core.midi_export_options import MidiExportOptions
+
+        MidiExportOptions(**self.model_dump())
+        return self
+
+
 class InferenceOptions(BaseModel):
     """All product-level controls required to reproduce one primary job."""
 
@@ -51,6 +71,10 @@ class InferenceOptions(BaseModel):
     custom_bpm: float | None = None
     quantize_notes: bool = False
     quantize_grid: MidiQuantizeGrid = "1/32"
+    quantize_strength: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
+    quantize_triplet: bool = False
+    quantize_auto: bool = False
+    midi_export: "MidiExportSettings | None" = None
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
     language: Literal["zh_CN", "en_US"] = "zh_CN"
@@ -151,6 +175,10 @@ class ManualMidiOptions(BaseModel):
     custom_bpm: float | None = None
     quantize_notes: bool = False
     quantize_grid: MidiQuantizeGrid = "1/32"
+    quantize_strength: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
+    quantize_triplet: bool = False
+    quantize_auto: bool = False
+    midi_export: "MidiExportSettings | None" = None
     use_gpu: bool = True
     gpu_device: int = Field(default=0, ge=0)
     language: Literal["zh_CN", "en_US"] = "zh_CN"

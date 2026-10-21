@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 
+import mido
 from PyQt6.QtCore import (
     QEvent,
     QLineF,
@@ -83,6 +84,7 @@ from src.gui.layouts import FlowLayout
 from src.gui.synchronized_pcm_player import SynchronizedPcmPlayer
 from src.gui.widgets.chord_playback_controls import ChordPlaybackControls
 from src.gui.widgets.midi_chord_lane import ChordAuditioner, MidiChordLane
+from src.gui.widgets.midi_timing_controls import MidiTimingControls, QuantizationControls
 from src.gui.widgets.soundfont_panel import SoundFontPanel
 from src.gui.widgets.wheel_safe_controls import (
     NoWheelComboBox,
@@ -149,11 +151,12 @@ def _export_midi_with_bpm(
 ) -> Path:
     """Build the reference-speed preview while retaining musical ticks."""
 
-    from src.core.midi_tempo import rewrite_midi_tempo_preserving_ticks
+    from src.core.midi_timing import write_project_tempo_map
 
-    return rewrite_midi_tempo_preserving_ticks(
+    return write_project_tempo_map(
         source_path,
         destination_path,
+        bpm,
         bpm,
         label="Result reference-speed MIDI preview",
     )
@@ -167,15 +170,14 @@ def _export_midi_at_project_speed(
 ) -> Path:
     """Publish target tempo from an already normalized reference tick grid."""
 
-    from src.core.midi_tempo import (
-        rewrite_midi_tempo_preserving_ticks,
-        validated_midi_bpm,
-    )
+    from src.core.midi_tempo import validated_midi_bpm
+    from src.core.midi_timing import write_project_tempo_map
 
     validated_midi_bpm(reference_bpm, "reference")
-    return rewrite_midi_tempo_preserving_ticks(
+    return write_project_tempo_map(
         source_path,
         destination_path,
+        reference_bpm,
         target_bpm,
         label="Result project-speed MIDI export",
     )
@@ -689,6 +691,10 @@ class _PianoRollCanvas(QWidget):
         self.update()
 
     def snap_time(self, seconds: float) -> float:
+        timeline = getattr(self, "_musical_timeline", None)
+        if timeline is not None and self._daw_reference_bpm:
+            step = self._grid_seconds * self._daw_reference_bpm / 60
+            return timeline.seconds_at(round(max(0, timeline.beats_at(seconds)) / step) * step)
         return round(max(0.0, float(seconds)) / self._grid_seconds) * self._grid_seconds
 
     def set_position(self, seconds: float) -> None:
@@ -991,6 +997,19 @@ class _PianoRollCanvas(QWidget):
             )
             numerator, denominator = self._daw_time_signature
             quarter_seconds = 60.0 / self._daw_reference_bpm
+            timeline = getattr(self, "_musical_timeline", None)
+
+            def grid_x(score_seconds):
+                actual = (
+                    timeline.seconds_at(score_seconds / quarter_seconds)
+                    if timeline
+                    else score_seconds
+                )
+                return self.x_for_time_float(actual)
+
+            if timeline is not None:
+                visible_start = timeline.beats_at(visible_start) * quarter_seconds
+                visible_end = timeline.beats_at(visible_end) * quarter_seconds
             subdivision_seconds = self._grid_seconds
             beat_seconds = quarter_seconds * 4.0 / float(denominator)
             bar_seconds = beat_seconds * float(numerator)
@@ -1000,8 +1019,8 @@ class _PianoRollCanvas(QWidget):
             for bar_index in range(first_bar, last_bar):
                 if bar_index % 2 == 0:
                     continue
-                left = self.x_for_time_float(bar_index * bar_seconds)
-                right = self.x_for_time_float((bar_index + 1) * bar_seconds)
+                left = grid_x(bar_index * bar_seconds)
+                right = grid_x((bar_index + 1) * bar_seconds)
                 painter.fillRect(
                     QRectF(left, 0.0, max(0.0, right - left), float(self.height())),
                     QColor(255, 255, 255, 8),
@@ -1021,7 +1040,7 @@ class _PianoRollCanvas(QWidget):
                 last_subdivision + 1,
                 subdivision_stride,
             ):
-                x = self.x_for_time_float(subdivision_index * subdivision_seconds)
+                x = grid_x(subdivision_index * subdivision_seconds)
                 painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
 
             first_beat = max(0, int(math.floor(visible_start / beat_seconds)) - 1)
@@ -1031,7 +1050,7 @@ class _PianoRollCanvas(QWidget):
                 beat_in_bar = beat_index % numerator
                 if beat_in_bar == 0:
                     continue
-                x = self.x_for_time_float(beat_index * beat_seconds)
+                x = grid_x(beat_index * beat_seconds)
                 painter.setPen(QPen(QColor("#36506f"), 1))
                 painter.drawLine(QLineF(x, 0.0, x, float(self.height())))
                 if label_beats:
@@ -1044,7 +1063,7 @@ class _PianoRollCanvas(QWidget):
             first_downbeat = max(0, int(math.floor(visible_start / bar_seconds)) - 1)
             last_downbeat = int(math.ceil(visible_end / bar_seconds)) + 1
             for bar_index in range(first_downbeat, last_downbeat + 1):
-                x = self.x_for_time_float(bar_index * bar_seconds)
+                x = grid_x(bar_index * bar_seconds)
                 downbeat_pen = QPen(QColor("#78aee8"))
                 downbeat_pen.setWidthF(1.5)
                 downbeat_pen.setCosmetic(True)
@@ -1335,7 +1354,7 @@ class _PianoRollCanvas(QWidget):
                     -min(note.start for note in self._drag_origin_notes.values()),
                     min(
                         min(
-                            note.end - note.start - 0.01
+                            max(0.0, note.end - note.start - 0.01)
                             for note in self._drag_origin_notes.values()
                         ),
                         delta_seconds,
@@ -1351,9 +1370,13 @@ class _PianoRollCanvas(QWidget):
                     end = self.snap_time(end)
                 delta_seconds = end - origin.end
                 delta_seconds = max(
-                    -min(note.end - note.start - 0.01 for note in self._drag_origin_notes.values()),
+                    -min(
+                        max(0.0, note.end - note.start - 0.01)
+                        for note in self._drag_origin_notes.values()
+                    ),
                     min(
-                        self._duration - max(note.end for note in self._drag_origin_notes.values()),
+                        self._duration
+                        - max(note.end for note in self._drag_origin_notes.values()),
                         delta_seconds,
                     ),
                 )
@@ -2284,6 +2307,13 @@ class MuscriptorResultWidget(QFrame):
             _labeled_control(self.edit_quantize_grid_label, self.edit_quantize_grid_combo)
         )
         quantize_commands.addWidget(_labeled_control(QLabel(" "), self.edit_quantize_button))
+        self.quantize_options = QuantizationControls()
+        self.quantize_options.triplet.toggled.connect(self._on_editor_quantize_grid_changed)
+        quantize_commands.addWidget(self.quantize_options)
+        self.timing_controls = MidiTimingControls()
+        self.timing_controls.setEnabled(False)
+        self.timing_controls.apply_requested.connect(self._apply_timing_options)
+        quantize_commands.addWidget(self.timing_controls)
         self.edit_quantize_button.setObjectName("applyQuantization")
         for command_button in (
             self.edit_toggle,
@@ -2473,6 +2503,10 @@ class MuscriptorResultWidget(QFrame):
         # Do not retain the pre-layout preferred height: it overestimates
         # wrapped labels and leaves blank space above the piano roll.
         self.result_splitter.setSizes([1, 465])
+        self._controls_auto_fit = True
+        self.result_splitter.splitterMoved.connect(
+            lambda _position, _index: setattr(self, "_controls_auto_fit", False)
+        )
         self.result_splitter.handle(1).setToolTip(t("muscriptor_result.editor_resize_hint"))
         root.addWidget(self.result_splitter, 1)
 
@@ -2561,6 +2595,10 @@ class MuscriptorResultWidget(QFrame):
         required_height = controls.totalHeightForWidth(available)
         if required_height >= 0:
             self.result_controls_panel.set_wrapped_height(required_height)
+        if getattr(self, "_controls_auto_fit", True):
+            total = sum(self.result_splitter.sizes())
+            if total > 0:
+                self.result_splitter.setSizes([1, max(1, total - 1)])
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -2691,6 +2729,8 @@ class MuscriptorResultWidget(QFrame):
             self._update_stream_progress()
 
     def finalize_result(self, result: ProcessingResult) -> None:
+        self._last_result = result
+        self.timing_controls.setEnabled(True)
         self._finalizing = True
         self._muted.clear()
         self._soloed.clear()
@@ -2725,9 +2765,15 @@ class MuscriptorResultWidget(QFrame):
                 self._detected_bpm,
             )
         self._original_audio_midi_path = Path(playback_midi_path).resolve()
+        from src.core.midi_timing import MidiTimeline
+
+        self.roll._musical_timeline = MidiTimeline.from_midi(
+            mido.MidiFile(str(playback_midi_path)),
+            reference_bpm=self._detected_bpm,
+        )
         self._active_audio_midi_path = self._original_audio_midi_path
         self.chord_lane.source_offset = 0.0
-        if self.muscriptor_groups and result.beat_info is not None:
+        if result.beat_info is not None and len(result.beat_info.beat_times) >= 2:
             from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
 
             bar_offset = read_muscriptor_bar_offset_seconds(playback_midi_path)
@@ -3682,6 +3728,8 @@ class MuscriptorResultWidget(QFrame):
         )
 
     def _quantize_selected_editor_notes(self) -> None:
+        if self.quantize_options.strength.value() == 0:
+            return
         selected_indices = self.roll.selected_indices
         indices = (
             tuple(range(len(self._edited_notes)))
@@ -3690,18 +3738,29 @@ class MuscriptorResultWidget(QFrame):
         )
         if not self.edit_toggle.isChecked() or not indices:
             return
-        grid = self._editor_grid_seconds()
-        updated = list(self._edited_notes)
+        from src.core.midi_timing import (
+            MidiTimeline,
+            quantize_editor_notes,
+            reference_timelines,
+        )
+
+        if self._midi_path:
+            timelines = reference_timelines(mido.MidiFile(self._midi_path), self._detected_bpm)
+        else:
+            # Notes entered into an empty editor have the explicitly selected fixed grid.
+            timelines = (MidiTimeline(480, ((0, 0.0, mido.bpm2tempo(self._detected_bpm)),)),)
+        updated, _grid = quantize_editor_notes(
+            self._edited_notes,
+            timelines,
+            f"1/{self._editor_grid_denominator()}",
+            indices=indices,
+            **self.quantize_options.options(),
+        )
         for index in indices:
             note = updated[index]
-            duration = note.end - note.start
-            quantized_duration = max(grid, round(duration / grid) * grid)
-            quantized_duration = min(self._edit_duration, quantized_duration)
-            start = round(note.start / grid) * grid
-            start = max(0.0, min(self._edit_duration - quantized_duration, start))
-            end = start + quantized_duration
-            if note.start != start or note.end != end:
-                updated[index] = replace(note, start=start, end=end)
+            duration = min(self._edit_duration, note.end - note.start)
+            start = max(0.0, min(self._edit_duration - duration, note.start))
+            updated[index] = replace(note, start=start, end=start + duration)
         self._apply_editor_snapshot(
             updated,
             selected_index=self.roll.selected_index,
@@ -3716,7 +3775,7 @@ class MuscriptorResultWidget(QFrame):
         updated = list(self._edited_notes)
         selected = [updated[index] for index in indices]
         if command == "move_time":
-            delta = self._editor_grid_seconds() * amount
+            delta = self._editor_grid_seconds(selected[0].start, amount)
             delta = max(
                 -min(note.start for note in selected),
                 min(self._edit_duration - max(note.end for note in selected), delta),
@@ -3729,9 +3788,9 @@ class MuscriptorResultWidget(QFrame):
                     end=note.end + delta,
                 )
         elif command == "resize_time":
-            delta = self._editor_grid_seconds() * amount
+            delta = self._editor_grid_seconds(selected[0].end, amount)
             delta = max(
-                -min(note.end - note.start - 0.01 for note in selected),
+                -min(max(0.0, note.end - note.start - 0.01) for note in selected),
                 min(self._edit_duration - max(note.end for note in selected), delta),
             )
             for index in indices:
@@ -3798,13 +3857,100 @@ class MuscriptorResultWidget(QFrame):
             )
         return denominator
 
-    def _editor_grid_seconds(self) -> float:
+    def _apply_timing_options(self, raw_options: dict) -> None:
+        from src.core.midi_export_options import MidiExportOptions, apply_midi_export_options
+        from src.core.midi_tempo import validated_midi_bpm
+        from src.core.midi_timing import MidiTimeline
+
+        if not self._midi_path or not hasattr(self, "_last_result"):
+            return
+        try:
+            options = MidiExportOptions(**raw_options)
+            reference = float(self._detected_bpm)
+            rate = self._commit_result_tempo_edit() / reference
+            new_reference = validated_midi_bpm(
+                options.bpm or reference * float(options.beat_scale), "corrected reference"
+            )
+            validated_midi_bpm(new_reference * rate, "corrected project")
+            self.stop()
+            directory = Path(tempfile.mkdtemp(prefix="timing-", dir=self._edit_asset_root))
+            source = export_edited_midi(
+                self._midi_path,
+                directory / "current.mid",
+                self._edited_notes,
+                reference_bpm=reference,
+                target_bpm=reference,
+            )
+            corrected = apply_midi_export_options(source, directory / "corrected.mid", options)
+            parsed = mido.MidiFile(str(corrected))
+            timeline = MidiTimeline.from_midi(parsed)
+            signature = next(
+                (
+                    (m.numerator, m.denominator)
+                    for tr in parsed.tracks
+                    for m in tr
+                    if m.type == "time_signature"
+                ),
+                self._time_signature,
+            )
+            from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
+
+            offset = read_muscriptor_bar_offset_seconds(parsed)
+            end_tick = max(sum(m.time for m in tr) for tr in parsed.tracks)
+            beats = [
+                timeline.seconds_at_tick(tick) - offset
+                for tick in range(0, end_tick + 1, parsed.ticks_per_beat)
+            ]
+            bar_ticks = round(signature[0] * 4 / signature[1] * parsed.ticks_per_beat)
+            downbeats = [
+                timeline.seconds_at_tick(tick) - offset
+                for tick in range(0, end_tick + 1, max(1, bar_ticks))
+            ]
+            beat_info = replace(
+                self._last_result.beat_info,
+                bpm=new_reference * rate,
+                source_bpm=new_reference,
+                time_signature=signature,
+                beat_times=[s for s in beats if s >= 0],
+                downbeats=[s for s in downbeats if s >= 0],
+                tempo_map=(
+                    [(s, 60_000_000 / tempo) for _tick, s, tempo in timeline.sections]
+                    if len(timeline.sections) > 1
+                    else []
+                ),
+            )
+            self._grid_corrected_path = str(corrected)
+            overridden = self._bpm_user_overridden
+            self._bpm_user_overridden = False
+            try:
+                self.finalize_result(
+                    replace(self._last_result, midi_path=str(corrected), beat_info=beat_info)
+                )
+            finally:
+                self._bpm_user_overridden = overridden
+            self.status_label.setText(t("muscriptor_result.timing_applied"))
+        except Exception as exc:
+            logger.exception("MIDI grid correction failed")
+            self.status_label.setText(
+                t("muscriptor_result.timing_failed", error=_compact_editor_error(exc))
+            )
+
+    def _editor_grid_seconds(self, at_seconds: float | None = None, steps: int = 1) -> float:
         if self._detected_bpm is None:
             raise RuntimeError("Cannot derive MIDI editor grid without a reference BPM")
         bpm = float(self._detected_bpm)
         if not math.isfinite(bpm) or bpm <= 0:
             raise RuntimeError(f"Cannot derive MIDI editor grid from BPM {bpm!r}")
-        return 60.0 / bpm * 4.0 / self._editor_grid_denominator()
+        step = (
+            steps
+            * 4.0
+            / self._editor_grid_denominator()
+            * (2 / 3 if self.quantize_options.triplet.isChecked() else 1)
+        )
+        timeline = getattr(self.roll, "_musical_timeline", None)
+        if at_seconds is not None and timeline is not None:
+            return timeline.seconds_at(timeline.beats_at(at_seconds) + step) - at_seconds
+        return 60.0 / bpm * step
 
     def _undo_editor_notes(self) -> None:
         if not self._edit_undo:
@@ -4094,7 +4240,14 @@ class MuscriptorResultWidget(QFrame):
         self.tempo_status_label.setText(
             t("muscriptor_result.tempo_unset")
             if self._detected_bpm is None
-            else t("muscriptor_result.tempo_detected", bpm=f"{self._detected_bpm:.1f}")
+            else t(
+                (
+                    "muscriptor_result.timing_reference"
+                    if getattr(self, "_grid_corrected_path", None) == self._midi_path
+                    else "muscriptor_result.tempo_detected"
+                ),
+                bpm=f"{self._detected_bpm:.1f}",
+            )
         )
         self.tempo_changed.emit()
 
@@ -4907,6 +5060,11 @@ class MuscriptorResultWidget(QFrame):
                 midi_path=str(snapshot_midi),
                 destination=destination,
                 quantize_grid=quantize_grid,
+                quantization_options=dict(
+                    quantize_strength=self.quantize_options.strength.value() / 100,
+                    quantize_triplet=self.quantize_options.triplet.isChecked(),
+                    quantize_auto=self.quantize_options.automatic.isChecked(),
+                ),
                 parent=self,
             )
             worker.succeeded.connect(self._on_sheet_music_export_succeeded)
@@ -5040,6 +5198,8 @@ class MuscriptorResultWidget(QFrame):
         self.edit_paste_button.setText(t("muscriptor_result.editor_paste"))
         self.edit_duplicate_button.setText(t("muscriptor_result.editor_duplicate"))
         self.edit_quantize_button.setText(t("muscriptor_result.editor_quantize"))
+        self.quantize_options.update_translations()
+        self.timing_controls.update_translations()
         self.edit_quantize_scope_label.setText(t("muscriptor_result.editor_quantize_scope"))
         for index, scope in enumerate(MIDI_QUANTIZE_SCOPES):
             self.edit_quantize_scope_combo.setItemText(

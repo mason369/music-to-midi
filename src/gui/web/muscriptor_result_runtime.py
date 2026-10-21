@@ -16,8 +16,8 @@ from src.core.muscriptor_result_assets import (
     DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
     MIDI_AUDIO_EXPORT_PRESETS,
 )
-from src.gui.web.track_mixer_runtime import track_file_url
 from src.gui.web.soundfont_runtime import SOUNDFONT_JS, SOUNDFONT_STRING_KEYS
+from src.gui.web.track_mixer_runtime import track_file_url
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
     MUSCRIPTOR_REPRESENTATIVE_PROGRAMS,
@@ -124,12 +124,15 @@ def build_muscriptor_result_html(
         "downbeats": [float(value) for value in state.get("downbeats", [])],
         "repeatTempoPerNoteTrack": bool(state.get("repeat_tempo_per_note_track", False)),
         "quantizeGrids": list(MIDI_QUANTIZE_GRIDS),
+        "timeline": state.get("timeline"),
         "defaultQuantizeGrid": DEFAULT_MIDI_QUANTIZE_GRID,
         "quantizeScopes": list(MIDI_QUANTIZE_SCOPES),
         "defaultQuantizeScope": DEFAULT_MIDI_QUANTIZE_SCOPE,
         "backendLabel": str(state.get("backend_label", "")),
         "sourceTrackName": str(state.get("source_track_name", "")),
-        "previewApi": str(state.get("preview_api", "")).replace("./api/", "./gradio_api/api/", 1),
+        "previewApi": str(state.get("preview_api", "")).replace(
+            "./api/", "./gradio_api/api/", 1
+        ),
         "previewToken": str(state.get("preview_token", "")),
         "sheetApi": str(state.get("sheet_api", "")).replace("./api/", "./gradio_api/api/", 1),
         "sheetToken": str(state.get("sheet_token", "")),
@@ -139,7 +142,9 @@ def build_muscriptor_result_html(
         "audioStemExportApi": str(state.get("audio_stem_export_api", "")).replace(
             "./api/", "./gradio_api/api/", 1
         ),
-        "soundfontStrings": {key: translate(f"soundfont.{key}") for key in SOUNDFONT_STRING_KEYS},
+        "soundfontStrings": {
+            key: translate(f"soundfont.{key}") for key in SOUNDFONT_STRING_KEYS
+        },
         "audioExportPresets": [
             {
                 "id": preset.id,
@@ -224,6 +229,25 @@ def build_muscriptor_result_html(
                 "editor_paste",
                 "editor_duplicate",
                 "editor_quantize",
+                "quantize_strength",
+                "quantize_triplet",
+                "quantize_auto",
+                "timing_tools",
+                "timing_title",
+                "timing_notice",
+                "timing_bpm",
+                "timing_meter",
+                "timing_first_downbeat",
+                "timing_keep",
+                "timing_beatscale",
+                "timing_fill_gaps",
+                "timing_trim",
+                "timing_smooth",
+                "timing_smooth_help",
+                "timing_apply",
+                "timing_applied",
+                "timing_failed",
+                "timing_reference",
                 "editor_quantize_scope",
                 "editor_quantize_scope_all_tracks",
                 "editor_quantize_scope_selected_notes",
@@ -612,6 +636,32 @@ MUSCRIPTOR_RESULT_JS = r"""
       (tick - active.tick) * active.tempo / 1000000 / division
     );
   }
+  function secondsToTick(seconds, sections, division) {
+    var active = sections[0];
+    for (var index = 1; index < sections.length && sections[index].seconds <= seconds; index++) {
+      active = sections[index];
+    }
+    return active.tick + (seconds - active.seconds) * 1000000 * division / active.tempo;
+  }
+  function referenceTempoSections(parsed, referenceBpm) {
+    var rates=[];
+    parsed.tracks.forEach(function (track) {track.forEach(function (event) {
+      if (event.status === 255 && event.metaType === 6) {
+        var text=String.fromCharCode.apply(null,event.data), prefix="music-to-midi:playback_rate=";
+        if (text.indexOf(prefix) === 0) rates.push(Number(text.slice(prefix.length)));
+      }
+    });});
+    if (rates.some(function (v) {return !Number.isFinite(v) || v <= 0 || Math.abs(v-rates[0]) > 1e-9;})) {
+      throw new Error("Invalid or conflicting MIDI project-speed markers");
+    }
+    return buildTempoSections(parsed).map(function (sections) {
+      if (rates.length) return sections.map(function (s) {
+        return {tick:s.tick, seconds:s.seconds*rates[0], tempo:Math.round(s.tempo*rates[0])};
+      });
+      var variable = sections.some(function (s) { return s.tempo !== sections[0].tempo; });
+      return variable ? sections : [{tick:0, seconds:0, tempo:Math.round(60000000/referenceBpm)}];
+    });
+  }
   function retainedEventKey(trackIndex, event) {
     return trackIndex + "|" + event.bytes.join(",");
   }
@@ -642,7 +692,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     });
     return new Uint8Array(output);
   }
-  function normalizeExpectedNote(note, parsed, timelineBpm, index) {
+  function normalizeExpectedNote(note, parsed, timelineBpm, index, timelines) {
     var pitch = Number(note.pitch), velocity = Number(note.velocity);
     var start = Number(note.start), end = Number(note.end);
     var program = Number(note.program), trackIndex = Number(note.track_index);
@@ -650,7 +700,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (
       !note.instrument || !Number.isInteger(pitch) || pitch < 0 || pitch > 127 ||
       !Number.isInteger(velocity) || velocity < 1 || velocity > 127 ||
-      !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end - start < 0.01 - 1e-9 ||
+      !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end - start < 0.000001 - 1e-9 ||
       !Number.isInteger(program) || program < 0 || program > 127 ||
       !Number.isInteger(trackIndex) || trackIndex < 0 || trackIndex >= parsed.tracks.length ||
       !Number.isInteger(channel) || channel < 0 || channel > 15 ||
@@ -658,16 +708,16 @@ MUSCRIPTOR_RESULT_JS = r"""
     ) {
       throw new Error("Invalid edited MIDI note at index " + index);
     }
-    var ticksPerSecond = parsed.division * timelineBpm / 60;
-    var startTick = Math.max(0, Math.round(start * ticksPerSecond));
-    var durationTicks = Math.max(1, Math.round((end - start) * ticksPerSecond));
+    var sections = timelines[trackIndex];
+    var startTick = Math.max(0, roundGridStep(secondsToTick(start, sections, parsed.division)));
+    var endTick = Math.max(startTick + 1, roundGridStep(secondsToTick(end, sections, parsed.division)));
     return {
       track: trackIndex,
       channel: isDrum ? 9 : channel,
       pitch: pitch,
       velocity: velocity,
       start: startTick,
-      end: startTick + durationTicks,
+      end: endTick,
       program: isDrum ? 0 : program,
       drum: isDrum
     };
@@ -739,8 +789,17 @@ MUSCRIPTOR_RESULT_JS = r"""
     }
     var parsed = parseSmf(arrayBuffer), sequence = 0, retainedSource = {};
     var tempo = Math.round(60000000 / targetBpm);
+    var timelines = referenceTempoSections(parsed, referenceBpm), expectedTempos = [];
+    var rawTimelines = buildTempoSections(parsed);
     var normalizedNotes = notes.map(function (note, noteIndex) {
-      return normalizeExpectedNote(note, parsed, referenceBpm, noteIndex);
+      return normalizeExpectedNote(note, parsed, referenceBpm, noteIndex, timelines);
+    });
+    normalizedNotes.forEach(function (note) {
+      var release=parsed.tracks[note.track].find(function (event) {
+        return event.tick === note.end && (event.status & 15) === note.channel &&
+          (event.status & 240) === 128 && event.data[0] === note.pitch;
+      });
+      note.releaseVelocity=release ? release.data[1] : 0;
     });
     var reservedChannels = { 9: true };
     parsed.tracks.forEach(function (events) {
@@ -825,6 +884,22 @@ MUSCRIPTOR_RESULT_JS = r"""
         // through target-tempo seconds would apply the BPM ratio twice.
         var targetTick = event.tick;
         var retainedCopies = [event.bytes.slice()];
+        if (event.status === 255 && event.metaType === 6) {
+          var marker=String.fromCharCode.apply(null,event.data);
+          var prefix="muscriptor:bar_offset=";
+          if (marker.indexOf(prefix) === 0) {
+            var offset=Number(marker.slice(prefix.length));
+            if (!Number.isFinite(offset)) throw new Error("Invalid MIDI bar-offset marker");
+            var scale=timelines[trackIndex][0].tempo*referenceBpm/targetBpm/rawTimelines[trackIndex][0].tempo;
+            var corrected=prefix+(offset*scale).toFixed(4);
+            var data=Array.from(corrected).map(function (c) {return c.charCodeAt(0);});
+            retainedCopies=[[255,6].concat(writeVlq(data.length),data)];
+          } else if (marker.indexOf("music-to-midi:playback_rate=") === 0) {
+            var rateText="music-to-midi:playback_rate="+Number((targetBpm/referenceBpm).toPrecision(12));
+            var rateData=Array.from(rateText).map(function (c) {return c.charCodeAt(0);});
+            retainedCopies=[[255,6].concat(writeVlq(rateData.length),rateData)];
+          }
+        }
         if (event.status >= 128 && event.status < 240) {
           var sourceChannel = event.status & 15;
           (auxiliaryBySource[sourceChannel] || []).forEach(function (channel) {
@@ -850,7 +925,6 @@ MUSCRIPTOR_RESULT_JS = r"""
       });
       return output;
     });
-    var tempoBytes = [255, 81, 3, (tempo >>> 16) & 255, (tempo >>> 8) & 255, tempo & 255];
     var tempoTracks = parsed.format === 2 ? trackEvents.map(function (_track, index) { return index; }) : [0];
     if (parsed.format !== 2 && Boolean(repeatTempoPerNoteTrack)) {
       normalizedNotes.forEach(function (note) {
@@ -859,7 +933,24 @@ MUSCRIPTOR_RESULT_JS = r"""
       tempoTracks.sort(function (left, right) { return left - right; });
     }
     tempoTracks.forEach(function (trackIndex) {
-      trackEvents[trackIndex].push({ tick: 0, order: 0, sequence: 0, bytes: tempoBytes.slice() });
+      var hasRate=parsed.tracks.some(function (events) {return events.some(function (event) {
+        return event.status === 255 && event.metaType === 6 &&
+          String.fromCharCode.apply(null,event.data).indexOf("music-to-midi:playback_rate=") === 0;
+      });});
+      if (!hasRate && timelines[trackIndex].some(function (s) {return s.tempo !== timelines[trackIndex][0].tempo;})) {
+        var text="music-to-midi:playback_rate="+Number((targetBpm/referenceBpm).toPrecision(12));
+        var data=Array.from(text).map(function (c) {return c.charCodeAt(0);});
+        var bytes=[255,6].concat(writeVlq(data.length),data);
+        trackEvents[trackIndex].push({tick:0, order:-99, sequence:0, bytes:bytes});
+        appendRetained(retainedSource,retainedEventKey(trackIndex,{bytes:bytes}),0);
+      }
+      timelines[trackIndex].forEach(function (section) {
+        var scaled = roundGridStep(section.tempo * referenceBpm / targetBpm);
+        if (scaled < 1 || scaled > 16777215) throw new Error("Invalid tempo event in edited MIDI");
+        expectedTempos.push(scaled);
+        var bytes = [255, 81, 3, (scaled >>> 16) & 255, (scaled >>> 8) & 255, scaled & 255];
+        trackEvents[trackIndex].push({ tick:section.tick, order:-100, sequence:0, bytes:bytes });
+      });
     });
     var lanes = {};
     normalizedNotes.forEach(function (normalized, noteIndex) {
@@ -919,7 +1010,7 @@ MUSCRIPTOR_RESULT_JS = r"""
         tick: normalized.end,
         order: 10,
         sequence: sequence,
-        bytes: [128 | normalized.channel, normalized.pitch, 0]
+        bytes: [128 | normalized.channel, normalized.pitch, normalized.releaseVelocity || 0]
       });
       sequence++;
       trackEvents[normalized.track].push({
@@ -939,10 +1030,8 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (JSON.stringify(expected) !== JSON.stringify(verified.notes)) {
       throw new Error("Edited MIDI note verification failed");
     }
-    var expectedTempoCount = tempoTracks.length;
     if (
-      verified.tempos.length !== expectedTempoCount ||
-      verified.tempos.some(function (value) { return value !== tempo; })
+      JSON.stringify(verified.tempos) !== JSON.stringify(expectedTempos)
     ) {
       throw new Error("Edited MIDI tempo verification failed");
     }
@@ -999,6 +1088,9 @@ MUSCRIPTOR_RESULT_JS = r"""
     this.originalNotes = [];
     this.targetBpm = 0;
     this.quantizeGrid = "";
+    this.quantizeStrength = 1;
+    this.quantizeTriplet = false;
+    this.quantizeAuto = false;
     this.activeInstrument = "";
     this.rollHeight = 390;
     this.previewRevision = 0;
@@ -1069,7 +1161,11 @@ MUSCRIPTOR_RESULT_JS = r"""
           })) {
         throw new Error("Invalid MIDI quantization-grid contract");
       }
-      this.quantizeGrid = this.m.defaultQuantizeGrid;
+      this.quantizeGrid = this.m.quantizeGrids.indexOf(this.m.activeQuantizeGrid) >= 0
+        ? this.m.activeQuantizeGrid : this.m.defaultQuantizeGrid;
+      this.quantizeStrength = Number(this.m.quantizeStrength === undefined ? 1 : this.m.quantizeStrength);
+      this.quantizeTriplet = Boolean(this.m.quantizeTriplet);
+      this.quantizeAuto = Boolean(this.m.quantizeAuto);
       if (this.m.quantizeScopes.length !== 2
           || this.m.quantizeScopes.indexOf("all_tracks") < 0
           || this.m.quantizeScopes.indexOf("selected_notes") < 0
@@ -1659,6 +1755,21 @@ MUSCRIPTOR_RESULT_JS = r"""
     };
     quantizeGridLabel.appendChild(this.quantizeGridSelect);
     editor.appendChild(quantizeGridLabel);
+    var strengthLabel = el("label", "", strings.quantize_strength);
+    this.strengthInput = el("input");
+    this.strengthInput.type = "number"; this.strengthInput.min = "0";
+    this.strengthInput.required = true;
+    this.strengthInput.max = "100"; this.strengthInput.step = "1"; this.strengthInput.value = String(this.quantizeStrength*100);
+    strengthLabel.appendChild(this.strengthInput); editor.appendChild(strengthLabel);
+    this.tripletInput = el("input"); this.tripletInput.type = "checkbox";
+    this.tripletInput.checked = this.quantizeTriplet;
+    var tripletLabel = el("label", "", strings.quantize_triplet);
+    tripletLabel.appendChild(this.tripletInput); editor.appendChild(tripletLabel);
+    this.autoGridInput = el("input"); this.autoGridInput.type = "checkbox";
+    this.autoGridInput.checked = this.quantizeAuto;
+    var autoLabel = el("label", "", strings.quantize_auto);
+    autoLabel.appendChild(this.autoGridInput); editor.appendChild(autoLabel);
+    this.buildTimingControls(editor);
 
     var instrumentLabel = el("label", "", strings.editor_instrument);
     this.instrumentSelect = el("select");
@@ -1728,7 +1839,8 @@ MUSCRIPTOR_RESULT_JS = r"""
     };
     bpmLabel.appendChild(this.bpmInput);
     this.tempoBar.appendChild(el("span", "msr-detected-tempo",
-      strings.tempo_detected.replace("{bpm}", Number(this.m.referenceBpm).toFixed(1))));
+      (this.m.gridCorrected ? strings.timing_reference : strings.tempo_detected)
+        .replace("{bpm}", Number(this.m.referenceBpm).toFixed(1))));
     this.tempoBar.appendChild(bpmLabel);
     var rateLabel = el("label", "", strings.playback_speed_label);
     this.rateInput = el("input");
@@ -1801,7 +1913,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       });
     }
   };
-  ResultSession.prototype.gridSeconds = function () {
+  ResultSession.prototype.gridSeconds = function (atSeconds, trackIndex, steps) {
     var referenceBpm = Number(this.m.referenceBpm);
     if (!Number.isFinite(referenceBpm) || referenceBpm <= 0) {
       throw new Error("Cannot derive MIDI editor grid from reference BPM " + referenceBpm);
@@ -1810,11 +1922,114 @@ MUSCRIPTOR_RESULT_JS = r"""
     if (!match || this.m.quantizeGrids.indexOf(this.quantizeGrid) < 0) {
       throw new Error("Unsupported MIDI quantization grid: " + this.quantizeGrid);
     }
-    return 60 / referenceBpm * 4 / Number(match[1]);
+    var step = (steps === undefined ? 1 : steps) * 4 / Number(match[1]) * (this.tripletInput && this.tripletInput.checked ? 2/3 : 1);
+    if (Number.isFinite(atSeconds)) {
+      var timeline = this.timelineFor(trackIndex);
+      var beat = secondsToTick(atSeconds, timeline.sections, timeline.division) / timeline.division;
+      return tickToSeconds((beat + step) * timeline.division, timeline.sections, timeline.division) - atSeconds;
+    }
+    return 60 / referenceBpm * step;
+  };
+  ResultSession.prototype.timelineFor = function (trackIndex) {
+    var tracks = this.m.timeline && this.m.timeline.tracks;
+    if (tracks && tracks.length) {
+      var timeline = tracks[Math.min(trackIndex || 0, tracks.length - 1)];
+      return { division:timeline.division, sections:timeline.sections.map(function (s) {
+        return {tick:s[0], seconds:s[1], tempo:s[2]};
+      }) };
+    }
+    return {division:480, sections:[{tick:0, seconds:0, tempo:60000000/this.m.referenceBpm}]};
+  };
+  ResultSession.prototype.buildTimingControls = function (editor) {
+    var self = this, strings = this.m.strings;
+    var details = el("details", "msr-timing-tools");
+    details.appendChild(el("summary", "", strings.timing_tools));
+    details.appendChild(el("p", "", strings.timing_notice));
+    var form = el("div", "msr-command-group"), inputs = {};
+    function field(key, min, max, value, step) {
+      var label = el("label", "", strings[key]), input = el("input");
+      input.type = "number"; input.min = String(min); input.max = String(max);
+      input.step = String(step || 1); input.value = value === null ? "" : String(value);
+      input.placeholder = strings.timing_keep; input.dataset.timing = key;
+      label.appendChild(input); form.appendChild(label); inputs[key] = input;
+    }
+    field("timing_bpm", 4, 400, null, .001);
+    field("timing_meter", 1, 255, null);
+    var unit = el("select"); [1,2,4,8,16,32].forEach(function (n) {
+      var option = el("option", "", "/" + n); option.value = String(n); unit.appendChild(option);
+    }); unit.value = "4"; form.appendChild(unit);
+    field("timing_first_downbeat", 0, 14400, null, .001);
+    var scaleLabel = el("label", "", strings.timing_beatscale), scale = el("select");
+    [.25,.5,1,2,4].forEach(function (n) {var option = el("option", "", n + "×"); option.value=String(n); scale.appendChild(option);});
+    scale.value="1"; scaleLabel.appendChild(scale); form.appendChild(scaleLabel);
+    field("timing_fill_gaps", 0, 4, 0, .125);
+    function check(key) {
+      var label=el("label","",strings[key]), input=el("input"); input.type="checkbox";
+      input.dataset.timing=key; label.appendChild(input); form.appendChild(label); return input;
+    }
+    var trim=check("timing_trim"), smooth=check("timing_smooth");
+    smooth.title = strings.timing_smooth_help;
+    var apply=button(strings.timing_apply); apply.disabled = !this.m.previewApi || !this.m.previewToken;
+    apply.onclick=function () {
+      if (Array.from(form.querySelectorAll("input")).some(function (input) {return !input.reportValidity();})) return;
+      var first=inputs.timing_first_downbeat.value, bpm=inputs.timing_bpm.value, meter=inputs.timing_meter.value;
+      self.applyTimingCorrection({bpm:bpm === "" ? null:Number(bpm), beats_per_bar:meter === "" ? null:Number(meter),
+        beat_unit:Number(unit.value), first_downbeat:first === "" ? null:Number(first), beat_scale:Number(scale.value),
+        fill_gaps:Number(inputs.timing_fill_gaps.value), trim_leading_bars:trim.checked, smooth_tempo:smooth.checked}, apply);
+    };
+    form.appendChild(apply); details.appendChild(form); editor.appendChild(details);
+  };
+  ResultSession.prototype.applyTimingCorrection = function (options, applyButton) {
+    var self=this;
+    try {this.commitBpm();} catch(error) {
+      this.status.textContent=this.m.strings.timing_failed.replace("{error}",this.errorText(error)); return;
+    }
+    var rate=this.playbackRate(); this.pause(); applyButton.disabled=true;
+    fetch(this.m.previewApi, {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({data:[JSON.stringify({token:this.m.previewToken, operation:"timing", options:options, project_rate:rate,
+        notes:this.m.notes, soundfont:this.soundfontSelection || null})]})})
+      .then(function (response) {return response.text().then(function (text) {
+        if (!response.ok) throw new Error("HTTP " + response.status + " " + text);
+        var result=JSON.parse(text); if (!result.data || result.data.length !== 1) throw new Error("Edited preview endpoint returned no result");
+        return typeof result.data[0] === "string" ? JSON.parse(result.data[0]) : result.data[0];
+      });}).then(function (result) {
+        if (self.disposed) return;
+        var manifest=Object.assign({},self.m,result);
+        manifest.gridCorrected=true;
+        manifest.activeQuantizeGrid=self.quantizeGrid;
+        manifest.quantizeStrength=Number(self.strengthInput.value)/100;
+        manifest.quantizeTriplet=self.tripletInput.checked;
+        manifest.quantizeAuto=self.autoGridInput.checked;
+        manifest.targetBpm=result.referenceBpm*rate;
+        manifest.downloads=Object.assign({},self.m.downloads,{midi:result.midiUrl,transcription:result.transcriptionUrl,stereo:result.stereoUrl});
+        manifest.instruments=self.m.instruments.map(function (instrument) {return Object.assign({},instrument,
+          {url:result.instrumentUrls[instrument.id] || "", detected:!!result.instrumentUrls[instrument.id]});});
+        var root=self.root; self.dispose();
+        root.querySelector(".msr-host").replaceChildren();
+        root.querySelector(".msr-manifest").textContent=JSON.stringify(manifest);
+        var next=new ResultSession(root);
+        next.mix=self.mix; next.stereo=self.stereo; next.follow=self.follow; next.pps=self.pps;
+        next.muted=new Set(self.muted); next.solo=new Set(self.solo);
+        sessions.push(next); next.init();
+        next.soundfontSelection=self.soundfontSelection;
+        if (self.soundfontPicker && next.soundfontPicker) {
+          var picker=next.soundfontPicker;
+          picker.libraries=new Map(self.soundfontPicker.libraries);
+          picker.assignments=new Map(self.soundfontPicker.assignments);
+          picker.libraries.forEach(function (library) {
+            var option=el("option","",library.name); option.value=library.id; picker.library.appendChild(option);
+          });
+          picker.library.value=self.soundfontPicker.library.value; picker.refresh();
+        }
+      }).catch(function (error) {
+        if (!self.disposed) self.status.textContent=self.m.strings.timing_failed.replace("{error}",self.errorText(error));
+      }).finally(function () {if (!self.disposed) applyButton.disabled=false;});
   };
   ResultSession.prototype.snapTime = function (value) {
-    var grid = this.gridSeconds();
-    return Math.round(Math.max(0, value) / grid) * grid;
+    var timeline=this.timelineFor(0), step=4/Number(this.quantizeGrid.split("/")[1]);
+    if (this.tripletInput && this.tripletInput.checked) step*=2/3;
+    var beat=secondsToTick(Math.max(0,value),timeline.sections,timeline.division)/timeline.division;
+    return tickToSeconds(roundGridStep(beat/step)*step*timeline.division,timeline.sections,timeline.division);
   };
   ResultSession.prototype.stopSources = function () {
     this.sources.forEach(function (source) {
@@ -2085,41 +2300,49 @@ MUSCRIPTOR_RESULT_JS = r"""
     var numerator = this.m.timeSignature[0], denominator = this.m.timeSignature[1];
     var quarterSeconds = 60 / referenceBpm;
     var subdivisionSeconds = this.gridSeconds();
+    if (this.tripletInput && this.tripletInput.checked) subdivisionSeconds*=2/3;
+    var timeline=this.timelineFor(0);
+    var scoreStart=secondsToTick(start,timeline.sections,timeline.division)/timeline.division*quarterSeconds;
+    var scoreEnd=secondsToTick(end,timeline.sections,timeline.division)/timeline.division*quarterSeconds;
+    function gridX(scoreSeconds) {
+      var seconds=tickToSeconds(scoreSeconds/quarterSeconds*timeline.division,timeline.sections,timeline.division);
+      return LEFT+seconds*self.pps-scrollX;
+    }
     var beatSeconds = quarterSeconds * 4 / denominator;
     var barSeconds = beatSeconds * numerator;
-    var firstBar = Math.max(0, Math.floor(start / barSeconds));
-    var lastBar = Math.ceil(end / barSeconds) + 1;
+    var firstBar = Math.max(0, Math.floor(scoreStart / barSeconds));
+    var lastBar = Math.ceil(scoreEnd / barSeconds) + 1;
     for (var barIndex = firstBar; barIndex <= lastBar; barIndex++) {
       var barTime = barIndex * barSeconds;
-      var barX = LEFT + barTime * this.pps - scrollX;
+      var barX = gridX(barTime);
       if (barIndex % 2 === 1) {
-        var barRight = LEFT + (barTime + barSeconds) * this.pps - scrollX;
+        var barRight = gridX(barTime + barSeconds);
         painter.fillStyle = "rgba(255,255,255,0.03)";
         painter.fillRect(barX, 0, Math.max(0, barRight - barX), HEIGHT);
       }
     }
     var subdivisionStride = 1;
     while (subdivisionSeconds * this.pps * subdivisionStride < 5) subdivisionStride *= 2;
-    var firstSubdivision = Math.max(0, Math.floor(start / subdivisionSeconds) - 1);
-    var lastSubdivision = Math.ceil(end / subdivisionSeconds) + 1;
+    var firstSubdivision = Math.max(0, Math.floor(scoreStart / subdivisionSeconds) - 1);
+    var lastSubdivision = Math.ceil(scoreEnd / subdivisionSeconds) + 1;
     painter.strokeStyle = "#263d59";
     painter.lineWidth = 1;
     for (var subdivisionIndex = firstSubdivision;
          subdivisionIndex <= lastSubdivision;
          subdivisionIndex += subdivisionStride) {
-      var subdivisionX = LEFT + subdivisionIndex * subdivisionSeconds * this.pps - scrollX;
+      var subdivisionX = gridX(subdivisionIndex * subdivisionSeconds);
       painter.beginPath();
       painter.moveTo(subdivisionX, 0);
       painter.lineTo(subdivisionX, HEIGHT);
       painter.stroke();
     }
-    var firstBeat = Math.max(0, Math.floor(start / beatSeconds) - 1);
-    var lastBeat = Math.ceil(end / beatSeconds) + 1;
+    var firstBeat = Math.max(0, Math.floor(scoreStart / beatSeconds) - 1);
+    var lastBeat = Math.ceil(scoreEnd / beatSeconds) + 1;
     var labelBeats = beatSeconds * this.pps >= 38;
     for (var beatIndex = firstBeat; beatIndex <= lastBeat; beatIndex++) {
       var beatInBar = beatIndex % numerator;
       if (beatInBar === 0) continue;
-      var beatX = LEFT + beatIndex * beatSeconds * this.pps - scrollX;
+      var beatX = gridX(beatIndex * beatSeconds);
       painter.strokeStyle = "#36506f";
       painter.beginPath();
       painter.moveTo(beatX, 0);
@@ -2132,7 +2355,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       }
     }
     for (var downbeatIndex = firstBar; downbeatIndex <= lastBar; downbeatIndex++) {
-      var downbeatX = LEFT + downbeatIndex * barSeconds * this.pps - scrollX;
+      var downbeatX = gridX(downbeatIndex * barSeconds);
       painter.strokeStyle = "#78aee8";
       painter.lineWidth = 1.5;
       painter.beginPath();
@@ -2390,7 +2613,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       delta = nextStart - origin.start;
       var earliest = Math.min.apply(null, this.drag.notes.map(function (item) { return item.note.start; }));
       var shortest = Math.min.apply(null, this.drag.notes.map(function (item) {
-        return item.note.end - item.note.start - 0.01;
+        return Math.max(0, item.note.end - item.note.start - 0.01);
       }));
       delta = clamp(delta, -earliest, shortest);
       this.drag.notes.forEach(function (item) {
@@ -2403,7 +2626,7 @@ MUSCRIPTOR_RESULT_JS = r"""
       if (!event.altKey) nextEnd = this.snapTime(nextEnd);
       delta = nextEnd - origin.end;
       var shortestDuration = Math.min.apply(null, this.drag.notes.map(function (item) {
-        return item.note.end - item.note.start - 0.01;
+        return Math.max(0, item.note.end - item.note.start - 0.01);
       }));
       var latest = Math.max.apply(null, this.drag.notes.map(function (item) { return item.note.end; }));
       delta = clamp(delta, -shortestDuration, this.m.duration - latest);
@@ -2588,20 +2811,45 @@ MUSCRIPTOR_RESULT_JS = r"""
   };
   ResultSession.prototype.quantizeSelected = function () {
     if (!this.editing) return;
+    if (this.strengthInput && !this.strengthInput.reportValidity()) return;
     var indices = this.quantizeScope === "all_tracks"
       ? this.m.notes.map(function (_note, index) { return index; })
       : Array.from(this.selectedIndices);
     if (!indices.length) return;
     var before = cloneNotes(this.m.notes), grid = this.gridSeconds();
+    var strength = this.strengthInput ? Number(this.strengthInput.value)/100 : 1;
+    if (strength === 0) return;
+    var triplet = this.tripletInput ? this.tripletInput.checked : false;
+    if (!Number.isFinite(strength) || strength < 0 || strength > 1) throw new Error("Invalid MIDI quantization strength");
+    var chosenGrid=this.quantizeGrid;
+    if (this.autoGridInput && this.autoGridInput.checked) {
+      var best=Infinity, bestGrid=chosenGrid;
+      this.m.quantizeGrids.some(function (candidate) {
+        var step=4/Number(candidate.split("/")[1])*(triplet ? 2/3:1), total=0, count=0;
+        indices.forEach(function (index) {
+          var note=this.m.notes[index], t=this.timelineFor(note.track_index);
+          [note.start,note.end].forEach(function (seconds) {
+            var value=secondsToTick(seconds,t.sections,t.division)/t.division/step;
+            total+=Math.abs(value-roundGridStep(value)); count++;
+          });
+        },this);
+        var score=total/count; if (score < best) {best=score;bestGrid=candidate;}
+        if (score <= .08) {bestGrid=candidate;return true;} return false;
+      },this);
+      chosenGrid=bestGrid;
+    }
+    var beatStep=4/Number(chosenGrid.split("/")[1])*(triplet ? 2/3:1);
     indices.forEach(function (index) {
       var note = this.m.notes[index], duration = note.end - note.start;
-      var quantizedDuration = Math.max(grid, roundGridStep(duration / grid) * grid);
-      quantizedDuration = Math.min(this.m.duration, quantizedDuration);
-      var start = clamp(
-        roundGridStep(note.start / grid) * grid,
-        0,
-        this.m.duration - quantizedDuration
-      );
+      var timeline=this.timelineFor(note.track_index);
+      var onset=secondsToTick(note.start,timeline.sections,timeline.division)/timeline.division;
+      var offset=secondsToTick(note.end,timeline.sections,timeline.division)/timeline.division;
+      var snapped=Math.max(0,roundGridStep(onset/beatStep)*beatStep);
+      var snappedEnd=snapped+Math.max(beatStep,roundGridStep((offset-onset)/beatStep)*beatStep);
+      var start=tickToSeconds((onset+strength*(snapped-onset))*timeline.division,timeline.sections,timeline.division);
+      var end=tickToSeconds((offset+strength*(snappedEnd-offset))*timeline.division,timeline.sections,timeline.division);
+      var quantizedDuration=Math.min(this.m.duration,Math.max(.000001,end-start));
+      start=clamp(start,0,this.m.duration-quantizedDuration);
       this.m.notes[index] = Object.assign({}, note, {
         start: start,
         end: start + quantizedDuration
@@ -2614,7 +2862,7 @@ MUSCRIPTOR_RESULT_JS = r"""
     var self = this, before = cloneNotes(this.m.notes);
     var selected = Array.from(this.selectedIndices).map(function (index) { return self.m.notes[index]; });
     if (command === "move_time") {
-      var delta = this.gridSeconds() * amount;
+      var delta = this.gridSeconds(selected[0].start, selected[0].track_index, amount);
       delta = clamp(
         delta,
         -Math.min.apply(null, selected.map(function (note) { return note.start; })),
@@ -2627,10 +2875,12 @@ MUSCRIPTOR_RESULT_JS = r"""
         });
       }, this);
     } else if (command === "resize_time") {
-      var durationDelta = this.gridSeconds() * amount;
+      var durationDelta = this.gridSeconds(selected[0].end, selected[0].track_index, amount);
       durationDelta = clamp(
         durationDelta,
-        -Math.min.apply(null, selected.map(function (note) { return note.end - note.start - 0.01; })),
+        -Math.min.apply(null, selected.map(function (note) {
+          return Math.max(0,note.end-note.start-0.01);
+        })),
         this.m.duration - Math.max.apply(null, selected.map(function (note) { return note.end; }))
       );
       this.selectedIndices.forEach(function (index) {
@@ -3089,7 +3339,10 @@ MUSCRIPTOR_RESULT_JS = r"""
             data: [JSON.stringify({
               token: self.m.sheetToken,
               midi_base64: bytesToBase64(editedMidi),
-              quantize_grid: self.quantizeGrid
+              quantize_grid: self.quantizeGrid,
+              quantize_strength:self.strengthInput ? Number(self.strengthInput.value)/100 : 1,
+              quantize_triplet:!!(self.tripletInput && self.tripletInput.checked),
+              quantize_auto:!!(self.autoGridInput && self.autoGridInput.checked)
             })]
           })
         });

@@ -9,6 +9,7 @@
 - 空格播放/暂停，Shift+空格或停止按钮停止并回到零点，同时重置进度条、播放头和水平视图；文本、数值输入和下拉框保留键盘原行为。快捷键仅作用于当前获得焦点的结果编辑器。
 - 本地桌面和弦轨使用与 TelkNet 默认工具相同的 **ChordMini BTC**，固定官方源码 `aa6e3a8d7b017f082fd2aaff9329d5c26af49c03` 和 `btc_model_best.pth`。原音按原采样率、原声道解码为 PCM32，再交给官方特征提取与推理；170 类完整标签涵盖 14 种和弦性质及 N/X，无和弦/不确定区间不试听。保留原生边界，只在小节处分割显示，MuScriptor 开头补齐偏移同步到和弦。小节、和弦、音符共用参考 BPM 和拍号；工程变速不会导致三者漂移，编辑 MIDI 不会改写原音和弦。后台分析可取消并与转写共用 GPU 锁；失败显示原因、点击重试，不替换为 MIDI 估计或 Omnizart。
 - 点击和弦暂停整曲并通过当前 SoundFont 单独试听。取消、快速连续点击、停止和关闭编辑器会取消旧请求，防止较慢的旧试听覆盖新选择。
+- FLAC 兼容处理：对 STREAMINFO 声明帧数的原生 FLAC，使用现有 libsndfile 无损读取整数样本，保持原采样率、声道、精度和完整时长，核对声明帧数及可用的样本 MD5，再送入官方前端。支持尾部 ID3v1 / APEv2 标签和前置 ID3v2（含页脚）的文件，不修改原文件。无损数据完整时，尾部标签不再被严格 FFmpeg 误当作坏音频帧；真正的坏帧、截断和校验不一致必须失败，不运行模型、不写成功缓存。MD5 全零表示文件未提供该可选校验，仍检查完整帧数；未声明帧数的 FLAC 和其他格式沿用严格 FFmpeg 解码。校验定义参照 [FLAC RFC 9639 §8.2](https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2)，读取方式参照 [python-soundfile 文档](https://python-soundfile.readthedocs.io/en/latest/#soundfile.SoundFile)。
 - 和弦栏上方的“和弦随曲播放”首次默认关闭，0～200% 独立音量默认 100%，并以固定应用名的用户级 INI 记住两项设置。关闭随播仍可点击试听；0% 静音两种试听，静音时点击和弦不会暂停歌曲。200% 提供实际音频增益，点击试听与随播采用相同的响度校准和音量标尺。控制条在窄窗口自动换行，支持键盘调整、中英文切换和明确的准备/失败/重试状态。
 - `chord_audio` 从原始和弦区间和 MuScriptor 开头偏移生成一次完整 SoundFont 音轨，保留长和弦和转位，N/X 区间不发声；显示用小节分块不进入发声调度。`ChordMonitor` 在用户启用时后台准备音轨，用代次检查丢弃过期结果；静音/关闭随播取消未完成请求，换音色清除旧音轨，失败需要明确重试。已完成音轨在当前结果内复用，切换音量无需重新合成。
 - 和弦 PCM 接入 `SynchronizedPcmPlayer`，与原音、MIDI 和声部混音共用帧坐标及一个音频输出。暂停、跳转、BPM、倍速和从中途播放因此统一生效。音量最多用 20 ms 平滑过渡；叠加时采用双声道联动的 10 ms 前视峰值保护（PCM 已在内存中，无需额外播放延迟），避免高音量硬削波。关闭和弦且过渡结束后，原音/MIDI 混音路径保持原始样本。此设置只控制监听，不更改识别和弦、转写 MIDI、编辑历史或任何导出。
@@ -29,7 +30,8 @@ flowchart LR
     Editor --> Export[midi_editor 校验 → 合并 MIDI / 声部 ZIP]
     Export --> Download[桌面 Qt 下载动作 / Desktop Qt download action]
     Download --> Failure[失败记录调用栈 + 显示原因 + 保留结果以便重试 / Log failure, report cause and allow retry]
-    Audio[原始音频 / 所选 stem WAV] --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
+    Audio[原始音频 / 所选 stem WAV] --> Decode[FLAC 无损 PCM32 + 帧数 / MD5 校验<br/>FLAC lossless PCM32 + frame count / MD5 verification<br/>其他格式严格 FFmpeg / Strict FFmpeg for other formats]
+    Decode --> Worker[GPU 锁 → 可取消 ChordMini BTC 子进程]
     Worker --> Native[原音秒坐标和弦 + 固定模型身份缓存]
     Native --> Chords[时间偏移与小节显示 → 彩色和弦与完整避让标签]
     Native --> Monitor[原始区间 + 时间偏移 → 可取消 FluidSynth 音轨 → 响度校准]
@@ -53,6 +55,8 @@ New results start with all instruments audible and visible. Solo is additive; ma
 Space plays/pauses; Shift+Space or Stop and rewind returns transport and horizontal view to zero. Text, numeric and select inputs retain normal keyboard behavior. Only the focused result editor receives transport shortcuts. The desktop uses TelkNet’s default ChordMini BTC recipe on source audio, with the exact pinned source and BTC checkpoint. Native-rate, original-channel PCM32 decoding precedes the official feature frontend. All 170 classes, including seventh/suspended qualities and N/X, retain their original boundaries. Bar splits affect display only; MuScriptor lead-in offsets and project tempo changes remain aligned. MIDI edits do not alter source-audio chords. Background inference shares the accelerator lock, supports cancellation and reports failures with click-to-retry; it never falls back to MIDI templates or Omnizart. Chord recognition remains a model prediction, not a guarantee of score accuracy.
 
 Space and Colab share the browser mixer/export/transport implementation. Chord display is desktop-only as requested. Standalone Web/API, Docker and portable Web offer instrument ZIP downloads for both jobs and restored project results, preserving the source tempo map and event ticks. They have no MIDI editor/solo state, so editor-specific shortcuts and audible-group exports do not apply. Those browser surfaces retain their existing SoundFont/FluidSynth dependencies. Only desktop chord analysis requires the additional pinned ChordMini BTC resources.
+
+For native FLAC with a declared STREAMINFO frame count, the existing libsndfile decoder reads lossless integer samples at the original rate, channel count and precision, then verifies the full frame count and available sample MD5 before the official frontend runs. Trailing ID3v1 / APEv2 tags and leading ID3v2 tags, including footers, are supported without modifying the source. Complete samples no longer fail because strict FFmpeg interprets a trailing tag as an audio frame. Actual frame damage, truncation and checksum mismatches fail before model inference or success-cache publication. An all-zero MD5 denotes an omitted optional checksum; frame-count validation still applies. FLAC with an unknown declared length and other formats retain strict FFmpeg decoding. See [FLAC RFC 9639 §8.2](https://www.rfc-editor.org/rfc/rfc9639.html#section-8.2) and the [python-soundfile API](https://python-soundfile.readthedocs.io/en/latest/#soundfile.SoundFile).
 
 Desktop chord controls provide **Chords follow song** (initially off) and **0–200% chord volume** (initially 100%), persisted in a user INI under a stable application name. Follow off still allows click auditions; 0% mutes both, and clicking while muted does not pause the song. 200% applies real audio gain, using the same loudness calibration and volume scale for accompaniment and click auditions. The controls wrap in narrow windows, support keyboard input and both locales, and report preparation failures with an explicit retry.
 
@@ -118,7 +122,7 @@ Desktop, Space and Colab highlight MIDI notes at the current playhead position, 
 - 适用吉他/贝斯的 `_tab.pdf` 指法谱；
 - `sheet_music_manifest.json`：源文件校验值、排版网格、音符数和 MuseScore 版本。
 
-排版前仅量化私有 MIDI 副本。结果编辑器使用当前网格，默认 `1/32`；独立 Web 默认 `1/32`，API 可传 `quantize_grid`。源 MIDI 不被覆盖。MuseScore 不可用、没有真实输出、分谱失败或任务取消时不会发布成功结果。
+排版前仅量化私有 MIDI 副本。结果编辑器与独立 Web 使用当前网格，默认 `1/32`；量化强度、三连音和自动网格设置同步用于乐谱副本，HTTP 入口可传 `quantize_grid`、`quantize_strength`、`quantize_triplet`、`quantize_auto`，各组设置独立缓存。源 MIDI 不被覆盖。MuseScore 不可用、没有真实输出、分谱失败或任务取消时不会发布成功结果。速度图、无变速纠错、休止填补与空小节裁切的操作和架构见 [MIDI 时间轴与导出增强](midi-timing-export.md)。
 
 乐谱是对当前 MIDI 的自动排版。它不保证修正模型识别错误，也不能保证所有自由节奏、复杂复调或指法选择都符合人工制谱要求；可在 MuseScore 中继续编辑 MusicXML。
 
@@ -129,5 +133,7 @@ Import SF2/SF3 files in the MIDI result's **SoundFont and instrument sounds** pa
 Each file is limited to 1 GiB. One imported library is active per result, with individual instrument assignments. Drum presets use bank 128. Missing presets, changed files, malformed banks and synthesis failures are explicit errors. Asynchronous Type 2 MIDI and SysEx sound-source control are unsupported for custom rendering. SoundFonts do not extend model recognition, alter the exported MIDI instruments, or become embedded in MIDI or sheet music.
 
 **Sheet music (MusicXML / PDF)** exports a ZIP containing a MIDI engraving copy, MusicXML, full-score PDF, part PDFs, applicable guitar/bass tablature, and an integrity manifest. The implementation follows the official MuScriptor MuseScore workflow. Only a private copy is quantized for engraving; the original MIDI is preserved. Automatic engraving may still require human review for transcription accuracy, complex rhythm, voicing and fingering.
+
+The current grid, strength, triplet and automatic-grid settings also apply to the engraving copy, with separate cache identities. HTTP job and project-result endpoints accept all four settings. See [MIDI timing and export enhancements](midi-timing-export.md) for adaptive maps, corrections that retain performance speed, gap filling, leading-bar trimming and the shared architecture.
 
 For deployment, the same shared modules serve desktop, Space, Colab, standalone API, Docker and portable launchers. Existing FluidSynth and MuseScore runtime requirements remain in effect. Desktop chord analysis additionally requires the pinned ChordMini BTC resources; run `python download_chordmini_model.py` or `python download_sota_models.py`. Full portable App builds include and verify these resources. Space/Colab and standalone Web/API/Docker do not expose the desktop chord lane or run its model; their existing shared exports and playback paths remain covered separately.

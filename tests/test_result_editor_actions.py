@@ -218,6 +218,25 @@ def test_noop_snapshot_keeps_paint_cache_and_selection(editor, monkeypatch):
     assert calls == [] and renders == []
 
 
+def test_tempo_boundary_nudges_and_sub_ten_ms_triplets_keep_their_length(editor):
+    from src.core.midi_timing import MidiTimeline
+
+    w, _ = editor
+    note = MuscriptorRollNote("acoustic_piano", 60, 90, 4.0, 4.005, 0, False, 0, 0)
+    w._begin_editor_session((note,), 8)
+    w.roll.set_notes((note,), duration=8, selected_indices=(0,))
+    w.roll._musical_timeline = MidiTimeline(480, ((0, 0.0, 500000), (3840, 4.0, 1000000)))
+    w.quantize_options.triplet.setChecked(True)
+    click(w.edit_toggle)
+    assert w._editor_grid_seconds(4.0, -1) == pytest.approx(-1 / 24)
+    assert w._editor_grid_seconds(4.0, 1) == pytest.approx(1 / 12)
+    w._transform_selected_editor_notes("resize_time", -1)
+    assert w._edited_notes[0] == note
+    w._transform_selected_editor_notes("move_time", -1)
+    assert w._edited_notes[0].start == pytest.approx(4 - 1 / 24)
+    assert w._edited_notes[0].end - w._edited_notes[0].start == pytest.approx(0.005)
+
+
 def test_result_summary_tracks_current_project_bpm_and_malformed_context_is_rejected(
     tmp_path, monkeypatch
 ):

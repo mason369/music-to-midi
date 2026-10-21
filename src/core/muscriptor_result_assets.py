@@ -1042,7 +1042,7 @@ def _write_bar_aligned_reference_audio(
     """Prepend the same MuScriptor delay carried by the final MIDI marker."""
 
     offset = float(offset_seconds)
-    if not math.isfinite(offset) or offset < 0.0:
+    if not math.isfinite(offset):
         raise ValueError(f"Invalid MuScriptor bar-alignment offset: {offset_seconds!r}")
     if offset == 0.0:
         return source
@@ -1051,13 +1051,19 @@ def _write_bar_aligned_reference_audio(
     import soundfile as sf
 
     padding_frames = int(round(offset * _SAMPLE_RATE))
-    if padding_frames <= 0:
+    if padding_frames == 0:
         raise RuntimeError(
             "Positive MuScriptor bar offset rounded to zero audio frames: "
             f"offset={offset}, sample_rate={_SAMPLE_RATE}"
         )
     original = _load_reference_mono_44k(source)
-    aligned = np.pad(original, (padding_frames, 0))
+    if padding_frames < 0 and -padding_frames >= len(original):
+        raise ValueError("MIDI leading-bar trim would remove the entire source audio")
+    aligned = (
+        np.pad(original, (padding_frames, 0))
+        if padding_frames > 0
+        else original[-padding_frames:]
+    )
     destination = output_dir / "bar-aligned-original.wav"
     sf.write(destination, aligned, _SAMPLE_RATE, subtype="PCM_16")
     info = sf.info(str(destination))

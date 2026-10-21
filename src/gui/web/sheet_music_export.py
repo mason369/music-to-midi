@@ -154,7 +154,21 @@ class SheetMusicExportRegistry:
         if quantize_grid not in MIDI_QUANTIZE_GRIDS:
             raise ValueError(f"Unsupported sheet-music quantization grid: {quantize_grid!r}")
         midi_bytes = self._decode_midi(payload.get("midi_base64"))
-        digest = hashlib.sha256(midi_bytes).hexdigest()
+        quantization_options = dict(
+            quantize_strength=float(payload.get("quantize_strength", 1)),
+            quantize_triplet=bool(payload.get("quantize_triplet", False)),
+            quantize_auto=bool(payload.get("quantize_auto", False)),
+        )
+        defaults = dict(quantize_strength=1.0, quantize_triplet=False, quantize_auto=False)
+        quantization_options = {
+            key: value for key, value in quantization_options.items() if value != defaults[key]
+        }
+        identity = (
+            json.dumps(quantization_options, sort_keys=True).encode("utf-8")
+            if quantization_options
+            else b""
+        )
+        digest = hashlib.sha256(midi_bytes + identity).hexdigest()
         cache_key = (token, digest, quantize_grid)
         with self._lock:
             cached = self._cache.get(cache_key)
@@ -182,6 +196,7 @@ class SheetMusicExportRegistry:
                 midi_path,
                 archive_path,
                 quantize_grid=quantize_grid,
+                **quantization_options,
             )
             filename_stem = "".join(
                 character if character.isalnum() or character in {"-", "_"} else "_"

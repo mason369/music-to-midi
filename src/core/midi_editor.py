@@ -22,7 +22,7 @@ from src.utils.midi_output import (
     unique_midi_temp_path,
 )
 
-_MIN_NOTE_SECONDS = 0.01
+_MIN_NOTE_SECONDS = 0.000001
 
 
 def _validated_bpm(value: float, label: str) -> float:
@@ -290,6 +290,26 @@ def export_edited_midi(
     export_bpm = _validated_bpm(target_bpm, "target")
     edited_notes = validate_editable_notes(notes, track_count=len(source_midi.tracks))
     tempo_us = mido.bpm2tempo(export_bpm)
+    from src.core.midi_tempo import _bar_offset_value
+    from src.core.midi_timing import PROJECT_RATE_MARKER, MidiTimeline, reference_timelines
+
+    timelines = reference_timelines(source_midi, reference)
+    rate = export_bpm / reference
+    releases = {}
+    for track_index, track in enumerate(source_midi.tracks):
+        active, tick = defaultdict(list), 0
+        for message in track:
+            tick += message.time
+            if message.type == "note_on" and message.velocity > 0:
+                active[(message.channel, message.note)].append(tick)
+            elif (
+                message.type in {"note_on", "note_off"}
+                and active[(message.channel, message.note)]
+            ):
+                start = active[(message.channel, message.note)].pop(0)
+                releases[(track_index, message.channel, message.note, start, tick)] = (
+                    message.velocity
+                )
 
     output = mido.MidiFile(
         type=source_midi.type,
@@ -301,12 +321,10 @@ def export_edited_midi(
     sequence = 0
     prepared_notes: list[tuple[int, MuscriptorRollNote, int, int, int, int]] = []
     for note_index, note in enumerate(edited_notes):
-        start_tick, end_tick = _note_tick_bounds(
-            note,
-            ticks_per_beat=source_midi.ticks_per_beat,
-            timeline_bpm=reference,
-        )
         track_index = int(note.track_index)
+        timeline = timelines[track_index]
+        start_tick = max(0, round(timeline.tick_at_seconds(note.start)))
+        end_tick = max(start_tick + 1, round(timeline.tick_at_seconds(note.end)))
         channel = 9 if note.is_drum else int(note.channel)
         prepared_notes.append((note_index, note, start_tick, end_tick, track_index, channel))
 
@@ -333,6 +351,13 @@ def export_edited_midi(
             # tick; converting through the source file's target-tempo seconds
             # here would apply the BPM ratio a second time.
             target_tick = absolute_tick
+            offset = _bar_offset_value(message) if message.is_meta else None
+            if offset is not None:
+                original_tempo = MidiTimeline.from_midi(source_midi, track_index).sections[0][2]
+                scale = timelines[track_index].sections[0][2] / rate / original_tempo
+                message = message.copy(text=f"muscriptor:bar_offset={offset * scale:.4f}")
+            if message.type == "marker" and message.text.startswith(PROJECT_RATE_MARKER):
+                message = message.copy(text=f"{PROJECT_RATE_MARKER}{rate:.12g}")
             retained_copies = [message.copy(time=0)]
             if not message.is_meta and hasattr(message, "channel"):
                 retained_copies.extend(
@@ -345,10 +370,25 @@ def export_edited_midi(
                 expected_retained[track_index].append((_message_bytes(retained), target_tick))
 
     tempo_tracks = range(len(source_midi.tracks)) if source_midi.type == 2 else (0,)
+    expected_tempos = []
     for track_index in tempo_tracks:
-        track_events[track_index].append(
-            (0, -100, 0, mido.MetaMessage("set_tempo", tempo=tempo_us, time=0))
+        has_rate = any(
+            m.type == "marker" and m.text.startswith(PROJECT_RATE_MARKER)
+            for track in source_midi.tracks
+            for m in track
         )
+        if not has_rate and len({s[2] for s in timelines[track_index].sections}) > 1:
+            marker = mido.MetaMessage("marker", text=f"{PROJECT_RATE_MARKER}{rate:.12g}")
+            track_events[track_index].append((0, -99, 0, marker))
+            expected_retained[track_index].insert(0, (_message_bytes(marker), 0))
+        for tempo_tick, _seconds, original_tempo in timelines[track_index].sections:
+            scaled_tempo = round(original_tempo / rate)
+            if not 1 <= scaled_tempo <= 0xFFFFFF:
+                raise ValueError("Edited MIDI tempo exceeds the SMF range")
+            track_events[track_index].append(
+                (tempo_tick, -100, 0, mido.MetaMessage("set_tempo", tempo=scaled_tempo, time=0))
+            )
+            expected_tempos.append(scaled_tempo)
 
     expected_notes: Counter[tuple[int, int, int, int, int, int, int, bool]] = Counter()
     for (
@@ -369,7 +409,9 @@ def export_edited_midi(
                     "note_off",
                     channel=channel,
                     note=int(note.pitch),
-                    velocity=0,
+                    velocity=releases.get(
+                        (track_index, _source_channel, int(note.pitch), start_tick, end_tick), 0
+                    ),
                     time=0,
                 ),
             )
@@ -470,10 +512,7 @@ def export_edited_midi(
             for message in track
             if message.type == "set_tempo"
         ]
-        expected_tempo_count = len(verified.tracks) if verified.type == 2 else 1
-        if len(published_tempos) != expected_tempo_count or any(
-            tempo != tempo_us for tempo in published_tempos
-        ):
+        if published_tempos != expected_tempos:
             raise RuntimeError(
                 "Edited MIDI tempo verification failed: "
                 f"path={temporary}, expected={tempo_us}, actual={published_tempos!r}"

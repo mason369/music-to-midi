@@ -134,6 +134,52 @@ def inference_options(mode: str = "smart") -> dict:
     }
 
 
+def test_sheet_quantization_options_have_separate_cached_artifacts(tmp_path, monkeypatch):
+    calls = []
+
+    def export(source, destination, **options):
+        calls.append(options)
+        Path(destination).write_bytes(b"PK\x03\x04notation contract fixture")
+
+    monkeypatch.setattr(jobs_module, "export_sheet_music_zip", export)
+    manager = JobManager(tmp_path, engine=FakeInferenceEngine())
+    try:
+        with TestClient(create_app(manager=manager)) as client:
+            created = post_audio(client)
+            job_id = created.json()["id"]
+            assert wait_for_terminal(manager, job_id)["status"] == "succeeded"
+            endpoint = f"/api/v1/jobs/{job_id}/sheet-music"
+            for strength in (0.5, 0.75, 0.5):
+                response = client.post(
+                    endpoint,
+                    params=dict(
+                        artifact_id="midi",
+                        quantize_grid="1/16",
+                        quantize_strength=strength,
+                        quantize_triplet=True,
+                        quantize_auto=True,
+                    ),
+                )
+                assert response.status_code == 200, response.text
+            assert len(calls) == 2
+            assert calls[0] == dict(
+                quantize_grid="1/16",
+                quantize_strength=0.5,
+                quantize_triplet=True,
+                quantize_auto=True,
+            )
+            sheets = [a for a in response.json()["artifacts"] if a["kind"] == "sheet_music"]
+            assert len(sheets) == 2
+            for invalid in ("nan", "inf", "-1", "1.1"):
+                assert (
+                    client.post(endpoint, params={"quantize_strength": invalid}).status_code
+                    == 422
+                )
+            assert len(calls) == 2
+    finally:
+        manager.close()
+
+
 def wait_for_terminal(manager: JobManager, job_id: str, timeout: float = 5.0) -> dict:
     deadline = time.monotonic() + timeout
     snapshot = manager.snapshot(job_id)

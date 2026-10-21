@@ -129,6 +129,7 @@ class InferenceEngine:
         result: ProcessingResult,
         config: Config,
         midi_path: Path,
+        timing_result: dict | None = None,
     ) -> dict:
         backend = result.transcription_backend
         if not backend:
@@ -152,6 +153,62 @@ class InferenceEngine:
             quality_warnings.append("empty_midi")
         if int(result.total_notes) != total_notes:
             quality_warnings.append("note_count_corrected_from_file")
+        beat = cls._beat_payload(result)
+        if beat is not None and timing_result and timing_result.get("midi_export"):
+            from src.core.midi_timing import MidiTimeline
+
+            timeline = MidiTimeline.from_midi(midi)
+            signature = next(
+                (
+                    (m.numerator, m.denominator)
+                    for tr in midi.tracks
+                    for m in tr
+                    if m.type == "time_signature"
+                ),
+                None,
+            )
+            reference = timing_result["reference_bpm"]
+            target = timing_result["target_bpm"]
+            from src.core.midi_tempo import read_muscriptor_bar_offset_seconds
+            from src.core.midi_timing import reference_timelines
+
+            reference_timeline = reference_timelines(midi, reference)[0]
+            offset = (
+                read_muscriptor_bar_offset_seconds(midi)
+                * reference_timeline.sections[0][2]
+                / timeline.sections[0][2]
+            )
+            last_tick = max(sum(m.time for m in track) for track in midi.tracks)
+            beats = [
+                reference_timeline.seconds_at_tick(tick) - offset
+                for tick in range(0, last_tick + 1, midi.ticks_per_beat)
+            ]
+            bar_ticks = (
+                round(signature[0] * 4 / signature[1] * midi.ticks_per_beat) if signature else 0
+            )
+            downbeats = (
+                [
+                    reference_timeline.seconds_at_tick(tick) - offset
+                    for tick in range(0, last_tick + 1, max(1, bar_ticks))
+                ]
+                if bar_ticks
+                else []
+            )
+            beat.update(
+                detected_bpm=beat.get("source_bpm") or beat["bpm"],
+                bpm=target,
+                source_bpm=reference if target != reference else None,
+                bpm_display=f"{target:.1f}",
+                time_signature=list(signature) if signature else None,
+                is_variable_tempo=len(timeline.sections) > 1,
+                beat_times=[s for s in beats if s >= 0],
+                downbeats=[s for s in downbeats if s >= 0],
+                tempo_map=(
+                    [[s, 60_000_000 / tempo] for _tick, s, tempo in timeline.sections]
+                    if len(timeline.sections) > 1
+                    else []
+                ),
+            )
         return {
             "mode": config.processing_mode,
             "processing_time": float(result.processing_time),
@@ -160,7 +217,7 @@ class InferenceEngine:
             "transcription_backend": backend,
             "selected_instruments": list(result.selected_instruments),
             "detected_instruments": list(result.detected_instruments),
-            "beat": cls._beat_payload(result),
+            "beat": beat,
             "quality_warnings": quality_warnings,
         }
 
@@ -216,20 +273,78 @@ class InferenceEngine:
         )
 
     @staticmethod
-    def _apply_requested_quantization(midi_path: Path, options: dict) -> dict | None:
-        if not bool(options.get("quantize_notes", False)):
-            return None
-        report = quantize_midi_notes(
-            midi_path,
-            str(options.get("quantize_grid", "1/32")),
-            label="HTTP MIDI note quantization",
-        )
-        return {
-            "enabled": True,
-            "grid": report.grid,
-            "grid_ticks": report.grid_ticks,
-            "paired_note_count": report.paired_note_count,
-        }
+    def _apply_requested_quantization(
+        midi_path: Path,
+        options: dict,
+        *,
+        reference_bpm=None,
+        target_bpm=None,
+    ) -> dict | None:
+        from src.core.midi_export_options import MidiExportOptions, apply_midi_export_options
+
+        export = options.get("midi_export")
+        if export:
+            from src.core.midi_tempo import validated_midi_bpm
+            from src.core.midi_timing import MidiTimeline, write_project_tempo_map
+
+            reference_bpm = (
+                reference_bpm
+                or 60_000_000 / MidiTimeline.from_midi(mido.MidiFile(midi_path)).sections[0][2]
+            )
+            target_bpm = target_bpm or reference_bpm
+            rate = target_bpm / reference_bpm
+            new_reference = validated_midi_bpm(
+                export.get("bpm") or reference_bpm * float(export.get("beat_scale", 1)),
+                "corrected reference",
+            )
+            validated_midi_bpm(new_reference * rate, "corrected project")
+            if rate != 1:
+                write_project_tempo_map(midi_path, midi_path, reference_bpm, reference_bpm)
+            correction = dict(export)
+            correction.update(fill_gaps=0.0, trim_leading_bars=False)
+            apply_midi_export_options(midi_path, midi_path, MidiExportOptions(**correction))
+        result = None
+        if bool(options.get("quantize_notes", False)):
+            report = quantize_midi_notes(
+                midi_path,
+                str(options.get("quantize_grid", "1/32")),
+                label="HTTP MIDI note quantization",
+                strength=float(options.get("quantize_strength", 1.0)),
+                triplet=bool(options.get("quantize_triplet", False)),
+                automatic=bool(options.get("quantize_auto", False)),
+            )
+            result = {
+                "enabled": True,
+                "grid": report.grid,
+                "grid_ticks": report.grid_ticks,
+                "paired_note_count": report.paired_note_count,
+            }
+            if report.strength != 1 or report.triplet or report.automatic:
+                result.update(
+                    strength=report.strength, triplet=report.triplet, automatic=report.automatic
+                )
+            if report.grid_step_ticks != report.grid_ticks:
+                result["grid_step_ticks"] = report.grid_step_ticks
+        if export:
+            apply_midi_export_options(
+                midi_path,
+                midi_path,
+                MidiExportOptions(
+                    fill_gaps=float(export.get("fill_gaps", 0)),
+                    trim_leading_bars=bool(export.get("trim_leading_bars", False)),
+                ),
+            )
+            if rate != 1:
+                write_project_tempo_map(
+                    midi_path, midi_path, new_reference, new_reference * rate
+                )
+            result = dict(
+                result or {"enabled": False},
+                midi_export=dict(export),
+                reference_bpm=new_reference,
+                target_bpm=new_reference * rate,
+            )
+        return result
 
     def _run_direct(
         self,
@@ -330,8 +445,17 @@ class InferenceEngine:
         if not isinstance(result, ProcessingResult):
             raise TypeError(f"pipeline returned unsupported result type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "MIDI output")
-        quantization = self._apply_requested_quantization(midi_path, options)
-        payload = self._processing_payload(result, config, midi_path)
+        quantization = self._apply_requested_quantization(
+            midi_path,
+            options,
+            reference_bpm=(
+                (result.beat_info.source_bpm or result.beat_info.bpm)
+                if result.beat_info
+                else None
+            ),
+            target_bpm=result.beat_info.bpm if result.beat_info else None,
+        )
+        payload = self._processing_payload(result, config, midi_path, quantization)
         if quantization is not None:
             payload["quantization"] = quantization
         return ExecutionResult(
@@ -364,8 +488,17 @@ class InferenceEngine:
         if not isinstance(result, ProcessingResult):
             raise TypeError(f"manual MIDI route returned unsupported type: {type(result)!r}")
         midi_path = self._require_file(result.midi_path, "manual MIDI output")
-        quantization = self._apply_requested_quantization(midi_path, options)
-        payload = self._processing_payload(result, config, midi_path)
+        quantization = self._apply_requested_quantization(
+            midi_path,
+            options,
+            reference_bpm=(
+                (result.beat_info.source_bpm or result.beat_info.bpm)
+                if result.beat_info
+                else None
+            ),
+            target_bpm=result.beat_info.bpm if result.beat_info else None,
+        )
+        payload = self._processing_payload(result, config, midi_path, quantization)
         payload.update({"route": options["route"], "source_track_id": track_id})
         if quantization is not None:
             payload["quantization"] = quantization

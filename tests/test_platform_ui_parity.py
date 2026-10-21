@@ -349,7 +349,7 @@ def test_every_direct_mode_and_split_track_uses_the_shared_midi_workbench():
         assert "prepare_midi_playback_assets" in source
         assert '"playback_audio_path"' in source
         assert "assets.original_wav" in source
-        assert "rewrite_midi_tempo_preserving_ticks" in source
+        assert "write_project_tempo_map" in source
         assert "source-tempo-playback.mid" in source
         assert "result.beat_info.source_bpm" in source
 
@@ -456,6 +456,19 @@ def test_space_and_colab_midi_editor_state_keeps_note_identity_and_bpm_context()
 def test_space_and_colab_build_real_muscriptor_beat_grid_state(tmp_path, monkeypatch):
     from src.core import midi_tempo, muscriptor_result_assets
     from src.models.data_models import BeatInfo
+    import mido
+
+    source = mido.MidiFile(ticks_per_beat=480)
+    source.tracks.append(
+        mido.MidiTrack(
+            [
+                mido.MetaMessage("set_tempo", tempo=500000),
+                mido.Message("note_on", note=60, velocity=90, time=240),
+                mido.Message("note_off", note=60, velocity=0, time=240),
+            ]
+        )
+    )
+    source.save(tmp_path / "result.mid")
 
     playback_midi = tmp_path / "source-tempo-playback.mid"
     monkeypatch.setattr(

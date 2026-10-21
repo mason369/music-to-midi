@@ -2,7 +2,8 @@
 
 from dataclasses import asdict
 
-from src.core.midi_tempo import rewrite_midi_tempo_preserving_ticks, validated_midi_time_signature
+from src.core.midi_tempo import validated_midi_time_signature
+from src.core.midi_timing import midi_timeline_manifest, write_project_tempo_map
 from src.core.muscriptor_result_assets import prepare_midi_playback_assets
 from src.gui.web.muscriptor_result_runtime import build_muscriptor_result_html
 from src.gui.web.project_files import cache_project_file
@@ -32,13 +33,18 @@ def render_saved_midi(store, song_id, signature, translator, previews, sheets):
         reference_bpm = beat["source_bpm"] if beat.get("source_bpm") is not None else beat["bpm"]
         output = store.root / "previews" / signature
         output.mkdir(parents=True, exist_ok=True)
-        playback = rewrite_midi_tempo_preserving_ticks(
-            midi_path, output / "source-tempo.mid", reference_bpm, label="Project MIDI playback"
+        playback = write_project_tempo_map(
+            midi_path,
+            output / "source-tempo.mid",
+            reference_bpm,
+            reference_bpm,
+            label="Project MIDI playback",
         )
         groups = step.result.get("transcription_backend") == "muscriptor"
         assets = prepare_midi_playback_assets(playback, original, output, muscriptor_groups=groups)
         detected = list(dict.fromkeys(n.instrument for n in assets.notes))
         state = dict(
+            timeline=midi_timeline_manifest(playback, reference_bpm),
             notes=[asdict(n) for n in assets.notes],
             duration=assets.duration,
             reference_bpm=reference_bpm,
