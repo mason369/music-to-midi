@@ -7,9 +7,11 @@
 - 发布标签先核对工程版本、运行时版本和精确源码提交。Actions 统一运行源码与打包契约、Windows/Linux 完整 GPU 包、容器发行包和 Space 同步，全部成功后由唯一任务公开 Release；容器工作流不再抢先创建同名 Release。
 - Windows/Linux 分卷必须连续完整，每份包记录来源提交、大小与 SHA-256。发布前复核构建清单，上传保持草稿，远端附件集合、大小、状态和摘要一致后才公开。上传错误直接失败，不自动重试或覆盖已公开版本。
 - Release 仅附软件包和统一下载校验值，不单独附测试报告、截图、日志、SBOM 或构建清单。Docker 配置、镜像 digest、依赖清单和必要许可仍在包内；对外说明改为完整中英文功能与使用说明，原始验收记录留本地。
+- Space 同步后验证精确 Hub 提交、`RUNNING` 状态、Gradio 版本及实际组件/事件图，避免源码推送成功掩盖应用启动失败。构建、运行、HTTP 和超时错误均阻断 Release，不自动重启、重装或重试。
 - The release tag must match project/runtime versions and the exact source commit. One Actions workflow coordinates source/contracts, complete Windows/Linux GPU bundles, Docker distribution and Space sync; one final job publishes the Release only after every dependency succeeds. Container builds no longer create a competing Release.
 - Portable volumes must be complete and consecutive. Build manifests bind file sizes and SHA-256 to the source commit. Uploads stay in a draft until the remote asset set, state, sizes and digests match. Upload errors fail immediately, without automatic retries or overwriting a public version.
 - Release assets contain software packages and one download-checksum file. Test reports, screenshots, logs, standalone SBOMs and build manifests are excluded. Docker configuration, image digests, dependency inventories and required notices remain inside packages. Bilingual release notes describe features and usage; raw acceptance evidence remains local.
+- Space sync verifies the exact Hub revision, `RUNNING` status, Gradio version and live component/event graph. A successful push cannot hide an application startup failure. Build, runtime, HTTP and timeout errors block the Release without automatic restarts, dependency reinstalls or retries.
 
 以下保留各阶段的实现与验证记录，其中“候选、未发布”描述对应当时的阶段。
 The implementation and validation history below retains each stage's original candidate/publication status.

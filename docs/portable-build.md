@@ -70,13 +70,17 @@ XPU 构建默认对同卷的暂存资源使用 NTFS 硬链接，跨卷资源逐�
 
 `release.yml` is the sole versioned-release entry. Push a matching `vX.Y.Z` tag or run it manually at that exact tagged commit. Portable and Docker packages share one source SHA; publication requires consecutive volumes and verified local/remote SHA-256 for every asset. Failed checks/uploads leave the draft unpublished and never overwrite an existing public version.
 
+Space 同步还必须确认 Hub 中的精确提交、运行状态 `RUNNING`、声明的 Gradio 版本及真实界面的组件和事件图。构建错误、运行错误、HTTP 错误或启动超时都会阻断发布；等待正在进行的构建不会重启服务或重装依赖。
+
+Space synchronization also verifies the exact Hub commit, `RUNNING` status, declared Gradio version and the live UI's component/event graph. Build/runtime/HTTP errors or a startup timeout block publication. Waiting for an in-flight build never restarts the service or reinstalls dependencies.
+
 ```mermaid
 flowchart TD
     V[Tag / version / source SHA] --> S[Source and packaging contracts]
     V --> W[Windows GPU build and smoke checks]
     V --> L[Linux GPU build and smoke checks]
     S --> D[Docker build, public pull and distribution]
-    S --> H[Space sync]
+    S --> H[Space sync and live application gate]
     W --> H
     L --> H
     D --> H

@@ -64,6 +64,7 @@ jobs:
           fetch-depth: 0
 
       - name: 构建 Space 目录并推送
+        id: push
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -125,3 +126,12 @@ jobs:
           git add .
           git commit -m "sync: $(git -C $GITHUB_WORKSPACE log -1 --format='%h %s')"
           git push space main --force
+          echo "space_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 验证同一提交的 Space 已启动并提供真实界面
+        timeout-minutes: 35
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          python tools/verify_hf_space.py --repository mason369/music-to-midi
+          --revision '${{ steps.push.outputs.space_commit }}'
