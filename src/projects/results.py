@@ -87,8 +87,12 @@ class ProjectResults:
         quantize_triplet=False,
         quantize_auto=False,
     ):
-        from src.core.sheet_music import export_sheet_music_zip, quantization_export_options
         from src.core.midi_quantization import MIDI_QUANTIZE_GRIDS
+        from src.core.sheet_music import (
+            SHEET_MUSIC_SCHEMA_VERSION,
+            export_sheet_music_zip,
+            quantization_export_options,
+        )
 
         if quantize_grid not in MIDI_QUANTIZE_GRIDS:
             raise ValueError("乐谱量化网格无效")
@@ -101,13 +105,13 @@ class ProjectResults:
             source, original = self.resolve_artifact(result_id, artifact_id)
             if original.kind != "midi":
                 raise ValueError("乐谱输入必须是 MIDI")
-            identity = f"sheet_{original.sha256[:16]}_{quantize_grid.split('/')[1]}"
+            identity = f"sheet_v{SHEET_MUSIC_SCHEMA_VERSION}_{original.sha256[:16]}_{quantize_grid.split('/')[1]}"
             if quantization:
                 identity += (
                     "_"
-                    + hashlib.sha256(
-                        json.dumps(quantization, sort_keys=True).encode()
-                    ).hexdigest()[:12]
+                    + hashlib.sha256(json.dumps(quantization, sort_keys=True).encode()).hexdigest()[
+                        :12
+                    ]
                 )
             existing = next((a for a in step.artifacts if a.id == identity), None)
             if existing:
@@ -115,9 +119,7 @@ class ProjectResults:
             else:
                 target = source.parent / "sheet_music" / (identity + ".zip")
                 target.parent.mkdir(parents=True, exist_ok=True)
-                export_sheet_music_zip(
-                    source, target, quantize_grid=quantize_grid, **quantization
-                )
+                export_sheet_music_zip(source, target, quantize_grid=quantize_grid, **quantization)
                 step.artifacts.append(
                     store.asset(
                         target,

@@ -47,6 +47,12 @@ CLI 参数为 `--grid-bpm`、`--beats-per-bar`、`--beat-unit`、`--first-downbe
 
 独立 HTTP 乐谱入口 `/api/v1/jobs/{id}/sheet-music` 与 `/api/v1/project-results/{id}/sheet-music` 同时接受 `quantize_grid`、`quantize_strength`、`quantize_triplet`、`quantize_auto` 查询参数；每组设置独立缓存。桌面与共用 Web 编辑器沿用相同设置生成排版副本，原始及当前编辑 MIDI 不被乐谱排版覆盖。
 
+乐谱导入关闭自由演奏重估与自动弱起推断，使用足够细的导入分辨率保留已量化网格及奇数拍小节边界。三连音先在临时导入副本中把节奏坐标放大 3/2，再以显式 3:2 MusicXML 分组恢复原时值、拍号和延音线，避免 MuseScore 对复合拍号重新识别三连音；常规与三连音都使用两次排谱转换。源 MIDI 的全部速度事件直接写回 MusicXML，包括不落在音符起点上的变化；演奏随动的后续速度事件只写播放数据，避免 PDF 被细碎标记覆盖。部分强度保留的非网格演奏时间仍须由乐谱音值表达，`score.mid` 保留选定强度的精确 MIDI；不声称排版音值等同于每个原始演奏微时差。
+
+关闭时值简化后，共享层仍核对导入前后的乐器、音高、起点和结束时间，恢复上游截短的同音高重叠。独立声部保留延音，现有谱表的四个声部不足时增加谱表；不截断、删除或移动音符来容纳重叠。此步骤只修改排谱副本，不增加推理或排谱转换次数。
+
+Tab 分配校验跨声部的同时音、持续音、延音线、移调乐器音域和弦数；完整匹配替代可能产生重复弦位的贪心选择。超出单件乐器承载能力或无法完成弦位分配的声部不输出冲突 Tab，五线谱和 MIDI 保留全部音符，ZIP 附双语 `TAB_README.txt` 与逐小节 `tablature_report.json`。这不是自动删音或编配，也不保证已分配指法的手型舒适度。排谱缓存身份含 schema 版本，升级后不会复用旧版排谱结果。
+
 ```mermaid
 flowchart LR
     B[一次 Beat This 分析] --> U[官方 MuScriptor 0.4.0 writer]
@@ -59,7 +65,11 @@ flowchart LR
     C --> E[显式编辑与量化]
     E --> X[可选休止填补 / 空小节裁切]
     X --> R[整张速度图按工程倍速缩放]
-    R --> M[MIDI / 分乐器 MIDI / 乐谱副本]
+    R --> M[MIDI / 分乐器 MIDI]
+    R --> S[乐谱副本 / 保留网格与时值 / 重叠声部恢复 / 显式三连音 / 完整速度事件]
+    S --> F[MusicXML / 总谱与分谱 PDF]
+    S --> V[Tab 弦位与持续音校验]
+    V --> A1[有效 Tab 或具体冲突报告 / 全部五线谱保留]
     X --> P[参考速度试听与真实 PCM 合成]
     O[原音 + 有符号偏移] --> P
     P --> W[同步原音 / MIDI / WAV]
@@ -105,6 +115,12 @@ Gap filling, trimming and smoothing are off by default. Gap filling extends melo
 Desktop, Space, Colab and standalone Web expose the options; Docker and portable/executable entries reuse their implementations. Existing PDF, MusicXML, score, part and applicable Tab exports retain triplet/strength/automatic-grid settings on a private copy. The API example and CLI flags above apply to both languages; `custom_bpm` remains true project speed. The regression tests use real SMF/PCM, and the local UI script serves the production shared component in both supported languages using real FluidSynth assets.
 
 Project/reference BPM retains the existing 4–400 range. A beat-scale result or combined project speed outside it fails explicitly instead of clipping. The internal `music-to-midi:playback_rate=` marker restores the reference timeline even when trimming leaves a single tempo segment. Both standalone job and saved-project sheet endpoints accept the four quantization query parameters listed above and cache each settings combination separately.
+
+Notation disables human-performance re-estimation and automatic pickup inference. Fine import resolution retains existing grids and odd-meter barlines. Triplet import temporarily scales rhythmic coordinates by 3/2, then restores original durations, meters and ties through explicit 3:2 MusicXML groups; both ordinary and triplet paths use two engraving conversions. Every source tempo event is written explicitly, including changes between note attacks. Subsequent adaptive changes affect MusicXML playback without cluttering the PDF with tempo labels. Partial-strength performance offsets still require notation values; `score.mid` retains the exact selected-strength MIDI, without claiming that engraved values reproduce every performance microtiming offset.
+
+With duration simplification disabled, the shared layer also matches instruments, pitches, starts and ends before restoring same-pitch overlaps shortened by the upstream importer. Independent voices preserve sustains; a new staff is added when the existing staves' four voices are occupied. Notes are not shortened, removed or shifted to fit. This affects only the engraving copy and adds no inference or engraving-conversion calls.
+
+Tab assigns distinct strings across simultaneous voices and sustains, preserving ties and accounting for transposition/range. Complete matching replaces conflicting greedy assignments. Parts exceeding string capacity or lacking a complete assignment retain every note in MIDI and standard notation; their conflicting Tab is not emitted, and bilingual `TAB_README.txt` plus `tablature_report.json` identify exact locations. This neither removes notes nor invents an arrangement, and assigned strings do not certify comfortable fingering. Sheet cache identities include the schema version so old engraving is not reused after an upgrade.
 
 Validation passed 1,851 complete-workspace tests with five explicit device-acceptance skips. After the last browser BPM input fix, 126 affected-path tests passed again, including one new case; overlapping batches are not added together. Both locales passed full-catalog checks across 660 shared/desktop and 283 standalone-Web keys each. Real Chrome exercised both languages, 320px layouts, playback, corrections, quantization and completed MIDI download events. Production serialization was independently round-tripped as real SMF; browser policy prevented reading download-manager paths. Real FluidSynth and MuseScore generated audio and a five-file score package whose manifest retained 75% strength, triplets and automatic 1/64 selection. The table above names separate delivery contracts; no cloud/image deployment, portable rebuild, seven-model inference sweep or physical-device acceptance is claimed.
 

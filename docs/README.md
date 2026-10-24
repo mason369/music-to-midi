@@ -8,6 +8,8 @@ The [v1.10.0 candidate notes](releases/v1.10.0.md) cover shared MIDI origins, Wi
 
 [Changelog](../CHANGELOG.md)
 
+Score export preserves the selected grid and note durations, restores all source tempo events and writes explicit triplets across meter changes. Overlapping same-pitch sustains use independent voices and additional staves when needed. Tab checks simultaneous strings, sustains, ties and range; impossible parts retain full standard notation and include a bilingual report with exact locations instead of conflicting fingerings. See [notation details](midi-timing-export.md#english). Cached scores are versioned so an upgrade regenerates notation with these fixes.
+
 Failed desktop MIDI or stereo WAV downloads report the cause and log the full traceback while keeping the conversion result available. Correct the destination, file lock or permissions and retry. Logs use `~/.music-to-midi/logs/`; portable applications prefer `runtime/logs/` next to the application.
 
 MIDI result editors start with every instrument visible and audible. Solo supports multiple instruments while preserving manual mutes. Export all instruments together, only the audible instruments together, or every instrument in a separate MIDI inside one ZIP. Space plays/pauses; Shift+Space stops and rewinds without intercepting text or numeric input. The desktop piano roll also has a ChordMini BTC chord lane recognized from source audio, aligned with the bar grid, with clickable SoundFont audition. Playback follow, zoom and scrolling update the chord lane in the same frame as the piano roll. Standalone Web/API result downloads support instrument MIDI ZIPs too. See the [result editor guide](soundfont-and-sheet-music.md).
@@ -173,7 +175,7 @@ Current synchronization coverage:
 
 | Location | Synced Content | Notes |
 |----------|----------------|-------|
-| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; Leap Instrumental; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; FluidSynth; and pinned MuseScore Studio 4.7.4 | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
+| `download_sota_models.py` | Prepares Beat This `final0`; all five official YourMT3+ checkpoints; pinned MIROS source plus both weights; MuScriptor Large / Medium / Small; `BS-Rofo-SW-Fixed.ckpt`; Leap XE; Leap Instrumental; TransKun V2 Aug; Aria-AMT; ByteDance; MuseScore General SoundFont; FluidSynth; and pinned MuseScore Studio 4.7.6 | Fixed-source resources are validated by known size/SHA256 or their explicit source/runtime identity; any required-resource failure stops the command. |
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | Checks actual accelerator execution, all official YourMT3+ modes, MuScriptor Large / Medium / Small, BS-RoFormer SW Fixed, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance Pedal, MIROS, SoundFont, FluidSynth, and separator availability before launch | Missing or invalid required resources and CPU fallback are reported explicitly. |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | Installs an isolated NVIDIA PyTorch 2.7 or Intel XPU PyTorch 2.11 runtime, NumPy 1.26, audio-separator 0.44.1, the identity-verified official MuScriptor v0.4.0 runtime, and every required model/runtime asset | NVIDIA uses `venv` + CUDA 12.8; Windows Intel uses `venv-xpu` + native PyTorch XPU + OpenVINO GPU. Mixed runtimes are rejected. |
 | `.github/workflows/build.yml` | Push/PR jobs run Linux and Windows source, test, and packaging checks only | These jobs do not produce a portable package. Bundle validation requires complete model files with matching identities. |
@@ -235,7 +237,7 @@ The exact files depend on the selected mode and the per-track conversions the us
 
 ### YourMT3+
 
-YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
+YourMT3+ is the default multi-instrument backend. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.6, and strictly validates the default TransKun 2.0.1 package and bundled V2 resources. YourMT3 inference imports the repository-controlled `YourMT3/amt/src` tree through `src/core/yourmt3_transcriber.py`.
 
 The source runtime depends on:
 
@@ -667,7 +669,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.4, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
+The repository already includes the controlled, compatibility-patched `YourMT3/amt/src`; mutable upstream `master` does not satisfy its source-identity check. `download_sota_models.py` prepares Beat This `final0`, all five official YourMT3+ checkpoints, pinned MIROS source and both weights, MuScriptor Large / Medium / Small, `BS-Rofo-SW-Fixed.ckpt`, Leap XE, Leap Instrumental, TransKun V2 Aug, Aria-AMT, ByteDance, MuseScore General SoundFont, FluidSynth, and pinned MuseScore Studio 4.7.6, and strictly verifies the default TransKun 2.0.1 package and bundled V2 resources.
 
 ### 5. Prepare Separation and Piano Models
 

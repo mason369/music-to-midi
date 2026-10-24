@@ -68,6 +68,26 @@ def test_probe_wait_timeout_is_failure(qapp):
         wait_for_gui(lambda: False, "timeout", 0.03)
 
 
+def test_probe_completion_before_first_poll_is_not_a_timeout(qapp):
+    state = []
+    QTimer.singleShot(0, lambda: state.append(True))
+    wait_for_gui(lambda: bool(state), "completion before first poll", 0.005)
+    assert state == [True]
+
+
+def test_probe_deadline_preserves_predicate_error(qapp):
+    state = []
+    QTimer.singleShot(0, lambda: state.append(True))
+
+    def failed_after_signal():
+        if state:
+            raise ValueError("deadline predicate error")
+        return False
+
+    with pytest.raises(ValueError, match="deadline predicate error"):
+        wait_for_gui(failed_after_signal, "deadline", 0.005)
+
+
 def test_probe_wait_predicate_error_is_not_swallowed(qapp):
     def failed():
         raise ValueError("real predicate error")

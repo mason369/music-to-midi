@@ -39,9 +39,9 @@ def test_musescore_runtime_is_pinned_staged_and_license_recorded():
     docker = _read("docker/backend.Dockerfile")
 
     assert "PORTABLE_COMPONENT: musescore_studio" in notice
-    assert "4.7.4.260706075" in notice
+    assert "4.7.6.261022093" in notice
     assert "GPL-3.0-only" in notice
-    assert "9233ed1b87d3e6b45722278f3c286dcd41e83da778bd0f80a1dd04949696ad93" in notice
+    assert "5fcbd1f292270eca5c3867d56b767c31a173a155216a415f5caee22553f8e7a6" in notice
     assert "MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR" in spec
     assert "resources/musescore" in spec
     assert "download_musescore_runtime.py" in portable
@@ -162,7 +162,11 @@ def test_release_gate_requires_verified_or_owner_accepted_components():
     for component_id in sorted(owner_accepted):
         assert f"OWNER_ACCEPTED_NOTICE: {component_id}" in notice
 
-    blocked = {line.split(" |", 1)[0].split(": ", 1)[1] for line in rows if line.endswith(" | status=BLOCKED")}
+    blocked = {
+        line.split(" |", 1)[0].split(": ", 1)[1]
+        for line in rows
+        if line.endswith(" | status=BLOCKED")
+    }
     assert blocked == set()
 
     # Owner-accepted records keep full attribution and the takedown route.

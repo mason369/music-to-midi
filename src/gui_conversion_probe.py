@@ -69,8 +69,14 @@ def wait_for_gui(predicate, description, seconds=900):
             state["error"] = exc
             loop.quit()
 
+    def expire():
+        # Completion can precede the deadline without another polling tick.
+        # Check its actual state before terminating this event loop.
+        check()
+        loop.quit()
+
     poll.timeout.connect(check)
-    deadline.timeout.connect(loop.quit)
+    deadline.timeout.connect(expire)
     poll.start(20)
     deadline.start(int(seconds * 1000))
     check()

@@ -122,7 +122,7 @@ COPY docker/backend-entrypoint.sh docker/healthcheck.py ./docker/
 # hash-verified runtime preparation function. It is a renderer, not a checkpoint.
 RUN python -c "from src.utils.musescore_runtime import download_musescore_runtime; print(download_musescore_runtime())" \
     && mkdir -p /opt \
-    && mv /models/home/.cache/music_ai_models/musescore/4.7.4 /opt/musescore \
+    && mv /models/home/.cache/music_ai_models/musescore/4.7.6 /opt/musescore \
     && python - <<'PY'
 from src.utils.musescore_runtime import validate_pinned_musescore_distribution
 

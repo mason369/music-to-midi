@@ -2,12 +2,56 @@
 
 import hashlib
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
 import src.utils.musescore_runtime as runtime
+
+
+@pytest.mark.parametrize("platform,expected", [("win32", "windows"), ("linux", "offscreen")])
+def test_musescore_child_uses_its_own_qt_plugins_without_changing_parent(
+    monkeypatch, platform, expected
+):
+    inherited = {
+        "QT_QPA_PLATFORM": "offscreen" if platform == "win32" else "windows",
+        "MU_QT_QPA_PLATFORM": "parent-only",
+        "QT_PLUGIN_PATH": "/parent/pyqt/plugins",
+        "QT_QPA_PLATFORM_PLUGIN_PATH": "/parent/pyqt/platforms",
+        "QT_QPA_PLATFORMTHEME": "parent-only",
+        "QML_IMPORT_PATH": "/parent/pyqt/qml",
+        "QML2_IMPORT_PATH": "/parent/pyqt/qml2",
+    }
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("QT_DEBUG_PLUGINS", "1")
+    monkeypatch.setattr(runtime.sys, "platform", platform)
+    environment = runtime.get_musescore_subprocess_env()
+    assert environment["QT_QPA_PLATFORM"] == expected
+    assert environment["MU_QT_QPA_PLATFORM"] == expected
+    assert all(
+        name not in environment
+        for name in inherited
+        if "PLATFORM" not in name or name.endswith(("PATH", "THEME"))
+    )
+    assert environment["QT_DEBUG_PLUGINS"] == "1"
+    assert all(os.environ[name] == value for name, value in inherited.items())
+
+
+@pytest.mark.skipif(
+    os.environ.get("MUSIC_TO_MIDI_TEST_MUSESCORE") != "1",
+    reason="requires explicit real MuseScore acceptance",
+)
+def test_real_musescore_starts_from_a_foreign_qt_environment(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen" if os.name == "nt" else "windows")
+    monkeypatch.setenv("MU_QT_QPA_PLATFORM", "parent-only")
+    monkeypatch.setenv("QT_PLUGIN_PATH", "/parent/pyqt/plugins")
+    monkeypatch.setenv("QT_QPA_PLATFORM_PLUGIN_PATH", "/parent/pyqt/platforms")
+    binary = runtime.get_musescore_executable()
+    assert runtime.musescore_version(binary)[:3] == tuple(
+        int(part) for part in runtime.MUSESCORE_VERSION.split(".")
+    )
 
 
 def test_runtime_staging_preserves_relative_cyclic_and_dangling_links(tmp_path, monkeypatch):
@@ -37,9 +81,15 @@ def test_runtime_staging_preserves_relative_cyclic_and_dangling_links(tmp_path, 
     monkeypatch.setattr(runtime, "_prepare_windows_runtime", prepare)
     monkeypatch.setattr(runtime, "_prepare_linux_runtime", prepare)
     monkeypatch.setattr(runtime, "_download_verified", download_license)
-    monkeypatch.setattr(runtime, "musescore_version", lambda _path: (4, 7, 4))
+    monkeypatch.setattr(
+        runtime,
+        "musescore_version",
+        lambda _path: tuple(int(part) for part in runtime.MUSESCORE_VERSION.split(".")),
+    )
     monkeypatch.setattr(runtime, "MUSESCORE_LICENSE_BYTES", len(license_bytes))
-    monkeypatch.setattr(runtime, "MUSESCORE_LICENSE_SHA256", hashlib.sha256(license_bytes).hexdigest())
+    monkeypatch.setattr(
+        runtime, "MUSESCORE_LICENSE_SHA256", hashlib.sha256(license_bytes).hexdigest()
+    )
 
     executable = runtime.download_musescore_runtime(printer=lambda _message: None)
 
@@ -71,7 +121,9 @@ def test_runtime_staging_preserves_relative_cyclic_and_dangling_links(tmp_path, 
         ("MuseScore4 4.7.4\n", 1, None),
     ],
 )
-def test_version_requires_successful_musescore_identity_line(tmp_path, monkeypatch, output, returncode, expected):
+def test_version_requires_successful_musescore_identity_line(
+    tmp_path, monkeypatch, output, returncode, expected
+):
     executable = tmp_path / "renderer"
     executable.write_bytes(b"runtime fixture")
     monkeypatch.setattr(
@@ -80,3 +132,20 @@ def test_version_requires_successful_musescore_identity_line(tmp_path, monkeypat
         lambda command, **_kwargs: subprocess.CompletedProcess(command, returncode, output),
     )
     assert runtime.musescore_version(executable) == expected
+
+
+@pytest.mark.parametrize("version", [(3, 6, 2), (4, 0), (4, 7, 4), (4, 7, 5)])
+def test_runtime_rejects_versions_without_the_cli_shutdown_fix(tmp_path, monkeypatch, version):
+    executable = tmp_path / "renderer"
+    executable.write_bytes(b"runtime fixture")
+    monkeypatch.setattr(runtime, "musescore_version", lambda _path: version)
+    with pytest.raises(runtime.MuseScoreRuntimeError, match=r"4\.7\.6\+ is required"):
+        runtime.validate_musescore_runtime(executable)
+
+
+@pytest.mark.parametrize("version", [(4, 7, 6), (4, 8, 0)])
+def test_runtime_accepts_supported_shutdown_versions(tmp_path, monkeypatch, version):
+    executable = tmp_path / "renderer"
+    executable.write_bytes(b"runtime fixture")
+    monkeypatch.setattr(runtime, "musescore_version", lambda _path: version)
+    assert runtime.validate_musescore_runtime(executable) == executable.resolve()

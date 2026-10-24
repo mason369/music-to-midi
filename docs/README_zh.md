@@ -6,6 +6,8 @@
 
 [项目、工作流配置与跨会话续跑](projects.md)
 
+乐谱导出保留选定网格和音符时值，写回源 MIDI 全部速度事件，并跨拍号显式写入三连音。同音高重叠通过独立声部及必要的附加谱表保留延音。Tab 校验同时音、持续音、延音线与音域；无法完整分配弦位的声部保留全部五线谱，并附具体位置的双语报告。见[排谱细节](midi-timing-export.md)。乐谱缓存含版本标识，升级后重新生成修复后的排谱。
+
 [更新说明](../CHANGELOG.md)
 
 桌面下载 MIDI 或立体声 WAV 失败时会显示原因并记录完整错误，当前转换结果仍可继续使用；修正路径、文件占用或权限问题后可以重试。日志位于 `~/.music-to-midi/logs/`；便携版优先使用程序旁的 `runtime/logs/`。
@@ -82,7 +84,7 @@
 | 音源分离 | `VOCAL_SPLIT` 用 Leap XE 90-band 与 Leap Instrumental 生成两条 WAV；`SIX_STEM_SPLIT` 用 `BS-Rofo-SW-Fixed.ckpt` 生成 `bass / drums / guitar / piano / vocals / other` 六条 WAV。分离后，每条 WAV 可独立选择 13 条 MIDI 路线并点击转换。 |
 | 钢琴转写 | `PIANO_TRANSKUN`、`PIANO_TRANSKUN_V2_AUG`、`PIANO_ARIA_AMT` 和 `PIANO_BYTEDANCE_PEDAL` 分别调用 TransKun 默认 V2、官方 V2 Aug、Aria-AMT 和 ByteDance 带踏板模型。 |
 | MuScriptor 乐器约束 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也限制其他乐器输出，全选不等于自动识别。输出包含未选乐器时任务会报错。已知条件生成退化与实测边界见 [模型研究](muscriptor-model.md#2026-10-12-条件生成复核)。 |
-| 乐谱导出 | 每个 MIDI 结果（包括分离后逐轨转换）都可生成独立 ZIP；只对副本量化，不修改原 MIDI。ZIP 含量化 MIDI、MusicXML、总谱、逐乐器分谱及符合 4–9 弦识别条件的 Tab PDF。桌面、Space、Colab 使用当前编辑器网格，独立 Web/API 使用 `1/32`；MuseScore Studio 4 缺失或失败会直接报错。 |
+| 乐谱导出 | 每个 MIDI 结果（包括分离后逐轨转换）都可生成独立 ZIP；只对副本量化，不修改原 MIDI。ZIP 含量化 MIDI、MusicXML、总谱、逐乐器分谱和通过弦位／持续音校验的 Tab PDF。所有结果入口支持五档网格、强度、三连音和自动网格，默认 `1/32`；MuseScore Studio 4 缺失或失败会直接报错。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。模型事件映射到音乐网格，但不做量化。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |
 | 试听与 DAW | MuScriptor 工作台以 MIDI 合成轨为主时钟，同步 MIDI、原音和乐器分轨，并校正超过 80 ms 的漂移。DAW 导入时需启用 tempo map；MuseScore 3/4 可能重新跟拍未量化演奏并改写乐谱页显示 BPM，但不会改变文件中已经校验的 tempo。 |
@@ -152,7 +154,7 @@ song_other.wav
 
 ### YourMT3+
 
-YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
+YourMT3+ 是默认多乐器后端。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.6，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源；YourMT3 推理通过 `src/core/yourmt3_transcriber.py` 调用仓库内受控的 `YourMT3/amt/src` 源码。
 
 需要满足：
 
@@ -651,7 +653,7 @@ python -m src.utils.source_runtime
 python download_sota_models.py
 ```
 
-当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
+当前仓库已经包含受控且经过兼容补丁的 `YourMT3/amt/src`；可变上游 `master` 不满足这里的源码身份校验。`download_sota_models.py` 会准备 Beat This `final0`、五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、MuScriptor Large / Medium / Small、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.6，并严格校验默认 TransKun 2.0.1 包及其内置 V2 资源。
 
 ### 5. 准备分离与钢琴模型
 

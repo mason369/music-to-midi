@@ -22,6 +22,7 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +33,9 @@ from src.core.midi_quantization import (
     MidiQuantizationReport,
     quantize_midi_notes,
 )
+from src.core.sheet_note_durations import restore_note_durations
+from src.core.sheet_tablature import assign_score_tablature
+from src.core.sheet_triplets import prepare_triplet_import, restore_triplet_musicxml
 from src.utils.midi_output import validate_midi_output
 from src.utils.musescore_runtime import (
     get_musescore_executable,
@@ -42,7 +46,7 @@ from src.utils.musescore_runtime import (
 
 SHEET_MUSIC_ZIP_NAME = "sheet_music.zip"
 SHEET_MUSIC_MANIFEST_NAME = "sheet_music_manifest.json"
-SHEET_MUSIC_SCHEMA_VERSION = 1
+SHEET_MUSIC_SCHEMA_VERSION = 2
 MUSESCORE_RUN_TIMEOUT_SECONDS = 120.0
 
 
@@ -60,20 +64,144 @@ def quantization_export_options(strength=1.0, triplet=False, automatic=False):
 
 _IMPORT_OPTIONS = """<?xml version="1.0" encoding="UTF-8"?>
 <MidiOptions>
-  <QuantValue>2</QuantValue>
-  <HumanPerformance>true</HumanPerformance>
+  <QuantValue>3</QuantValue>
+  <HumanPerformance>false</HumanPerformance>
+  <RecognizePickupBar>false</RecognizePickupBar>
   <Duplets>false</Duplets>
-  <Triplets>true</Triplets>
+  <Triplets>false</Triplets>
   <Quadruplets>false</Quadruplets>
   <Quintuplets>false</Quintuplets>
   <Septuplets>false</Septuplets>
   <Nonuplets>false</Nonuplets>
-  <SimplifyDurations>true</SimplifyDurations>
+  <SimplifyDurations>false</SimplifyDurations>
   <DottedNotes>true</DottedNotes>
 </MidiOptions>
 """
 _TAB_PRESETS = {count: f"tab{count}StrCommon" for count in range(4, 10)}
 _TAB_LINE_DISTANCE = "1.5"
+
+
+def _midi_import_options(grid: str, strength: float, triplet: bool) -> str:
+    """Engrave the existing music grid without a second beat reconstruction.
+
+    MuseScore's QuantValue is a zero-based power-of-two subdivision (0=1/4).
+    Partial quantization retains performance offsets, so use its finest import
+    resolution instead of snapping those offsets to the full-strength grid.
+    """
+    options = ET.fromstring(_IMPORT_OPTIONS)
+    resolution = {"1/4": 0, "1/8": 1, "1/16": 2, "1/32": 3, "1/64": 4}[grid]
+    # A barline need not lie on the selected coarse grid (e.g. 9/8 + quarters).
+    # The copy is already quantized; finer import resolution preserves that grid.
+    options.find("QuantValue").text = str(max(resolution, 4) if strength == 1.0 else 8)
+    options.find("Triplets").text = "true" if triplet else "false"
+    return ET.tostring(options, encoding="unicode")
+
+
+def _restore_score_tempos(midi_path: Path, musicxml: Path) -> None:
+    """MIDI import drops off-note tempo events; write the source map explicitly."""
+    midi = mido.MidiFile(midi_path)
+    tick = 0
+    tempos = {Fraction(0): 500000}
+    for message in mido.merge_tracks(midi.tracks):
+        tick += message.time
+        if message.type == "set_tempo":
+            tempos[Fraction(tick, midi.ticks_per_beat)] = message.tempo
+    tree = ET.parse(musicxml)
+    parts = tree.getroot().findall("part")
+    if not parts:
+        raise SheetMusicExportError("MuseScore MusicXML contains no score part")
+    for part in parts:
+        for measure in part.findall("measure"):
+            for direction in measure.findall("direction"):
+                if direction.find("./sound[@tempo]") is not None:
+                    measure.remove(direction)
+    start, divisions = Fraction(0), 1
+    pending = dict(sorted(tempos.items()))
+    measures = parts[0].findall("measure")
+    for index, measure in enumerate(measures):
+        divisions = int(measure.findtext("./attributes/divisions", str(divisions)))
+        cursor, length = Fraction(0), Fraction(0)
+        for child in measure:
+            if child.tag in {"backup", "forward"}:
+                cursor += (-1 if child.tag == "backup" else 1) * Fraction(
+                    int(child.findtext("duration")), divisions
+                )
+            elif child.tag == "note" and child.find("chord") is None:
+                cursor += Fraction(int(child.findtext("duration", "0")), divisions)
+            length = max(length, cursor)
+        changes = [
+            (beat, tempo)
+            for beat, tempo in pending.items()
+            if start <= beat < start + length
+            or (index == len(measures) - 1 and beat == start + length)
+        ]
+        if changes:
+            resolution = math.lcm(
+                divisions, *(beat.denominator for beat, _ in changes), start.denominator
+            )
+            factor = resolution // divisions
+            for tag in ("duration", "offset"):
+                for child in measure.findall(f".//{tag}"):
+                    child.text = str(int(child.text) * factor)
+            attributes = measure.find("attributes")
+            if attributes is None:
+                attributes = ET.Element("attributes")
+                measure.insert(0, attributes)
+            division_node = attributes.find("divisions")
+            if division_node is None:
+                division_node = ET.Element("divisions")
+                attributes.insert(0, division_node)
+            division_node.text = str(resolution)
+            insertion = list(measure).index(attributes) + 1
+            for beat, tempo in changes:
+                direction = ET.Element("direction", placement="above")
+                bpm = 60000000 / tempo
+                if beat == 0:
+                    kind = ET.SubElement(direction, "direction-type")
+                    metronome = ET.SubElement(kind, "metronome")
+                    ET.SubElement(metronome, "beat-unit").text = "quarter"
+                    ET.SubElement(metronome, "per-minute").text = f"{bpm:.2f}".rstrip("0").rstrip(
+                        "."
+                    )
+                else:
+                    # Preserve adaptive playback without printing hundreds of tempo labels.
+                    kind = ET.SubElement(direction, "direction-type")
+                    ET.SubElement(kind, "words", {"print-object": "no"}).text = ""
+                amount = int((beat - start) * resolution)
+                # MuseScore's MusicXML importer deduplicates tempos at the current
+                # cursor before applying <offset>. Give each event its real cursor
+                # position, then restore it so the existing notes do not move.
+                if amount:
+                    forward = ET.Element("forward")
+                    ET.SubElement(forward, "duration").text = str(amount)
+                    measure.insert(insertion, forward)
+                    insertion += 1
+                ET.SubElement(direction, "offset").text = "0"
+                ET.SubElement(direction, "sound", tempo=f"{bpm:.12g}")
+                measure.insert(insertion, direction)
+                insertion += 1
+                if amount:
+                    backup = ET.Element("backup")
+                    ET.SubElement(backup, "duration").text = str(amount)
+                    measure.insert(insertion, backup)
+                    insertion += 1
+                del pending[beat]
+            # The next measure inherits the *original* divisions in this traversal;
+            # explicitly write it there before changing the current XML declaration.
+            if index + 1 < len(measures):
+                following = measures[index + 1]
+                if following.find("./attributes/divisions") is None:
+                    attributes = following.find("attributes")
+                    if attributes is None:
+                        attributes = ET.Element("attributes")
+                        following.insert(0, attributes)
+                    node = ET.Element("divisions")
+                    node.text = str(divisions)
+                    attributes.insert(0, node)
+        start += length
+    if pending:
+        raise SheetMusicExportError("Source tempo events lie outside the engraved score")
+    tree.write(musicxml, encoding="UTF-8", xml_declaration=True)
 
 
 class SheetMusicExportError(RuntimeError):
@@ -334,6 +462,9 @@ def engrave_sheet_directory(
     quantized_midi_path: str | Path,
     output_dir: str | Path,
     *,
+    quantize_grid: str = DEFAULT_MIDI_QUANTIZE_GRID,
+    quantize_strength: float = 1.0,
+    quantize_triplet: bool = False,
     musescore: str | Path | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[Path]:
@@ -360,23 +491,45 @@ def engrave_sheet_directory(
     with tempfile.TemporaryDirectory(prefix="music-to-midi-engrave-") as temporary:
         work = Path(temporary)
         import_options = work / "import.xml"
-        import_options.write_text(_IMPORT_OPTIONS, encoding="utf-8")
+        import_options.write_text(
+            _midi_import_options(quantize_grid, quantize_strength, False),
+            encoding="utf-8",
+        )
         project = work / "score.mscx"
-        process = _run_musescore(
-            binary,
-            ["-M", str(import_options), "-o", str(project), str(score_midi)],
-            cancel_check=check_cancelled,
-        )
-        _require_file(project, "import the MIDI file", process)
-        _score_root(project)
-
         musicxml = destination / "score.musicxml"
+        if quantize_triplet:
+            import_midi = work / "triplet-coordinates.mid"
+            signatures = prepare_triplet_import(score_midi, import_midi)
+            process = _run_musescore(
+                binary,
+                ["-M", str(import_options), "-o", str(musicxml), str(import_midi)],
+                cancel_check=check_cancelled,
+            )
+            _require_file(musicxml, "write MusicXML", process)
+            restore_note_durations(
+                import_midi,
+                musicxml,
+                import_grid=Fraction(1, 16) if quantize_strength == 1.0 else Fraction(1, 256),
+            )
+            restore_triplet_musicxml(musicxml, signatures)
+        else:
+            process = _run_musescore(
+                binary,
+                ["-M", str(import_options), "-o", str(musicxml), str(score_midi)],
+                cancel_check=check_cancelled,
+            )
+            _require_file(musicxml, "import the MIDI file", process)
+            restore_note_durations(
+                score_midi,
+                musicxml,
+                import_grid=Fraction(1, 16) if quantize_strength == 1.0 else Fraction(1, 256),
+            )
+        _restore_score_tempos(score_midi, musicxml)
         process = _run_musescore(
-            binary,
-            ["-o", str(musicxml), str(project)],
-            cancel_check=check_cancelled,
+            binary, ["-o", str(project), str(musicxml)], cancel_check=check_cancelled
         )
-        _require_file(musicxml, "write MusicXML", process)
+        _require_file(project, "import the notation", process)
+        _score_root(project)
         try:
             ET.parse(musicxml)
         except (ET.ParseError, OSError) as exc:
@@ -410,16 +563,43 @@ def engrave_sheet_directory(
                 raise SheetMusicExportError(
                     f"Tablature conversion mismatch: expected={fretted}, converted={converted}"
                 )
-            written.extend(
-                _write_part_pdfs(
-                    binary,
-                    tab_project,
-                    destination,
-                    suffix="_tab",
-                    only=set(fretted),
-                    cancel_check=check_cancelled,
+            tab_tree = ET.parse(tab_project)
+            try:
+                tab_report = assign_score_tablature(tab_tree.getroot().find("Score"), converted)
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                raise SheetMusicExportError(f"Could not validate tablature: {exc}") from exc
+            tab_tree.write(tab_project, encoding="UTF-8", xml_declaration=True)
+            valid_parts = {part["part"] - 1 for part in tab_report if part["status"] == "assigned"}
+            if valid_parts:
+                written.extend(
+                    _write_part_pdfs(
+                        binary,
+                        tab_project,
+                        destination,
+                        suffix="_tab",
+                        only=valid_parts,
+                        cancel_check=check_cancelled,
+                    )
                 )
-            )
+            if valid_parts != set(fretted):
+                report_path = destination / "tablature_report.json"
+                report_path.write_text(
+                    json.dumps(tab_report, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                explanation = destination / "TAB_README.txt"
+                explanation.write_text(
+                    "部分声部无法在该乐器的弦数、音域和持续音约束下生成完整 Tab。\n"
+                    "这些声部的全部音符保留在 score.mid、MusicXML 和五线谱 PDF 中；没有为生成 Tab 删音、移调或截断持续音。\n"
+                    "未输出存在弦位冲突的 Tab。具体声部、小节（从 1 起）、小节内四分音符拍偏移（从 0 起）和 MIDI 音高见 tablature_report.json。\n"
+                    "需要人工编配这些位置；成功分配弦位也不等于已验证手型与演奏难度。\n\n"
+                    "Some parts cannot be represented completely within the instrument's strings, range and sustained-note constraints.\n"
+                    "All notes remain in score.mid, MusicXML and standard-notation PDFs; none were deleted, transposed or cut short to fit Tab.\n"
+                    "Conflicting Tab PDFs were not emitted. tablature_report.json identifies each part, 1-based measure, 0-based quarter-note offset and MIDI pitch.\n"
+                    "These passages require arrangement; assigned strings do not certify fingering comfort or playability.\n",
+                    encoding="utf-8",
+                )
+                written.extend([report_path, explanation])
     return written
 
 
@@ -491,6 +671,9 @@ def export_sheet_music_zip(
             written = engrave_sheet_directory(
                 quantization.path,
                 score_dir,
+                quantize_grid=quantization.grid,
+                quantize_strength=quantization.strength,
+                quantize_triplet=quantization.triplet,
                 musescore=binary,
                 cancel_check=check_cancelled,
             )

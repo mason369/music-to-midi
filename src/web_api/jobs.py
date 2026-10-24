@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from src.core.midi_quantization import DEFAULT_MIDI_QUANTIZE_GRID, MIDI_QUANTIZE_GRIDS
-from src.core.sheet_music import export_sheet_music_zip, quantization_export_options
+from src.core.sheet_music import (
+    SHEET_MUSIC_SCHEMA_VERSION,
+    export_sheet_music_zip,
+    quantization_export_options,
+)
 from src.models.data_models import ProcessingProgress
 from src.web_api.engine import ArtifactSpec, ExecutionResult, InferenceEngine
 from src.web_api.schemas import JobStatus
@@ -448,11 +452,11 @@ class JobManager:
                     )
                 source_artifact = midi_artifacts[0]
                 source_path = self._artifact_path_locked(record, source_artifact)
-                settings_identity = (
-                    json.dumps(quantization, sort_keys=True) if quantization else ""
-                )
+                settings_identity = json.dumps(quantization, sort_keys=True) if quantization else ""
                 identity = hashlib.sha256(
-                    (source_artifact.id + settings_identity).encode("utf-8")
+                    (
+                        f"v{SHEET_MUSIC_SCHEMA_VERSION}:" + source_artifact.id + settings_identity
+                    ).encode("utf-8")
                 ).hexdigest()[:12]
                 denominator = grid.split("/", 1)[1]
                 sheet_artifact_id = f"sheet_music_{identity}_{denominator}"

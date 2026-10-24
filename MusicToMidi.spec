@@ -226,7 +226,7 @@ fluidsynth_dir = _resolve_existing_dir(
 )
 musescore_dir = _resolve_existing_dir(
     os.environ.get("MUSIC_TO_MIDI_BUNDLE_MUSESCORE_DIR"),
-    os.path.join(USER_HOME, ".cache", "music_ai_models", "musescore", "4.7.4"),
+    os.path.join(USER_HOME, ".cache", "music_ai_models", "musescore", "4.7.6"),
     os.path.join(ROOT_DIR, "build", "portable_assets", "musescore"),
 )
 ffmpeg_dir = _resolve_existing_dir(

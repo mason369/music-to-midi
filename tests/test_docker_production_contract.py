@@ -55,6 +55,6 @@ def test_backend_image_bakes_verified_musescore_outside_the_model_volume():
 
     assert "from src.utils.musescore_runtime import download_musescore_runtime" in backend
     assert "MUSIC_TO_MIDI_MUSESCORE=/opt/musescore/AppRun" in backend
-    assert "mv /models/home/.cache/music_ai_models/musescore/4.7.4 /opt/musescore" in backend
+    assert "mv /models/home/.cache/music_ai_models/musescore/4.7.6 /opt/musescore" in backend
     assert "validate_pinned_musescore_distribution" in backend
     assert 'org.opencontainers.image.licenses="GPL-3.0-only"' in backend

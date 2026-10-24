@@ -19,32 +19,36 @@ from pathlib import Path
 
 from src.utils.runtime_paths import get_bundle_roots
 
-MUSESCORE_VERSION = "4.7.4"
-MUSESCORE_BUILD = "260706075"
-MUSESCORE_MINIMUM_MAJOR = 4
+# 4.7.5 still races EngineInit against EngineDeinit at CLI shutdown (#34445).
+# This official stable-channel build includes upstream fix #34781. Its exact
+# source and public mirror are pinned even before the GitHub release is published.
+MUSESCORE_VERSION = "4.7.6"
+MUSESCORE_BUILD = "261022093"
+MUSESCORE_SOURCE_REVISION = "96480d58445e3b24b230a3fe7d4725d639aa2eb3"
+MUSESCORE_MINIMUM_VERSION = (4, 7, 6)
+MUSESCORE_MINIMUM_MAJOR = MUSESCORE_MINIMUM_VERSION[0]
 MUSESCORE_ENV_VAR = "MUSIC_TO_MIDI_MUSESCORE"
 MUSESCORE_COMPAT_ENV_VAR = "MUSCRIPTOR_MUSESCORE"
 
 MUSESCORE_WINDOWS_INSTALLER = f"MuseScore-Studio-{MUSESCORE_VERSION}.{MUSESCORE_BUILD}-x86_64.msi"
 MUSESCORE_WINDOWS_URL = (
-    "https://github.com/musescore/MuseScore/releases/download/"
-    f"v{MUSESCORE_VERSION}/{MUSESCORE_WINDOWS_INSTALLER}"
+    "https://ftp.osuosl.org/pub/musescore-nightlies/windows/4x/stable/"
+    f"{MUSESCORE_WINDOWS_INSTALLER}"
 )
-MUSESCORE_WINDOWS_INSTALLER_BYTES = 127_807_488
+MUSESCORE_WINDOWS_INSTALLER_BYTES = 135_020_544
 MUSESCORE_WINDOWS_INSTALLER_SHA256 = (
-    "64fe70e5cb9ffe159d047d1e88db567bd101f60d36b0de28feb674716929a378"
+    "41c9ca34fbf0b720f229ed3b0c4ff923b5d41a8c24ad9262e1fce390cd5c34e5"
 )
 
 MUSESCORE_LINUX_APPIMAGE = f"MuseScore-Studio-{MUSESCORE_VERSION}.{MUSESCORE_BUILD}-x86_64.AppImage"
 MUSESCORE_LINUX_URL = (
-    "https://github.com/musescore/MuseScore/releases/download/"
-    f"v{MUSESCORE_VERSION}/{MUSESCORE_LINUX_APPIMAGE}"
+    f"https://ftp.osuosl.org/pub/musescore-nightlies/linux/4x/stable/{MUSESCORE_LINUX_APPIMAGE}"
 )
-MUSESCORE_LINUX_APPIMAGE_BYTES = 192_231_928
-MUSESCORE_LINUX_APPIMAGE_SHA256 = "9233ed1b87d3e6b45722278f3c286dcd41e83da778bd0f80a1dd04949696ad93"
+MUSESCORE_LINUX_APPIMAGE_BYTES = 192_616_952
+MUSESCORE_LINUX_APPIMAGE_SHA256 = "5fcbd1f292270eca5c3867d56b767c31a173a155216a415f5caee22553f8e7a6"
 MUSESCORE_LICENSE_NAME = "LICENSE.txt"
 MUSESCORE_LICENSE_URL = (
-    f"https://raw.githubusercontent.com/musescore/MuseScore/v{MUSESCORE_VERSION}/"
+    f"https://raw.githubusercontent.com/musescore/MuseScore/{MUSESCORE_SOURCE_REVISION}/"
     + MUSESCORE_LICENSE_NAME
 )
 MUSESCORE_LICENSE_BYTES = 36_493
@@ -73,12 +77,29 @@ def _cache_root() -> Path:
 
 
 def get_musescore_subprocess_env() -> dict[str, str]:
-    """Return a deterministic headless environment for MuseScore CLI calls."""
+    """Launch MuseScore with its own Qt runtime, not the caller's PyQt plugins."""
 
     environment = os.environ.copy()
+    # PyInstaller/PyQt and GUI tests configure a different Qt installation.
+    # Inheriting its plugin or QML paths can load an ABI-incompatible library;
+    # inheriting ``offscreen`` also fails on the official Windows distribution,
+    # which ships only the windows platform plugin. Change the child env only.
+    for name in (
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "QT_QPA_PLATFORMTHEME",
+        "QML_IMPORT_PATH",
+        "QML2_IMPORT_PATH",
+        "QT_QPA_PLATFORM",
+        "MU_QT_QPA_PLATFORM",
+    ):
+        environment.pop(name, None)
     if sys.platform.startswith("linux"):
-        environment.setdefault("QT_QPA_PLATFORM", "offscreen")
-        environment.setdefault("MU_QT_QPA_PLATFORM", "offscreen")
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+        environment["MU_QT_QPA_PLATFORM"] = "offscreen"
+    elif sys.platform == "win32":
+        environment["QT_QPA_PLATFORM"] = "windows"
+        environment["MU_QT_QPA_PLATFORM"] = "windows"
     return environment
 
 
@@ -120,7 +141,7 @@ def validate_musescore_runtime(
     *,
     require_pinned_version: bool = False,
 ) -> Path:
-    """Validate a real MuseScore 4+ executable and optionally its exact release."""
+    """Require the CLI shutdown fix and optionally the exact pinned version."""
 
     path = Path(executable).expanduser().resolve()
     if not path.is_file() or path.stat().st_size <= 0:
@@ -128,10 +149,11 @@ def validate_musescore_runtime(
     version = musescore_version(path)
     if version is None:
         raise MuseScoreRuntimeError(f"Executable did not identify as MuseScore Studio: {path}")
-    if version[0] < MUSESCORE_MINIMUM_MAJOR:
+    if version < MUSESCORE_MINIMUM_VERSION:
         shown = ".".join(str(value) for value in version)
+        minimum = ".".join(str(value) for value in MUSESCORE_MINIMUM_VERSION)
         raise MuseScoreRuntimeError(
-            f"MuseScore Studio {MUSESCORE_MINIMUM_MAJOR}+ is required; found {shown}: {path}"
+            f"MuseScore Studio {minimum}+ is required; found {shown}: {path}"
         )
     if require_pinned_version and version[:3] != tuple(
         int(value) for value in MUSESCORE_VERSION.split(".")
@@ -235,7 +257,7 @@ def _configured_executable() -> Path | None:
 
 
 def get_musescore_executable() -> Path:
-    """Resolve MuseScore 4+ without downloading or hiding an explicit bad path."""
+    """Resolve a supported runtime without downloading or hiding an invalid path."""
 
     configured = _configured_executable()
     if configured is not None:
@@ -263,7 +285,7 @@ def get_musescore_executable() -> Path:
             errors.append(str(exc))
     detail = f" Runtime checks: {'; '.join(errors)}" if errors else ""
     raise MuseScoreRuntimeError(
-        "MuseScore Studio 4+ is required to generate MusicXML/PDF sheet music. "
+        "MuseScore Studio 4.7.6+ is required to generate MusicXML/PDF sheet music. "
         "Run `python download_musescore_runtime.py`, install MuseScore Studio 4, "
         f"or set {MUSESCORE_ENV_VAR} to MuseScore4.exe/AppRun." + detail
     )
@@ -441,6 +463,8 @@ __all__ = [
     "MUSESCORE_LICENSE_SHA256",
     "MUSESCORE_LICENSE_URL",
     "MUSESCORE_MINIMUM_MAJOR",
+    "MUSESCORE_MINIMUM_VERSION",
+    "MUSESCORE_SOURCE_REVISION",
     "MUSESCORE_VERSION",
     "MUSESCORE_WINDOWS_INSTALLER",
     "MUSESCORE_WINDOWS_INSTALLER_BYTES",

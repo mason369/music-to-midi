@@ -2,6 +2,28 @@
 
 ## v1.10.0 候选，未发布 / Candidate, unreleased — 2026-10-24
 
+### 乐谱、和弦追加复核 / Score and chord follow-up
+
+- 修复 GUI 诊断在完成信号已到、截止计时器先于下一轮询触发时误报超时：到期时核对真实完成状态，仍保留真正超时和谓词异常；真实 Qt 事件复现修复前失败、修复后通过，不延长等待或重试。
+- Fixed false GUI diagnostic timeouts when completion precedes the deadline but no further polling tick runs. The deadline checks actual completion while retaining genuine timeouts and predicate errors. Real Qt events reproduce the failure before the fix and pass after it, without longer waits or retries.
+
+- 修复真实歌曲在“75% 强度＋自动网格＋三连音”下因中途谱号变化而排谱失败：谱号保持自己的精确位置，不再将该位置作为音符切分点。346 音符的实曲片段保留全部音符，记谱起点／结束时间最大误差分别约 0.50／1.25 ms；源 MIDI 不变，不新增转换或重试。
+- Fixed real-song engraving with 75% strength, automatic grid and triplets: mid-note clef changes keep their own positions instead of introducing unnotatable note fragments. All 346 excerpt notes remain; maximum notation start/end errors are approximately 0.50/1.25 ms. Source MIDI remains unchanged, with no added conversion or retry.
+
+- 修复排谱导入再次按自由演奏重建节奏，导致已量化音符移位的问题；保持既有音乐网格，显式生成三连音及跨小节延音线，覆盖 4/4、6/8、9/8、5/8、7/16、7/32、11/32 和五档网格。按音乐时间恢复拍号，兼容重复声明及等长的 3/4↔6/8 切换。补回 MuseScore MIDI 导入遗漏的不在音符起点上的速度事件，所有源速度事件进入 MusicXML。共享乐谱缓存升级到版本 2，桌面、Space/Colab、独立 Web/API、Docker 与便携入口使用相同规则。
+- 吉他／贝斯指法采用独立弦位匹配，检查音域、同时发音、持续音和延音线，修复贪心分配造成的同弦冲突。无法完整分配的声部保留全部五线谱与 MIDI，ZIP 内提供中英文说明和逐小节冲突报告；不删除、移调或截断音符来强行输出 Tab。
+- 修复 GUI 验收中 MuseScore 反复弹出 Qt 平台插件错误：外部排谱进程不再继承父程序的 PyQt 插件／QML 路径和平台选择，Windows 使用官方包自带的 `windows`，Linux 使用其 `offscreen`。不修改父进程或系统配置。另修正乐谱界面测试的 QApplication 生命周期，消除其破坏后续 Linux 和弦音量动画的问题；产品音量渐变及原有断言不变。
+- 关闭 MIDI 导入的时值简化，并恢复上游导入器截断的同音高重叠：先按乐器、音高和起点核对音符，再以独立声部及必要的附加谱表保留实际结束时间。指定整曲恢复 31 处重叠延音，最终 MusicXML 的全部 7,286 个音符音高、量化后起点和结束时间均与私有 MIDI 副本一致；8 个 PDF、122 页完成渲染和逐页检查。两条吉他轨包含超过六弦容量的和弦，明确报告并保留完整五线谱；贝斯 Tab 通过弦位校验。
+- 新运行官方 ChordMini CUDA 得到 232 个原生时间区间，与既有成功结果逐项一致，未知区间监听静音，峰值无削波；没有人工标注，不宣称识别准确率。
+- Windows 与 Linux 固定采用官方 stable 通道 MuseScore Studio 4.7.6（261022093，源码 `96480d58445e3b24b230a3fe7d4725d639aa2eb3`），同步校验值、许可证、Docker、发布工作流和打包路径。4.7.5 验收仍捕获退出崩溃：音频线程在清理期间重新初始化，留下失效订阅。采用上游 [关闭顺序修复 #34781](https://github.com/musescore/MuseScore/pull/34781)，拒绝缺少修复的旧运行时；不吞非零退出码、不重跑转换、不禁用音源。2026-10-24 核验时，4.7.6 的 GitHub 正式发行流程仍在等待，本项目仅做本地候选验收。
+- Fixed a second human-performance reconstruction during score import that shifted already quantized notes. Engraving keeps the existing grid, writes explicit triplets and barline ties across five grids and 4/4, 6/8, 9/8, 5/8, 7/16, 7/32 and 11/32, and restores every source tempo event, including off-note changes omitted by MuseScore MIDI import. Meters are restored by musical position, including repeats and equal-length 3/4↔6/8 changes. Shared score caches are now version 2 across desktop, Space/Colab, Web/API, Docker and portable entry points.
+- Guitar/bass fingering uses independent string matching with pitch-range, polyphony, sustain and tie checks. Unassignable parts retain complete standard notation/MIDI and receive bilingual instructions plus measure-level conflict reports instead of conflicting Tab. No notes are removed, transposed or shortened to force an assignment.
+- Fixed repeated MuseScore Qt platform-plugin dialogs by isolating the child from the parent's PyQt plugin/QML paths and platform selection: the official Windows runtime uses `windows`, Linux uses `offscreen`. Parent/system settings are untouched. The score UI test now uses the shared QApplication lifecycle so it cannot break later Linux chord-volume animations; production gain ramps and existing assertions remain unchanged.
+- Disabled MIDI-import duration simplification and restored same-pitch overlaps shortened by the upstream importer. Instrument/pitch/onset matching precedes restoration through independent voices and additional staves when needed. The requested song restores 31 overlapping durations; all 7,286 pitches, quantized starts and ends match the private MIDI copy. All 122 pages across eight PDFs were rendered and inspected. Two guitar parts exceed six-string capacity and are explicitly reported while retaining full standard notation; bass Tab passes string validation.
+- A fresh official ChordMini CUDA run produced 232 native intervals identical to the earlier successful result, with silent unknown intervals and unclipped monitoring. No annotated reference supports an accuracy claim.
+
+Both platforms pin the official stable-channel MuseScore Studio 4.7.6 build 261022093 at source `96480d58445e3b24b230a3fe7d4725d639aa2eb3`, with matching hashes, licensing and packaging. Acceptance still caught a native shutdown crash in 4.7.5: audio initialization could run during teardown and leave dangling subscriptions. Upstream [shutdown-order fix #34781](https://github.com/musescore/MuseScore/pull/34781) addresses this race; older runtimes are rejected. Nonzero exits remain errors, without conversion retries or disabled audio. As checked on 2026-10-24, upstream GitHub publication was still pending; this project remains a local candidate.
+
 ### 官方 0.4.0 融合与发版复核 / Official 0.4.0 integration and release preparation
 
 - 实际 MuScriptor 推理包升级为未修改的官方 0.4.0，固定 `8a1ef88672cc23c26619adaff37ec48d82c0b906`，同步七文件身份校验、接口检查、安装器、Space、Docker、CI、打包与第三方清单。保留三档权重、精度、五秒窗口和官方解码；既有后端接受项目唯一一次 Beat This 分析，时间轴由共享层统一处理，不新增版本转换路线或重复推理。

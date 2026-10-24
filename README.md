@@ -147,7 +147,7 @@ MusicToMidiCLI batch /data/audio --recursive --json
 | MuScriptor 乐器约束 | 默认留空，沿用官方自动识别；导入音频和新建分轨不再按文件名添加条件。仅手动选择曲中已确认的乐器：选择既提供模型条件，也限制其他乐器输出，全选不等于自动识别。输出包含未选乐器时任务会报错。已知条件生成退化与实测边界见 [模型研究](docs/muscriptor-model.md#2026-10-12-条件生成复核)。 |
 | 节拍与速度 | 七种模式和逐轨转写都使用 Beat This `final0`。拍点清理后以全局最小二乘拟合 BPM，下拍独立决定拍号；证据不足时不写 4/4。默认自动写入检测到的唯一 BPM；也可生成稳定的段落级 tempo map。手动 30–300 BPM 会保留检测 BPM 的音乐 tick 并覆盖工程速度。默认不量化模型事件；只有用户显式执行量化时才吸附到所选网格。 |
 | 音符量化 | 默认关闭。桌面、Space、Colab 的结果编辑器提供 `1/4`、`1/8`、`1/16`、`1/32`、`1/64` 网格，范围默认“全部轨道”并可切换为“所选音符”；切换范围或网格不会改音符，点击“量化”才同时吸附目标音符的起点和时值。独立 Web/API（含 Docker）固定量化输出 MIDI 的全部轨道，勾选后在 MIDI 写出后严格执行一次，并校验 tempo、拍号、控制器等非音符事件的绝对 tick 未变。 |
-| 乐谱导出 | 每个 MIDI 结果（包括分离后逐轨转换结果）都可生成乐谱 ZIP。系统只量化副本，不修改原 MIDI；ZIP 包含量化 MIDI、MusicXML、总谱 PDF、逐乐器分谱 PDF，以及 MuseScore 识别为 4–9 弦乐器时的 Tab PDF。桌面、Space、Colab 使用结果编辑器当前网格，独立 Web/API 固定使用默认 `1/32`。MuseScore Studio 4 缺失或制谱失败会直接报错。 |
+| 乐谱导出 | 每个 MIDI 结果（包括分离后逐轨转换结果）都可生成乐谱 ZIP。只量化副本，不修改原 MIDI；包含量化 MIDI、MusicXML、总谱和逐乐器分谱 PDF。所有结果入口支持五档网格、强度、三连音和自动网格，默认 `1/32`。排谱保留网格、音符时值和完整速度图，三连音显式分组；同音高重叠使用独立声部及必要的附加谱表保留延音。4–9 弦乐器通过弦位、音域和持续音校验后提供 Tab；无法完整分配时保留全部五线谱，在 ZIP 内说明具体冲突位置，不输出叠字假指法。MuseScore 缺失或制谱失败直接报错。 |
 | MIDI 内容 | YourMT3+ 与 MIROS 保留官方 writer 的音符、音色、力度、控制器和弯音消息，只在缺少 `set_tempo` 时按检测 BPM 保持绝对秒并补写 tempo。MuScriptor 使用官方事件与 writer，并校验所选乐器集合。项目不添加去重、短音符过滤、力度平滑、复音限制或 `NoteEvent` 重建。 |
 | 试听与 DAW | MuScriptor 工作台以 MIDI 合成轨为主时钟，同步 MIDI、原音和乐器分轨，并校正超过 80 ms 的漂移。DAW 导入时需启用 tempo map；MuseScore 3/4 可能重新跟拍未量化演奏并改写乐谱页显示 BPM，但不会改变文件中已经校验的 tempo。 |
 | 输入与入口 | 支持 `MP3`、`WAV`、`FLAC`、`OGG`、`M4A`；非 WAV 通过 FFmpeg 转为 44.1 kHz PCM WAV。桌面版、Space 与 Colab 提供相同的七种处理模式。 |
@@ -174,7 +174,7 @@ MusicToMidiCLI batch /data/audio --recursive --json
 
 | 位置 | 已同步内容 | 说明 |
 |------|------------|------|
-| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.4 | 固定来源模型和运行时按已知大小/SHA256 或明确身份校验；任一必需资源失败时立即停止。 |
+| `download_sota_models.py` | 准备 Beat This `final0`、全部五种官方 YourMT3+ checkpoint、固定 MIROS 源码与两组权重、`BS-Rofo-SW-Fixed.ckpt`、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance、MuseScore General SoundFont、FluidSynth 与固定 MuseScore Studio 4.7.6 | 固定来源模型和运行时按已知大小/SHA256 或明确身份校验；任一必需资源失败时立即停止。 |
 | `run.ps1` / `run_xpu.ps1` / `run.sh` | 启动前检查加速器实际执行、Beat This `final0`、全部官方 YourMT3+ 模式、MuScriptor 三档、BS-RoFormer SW Fixed、Leap XE、Leap Instrumental、TransKun V2 Aug、Aria-AMT、ByteDance Pedal、MIROS、SoundFont、FluidSynth 与分离器可用性 | 缺少必需模型或校验失败时显式报错，不把缺失资源或 CPU 回退当作可运行状态。 |
 | `install.ps1` / `install_xpu.ps1` / `install.sh` | 安装隔离的 NVIDIA PyTorch 2.7 或 Intel XPU PyTorch 2.11、NumPy 1.26、audio-separator 0.44.1 运行依赖，并下载必需模型 | NVIDIA 使用 `venv` + CUDA 12.8；Windows Intel 使用 `venv-xpu` + 原生 PyTorch XPU + OpenVINO GPU。两套互斥运行时不混装；`audio-separator` 使用 `--no-deps`。 |
 | `.github/workflows/build.yml` | push / PR 只运行 Linux、Windows 源码检查、测试和打包契约验证 | 不生成便携包，也不使用空目录或假模型绕过强制 bundle 校验。 |
@@ -873,7 +873,7 @@ python download_miros_model.py
 ~/.cache/music_ai_models/aria_amt
 ~/.cache/music_ai_models/bytedance_piano
 ~/.cache/music_ai_models/fluidsynth/2.5.6
-~/.cache/music_ai_models/musescore/4.7.4
+~/.cache/music_ai_models/musescore/4.7.6
 ${HF_HOME:-~/.cache/huggingface}/hub  # MuScriptor 三档与 MuseScore SoundFont
 external/ai4m-miros
 ```

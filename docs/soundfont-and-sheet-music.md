@@ -135,14 +135,28 @@ Desktop, Space and Colab highlight MIDI notes at the current playhead position, 
 - `score.musicxml`：可继续编辑的乐谱；
 - `full_score.pdf`：总谱；
 - 按乐器编号命名的 PDF 分谱；
-- 适用吉他/贝斯的 `_tab.pdf` 指法谱；
+- 通过弦数、音域、持续音及延音线校验的吉他/贝斯 `_tab.pdf` 指法谱；无法完整分配的声部保留全部五线谱，附 `TAB_README.txt` 与 `tablature_report.json` 标明原因及小节位置；
 - `sheet_music_manifest.json`：源文件校验值、排版网格、音符数和 MuseScore 版本。
 
 排版前仅量化私有 MIDI 副本。结果编辑器与独立 Web 使用当前网格，默认 `1/32`；量化强度、三连音和自动网格设置同步用于乐谱副本，HTTP 入口可传 `quantize_grid`、`quantize_strength`、`quantize_triplet`、`quantize_auto`，各组设置独立缓存。源 MIDI 不被覆盖。MuseScore 不可用、没有真实输出、分谱失败或任务取消时不会发布成功结果。速度图、无变速纠错、休止填补与空小节裁切的操作和架构见 [MIDI 时间轴与导出增强](midi-timing-export.md)。
 
 乐谱是对当前 MIDI 的自动排版。它不保证修正模型识别错误，也不能保证所有自由节奏、复杂复调或指法选择都符合人工制谱要求；可在 MuseScore 中继续编辑 MusicXML。
 
+排谱不会再次按自由演奏重估速度和起点。三连音按原时值显式分组，跨拍号及小节边界保留延音线；源速度图的全部事件写回 MusicXML。缓存版本随排版规则更新，避免旧谱复用。弦位分配不通过删音、移调或截断持续音来使多音和弦“可演奏”；报告中的冲突需要人工编配。
+
+关闭时值简化后，共享层仍核对导入前后的乐器、音高、起点和结束时间，恢复上游截短的同音高重叠。独立声部保留延音，现有谱表的四个声部不足时增加谱表；不截断、删除或移动音符来容纳重叠。此步骤只修改排谱副本，不增加推理或排谱转换次数。
+
+部分强度会保留偏离网格的演奏起点，排谱导入使用最高 1/1024 记谱分辨率；MusicXML 不保证任意 MIDI tick 的位级还原。ZIP 内的 `score.mid` 保留显式量化后的实际事件。源 MIDI 未声明拍号时，MuseScore 的 4/4 是排版默认值，不代表模型检测结果；需要时先纠正工程拍号再导出。
+
+MuseScore 使用自己随包提供的 Qt 插件。启动时只为子进程清除父程序的 PyQt 插件／QML 搜索路径，并明确选择 Windows 的 `windows` 或 Linux 的 `offscreen`；主界面与系统环境不变。这样可避免 GUI 测试或打包运行时的 Qt 配置污染外部排谱进程。依据：[Qt 平台选择](https://doc.qt.io/qt-6/qpa.html)、[Qt 插件部署](https://doc.qt.io/qt-6/deployment-plugins.html)。
+
+固定排谱运行时为官方 stable 通道 MuseScore Studio 4.7.6（261022093，源码 `96480d58445e3b24b230a3fe7d4725d639aa2eb3`）。4.7.4 与 4.7.5 的真实 Windows 验收均捕获退出访问冲突；4.7.5 中的 #34136 并未覆盖完整关闭竞态。本机转储的 `ChannelImpl<AudioOutputParams>`／`Asyncable` 类型与上游 [#34445](https://github.com/musescore/MuseScore/issues/34445) 一致。[#34781](https://github.com/musescore/MuseScore/pull/34781) 在关闭前取消延后的初始化订阅，并收到引擎清理应答后再停止线程。版本检查拒绝缺少修复的旧运行时，仍严格检查退出码，不重跑转换或停用音源。两平台大小、SHA-256、源码和许可证固定核验；Windows MSI 签名有效，Linux AppImage 与官方 zsync 相符。截至 2026-10-24，上游 GitHub 正式发行仍待批准，本项目不生产发版。
+
+中途谱号变化按其独立时间位置写入，不作为音符切分点。因此部分强度保留的原演奏时差不会因谱号位置再次拆成无法表示的极短时值。
+
 ## English
+
+Mid-note clef changes retain independent timing instead of splitting notes. Their positions therefore cannot turn partial-strength performance offsets into unnotatable fragments.
 
 Import SF2/SF3 files in the MIDI result's **SoundFont and instrument sounds** panel. Select a preset for each source instrument and click **Apply sounds**. Selection alone does not render. Desktop, Space and Colab apply the selection to preview and WAV/stem exports. The standalone Web client provides a **SoundFont preview** action for each MIDI result, with playback and a 24-bit / 48 kHz WAV download. Its API also supports 16-bit / 44.1 kHz.
 
@@ -152,4 +166,14 @@ Each file is limited to 1 GiB. One imported library is active per result, with i
 
 The current grid, strength, triplet and automatic-grid settings also apply to the engraving copy, with separate cache identities. HTTP job and project-result endpoints accept all four settings. See [MIDI timing and export enhancements](midi-timing-export.md) for adaptive maps, corrections that retain performance speed, gap filling, leading-bar trimming and the shared architecture.
 
+Engraving does not re-estimate the existing performance grid. Explicit triplet groups retain timing, meter changes and barline ties; MusicXML receives every source tempo event. Versioned caches prevent reuse of older engraving. Tab checks string capacity, pitch range, sustained notes and ties. Parts without a complete assignment retain all standard notation and receive `TAB_README.txt` plus `tablature_report.json` with exact locations instead of conflicting Tab. No notes are removed, transposed or cut short to force playability; these passages need human arrangement.
+
+With duration simplification disabled, the shared layer also matches instruments, pitches, starts and ends before restoring same-pitch overlaps shortened by the upstream importer. Independent voices preserve sustains; a new staff is added when the existing staves' four voices are occupied. Notes are not shortened, removed or shifted to fit. This affects only the engraving copy and adds no inference or engraving-conversion calls.
+
+Partial strength retains performance offsets and uses the finest 1/1024 notation import resolution; MusicXML is not a bit-exact representation of arbitrary MIDI ticks. The ZIP's `score.mid` retains the explicitly quantized events. When the source declares no meter, MuseScore's 4/4 is an engraving default, not a detected result; correct the project meter before exporting when needed.
+
+MuseScore uses its own bundled Qt plugins. Its child environment removes inherited PyQt plugin/QML search paths and selects `windows` on Windows or `offscreen` on Linux, without changing the parent or system environment. This prevents GUI-test/frozen-app Qt settings from contaminating the external renderer. See [Qt platform selection](https://doc.qt.io/qt-6/qpa.html) and [plugin deployment](https://doc.qt.io/qt-6/deployment-plugins.html).
+
 For deployment, the same shared modules serve desktop, Space, Colab, standalone API, Docker and portable launchers. Existing FluidSynth and MuseScore runtime requirements remain in effect. Desktop chord analysis additionally requires the pinned ChordMini BTC resources; run `python download_chordmini_model.py` or `python download_sota_models.py`. Full portable App builds include and verify these resources. Space/Colab and standalone Web/API/Docker do not expose the desktop chord lane or run its model; their existing shared exports and playback paths remain covered separately.
+
+The engraving runtime pins official stable-channel MuseScore Studio 4.7.6 build 261022093 at source `96480d58445e3b24b230a3fe7d4725d639aa2eb3`. Windows acceptance caught native shutdown failures in both 4.7.4 and 4.7.5; #34136 did not cover the complete shutdown race. Types recovered from the local dump match upstream [#34445](https://github.com/musescore/MuseScore/issues/34445): `ChannelImpl<AudioOutputParams>` and `Asyncable`. [Fix #34781](https://github.com/musescore/MuseScore/pull/34781) disconnects delayed initialization before shutdown and waits for engine deinitialization acknowledgement before stopping its worker. Older runtimes are rejected; nonzero exits remain errors, without conversion retries or disabled audio. Sizes, SHA-256, source revision and license are fixed; Windows signing and Linux zsync identity are verified. As checked on 2026-10-24, upstream GitHub publication still awaited approval. This project is not being released to production.

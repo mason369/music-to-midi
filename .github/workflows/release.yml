@@ -532,7 +532,7 @@ jobs:
 
           cp -a "$HOME/.cache/music_ai_models/transkun_v2_aug" "$BUILD_ASSET_ROOT/transkun_v2_aug"
 
-          cp -a "$HOME/.cache/music_ai_models/musescore/4.7.4" "$BUILD_ASSET_ROOT/musescore"
+          cp -a "$HOME/.cache/music_ai_models/musescore/4.7.6" "$BUILD_ASSET_ROOT/musescore"
 
           cp -a "$GITHUB_WORKSPACE/external/ai4m-miros" "$BUILD_ASSET_ROOT/ai4m-miros"
 

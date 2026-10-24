@@ -10,7 +10,6 @@ from pathlib import Path
 
 import mido
 import pytest
-from PyQt6.QtWidgets import QApplication
 
 import src.core.sheet_music as sheet_music
 import src.gui.web.sheet_music_export as browser_sheet_music
@@ -43,7 +42,7 @@ def _write_test_midi(path: Path) -> Path:
 
 
 def _fake_project_xml() -> str:
-    strings = "".join("<string/>" for _ in range(6))
+    strings = "".join(f"<string>{pitch}</string>" for pitch in (40, 45, 50, 55, 59, 64))
     return (
         "<?xml version='1.0' encoding='UTF-8'?>"
         "<museScore><Score>"
@@ -69,7 +68,10 @@ def _fake_musescore_run(_binary, arguments, *, cancel_check):
         output.write_text(_fake_project_xml(), encoding="utf-8")
     elif output.suffix == ".musicxml":
         output.write_text(
-            "<?xml version='1.0'?><score-partwise version='4.0'/>",
+            "<?xml version='1.0'?><score-partwise version='4.0'><part id='P1'>"
+            "<measure><attributes><divisions>480</divisions></attributes>"
+            "<note><pitch><step>E</step><octave>4</octave></pitch><duration>1920</duration>"
+            "<type>whole</type></note></measure></part></score-partwise>",
             encoding="utf-8",
         )
     elif output.suffix == ".pdf":
@@ -90,6 +92,7 @@ def _patch_fake_musescore(monkeypatch, tmp_path: Path) -> Path:
     )
     monkeypatch.setattr(sheet_music, "musescore_version", lambda _path: (4, 7, 4))
     monkeypatch.setattr(sheet_music, "_run_musescore", _fake_musescore_run)
+    monkeypatch.setattr(sheet_music, "restore_note_durations", lambda *args, **kwargs: None)
     return executable
 
 
@@ -217,7 +220,11 @@ def test_pinned_musescore_distribution_requires_exact_upstream_license(
     executable.write_bytes(b"runtime")
     license_bytes = b"GPL-3.0 test license"
     (root / "LICENSE.txt").write_bytes(license_bytes)
-    monkeypatch.setattr(musescore_runtime, "musescore_version", lambda _path: (4, 7, 4))
+    monkeypatch.setattr(
+        musescore_runtime,
+        "musescore_version",
+        lambda _path: tuple(int(part) for part in musescore_runtime.MUSESCORE_VERSION.split(".")),
+    )
     monkeypatch.setattr(musescore_runtime, "MUSESCORE_LICENSE_BYTES", len(license_bytes))
     monkeypatch.setattr(
         musescore_runtime,
@@ -304,8 +311,9 @@ def test_browser_sheet_registry_is_request_scoped_and_caches_identical_edit(
 def test_desktop_sheet_action_exports_current_project_tempo_snapshot(
     tmp_path: Path,
     monkeypatch,
+    qapp,
 ):
-    app = QApplication.instance() or QApplication([])
+    app = qapp
     source_audio = tmp_path / "source.wav"
     source_audio.write_bytes(b"desktop sheet export test audio placeholder")
     source_midi = _write_test_midi(tmp_path / "source.mid")

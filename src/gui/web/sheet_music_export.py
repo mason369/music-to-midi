@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.midi_quantization import MIDI_QUANTIZE_GRIDS
-from src.core.sheet_music import export_sheet_music_zip
+from src.core.sheet_music import SHEET_MUSIC_SCHEMA_VERSION, export_sheet_music_zip
 from src.gui.web.track_mixer_runtime import track_file_url
 from src.utils.midi_output import validate_midi_output
 
@@ -168,7 +168,9 @@ class SheetMusicExportRegistry:
             if quantization_options
             else b""
         )
-        digest = hashlib.sha256(midi_bytes + identity).hexdigest()
+        digest = hashlib.sha256(
+            f"v{SHEET_MUSIC_SCHEMA_VERSION}:".encode("ascii") + midi_bytes + identity
+        ).hexdigest()
         cache_key = (token, digest, quantize_grid)
         with self._lock:
             cached = self._cache.get(cache_key)
