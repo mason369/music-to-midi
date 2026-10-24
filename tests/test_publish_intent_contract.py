@@ -4,9 +4,10 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
-GUARD = "${{ !contains(github.event.head_commit.message, '[no publish]') }}"
+GUARD = (
+    "${{ inputs.release_tag != '' || !contains(github.event.head_commit.message, '[no publish]') }}"
+)
 
 
 def test_source_only_push_guards_every_external_publication():
@@ -23,3 +24,7 @@ def test_source_only_push_guards_every_external_publication():
     assert space["jobs"]["sync"]["if"] == GUARD
     ci = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text("utf-8"))
     assert "[no publish]" not in str(ci)
+    # Only the version-checked release caller can explicitly publish a no-publish commit.
+    assert workflow[True]["workflow_call"]["inputs"]["release_tag"]["required"] is True
+    assert "tags" not in workflow[True]["push"]
+    assert "inputs.release_tag" in jobs["distribution"]["if"]

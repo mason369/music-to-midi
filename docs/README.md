@@ -2,7 +2,7 @@
 
 [Tempo maps, grid correction, quantization strength/triplets and export options](midi-timing-export.md#english) cover desktop, Space, Colab, Web/API, CLI, Docker and portable entries with actual pinned official MuScriptor 0.4.0 inference and the existing seven-mode dependency baseline.
 
-The [v1.10.0 candidate notes](releases/v1.10.0.md) cover shared MIDI origins, Windows manifest-handle conflicts, project language switching and cross-port SoundFont loading, plus Windows/local WSL CUDA full-suite results, all 13 transcription routes and two separation modes in native Linux packages, the requested song and speed comparisons. Candidate commits use `[no publish]` to retain CI while preventing automatic production publication from that push.
+The [v1.10.0 release notes](releases/v1.10.0.md) cover tempo correction, quantization, score duration, Windows project saves and playback fixes. Actions coordinates complete Windows/Linux bundles, Docker distribution and Space sync before publishing one Release. Downloads include packages and SHA-256 checksums; test reports and logs are not release assets.
 
 [Projects, workflow profiles and resuming](projects.en.md)
 
@@ -765,7 +765,7 @@ Failed Space requests delete their request directory immediately. Successful out
 
 The Windows CUDA package command produces the desktop App, Web backend, and Web frontend:
 
-The portable gate accepts components recorded as `VERIFIED` or explicitly `OWNER_ACCEPTED`. The current `THIRD_PARTY_NOTICES.md` records 25 verified, four owner-accepted and one blocked component (Leap Instrumental); its unresolved redistribution record blocks portable release. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
+The portable gate accepts components recorded as `VERIFIED` or explicitly `OWNER_ACCEPTED`. The current `THIRD_PARTY_NOTICES.md` contains 31 components: 26 verified, five owner-accepted and none blocked. Every release rechecks the inventory and resource identities. Owner acceptance is revocable and does not represent an upstream license grant; running the local command below does not create redistribution rights.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_web_executables.ps1

@@ -88,28 +88,26 @@ docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```text
 MusicToMidi-Docker-vX.Y.Z.zip
 MusicToMidi-Docker-vX.Y.Z.tar.gz
-MusicToMidi-Docker-compose-vX.Y.Z.yaml
-MusicToMidi-Docker-env-vX.Y.Z.example
-MusicToMidi-Docker-image-digests-vX.Y.Z.txt
-MusicToMidi-Docker-SBOM-vX.Y.Z.txt
-MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
+SHA256SUMS.txt
 ```
 
 Linux 可以这样核对 ZIP：
 
 ```bash
 sha256sum MusicToMidi-Docker-vX.Y.Z.zip
-grep 'MusicToMidi-Docker-vX.Y.Z.zip$' MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
+grep 'MusicToMidi-Docker-vX.Y.Z.zip$' SHA256SUMS.txt
 ```
 
 Windows PowerShell 可以这样核对 ZIP：
 
 ```powershell
 Get-FileHash .\MusicToMidi-Docker-vX.Y.Z.zip -Algorithm SHA256
-Select-String .\MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt -Pattern 'MusicToMidi-Docker-vX.Y.Z.zip$'
+Select-String .\SHA256SUMS.txt -Pattern 'MusicToMidi-Docker-vX.Y.Z.zip$'
 ```
 
 两处 SHA-256 值一致后，下载文件与 Release 清单对应。ZIP 与 tar.gz 内的 Compose 已固定到发布流水线匿名拉取验证过的镜像 digest，因此后续移动的 `latest` 标签不会改变这次安装。
+
+配置、环境模板、镜像 digest 和依赖清单位于包内，不再单独作为附件。测试报告、截图和日志不随 Release 发布。安装包与 Docker 包全部成功后，统一任务才公开版本。
 
 解压后的目录包含：
 

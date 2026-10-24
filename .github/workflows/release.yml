@@ -7,15 +7,80 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要上传资源的 Release 标签（如 v1.0.0），留空则上传到最新 Release'
-        required: false
-        default: ''
+        description: '要构建并发布的现有标签（如 v1.10.0），必须指向本次工作流源码提交'
+        required: true
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: 核对发布版本与源码身份
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: 校验版本、标签与源码提交
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+          from tools.release_assets import validate_identity
+
+          tag = os.environ['RELEASE_TAG']
+          revision = os.environ['GITHUB_SHA']
+          validate_identity(tag, revision)
+          project_version = tomllib.loads(Path('pyproject.toml').read_text('utf-8'))['project']['version']
+          module = ast.parse(Path('src/__init__.py').read_text('utf-8'))
+          runtime_version = next(ast.literal_eval(node.value) for node in module.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == '__version__' for target in node.targets))
+          if tag != f'v{project_version}' or runtime_version != project_version:
+              raise SystemExit('Release tag, project version and runtime version must agree')
+          actual = subprocess.check_output(['git', 'rev-parse', f'refs/tags/{tag}^{{commit}}'], text=True).strip()
+          if actual != revision:
+              raise SystemExit('Release tag must point to this exact workflow commit')
+          notes = Path('docs/releases') / f'{tag}.md'
+          if not notes.is_file() or not notes.read_text('utf-8').strip():
+              raise SystemExit('Versioned release notes are required')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'tag={tag}\n')
+          print(f'Verified {tag} at {revision}')
+          PY
+
+  source:
+    name: 源码与打包契约
+    needs: preflight
+    uses: ./.github/workflows/build.yml
+
+  containers:
+    name: 容器构建与发行包
+    needs: [preflight, source]
+    uses: ./.github/workflows/container.yml
+    with:
+      release_tag: ${{ needs.preflight.outputs.tag }}
+
   build:
+    needs: preflight
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -1497,16 +1562,36 @@ jobs:
             tar -tzf "${LINUX_FRONTEND_NAME}-Portable.tar.gz" >/dev/null
           fi
 
+      - name: 记录已验收安装包的来源和校验值
+        shell: bash
+        run: |
+          python tools/release_assets.py record --role '${{ matrix.platform }}' \
+            --directory . --tag "$RELEASE_TAG" --revision "$GITHUB_SHA"
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
           name: MusicToMidi-${{ matrix.platform }}-${{ matrix.variant }}
-          path: MusicToMidi-${{ matrix.platform }}-*-Portable*
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            MusicToMidi-${{ matrix.platform }}-*-Portable*
+            release-manifest-${{ matrix.platform }}.json
+
+  space:
+    name: 同步同一版本到 Space
+    needs: [preflight, source, build, containers]
+    uses: ./.github/workflows/sync_to_hf.yml
+    with:
+      release_tag: ${{ needs.preflight.outputs.tag }}
+    secrets: inherit
 
   release:
-    name: 上传到 GitHub Release
-    needs: [build]
-    runs-on: ubuntu-latest
+    name: 校验全部附件后公开 GitHub Release
+    needs: [preflight, source, build, containers, space]
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.preflight.outputs.tag }}
 
     steps:
       - name: 检出发布源码
@@ -1515,141 +1600,14 @@ jobs:
       - name: 下载所有构建产物
         uses: actions/download-artifact@v8
         with:
+          pattern: MusicToMidi-*
+          path: release-assets
           merge-multiple: true
 
-      - name: 列出构建产物
-        run: ls -lh MusicToMidi-*
-
-      - name: 确定目标标签
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            LATEST=$(gh release list --repo ${{ github.repository }} --limit 1 --json tagName -q '.[0].tagName')
-            echo "tag=${LATEST}" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 校验 pyproject、运行时版本与发布标签一致
-        env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          python - <<'PY'
-          import ast
-          import os
-          import tomllib
-          from pathlib import Path
-
-          project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          module = ast.parse(Path("src/__init__.py").read_text(encoding="utf-8"))
-          runtime_version = next(
-              ast.literal_eval(node.value)
-              for node in module.body
-              if isinstance(node, ast.Assign)
-              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
-          )
-          release_tag = os.environ["RELEASE_TAG"].strip()
-          expected_tag = f"v{project_version}"
-          if runtime_version != project_version:
-              raise SystemExit(
-                  f"Version mismatch: pyproject.toml={project_version}, src.__version__={runtime_version}"
-              )
-          if release_tag != expected_tag:
-              raise SystemExit(
-                  f"Release tag mismatch: expected {expected_tag} from project version, got {release_tag!r}"
-              )
-          print(f"Version contract verified: {release_tag}")
-          PY
-
-      - name: 创建 Release（如不存在）
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          if ! gh release view "${TAG}" --repo ${{ github.repository }} &>/dev/null; then
-            gh release create "${TAG}" \
-              --repo ${{ github.repository }} \
-              --title "${TAG}" \
-              --notes "正在准备发布说明..."
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 更新 Release 说明
-        run: |
-          NOTES_PATH="docs/releases/${TAG}.md"
-          test -s "$NOTES_PATH"
-          cp "$NOTES_PATH" release-notes.md
-          gh release edit "${TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${TAG}" \
-            --notes-file release-notes.md
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 删除旧 CPU 发布资产
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          echo "清理 Release 中的旧 CPU 资产: ${TAG}"
-          mapfile -t CPU_ASSETS < <(
-            gh release view "${TAG}" \
-              --repo ${{ github.repository }} \
-              --json assets \
-              -q '.assets[].name | select(test("^MusicToMidi-.*-CPU-Portable"))'
-          )
-          if [ "${#CPU_ASSETS[@]}" -eq 0 ]; then
-            echo "未发现旧 CPU 资产"
-            exit 0
-          fi
-          for asset in "${CPU_ASSETS[@]}"; do
-            echo "删除旧 CPU 资产: ${asset}"
-            gh release delete-asset "${TAG}" "${asset}" \
-              --repo ${{ github.repository }} \
-              --yes
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 上传资源到 Release
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          echo "上传资源到 Release: ${TAG}"
-          mapfile -t FILES < <(find . -maxdepth 1 -name "MusicToMidi-*-Portable*" -type f | sort)
-          upload_asset_with_retry() {
-            local tag="$1"
-            local file="$2"
-            local attempt
-            local exit_code
-
-            for attempt in 1 2 3; do
-              echo "上传(${attempt}/3): ${file}"
-              if timeout 30m gh release upload "${tag}" "${file}" \
-                --repo ${{ github.repository }} \
-                --clobber; then
-                return 0
-              fi
-
-              exit_code=$?
-              echo "上传失败(退出码=${exit_code}): ${file}"
-              if [ "${attempt}" -lt 3 ]; then
-                sleep $(( attempt * 20 ))
-              fi
-            done
-
-            echo "上传最终失败: ${file}"
-            return 1
-          }
-          echo "找到以下文件："
-          for f in "${FILES[@]}"; do
-            SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
-            echo "  $f ($(( SIZE / 1048576 )) MB)"
-          done
-          for f in "${FILES[@]}"; do
-            upload_asset_with_retry "${TAG}" "$f"
-          done
-          echo "全部上传完成"
+      - name: 核验分卷与源码身份、上传草稿并校验后公开版本
+        run: >-
+          python tools/release_assets.py publish --directory release-assets
+          --tag "$TAG" --revision "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
+          --notes "docs/releases/${TAG}.md"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

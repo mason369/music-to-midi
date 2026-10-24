@@ -66,6 +66,29 @@ XPU 构建默认对同卷的暂存资源使用 NTFS 硬链接，跨卷资源逐�
 
 ## 发布目录
 
+`release.yml` 是正式版本的唯一发布入口。推送与工程版本一致的 `vX.Y.Z` 标签，或在同一标签提交手动运行，即可执行下列流程。安装包、容器包使用同一源码 SHA；公开前校验每个平台的连续分卷和所有附件的 SHA-256。任一检查或上传失败都不会将草稿公开，也不会覆盖既有公开版本。
+
+`release.yml` is the sole versioned-release entry. Push a matching `vX.Y.Z` tag or run it manually at that exact tagged commit. Portable and Docker packages share one source SHA; publication requires consecutive volumes and verified local/remote SHA-256 for every asset. Failed checks/uploads leave the draft unpublished and never overwrite an existing public version.
+
+```mermaid
+flowchart TD
+    V[Tag / version / source SHA] --> S[Source and packaging contracts]
+    V --> W[Windows GPU build and smoke checks]
+    V --> L[Linux GPU build and smoke checks]
+    S --> D[Docker build, public pull and distribution]
+    S --> H[Space sync]
+    W --> H
+    L --> H
+    D --> H
+    H --> A[Complete assets and SHA-256 verification]
+    A --> U[Upload draft and verify remote assets]
+    U --> R[Publish one Release]
+```
+
+发行附件仅包含完整包、轻量前端、Docker ZIP/tar.gz 和 `SHA256SUMS.txt`。内部构建清单用于 Actions 任务间校验，不上传 Release；测试报告、截图和日志也不作为发行附件。包内许可证、第三方声明、依赖清单和 FFmpeg 构建记录保留。
+
+Public assets contain complete bundles, lightweight frontends, Docker ZIP/tar.gz and `SHA256SUMS.txt`. Internal build manifests are used between Actions jobs but excluded from Release assets, as are test reports, screenshots and logs. Packages retain licenses, third-party notices, dependency inventories and FFmpeg build records.
+
 - 桌面 App 的完整目录为 `dist\MusicToMidi-App\`
 - Web 版的两个完整目录为 `dist\MusicToMidi-WebBackend\` 与 `dist\MusicToMidi-WebFrontend\`
 - XPU 对应目录为 `dist\MusicToMidi-XPU-App\` 与 `dist\MusicToMidi-XPU-WebBackend\`

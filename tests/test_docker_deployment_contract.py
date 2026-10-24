@@ -357,13 +357,15 @@ def test_container_workflow_publishes_amd64_images_with_supply_chain_evidence():
     assert "镜像级烟雾验收" in workflow
     assert "tests/test_third_party_notice_packaging.py" in workflow
     assert "HF_TOKEN" not in workflow
-    assert "验收公开镜像并发布自托管发行包" in workflow
+    assert "验收公开镜像并组装自托管发行包" in workflow
     assert "docker pull --platform linux/amd64" in workflow
     assert "Public anonymous pull failed permanently" in workflow
     assert "IMAGE_DIGESTS.txt" in workflow
     assert "RELEASE-MANIFEST.json" in workflow
-    assert "MusicToMidi-Docker-SHA256SUMS-${TAG}.txt" in workflow
-    assert "gh release upload" in workflow
+    assert "tools/release_assets.py record --role Docker" in workflow
+    assert "gh release upload" not in workflow
+    assert "MusicToMidi-Docker-SBOM-${TAG}.txt" not in workflow
+    assert "release-manifest-Docker.json" in workflow
     assert "docker compose --env-file" in workflow
     assert "bash -n" in workflow
     assert "Language.Parser]::ParseFile" in workflow

@@ -88,28 +88,26 @@ Stable releases provide these files on [GitHub Releases](https://github.com/maso
 ```text
 MusicToMidi-Docker-vX.Y.Z.zip
 MusicToMidi-Docker-vX.Y.Z.tar.gz
-MusicToMidi-Docker-compose-vX.Y.Z.yaml
-MusicToMidi-Docker-env-vX.Y.Z.example
-MusicToMidi-Docker-image-digests-vX.Y.Z.txt
-MusicToMidi-Docker-SBOM-vX.Y.Z.txt
-MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
+SHA256SUMS.txt
 ```
 
 Linux ZIP verification:
 
 ```bash
 sha256sum MusicToMidi-Docker-vX.Y.Z.zip
-grep 'MusicToMidi-Docker-vX.Y.Z.zip$' MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt
+grep 'MusicToMidi-Docker-vX.Y.Z.zip$' SHA256SUMS.txt
 ```
 
 Windows PowerShell ZIP verification:
 
 ```powershell
 Get-FileHash .\MusicToMidi-Docker-vX.Y.Z.zip -Algorithm SHA256
-Select-String .\MusicToMidi-Docker-SHA256SUMS-vX.Y.Z.txt -Pattern 'MusicToMidi-Docker-vX.Y.Z.zip$'
+Select-String .\SHA256SUMS.txt -Pattern 'MusicToMidi-Docker-vX.Y.Z.zip$'
 ```
 
 Matching SHA-256 values associate the downloaded archive with the Release manifest. The packaged Compose file pins the anonymously verified image digests, so a later `latest` tag change does not alter an existing installation.
+
+Configuration, environment templates, image digests and dependency inventories remain inside the packages instead of separate attachments. Test reports, screenshots and logs are excluded. One job publishes the Release only after both portable and Docker packages succeed.
 
 The archive contains:
 

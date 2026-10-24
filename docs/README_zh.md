@@ -2,7 +2,7 @@
 
 [速度图、节拍纠错、量化强度／三连音与导出整理](midi-timing-export.md)覆盖桌面、Space、Colab、Web/API、CLI、Docker 和便携入口；实际接入固定官方 MuScriptor 0.4.0，保持七模式依赖基线。
 
-[v1.10.0 候选说明](releases/v1.10.0.md)记录多轨起点、Windows 清单句柄冲突、项目语言切换及 Web 音色跨端口加载修复，以及 Windows／本机 WSL CUDA 全量回归、Linux 包全部 13 条转写路线与两种分离模式、指定歌曲和速度对照。候选提交使用 `[no publish]` 保留 CI，停止该次推送的自动生产发布。
+[v1.10.0 功能与下载说明](releases/v1.10.0.md)介绍节拍纠错、量化、乐谱时值、Windows 项目保存及播放修复。Actions 统一验收 Windows/Linux 完整包、Docker 包与 Space 同步，全部成功后公开版本。Release 只附软件包及 SHA-256，测试报告与日志不作为下载附件。
 
 [项目、工作流配置与跨会话续跑](projects.md)
 

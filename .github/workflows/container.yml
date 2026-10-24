@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - master
-    tags:
-      - "v*"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -78,7 +81,7 @@ jobs:
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: 登录 GHCR
-        if: ${{ !contains(github.event.head_commit.message, '[no publish]') }}
+        if: ${{ inputs.release_tag != '' || !contains(github.event.head_commit.message, '[no publish]') }}
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -93,8 +96,8 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=ref,event=tag
+            type=raw,value=latest,enable=${{ inputs.release_tag != '' }}
+            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
             type=sha,prefix=sha-
 
       - name: 构建本地验收镜像
@@ -165,7 +168,7 @@ jobs:
 
       - name: 推送带 SBOM 与 provenance 的镜像
         id: push
-        if: ${{ !contains(github.event.head_commit.message, '[no publish]') }}
+        if: ${{ inputs.release_tag != '' || !contains(github.event.head_commit.message, '[no publish]') }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -182,7 +185,7 @@ jobs:
           sbom: true
 
       - name: 生成注册表证明
-        if: ${{ !contains(github.event.head_commit.message, '[no publish]') }}
+        if: ${{ inputs.release_tag != '' || !contains(github.event.head_commit.message, '[no publish]') }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ github.repository }}-${{ matrix.component }}
@@ -190,12 +193,12 @@ jobs:
           push-to-registry: true
 
   distribution:
-    name: 验收公开镜像并发布自托管发行包
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: 验收公开镜像并组装自托管发行包
+    if: ${{ inputs.release_tag != '' }}
     needs: publish
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       packages: read
     steps:
       - name: 检出版本源码
@@ -205,7 +208,7 @@ jobs:
         id: images
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           REPOSITORY=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
@@ -245,7 +248,7 @@ jobs:
       - name: 已发布镜像离线内容与网关运行验收
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
           BACKEND_REF: ${{ steps.images.outputs.backend_ref }}
           GATEWAY_REF: ${{ steps.images.outputs.gateway_ref }}
         run: |
@@ -296,7 +299,7 @@ jobs:
         id: bundle
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag }}
           BACKEND_REF: ${{ steps.images.outputs.backend_ref }}
           GATEWAY_REF: ${{ steps.images.outputs.gateway_ref }}
           BACKEND_DIGEST: ${{ steps.images.outputs.backend_digest }}
@@ -381,10 +384,6 @@ jobs:
           path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
 
-          cp "$BUNDLE_DIR/compose.yaml" "dist/MusicToMidi-Docker-compose-${TAG}.yaml"
-          cp "$BUNDLE_DIR/.env.selfhost.example" "dist/MusicToMidi-Docker-env-${TAG}.example"
-          cp "$BUNDLE_DIR/IMAGE_DIGESTS.txt" "dist/MusicToMidi-Docker-image-digests-${TAG}.txt"
-          cp "$BUNDLE_DIR/THIRD_PARTY_SBOM.txt" "dist/MusicToMidi-Docker-SBOM-${TAG}.txt"
           docker compose --env-file "$BUNDLE_DIR/.env.selfhost.example" \
             -f "$BUNDLE_DIR/compose.yaml" config --quiet
           bash -n "$BUNDLE_DIR/scripts/docker_selfhost.sh"
@@ -393,37 +392,19 @@ jobs:
 
           (cd dist && zip -qr "${BUNDLE_NAME}.zip" "$BUNDLE_NAME")
           tar -czf "dist/${BUNDLE_NAME}.tar.gz" -C dist "$BUNDLE_NAME"
-          (
-            cd dist
-            sha256sum \
-              "${BUNDLE_NAME}.zip" \
-              "${BUNDLE_NAME}.tar.gz" \
-              "MusicToMidi-Docker-compose-${TAG}.yaml" \
-              "MusicToMidi-Docker-env-${TAG}.example" \
-              "MusicToMidi-Docker-image-digests-${TAG}.txt" \
-              "MusicToMidi-Docker-SBOM-${TAG}.txt" \
-              > "MusicToMidi-Docker-SHA256SUMS-${TAG}.txt"
-          )
+          unzip -tq "dist/${BUNDLE_NAME}.zip"
+          tar -tzf "dist/${BUNDLE_NAME}.tar.gz" >/dev/null
+          python tools/release_assets.py record --role Docker --directory dist \
+            --tag "$TAG" --revision "$GITHUB_SHA"
           echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: 创建或更新 Release 并上传 Docker 发行资产
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-          BUNDLE_NAME: ${{ steps.bundle.outputs.bundle_name }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "$TAG" \
-              --notes "该版本提供 Docker 自托管包、固定镜像 digest、环境模板、管理脚本、SBOM 和 SHA-256；安装与模型配置见发行包内 README。"
-          fi
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "dist/${BUNDLE_NAME}.zip" \
-            "dist/${BUNDLE_NAME}.tar.gz" \
-            "dist/MusicToMidi-Docker-compose-${TAG}.yaml" \
-            "dist/MusicToMidi-Docker-env-${TAG}.example" \
-            "dist/MusicToMidi-Docker-image-digests-${TAG}.txt" \
-            "dist/MusicToMidi-Docker-SBOM-${TAG}.txt" \
-            "dist/MusicToMidi-Docker-SHA256SUMS-${TAG}.txt"
+      - name: 交付 Docker 包给统一发布任务
+        uses: actions/upload-artifact@v7
+        with:
+          name: MusicToMidi-Docker
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            dist/${{ steps.bundle.outputs.bundle_name }}.zip
+            dist/${{ steps.bundle.outputs.bundle_name }}.tar.gz
+            dist/release-manifest-Docker.json

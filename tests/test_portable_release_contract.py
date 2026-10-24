@@ -214,13 +214,13 @@ class PortableReleaseContractTests(unittest.TestCase):
     def test_release_workflow_checks_version_tag_parity_before_mutating_release(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("Version contract verified:", workflow)
-        self.assertIn('Path("pyproject.toml")', workflow)
-        self.assertIn('Path("src/__init__.py")', workflow)
-        self.assertIn('expected_tag = f"v{project_version}"', workflow)
+        self.assertIn("Release tag, project version and runtime version must agree", workflow)
+        self.assertIn("Path('pyproject.toml')", workflow)
+        self.assertIn("Path('src/__init__.py')", workflow)
+        self.assertIn("Release tag must point to this exact workflow commit", workflow)
         self.assertLess(
-            workflow.index("校验 pyproject、运行时版本与发布标签一致"),
-            workflow.index("创建 Release（如不存在）"),
+            workflow.index("校验版本、标签与源码提交"),
+            workflow.index("tools/release_assets.py publish"),
         )
 
     def test_portable_usage_and_asset_log_cover_all_seven_routes_and_backends(self):
@@ -252,11 +252,13 @@ class PortableReleaseContractTests(unittest.TestCase):
         )
         self.assertIn("TransKun 2.0.1 default V2", workflow)
 
-    def test_release_workflow_uses_timeout_and_retry_for_release_uploads(self):
+    def test_release_uploads_are_bounded_and_fail_without_retries(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
-        self.assertIn("upload_asset_with_retry", workflow)
-        self.assertIn("timeout 30m gh release upload", workflow)
+        publisher = (REPO_ROOT / "tools" / "release_assets.py").read_text(encoding="utf-8")
+        self.assertIn("tools/release_assets.py publish", workflow)
+        self.assertIn("timeout=1800", publisher)
+        self.assertNotIn("upload_asset_with_retry", workflow)
+        self.assertNotIn("--clobber", publisher)
 
     def test_release_workflow_cleans_build_cache_before_compressing_large_bundles(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -558,34 +560,30 @@ class PortableReleaseContractTests(unittest.TestCase):
         self.assertNotIn("MusicToMidi-Windows-CPU", workflow)
         self.assertNotIn("MusicToMidi-Linux-CPU", workflow)
 
-    def test_release_workflow_removes_stale_cpu_assets_before_upload(self):
+    def test_release_rejects_unexpected_assets_without_mutating_public_versions(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
-        self.assertIn("删除旧 CPU 发布资产", workflow)
-        self.assertIn('select(test("^MusicToMidi-.*-CPU-Portable"))', workflow)
-        self.assertIn("gh release delete-asset", workflow)
-        self.assertLess(
-            workflow.index("删除旧 CPU 发布资产"),
-            workflow.index("上传资源到 Release"),
-        )
+        publisher = (REPO_ROOT / "tools" / "release_assets.py").read_text(encoding="utf-8")
+        self.assertNotIn("gh release delete-asset", workflow)
+        self.assertIn("Draft contains an unexpected or mismatched asset", publisher)
+        self.assertIn("Refusing to overwrite an already published release", publisher)
 
     def test_release_workflow_updates_existing_release_notes(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         notes = (REPO_ROOT / "docs" / "releases" / "v1.8.0.md").read_text(encoding="utf-8")
 
-        self.assertIn("更新 Release 说明", workflow)
-        self.assertIn("gh release edit", workflow)
-        self.assertIn("--notes-file release-notes.md", workflow)
-        self.assertIn('NOTES_PATH="docs/releases/${TAG}.md"', workflow)
-        self.assertIn('test -s "$NOTES_PATH"', workflow)
-        self.assertIn('cp "$NOTES_PATH" release-notes.md', workflow)
+        publisher = (REPO_ROOT / "tools" / "release_assets.py").read_text(encoding="utf-8")
+        self.assertIn('--notes "docs/releases/${TAG}.md"', workflow)
+        self.assertIn('"--notes-file"', publisher)
+        self.assertIn("str(notes)", publisher)
+        self.assertIn('"--draft=false"', publisher)
+        self.assertIn("Refusing to overwrite an already published release", publisher)
         self.assertIn("## 音乐转 MIDI v1.8.0", notes)
         self.assertIn("## Music to MIDI v1.8.0", notes)
         self.assertIn("不能匿名全自动下载", notes)
         self.assertIn("anonymous fully automatic download is not available", notes)
         self.assertLess(
-            workflow.index("更新 Release 说明"),
-            workflow.index("上传资源到 Release"),
+            publisher.index("Remote release asset digest/size/state verification failed"),
+            publisher.index('"--draft=false"'),
         )
 
     def test_release_workflow_filters_pinned_runtime_packages_from_requirements_build(self):

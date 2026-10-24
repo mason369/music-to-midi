@@ -4,6 +4,8 @@
 
 [更新说明](CHANGELOG.md)
 
+[v1.10.0 功能与下载说明](docs/releases/v1.10.0.md)：Actions 统一验收 Windows/Linux 完整包、Docker 包与 Space 同步，全部成功后公开版本。Release 只附软件包及 SHA-256，测试报告与日志不作为下载附件。
+
 <p align="center">
   中文 | <a href="./docs/README.md">English</a>
 </p>
@@ -268,7 +270,7 @@ models/yourmt3_all                  # 打包资源
 
 速度图贯通试听、编辑与导出，新增不变速节拍纠错、量化强度、三连音、自动网格和显式导出整理；所有交付面与 API/CLI 参数见[时间轴与导出说明](docs/midi-timing-export.md)。推理包直接接入固定官方 0.4.0，七模式依赖基线不变。
 
-0.4.0 融合已补齐多轨共有原音起点，并修复 Windows 项目清单句柄冲突、项目语言切换及 Web 音色脚本跨端口加载。Windows／本机 WSL CUDA 全量回归、Linux 包全部 13 条转写路线与两种分离模式、指定歌曲及速度对照见 [v1.10.0 候选说明](docs/releases/v1.10.0.md)。候选提交使用 `[no publish]` 保留 CI，停止该次推送的自动生产发布。
+0.4.0 融合已补齐多轨共有原音起点，并修复 Windows 项目清单句柄冲突、项目语言切换及 Web 音色脚本跨端口加载。功能与下载方式见 [v1.10.0 发布说明](docs/releases/v1.10.0.md)；发布流程统一核对源码提交、两平台完整包和容器包，全部成功后公开下载。
 
 运行日志现记录官方 MIDI writer 实际采用的 onset 校正、小节偏移及两者合成的净时间偏移；写出前保持“待计算”，不再误报为禁用校正或零偏移。此修复不改变 MIDI 字节，不增加模型推理或音符分析次数。后台实测与发布前检查见[时间轴核验](docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
 

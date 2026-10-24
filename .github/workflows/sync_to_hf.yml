@@ -41,12 +41,20 @@ on:
 
   # 支持手动触发
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+    secrets:
+      HF_TOKEN:
+        required: true
 
 jobs:
   sync:
     name: 同步到 HF Space
     # A verified source-only push must not deploy the production Space.
-    if: ${{ !contains(github.event.head_commit.message, '[no publish]') }}
+    if: ${{ inputs.release_tag != '' || !contains(github.event.head_commit.message, '[no publish]') }}
     runs-on: ubuntu-latest
 
     steps:
