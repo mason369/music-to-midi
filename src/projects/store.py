@@ -344,9 +344,18 @@ def project_path(value: str | Path) -> Path:
 
 class ProjectStore:
     def __init__(self, root: str | Path):
-        candidate = project_path(root)
-        self.root = candidate.parent if candidate.name == PROJECT_FILE else candidate
+        # Resolve the stable directory, never the replaceable manifest. On
+        # Windows Path.resolve() itself opens a non-delete-sharing handle.
+        candidate = Path(root).expanduser()
+        self.root = project_path(candidate.parent if candidate.name == PROJECT_FILE else candidate)
         self.path = self.root / PROJECT_FILE
+
+    def exists(self) -> bool:
+        """Metadata probes must obey the same mutex as JSON reads and writes."""
+        if not self.root.is_dir():
+            return False
+        with state_access(self.root):
+            return self.path.is_file()
 
     @property
     def run_lock(self) -> Path:

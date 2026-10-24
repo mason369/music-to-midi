@@ -489,11 +489,15 @@ def test_real_soundfont_chords_follow_windows_transport_and_boost(
             assert widget._playback_engine.output_stream_count == 1
             assert widget._playback_engine.position_seconds >= target
         widget.chord_controls.value.setValue(200)
-        QTest.qWait(80)
+        assert widget._playback_engine._source._chord_target_gain == 2
+        # Device callbacks consume the gain ramp; 80 ms may precede the next
+        # Windows buffer refill after seek. Observe actual consumption instead.
+        qtbot.waitUntil(lambda: widget._playback_engine._source._chord_gain == 2, timeout=1000)
         assert widget._playback_engine._source._chord_gain == 2
         assert widget.grab().save(str(tmp_path / f"chords-playing-{language}.png"))
         widget.chord_controls.value.setValue(0)
-        QTest.qWait(100)
+        assert widget._playback_engine._source._chord_target_gain == 0
+        qtbot.waitUntil(lambda: widget._playback_engine._source._chord_gain == 0, timeout=1000)
         assert widget._playback_engine._source._chord_gain == 0
         assert widget._playing
         widget.chord_controls.value.setValue(150)

@@ -21,7 +21,7 @@ from src.core.soundfont_library import (
     read_soundfont,
     soundfont_selection,
 )
-from src.gui.web.soundfont_runtime import SOUNDFONT_JS
+from src.gui.web.soundfont_runtime import SOUNDFONT_CSS, SOUNDFONT_JS
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import muscriptor_instrument_label
 
@@ -112,8 +112,12 @@ def install_soundfont_routes(app, manager, *, prefix="/api/v1/jobs", include_run
     def soundfont_ui():
         return Response(SOUNDFONT_JS, media_type="text/javascript")
 
+    def soundfont_css():
+        return Response(SOUNDFONT_CSS, media_type="text/css")
+
     if include_runtime:
         app.add_api_route("/api/v1/soundfont-ui.js", soundfont_ui, methods=["GET"], include_in_schema=False)
+        app.add_api_route("/api/v1/soundfont-ui.css", soundfont_css, methods=["GET"], include_in_schema=False)
 
     @app.get(prefix + "/{job_id}/soundfonts/{artifact_id}")
     def soundfont_catalog(job_id: str, artifact_id: str):

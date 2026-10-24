@@ -2590,7 +2590,9 @@ class MuscriptorResultWidget(QFrame):
         if self._roll_content_layout.direction() != direction:
             self._roll_content_layout.setDirection(direction)
         margins = self.layout().contentsMargins()
-        available = max(1, self.width() - margins.left() - margins.right())
+        # QFrame's border is outside its layout contents. Including those pixels
+        # here predicts wider rows than QSplitter actually gives the panel.
+        available = max(1, self.contentsRect().width() - margins.left() - margins.right())
         controls = self.result_controls_panel.layout()
         required_height = controls.totalHeightForWidth(available)
         if required_height >= 0:

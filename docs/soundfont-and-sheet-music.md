@@ -1,5 +1,21 @@
 # 音色库与乐谱导出 / SoundFonts and sheet music
 
+独立 Web 音色控件的脚本与样式分别从页面同源的 `/api/v1/soundfont-ui.js`、`/api/v1/soundfont-ui.css` 加载。便携前端直接提供共享资源，Docker 同源网关由 API 提供；推理数据请求仍使用配置的后端。Space/Colab 在既有页面 head 嵌入相同 JS/CSS。该结构兼容 `script-src 'self'` 和 Docker 的 `style-src 'self'`，无需跨域脚本、动态执行字符串或放宽 CSP。
+
+Standalone Web loads SoundFont scripts/styles from same-origin `/api/v1/soundfont-ui.js` and `/api/v1/soundfont-ui.css`. The portable frontend serves shared assets directly; Docker's same-origin gateway serves them through the API. Inference requests still use the configured backend. Space/Colab embed the same JS/CSS in their existing page head. This respects self-only script/style policies without remote scripts, eval or weakened CSP.
+
+```mermaid
+flowchart LR
+    S[共享音色 JS / CSS · Shared definitions] --> F[便携前端同源路径 · Portable frontend origin]
+    S --> A[API 资源路径 · API assets]
+    A --> G[Docker 同源网关 · Same-origin gateway]
+    S --> H[Space / Colab head]
+    F --> B[浏览器音色控件 · Browser picker]
+    G --> B
+    B --> R[所选后端 FluidSynth · Configured render backend]
+    H --> R
+```
+
 ## MIDI 声部、和弦与走带
 
 - 新结果默认所有声部可见、可听；重新打开结果不继承上一结果的静音或独奏。S 可多选，两条贝斯可一起试听、一起导出；手动静音优先于独奏，退出独奏后恢复原静音设置。

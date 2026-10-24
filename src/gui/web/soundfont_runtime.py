@@ -1,5 +1,7 @@
 """Shared SoundFont controls for Gradio and the standalone browser client."""
 
+SOUNDFONT_CSS = ".soundfont-panel{margin:10px 0;padding:10px;border:1px solid #365f8d;border-radius:7px;min-width:0}.soundfont-panel summary{cursor:pointer;font-weight:600}.soundfont-panel p{font-size:12px;line-height:1.6;overflow-wrap:anywhere}.soundfont-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.soundfont-controls label{display:flex;flex-direction:column;gap:4px;min-width:0;max-width:100%;font-size:12px}.soundfont-controls select,.soundfont-controls input{max-width:100%;min-width:0;width:210px}.soundfont-controls select,.soundfont-controls button{padding:7px;border:1px solid #456582;border-radius:5px;background:#172941;color:#e0e0e0;min-height:34px}.soundfont-panel audio{max-width:100%;width:100%;margin-top:8px}"
+
 SOUNDFONT_JS = r"""
 (function () {
   "use strict";
@@ -9,9 +11,6 @@ SOUNDFONT_JS = r"""
     if (text) element.textContent = text;
     return element;
   }
-  var style = node('style');
-  style.textContent = '.soundfont-panel{margin:10px 0;padding:10px;border:1px solid #365f8d;border-radius:7px;min-width:0}.soundfont-panel summary{cursor:pointer;font-weight:600}.soundfont-panel p{font-size:12px;line-height:1.6;overflow-wrap:anywhere}.soundfont-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.soundfont-controls label{display:flex;flex-direction:column;gap:4px;min-width:0;max-width:100%;font-size:12px}.soundfont-controls select,.soundfont-controls input{max-width:100%;min-width:0;width:210px}.soundfont-controls select,.soundfont-controls button{padding:7px;border:1px solid #456582;border-radius:5px;background:#172941;color:#e0e0e0;min-height:34px}.soundfont-panel audio{max-width:100%;width:100%;margin-top:8px}';
-  document.head.appendChild(style);
   function Picker(options) {
     var self = this;
     this.options = options;

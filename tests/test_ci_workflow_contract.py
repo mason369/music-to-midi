@@ -48,7 +48,7 @@ class CiWorkflowContractTests(unittest.TestCase):
 
         self.assertIn(
             '"muscriptor @ https://github.com/muscriptor/muscriptor/archive/'
-            'd73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip" --no-deps',
+            '8a1ef88672cc23c26619adaff37ec48d82c0b906.zip" --no-deps',
             workflow,
         )
         self.assertNotIn("patch_muscriptor_runtime.py", workflow)

@@ -1403,7 +1403,7 @@ def ensure_miros_weights():
 
 
 def ensure_muscriptor_runtime():
-    """Install and strictly verify the released MuScriptor v0.3.0 source."""
+    """Install and strictly verify the pinned official MuScriptor source."""
     from src.utils.subprocess_utils import hidden_subprocess_kwargs
     from src.core.muscriptor_transcriber import (
         MUSCRIPTOR_SOURCE_COMMIT,

@@ -55,7 +55,17 @@ def test_soundfont_http_import_is_bound_to_midi_and_persists_catalog(tmp_path):
             ).status_code
             == 422
         )
-        assert client.get("/api/v1/soundfont-ui.js").status_code == 200
+        from src.gui.web.soundfont_runtime import SOUNDFONT_CSS, SOUNDFONT_JS
+        from src.gui.web.muscriptor_result_runtime import muscriptor_result_head
+
+        script = client.get("/api/v1/soundfont-ui.js")
+        stylesheet = client.get("/api/v1/soundfont-ui.css")
+        assert script.status_code == stylesheet.status_code == 200
+        assert script.text == SOUNDFONT_JS
+        assert stylesheet.text == SOUNDFONT_CSS
+        assert stylesheet.headers["content-type"].startswith("text/css")
+        assert "node('style')" not in script.text
+        assert SOUNDFONT_CSS in muscriptor_result_head()
 
 
 def test_gradio_presets_are_token_bound_and_cache_identity_includes_bank(tmp_path):

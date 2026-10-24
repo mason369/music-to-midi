@@ -15,7 +15,7 @@ def test_public_readmes_identify_muscriptor_and_its_score_protocol():
         "MuScriptor Large",
         "MuScriptor Medium",
         "MuScriptor Small",
-        "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
+        "8a1ef88672cc23c26619adaff37ec48d82c0b906",
         "60.4 / 72.4 / 48.6 / 49.6 / 47.8",
         "372",
         "CC BY-NC 4.0",

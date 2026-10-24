@@ -16,7 +16,7 @@ from src.core.muscriptor_result_assets import (
     DEFAULT_MIDI_AUDIO_EXPORT_PRESET,
     MIDI_AUDIO_EXPORT_PRESETS,
 )
-from src.gui.web.soundfont_runtime import SOUNDFONT_JS, SOUNDFONT_STRING_KEYS
+from src.gui.web.soundfont_runtime import SOUNDFONT_CSS, SOUNDFONT_JS, SOUNDFONT_STRING_KEYS
 from src.gui.web.track_mixer_runtime import track_file_url
 from src.models.gm_instruments import get_instrument_name
 from src.models.muscriptor_instruments import (
@@ -3445,4 +3445,4 @@ MUSCRIPTOR_RESULT_JS = r"""
 
 
 def muscriptor_result_head() -> str:
-    return f"<style>{MUSCRIPTOR_RESULT_CSS}</style><script>{SOUNDFONT_JS}\n{MUSCRIPTOR_RESULT_JS}</script>"
+    return f"<style>{MUSCRIPTOR_RESULT_CSS}\n{SOUNDFONT_CSS}</style><script>{SOUNDFONT_JS}\n{MUSCRIPTOR_RESULT_JS}</script>"

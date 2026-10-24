@@ -71,7 +71,7 @@ def test_backend_image_is_pinned_headless_non_root_and_model_free():
         "onnxruntime-gpu==1.23.2",
         "audio-separator==0.44.1",
         "transkun==2.0.1",
-        "muscriptor==0.3.0",
+        "muscriptor==0.4.0",
     ):
         assert identity in constraints
     assert dockerfile.count("--constraint /tmp/backend-constraints.txt") == 2

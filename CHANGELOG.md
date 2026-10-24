@@ -1,8 +1,35 @@
 # 更新说明 / Changelog
 
-## 未发布 / Unreleased — 2026-10-21
+## v1.10.0 候选，未发布 / Candidate, unreleased — 2026-10-24
+
+### 官方 0.4.0 融合与发版复核 / Official 0.4.0 integration and release preparation
+
+- 实际 MuScriptor 推理包升级为未修改的官方 0.4.0，固定 `8a1ef88672cc23c26619adaff37ec48d82c0b906`，同步七文件身份校验、接口检查、安装器、Space、Docker、CI、打包与第三方清单。保留三档权重、精度、五秒窗口和官方解码；既有后端接受项目唯一一次 Beat This 分析，时间轴由共享层统一处理，不新增版本转换路线或重复推理。
+- 根治本次复现的 Windows 项目清单 WinError 5：存在性探针进入原有状态互斥，构造器只解析稳定父目录，消除清单元数据句柄与原子替换的冲突。两组真实 Win32 句柄／事件屏障测试在旧实现确定性失败、修复后通过；没有重试、等待补丁、吞异常或备用清单。
+- 修复独立 Web 项目面板切换语言时默认名称、状态与可访问标签残留旧语言，保留自定义名称及当前选择；中英文真实浏览器验证。修复音色控件从不同端口加载脚本被 CSP 拦截的问题，脚本／样式同源交付并复用共享实现，覆盖独立前后端、Docker 与 Gradio，不放宽安全策略。
+- 项目结果在切换语言等重绘中继续隐藏独立任务专用的删除按钮；Linux 项目包可导入 Windows 后直接恢复 MIDI 和乐谱，不重新推理。
+- Windows 全量 1,865 通过、270 子测试通过；本机 WSL Linux CUDA 全量 1,829 通过、36 项 Windows 专用跳过、270 子测试通过。Linux 原生包移目录后完成全部 13 条 MIDI 路线和两种 WAV 分离模式的真实 GPU 片段验收，以及浏览器上传、转换和 MuseScore 乐谱下载；相关后续同源修复另有 100 项 Windows 回归通过，不把重叠批次累计为总数。
+
+- 修复 Type 0/1 MIDI 首拍纠错按轨读取原音偏移的问题：conductor 轨中唯一的偏移现在供所有同步轨道共用，保留正／负偏移，与 BPM、倍频及空小节裁切组合时仍保持原音相对时间；Type 2 序列分别读取自己的偏移。新增六组真实多轨、变速 MIDI 回归，修改前六组均能复现问题。没有增加转写调用、音符过滤或精度降级。
+- 修复结果页用外框宽度计算流式布局导致的英文窄窗口控件裁切，改用实际内容宽度；测试同时核对布局所需高度与控件边界。
+- 修正 FLAC 跨平台验收假设：Windows 的 FFmpeg 可拒绝尾部标签，Linux 的版本可完整解码；拒绝时核对原错误，成功时逐样本核对 PCM。生产严格解码、完整帧数／样本 MD5 校验及坏帧拒绝保持不变。真实音频设备测试同时检查目标音量即时更新与下一缓冲区实际应用，不再用短于设备回调间隔的固定等待断言。
+- 版本、Docker 默认标签与安装契约准备为 1.10.0；发布工作流在资源准备后执行受影响回归。增加 `[no publish]` 提交标记及契约测试：保持 CI 与镜像构建／冒烟，阻止本次推送同步 Hugging Face 和发布 GHCR；不创建生产标签、Release 或部署。
+- 指定 243 秒歌曲使用官方 0.4.0 Large 完成 49/49 窗口、7,286 音符、6 声部／7 轨，耗时 413.47 秒，旧基线 406.17 秒如实保留。同片段旧→新→新→旧对照的 697 个事件完全一致，平均生成 15.5720→15.5411 秒，未观察到速度回归。新旧整曲差异符合官方 tick 取整和鼓时值由 10 ms 改为 1/32 拍的语义。真实 FluidSynth/MuseScore General 输出 48 kHz/24-bit WAV、320 kbps MP3，无削波；纠错保留全部音符载荷、原音相对误差小于 0.63 ms，不重新推理。没有标注参考，不将一致性当作准确率评分；详见[候选说明](docs/releases/v1.10.0.md)。
+- Upgraded the actual inference package to unmodified official MuScriptor 0.4.0 at `8a1ef88672cc23c26619adaff37ec48d82c0b906`, aligning seven-file identity/API checks, installers, Space, Docker, CI, packages and notices. Weights, precision, five-second windows and official decoding remain; the existing backend consumes one project Beat This analysis and shared timing, with no version-labelled route or extra inference.
+- Fixed the reproduced Windows manifest WinError 5 by protecting existence probes with the existing state mutex and resolving only the stable parent directory during construction. Two real Win32-handle/barrier regressions fail deterministically before repair and pass afterward. No retries, delay patches, swallowed errors or alternate manifests were added.
+- Web project language changes now update untouched defaults, statuses and accessible labels while retaining custom names/selection, verified in both locales. SoundFont scripts/styles are served from the page origin through the shared implementation, fixing cross-port script blocking in standalone frontend/backend, Docker and Gradio without weakening CSP.
+- Project-result redraws, including language changes, keep standalone-job deletion controls hidden. A Linux project archive imports into Windows and restores MIDI/scores without repeating inference.
+- Full Windows: 1,865 passed plus 270 subtests. Local WSL CUDA: 1,829 passed, 36 Windows-only skips plus 270 subtests. Relocated native Linux packages exercised all 13 MIDI routes and two WAV-separation modes on actual GPU audio, plus browser upload/conversion and MuseScore download. The later same-origin change passed 100 affected Windows checks; overlapping batches are not summed.
+- Fixed shared source origins in synchronous Type 0/1 MIDI: a conductor-only offset now applies to every track during downbeat correction and trimming, including positive/negative offsets and BPM/beat-scale combinations. Type 2 sequences retain independent origins. All six new real multitrack regressions reproduced the issue before the fix. No extra transcription, note filtering or precision change was introduced.
+- Fixed narrow English editor controls clipping by measuring the frame's actual content width; regression checks cover both required layout height and control bounds. Cross-platform FLAC checks now require exact PCM when FFmpeg accepts trailing tags and the original diagnostic when it rejects them. Strict production validation and corrupted-frame rejection are unchanged. Device checks verify both immediate gain targets and actual buffer consumption instead of assuming a fixed short callback interval.
+- Prepared 1.10.0 application/Docker defaults and resource-backed release regressions. A tested `[no publish]` commit gate preserves CI/container build-smoke checks but prevents this push from publishing to Hugging Face/GHCR. No production tag, Release or deployment is created.
+- Official 0.4.0 Large completed all 49 chunks of the requested 243-second song: 7,286 notes, six voices/seven tracks, 413.47 seconds versus the honestly retained 406.17-second baseline. Controlled old/new/new/old excerpt runs yielded identical 697-event sequences and mean generation 15.5720→15.5411 seconds, with no observed slowdown. Whole-song MIDI differences match official tick rounding and drums changing from 10 ms to 1/32 beat. FluidSynth/MuseScore General produced unclipped 48 kHz/24-bit WAV and 320 kbps MP3; corrections retain payloads within 0.63 ms source-relative error without inference. No annotated reference supports an accuracy claim; details are in the candidate notes.
 
 ### MIDI 时间轴、纠错与导出增强 / MIDI timing, correction and export
+
+以下保留第一阶段实现与验证记录；其中 0.3.0 包及尚未打包的状态已由上面的 0.4.0 融合和 Windows/WSL 验收替代。
+
+The following preserves first-stage implementation and validation history; its 0.3.0 package and pre-packaging status are superseded by the integration and Windows/WSL acceptance above.
 
 - 修通自适应速度图在桌面、Space/Colab 共用编辑器、工程重开、原音/MIDI 联动试听、音符编辑、量化及 MIDI/WAV/分轨/乐谱导出中的传递。工程变速缩放整张速度图；保留踏板、控制器、pitch bend、SysEx、音符释放力度及其他保留事件。新增工程倍率元数据，裁切后只剩一个速度段时仍能恢复参考时间轴，避免二次变速。
 - 新增显式、不改变原音相对演奏时间的 BPM、拍号、首个强拍和 0.25×／0.5×／1×／2×／4× 拍点倍频纠错，与真实工程变速分开并保留既有倍率。沿用 4–400 BPM 范围，越界先报错并保留当前结果；尚未失焦的 BPM 数字输入也会在应用时提交。

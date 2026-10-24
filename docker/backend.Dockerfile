@@ -100,7 +100,7 @@ RUN python -m pip install --no-cache-dir \
         six==1.17.0 \
     && python -m pip install --no-cache-dir audio-separator==0.44.1 --no-deps \
     && python -m pip install --no-cache-dir \
-        "muscriptor @ https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip" \
+        "muscriptor @ https://github.com/muscriptor/muscriptor/archive/8a1ef88672cc23c26619adaff37ec48d82c0b906.zip" \
         --no-deps \
     && python -m pip install --no-cache-dir \
         "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip" \
@@ -144,7 +144,7 @@ expected = {
     "onnxruntime-gpu": "1.23.2",
     "audio-separator": "0.44.1",
     "transkun": "2.0.1",
-    "muscriptor": "0.3.0",
+    "muscriptor": "0.4.0",
 }
 actual = {name: metadata.version(name).split("+", 1)[0] for name in expected}
 if actual != expected:

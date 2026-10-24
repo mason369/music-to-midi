@@ -16,14 +16,14 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 |---|---|
 | 开发者 | Kyutai、Mirelo AI、IRCAM 研究人员 |
 | 论文 | [MuScriptor: An Open Model for Multi-Instrument Music Transcription](https://arxiv.org/abs/2607.08168)，arXiv v1：2026-07-09 |
-| 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.3.0`：2026-08-05 |
+| 官方代码 | [muscriptor/muscriptor](https://github.com/muscriptor/muscriptor)，MIT；最新公开 release `v0.4.0`：2026-10-20 |
 | 官方权重 | [MuScriptor/muscriptor-large](https://huggingface.co/MuScriptor/muscriptor-large)，gated、CC BY-NC 4.0，并附额外合法使用条件 |
 | Hub 时间 | [Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录仓库创建于 2026-06-30、最后更新于 2026-07-10 |
-| 本项目固定代码 | 未修改的官方 `v0.3.0` commit `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，七个运行时源码文件均经 SHA-256 身份校验。产品默认使用官方 `TranscriptionModel`，另有显式可选的下游 TelkNet Issue #74 子类；项目向官方 writer 提供项目 BeatGrid。writer 可执行 onset 校正和小节对齐，不能据此声称最终 MIDI 保持模型原生秒数；见下方 2026-10-12 复核 |
+| 本项目固定代码 | 未修改的官方 `v0.4.0` commit `8a1ef88672cc23c26619adaff37ec48d82c0b906`，七个运行时源码文件均经 SHA-256 身份校验。产品默认使用官方 `TranscriptionModel`，另有显式可选的下游 TelkNet Issue #74 子类；项目向官方 writer 提供项目 BeatGrid。writer 可执行 onset 校正和小节对齐，不能据此声称最终 MIDI 保持模型原生秒数；见下方 2026-10-12 复核 |
 | 本项目固定权重 | revision `8809fdfbed2affa7ade94a7059e746e3880720e7`，`model.safetensors` 5,465,642,136 bytes |
 | Intel XPU 加载 | `safetensors==0.8.0` 官方 `pread`；先打开惰性文件句柄，再建立约 5.50 GiB 统一内存模型，随后按偏移逐张量复制；读取失败时停止加载 |
 
-发布时间线：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.3.0` 在 8 月 5 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
+发布时间线：Hub 仓库在正式发布前已于 6 月 30 日建立；论文和 Mirelo 文章在 7 月 9 日发布；当前权重 revision 在 7 月 10 日更新；官方源码 `v0.4.0` 在 10 月 20 日发布。Hub 的 `createdAt` / `lastModified` 是仓库元数据时间，不是训练完成时间，也不表示更早已有同一套公开代码、文档和最终 revision。
 
 ### 分段衔接
 
@@ -100,7 +100,7 @@ MuScriptor Large / Medium / Small 是开放权重的完整混音多乐器 AMT �
 
 ### 2026-10-12 条件生成复核
 
-官方 `instruments` 同时影响条件向量和生成阶段的乐器 token 屏蔽，不只是输出轨道过滤器。留空才是官方不提供乐器条件的自动识别；把全部 35 个可选组传入并不等价于留空。论文的条件列表描述的是曲目中存在的乐器，不能把候选类别或文件名当作已确认编制。[官方推理实现](https://github.com/muscriptor/muscriptor/blob/d73147e75e5b9b0c0a79ebe154587db4fd603e0c/muscriptor/transcription_model.py)、[论文](https://arxiv.org/html/2607.08168v1)共同界定此语义。
+官方 `instruments` 同时影响条件向量和生成阶段的乐器 token 屏蔽，不只是输出轨道过滤器。留空才是官方不提供乐器条件的自动识别；把全部 35 个可选组传入并不等价于留空。论文的条件列表描述的是曲目中存在的乐器，不能把候选类别或文件名当作已确认编制。[官方推理实现](https://github.com/muscriptor/muscriptor/blob/8a1ef88672cc23c26619adaff37ec48d82c0b906/muscriptor/transcription_model.py)、[论文](https://arxiv.org/html/2607.08168v1)共同界定此语义。
 
 已修正桌面、Space、Colab、独立 Web 的输入接入：导入音频或新建分轨不再根据文件名自动填写硬条件。新轨道使用空列表，显式选择和项目中保存的选择继续按其工作流传递；既不把全选偷偷改成空选，也不自动缩减选择数量。API 原本即以空列表为默认值；Docker、便携 Web 与可执行桌面复用对应源码。
 

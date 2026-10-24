@@ -975,7 +975,7 @@ function loadSoundfontRuntime() {
   if (!soundfontRuntimePromise) {
     soundfontRuntimePromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `${state.apiBase}/api/v1/soundfont-ui.js`;
+      script.src = "/api/v1/soundfont-ui.js";
       script.onload = () => resolve();
       script.onerror = () => { soundfontRuntimePromise = null; script.remove(); reject(new Error(t("soundfont.failed", { error: "SoundFont UI HTTP" }))); };
       document.head.append(script);
@@ -1090,7 +1090,7 @@ function renderArtifacts(job) {
 function renderPrimaryResult(job, { restoreTracks = true, scroll = true } = {}) {
   if (scroll) setWorkspacePage("result");
   $("#retryJob").hidden = true;
-  $("#deleteJob").hidden = false;
+  $("#deleteJob").hidden = job.id.startsWith("project-");
   state.currentJob = job;
   const result = job.result || {};
   $("#resultPanel").hidden = false;

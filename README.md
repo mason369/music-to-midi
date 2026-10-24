@@ -266,13 +266,15 @@ models/yourmt3_all                  # 打包资源
 
 ### MuScriptor Large / Medium / Small
 
-速度图贯通试听、编辑与导出，新增不变速节拍纠错、量化强度、三连音、自动网格和显式导出整理；所有交付面与 API/CLI 参数见[时间轴与导出说明](docs/midi-timing-export.md)。推理继续固定官方 0.3.0，七模式依赖基线不变。
+速度图贯通试听、编辑与导出，新增不变速节拍纠错、量化强度、三连音、自动网格和显式导出整理；所有交付面与 API/CLI 参数见[时间轴与导出说明](docs/midi-timing-export.md)。推理包直接接入固定官方 0.4.0，七模式依赖基线不变。
+
+0.4.0 融合已补齐多轨共有原音起点，并修复 Windows 项目清单句柄冲突、项目语言切换及 Web 音色脚本跨端口加载。Windows／本机 WSL CUDA 全量回归、Linux 包全部 13 条转写路线与两种分离模式、指定歌曲及速度对照见 [v1.10.0 候选说明](docs/releases/v1.10.0.md)。候选提交使用 `[no publish]` 保留 CI，停止该次推送的自动生产发布。
 
 运行日志现记录官方 MIDI writer 实际采用的 onset 校正、小节偏移及两者合成的净时间偏移；写出前保持“待计算”，不再误报为禁用校正或零偏移。此修复不改变 MIDI 字节，不增加模型推理或音符分析次数。后台实测与发布前检查见[时间轴核验](docs/muscriptor-model.md#2026-10-12-时间轴日志修正与发布前核验)。
 
-项目严格固定上游官方 `v0.3.0` 提交 `d73147e75e5b9b0c0a79ebe154587db4fd603e0c`，
+项目严格固定上游官方 `v0.4.0` 提交 `8a1ef88672cc23c26619adaff37ec48d82c0b906`，
 并对七个运行时源码文件执行 SHA-256 身份校验，不叠加未合并分支。全项目唯一的
-Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍直接传给 v0.3.0 BeatGrid：官方 onset
+Beat This `final0` 分析会把完整拍点、BPM、可靠拍号和首个强拍直接传给 v0.4.0 BeatGrid：官方 onset
 相位估计在满足样本数与集中度阈值时校正系统性起音偏移，不满足阈值时明确记录 0 校正；项目不再启动第二套节拍检测，也不接受占位
 120 BPM。写出的 MIDI 包含真实 tempo、拍号、小节相位和可验证的前置偏移标记；tempo 归一化后还会严格复制到每个含音符轨，
 兼容 MuseScore 的 conductor-track 行为。桌面、Space 和 Colab 的 MuScriptor 钢琴卷帘使用同一 Beat This 网格显示拍线、强拍线和交替小节底色。
@@ -325,7 +327,7 @@ MuScriptor 是 Kyutai、Mirelo AI 与 IRCAM 研究人员在 2026 年 7 月公开
 
 这些分数表明 MuScriptor Large 是很强的公开完整混音候选，但不是“所有 benchmark 的无条件 SOTA”：`D_Test` 是作者自建留出集，尚无公共下载入口；在论文列出的 8 个公共跨域数据集上，MuScriptor 的 Multi F1 高于 YourMT3+ 其中 6 个、低于其中 2 个。它也不输出 velocity，只提供 36 组乐器分类，并受 CC BY-NC 4.0 非商用许可约束。
 
-发布时间也应分开理解：[Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录模型仓库创建于 2026-06-30；[论文](https://arxiv.org/abs/2607.08168)与 [Mirelo 官方文章](https://mirelo.ai/blog/turning-audio-to-midi)发表于 2026-07-09；当前公开权重 revision 更新于 2026-07-10，而本项目固定的官方 MuScriptor `v0.3.0` 源码发布于 2026-08-05。仓库与源码发布日期不等于权重被重新训练；三个公开模型 revision 仍按各自 SHA 精确固定。
+发布时间也应分开理解：[Hugging Face API](https://huggingface.co/api/models/MuScriptor/muscriptor-large) 记录模型仓库创建于 2026-06-30；[论文](https://arxiv.org/abs/2607.08168)与 [Mirelo 官方文章](https://mirelo.ai/blog/turning-audio-to-midi)发表于 2026-07-09；当前公开权重 revision 更新于 2026-07-10，而本项目固定的官方 MuScriptor `v0.4.0` 源码发布于 2026-10-20。仓库与源码发布日期不等于权重被重新训练；三个公开模型 revision 仍按各自 SHA 精确固定。
 
 完整训练消融、8 个公共数据集逐项分数、模型规模对比、乐器条件收益、Mirelo Studio 私有增强版边界与后续模型观察清单见 [MuScriptor 模型研究、分数与项目定位](docs/muscriptor-model.md)。
 
@@ -643,7 +645,7 @@ YourMT3+ / MuScriptor / MIROS 属于多乐器后端，不能与上表的钢琴�
 
 ## 默认处理策略
 
-桌面版、Space、Colab 和独立 Web 前端使用固定转写质量。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；MIROS 保留官方 CLI writer 输出。MuScriptor 固定使用官方 v0.3.0 源码、权重、5 秒窗口和 MIDI writer，并提供两种分段衔接方式：默认的“标准”保留上游原始分段状态；“跨段延音衔接”连接跨分段的持续音符。这个开关不改变速度方案，两种方式默认不量化、过滤或重建音符。需要量化时，在结果编辑器中选择范围和网格，再点击“量化”。
+桌面版、Space、Colab 和独立 Web 前端使用固定转写质量。YourMT3+ 产品路线使用官方无重叠分段、固定 `bsz=8`、逐解码通道 detokenize/merge、`mix_notes` 和官方 MIDI writer；MIROS 保留官方 CLI writer 输出。MuScriptor 固定使用官方 v0.4.0 源码、权重、5 秒窗口和 MIDI writer，并提供两种分段衔接方式：默认的“标准”保留上游原始分段状态；“跨段延音衔接”连接跨分段的持续音符。这个开关不改变速度方案，两种方式默认不量化、过滤或重建音符。需要量化时，在结果编辑器中选择范围和网格，再点击“量化”。
 
 ## 失败时的行为
 
@@ -835,11 +837,11 @@ AMD/ROCm 尚未完成完整七模式实机验收，当前安装脚本仍会停�
 pip install -r requirements.txt
 python -m pip install --no-deps "audio-separator==0.44.1"
 python -m pip install --no-deps --force-reinstall "aria-amt @ https://github.com/EleutherAI/aria-amt/archive/a1ab73fc901d1759ec3bc173c146b3c6a3040261.zip"
-python -m pip install --no-deps --force-reinstall "muscriptor @ https://github.com/muscriptor/muscriptor/archive/d73147e75e5b9b0c0a79ebe154587db4fd603e0c.zip"
+python -m pip install --no-deps --force-reinstall "muscriptor @ https://github.com/muscriptor/muscriptor/archive/8a1ef88672cc23c26619adaff37ec48d82c0b906.zip"
 python -m src.utils.source_runtime
 ```
 
-`requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 的旧 torchaudio 约束覆盖 CUDA 12.8 运行时，因此两项采用固定版本的 `--no-deps` 独立安装。MuScriptor 同样以 `--no-deps` 固定源码身份，其 v0.3.0 非 Torch 依赖（包括 FastAPI 0.136.3、Starlette 1.5.0 与 SoundFile 0.14.0）已在项目依赖中显式满足；`install.ps1` / `install.sh` 提供完整伴随依赖。
+`requirements.txt` 有意不让 `audio-separator` 的 NumPy 2 元数据覆盖桌面 NumPy 1.26，也不让 Aria-AMT 的旧 torchaudio 约束覆盖 CUDA 12.8 运行时，因此两项采用固定版本的 `--no-deps` 独立安装。MuScriptor 同样以 `--no-deps` 固定源码身份，其伴随依赖（包括 FastAPI 0.136.3、Starlette 1.6.0 与 SoundFile 0.14.0）由项目显式安装；上游 NumPy 2 下限用于 uv 平台分支解析，桌面保留 NumPy 1.26.4，并以真实推理验证兼容性；`install.ps1` / `install.sh` 提供完整伴随依赖。
 
 ### 4. 准备 YourMT3+ 源码与模型
 

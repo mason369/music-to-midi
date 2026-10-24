@@ -21,6 +21,7 @@ from src.core.beat_detector import BeatDetector
 from src.core.muscriptor_transcriber import MuscriptorTranscriber
 from src.models.data_models import Config
 from src.utils.muscriptor_source_identity import (
+    MUSCRIPTOR_PACKAGE_VERSION,
     MUSCRIPTOR_SOURCE_COMMIT,
     validate_muscriptor_runtime_identity,
 )
@@ -159,9 +160,9 @@ def main() -> int:
                 "precision_policy": "official_cuda_default",
                 "autocast_enabled": True,
                 "autocast_dtype": str(torch.float16),
-                "quality_mode": "official_v0.3.0",
+                "quality_mode": f"official_v{MUSCRIPTOR_PACKAGE_VERSION}",
                 "window_seconds": 5.0,
-                "onset_phase_correction": "official_v0.3.0",
+                "onset_phase_correction": "official_writer",
                 "runs": runs,
             },
             ensure_ascii=False,

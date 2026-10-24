@@ -60,6 +60,23 @@ def _absolute_tracks(midi):
     return result
 
 
+def _audio_offsets(midi):
+    groups = ([track] for track in midi.tracks) if midi.type == 2 else [midi.tracks]
+    offsets = [
+        next(
+            (
+                _bar_offset_value(message)
+                for track in group
+                for message in track
+                if message.is_meta and _bar_offset_value(message) is not None
+            ),
+            0.0,
+        )
+        for group in groups
+    ]
+    return offsets if midi.type == 2 else offsets * len(midi.tracks)
+
+
 def _from_events(source, tracks):
     result = mido.MidiFile(type=source.type, ticks_per_beat=source.ticks_per_beat)
     for events in tracks:
@@ -154,6 +171,9 @@ def apply_midi_export_options(
     if not source.tracks:
         raise ValueError("MIDI export source has no tracks")
     source_tracks = _absolute_tracks(source)
+    # Type 0/1 tracks share one source-audio origin, usually stored only in the
+    # conductor track. Type 2 sequences each retain their own origin.
+    source_offsets = _audio_offsets(source)
     timelines = [MidiTimeline.from_midi(source, i) for i in range(len(source.tracks))]
     signature = next(
         (
@@ -246,15 +266,7 @@ def apply_midi_export_options(
         timeline = target_timelines[index]
         shift = 0
         if options.first_downbeat is not None:
-            old_offset = next(
-                (
-                    _bar_offset_value(e[2])
-                    for e in events
-                    if e[2].is_meta and _bar_offset_value(e[2]) is not None
-                ),
-                0.0,
-            )
-            origin_tick = timeline.tick_at_seconds(options.first_downbeat + old_offset)
+            origin_tick = timeline.tick_at_seconds(options.first_downbeat + source_offsets[index])
             shift = round((-origin_tick) % (bar * source.ticks_per_beat))
         padding = shift * timeline.sections[0][2] / 1_000_000 / source.ticks_per_beat
         if shift:
@@ -273,7 +285,9 @@ def apply_midi_export_options(
                 [
                     0,
                     -99,
-                    mido.MetaMessage("marker", text=f"muscriptor:bar_offset={padding:.4f}"),
+                    mido.MetaMessage(
+                        "marker", text=f"muscriptor:bar_offset={source_offsets[index] + padding:.4f}"
+                    ),
                 ]
             )
 
@@ -310,17 +324,11 @@ def apply_midi_export_options(
         )
         trim_tick = int(first // (bar * source.ticks_per_beat) * bar * source.ticks_per_beat)
         staged = _from_events(source, tracks)
+        staged_offsets = _audio_offsets(staged)
         for index, events in enumerate(tracks):
             timeline = MidiTimeline.from_midi(staged, index)
             removed_seconds = timeline.seconds_at_tick(trim_tick)
-            old_marker = next(
-                (
-                    _bar_offset_value(e[2])
-                    for e in events
-                    if e[2].is_meta and _bar_offset_value(e[2]) is not None
-                ),
-                0.0,
-            )
+            old_marker = staged_offsets[index]
             for event in events:
                 event[0] = max(0, event[0] - trim_tick)
             events[:] = [

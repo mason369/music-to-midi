@@ -96,13 +96,16 @@ class MuscriptorTranscriber:
         beat_grid_parameters = inspect.signature(BeatGrid).parameters
         if (
             "beat_grid" not in midi_parameters
+            or "export" not in midi_parameters
             or "beats" not in beat_grid_parameters
             or "onset_delay" not in beat_grid_parameters
+            or "steady" not in beat_grid_parameters
+            or "beat_subdivision" not in beat_grid_parameters
             or not callable(getattr(BeatGrid, "bar_offset", None))
             or not callable(getattr(BeatGrid, "with_onset_delay", None))
         ):
             return (
-                "MuScriptor runtime is missing the v0.3.0 BeatGrid/onset-correction API. "
+                "MuScriptor runtime is missing the released BeatGrid/export API. "
                 f"Required source commit: {MUSCRIPTOR_SOURCE_COMMIT}."
             )
         return ""
@@ -164,7 +167,7 @@ class MuscriptorTranscriber:
         self._beat_info = beat_info
 
     def _project_beat_grid(self):
-        """Build v0.3.0's BeatGrid from the authoritative project analysis."""
+        """Supply upstream onset correction with the one project beat analysis."""
 
         from math import isclose, isfinite
 
@@ -227,6 +230,9 @@ class MuscriptorTranscriber:
             beats_per_bar=beats_per_bar,
             first_downbeat=first_downbeat,
             beats=beats,
+            # The shared pipeline owns the authoritative adaptive map. Do not
+            # let the writer smooth/detect a second map before it is applied.
+            steady=True,
         )
         self.last_bar_offset_seconds = None
         self.last_onset_delay_seconds = None
@@ -287,12 +293,13 @@ class MuscriptorTranscriber:
             "prelude_forcing": True,
             "processing_chain": processing_chain,
             "quality_mode": (
-                "official_v0.3.0+telknet_issue74_boundary_recovery_v1"
+                f"official_v{MUSCRIPTOR_PACKAGE_VERSION}+telknet_issue74_boundary_recovery_v1"
                 if uses_telknet_recovery
-                else "official_v0.3.0"
+                else f"official_v{MUSCRIPTOR_PACKAGE_VERSION}"
             ),
             "boundary_recovery": (
-                "telknet_issue74_single_program_v1" if uses_telknet_recovery else "official_v0.3.0"
+                "telknet_issue74_single_program_v1"
+                if uses_telknet_recovery else f"official_v{MUSCRIPTOR_PACKAGE_VERSION}"
             ),
             "window_seconds": 5.0,
             "no_eos_is_ok": True,
@@ -429,7 +436,7 @@ class MuscriptorTranscriber:
         elif processing_chain == MuscriptorProcessingChain.OFFICIAL.value:
             final_events = official_events
             boundary_notes_merged = 0
-            chunk_boundary_continuity = "official_v0.3.0"
+            chunk_boundary_continuity = f"official_v{MUSCRIPTOR_PACKAGE_VERSION}"
         else:
             raise RuntimeError(
                 "MuScriptor loaded model has no valid processing-chain identity: "

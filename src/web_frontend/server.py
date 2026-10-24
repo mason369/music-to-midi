@@ -12,6 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from src.gui.web.soundfont_runtime import SOUNDFONT_CSS, SOUNDFONT_JS
 from src.utils.runtime_paths import get_resource_path, get_runtime_data_dir
 from src.web_contract import API_VERSION
 from src.web_frontend.config import FrontendServerConfig
@@ -48,7 +49,19 @@ class _FrontendRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
-        if urlsplit(self.path).path == "/runtime-config.json":
+        path = urlsplit(self.path).path
+        if path in ("/api/v1/soundfont-ui.js", "/api/v1/soundfont-ui.css"):
+            # Executable UI assets belong to the frontend origin, even when
+            # inference is configured on a different host or port.
+            script = path.endswith(".js")
+            body = (SOUNDFONT_JS if script else SOUNDFONT_CSS).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", f"text/{'javascript' if script else 'css'}; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/runtime-config.json":
             body = json.dumps(self._runtime_config, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

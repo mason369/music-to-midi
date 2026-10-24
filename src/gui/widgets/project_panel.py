@@ -244,7 +244,7 @@ class ProjectPanel(QGroupBox):
             self.store = ProjectStore(
                 Path(self.owner.output_dir_edit.text()) / "Projects" / "Library"
             )
-            if not self.store.path.exists():
+            if not self.store.exists():
                 self.store.create(workflow=self.current_workflow())
 
     def add_audio(self, paths):

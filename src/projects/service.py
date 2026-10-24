@@ -24,7 +24,7 @@ class ProjectService:
         if not isinstance(project_id, str) or not re.fullmatch(r"[0-9a-f]{32}", project_id):
             raise ValueError("项目 ID 无效")
         store = ProjectStore(self.root / project_id)
-        if not store.path.is_file():
+        if not store.exists():
             raise FileNotFoundError("项目不存在")
         return store
 

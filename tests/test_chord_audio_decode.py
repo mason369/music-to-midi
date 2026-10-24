@@ -101,10 +101,17 @@ def test_screenshot_flac_error_is_reproduced_but_complete_samples_decode(tmp_pat
     expected, rate = flac_audio(source)
     source.write_bytes(source.read_bytes() + tail)
     snapshot = source.read_bytes()
-    failed = strict_ffmpeg(source, tmp_path / "strict.wav")
-    assert failed.returncode != 0
-    assert "invalid sync code" in failed.stderr
-    assert "invalid frame header" in failed.stderr
+    reference = tmp_path / "strict.wav"
+    result = strict_ffmpeg(source, reference)
+    # FFmpeg builds differ in whether they parse trailing tags as FLAC frames.
+    # Both paths must validate actual audio, rather than require an upstream bug.
+    if result.returncode:
+        assert "invalid sync code" in result.stderr
+        assert "invalid frame header" in result.stderr
+    else:
+        reference_audio, reference_rate = sf.read(reference, dtype="int32", always_2d=True)
+        np.testing.assert_array_equal(reference_audio, expected)
+        assert reference_rate == rate
     decode(source, output)
     actual, actual_rate = sf.read(output, dtype="int32", always_2d=True)
     np.testing.assert_array_equal(actual, expected)

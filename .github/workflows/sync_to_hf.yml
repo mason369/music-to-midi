@@ -45,6 +45,8 @@ on:
 jobs:
   sync:
     name: 同步到 HF Space
+    # A verified source-only push must not deploy the production Space.
+    if: ${{ !contains(github.event.head_commit.message, '[no publish]') }}
     runs-on: ubuntu-latest
 
     steps:

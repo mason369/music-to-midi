@@ -26,6 +26,7 @@ def test_default_controls_height_matches_wrapped_content(window, language):
         for _ in range(10):
             QApplication.processEvents()
         controls = workbench.result_controls_panel
+        assert controls._wrapped_height == controls.layout().totalHeightForWidth(controls.width())
         assert controls.sizeHint().height() == controls._wrapped_height
         assert workbench.result_splitter.sizes()[0] == controls.minimumSizeHint().height()
         assert workbench.result_splitter.sizes()[1] >= workbench.roll_panel.minimumSizeHint().height()

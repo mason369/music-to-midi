@@ -44,6 +44,9 @@ class MusicProjects {
       ${["apply", "result", "run", "stop"].map((k) => `<button data-action="${k}" type="button">${escapeHtml(w[k])}</button>`).join("")}</div>
       <p class="project-status" aria-live="polite"></p><div class="project-song-list"></div>
       <input class="project-audio" type="file" accept="audio/*" multiple hidden><input class="project-import" type="file" accept=".mtmproject" hidden><input class="project-profile" type="file" accept=".json" hidden>`;
+    this.el(".project-name").addEventListener("input", () => {
+      this.nameEdited = true;
+    });
     this.root
       .querySelectorAll("[data-action]")
       .forEach((b) =>
@@ -90,6 +93,7 @@ class MusicProjects {
       signal: this.abort.signal,
     });
     await this.refresh();
+    this.translate();
     const saved = localStorage.getItem(`musicToMidiProject:${state.apiBase}`);
     if (
       saved &&
@@ -99,14 +103,19 @@ class MusicProjects {
   }
   async refresh() {
     const projects = await this.request("");
+    this.projects = projects;
+    this.renderProjectList();
+    return projects;
+  }
+  renderProjectList() {
     const select = this.el(".project-list");
+    const selected = this.project?.storage_id || select.value;
     select.replaceChildren(new Option(this.words.open, ""));
-    for (const p of projects)
+    for (const p of this.projects || [])
       select.add(
         new Option(`${p.name} · ${this.words[p.status]}`, p.storage_id),
       );
-    if (this.project) select.value = this.project.storage_id;
-    return projects;
+    select.value = selected || "";
   }
   translate() {
     this.words = this.allLabels[state.language];
@@ -114,6 +123,9 @@ class MusicProjects {
     this.root.querySelector("h2").textContent = w.title;
     this.root.querySelector("p").textContent = w.empty;
     this.root.setAttribute("aria-label", w.title);
+    const name = this.el(".project-name");
+    name.setAttribute("aria-label", w.name);
+    if (!this.nameEdited) name.value = w.title;
     this.root
       .querySelectorAll("[data-action]")
       .forEach((b) => (b.textContent = w[b.dataset.action]));
@@ -122,6 +134,7 @@ class MusicProjects {
     this.el(".project-scope").options[1].text = w.all;
     this.el(".project-song").setAttribute("aria-label", w.song);
     this.el(".project-list").setAttribute("aria-label", w.open);
+    this.renderProjectList();
     this.render();
     this.renderStems();
   }

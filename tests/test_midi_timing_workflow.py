@@ -161,6 +161,29 @@ def test_downbeat_correction_aligns_bars_and_original_audio(variable_midi, tmp_p
     assert timeline.beats_at(1.25 + offset) % 4 == pytest.approx(0, abs=0.003)
 
 
+@pytest.mark.parametrize("source_offset", [0.375, -0.375])
+@pytest.mark.parametrize("correction", [{}, {"bpm": 90}, {"beat_scale": 2}])
+def test_downbeat_correction_uses_shared_origin_for_every_track(
+    variable_midi, tmp_path, source_offset, correction
+):
+    midi = mido.MidiFile(variable_midi)
+    midi.tracks[0].insert(
+        0, mido.MetaMessage("marker", text=f"muscriptor:bar_offset={source_offset}")
+    )
+    midi.tracks.append(mido.MidiTrack(message.copy() for message in midi.tracks[1]))
+    midi.save(variable_midi)
+    source_bytes = variable_midi.read_bytes()
+    output = apply_midi_export_options(
+        variable_midi, tmp_path / "shared-origin.mid",
+        MidiExportOptions(first_downbeat=1.25, **correction),
+    )
+    result_offset = read_muscriptor_bar_offset_seconds(output)
+    for before, after in zip(event_seconds(variable_midi), event_seconds(output), strict=True):
+        assert before[:2] == after[:2]
+        assert before[2] - source_offset == pytest.approx(after[2] - result_offset, abs=0.003)
+    assert variable_midi.read_bytes() == source_bytes
+
+
 def test_gap_filling_and_trim_are_explicit_and_preserve_source(variable_midi, tmp_path):
     original = variable_midi.read_bytes()
     filled = apply_midi_export_options(

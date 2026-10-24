@@ -77,8 +77,8 @@ def test_transcriber_reloads_the_selected_processing_wrapper(
     transcriber = MuscriptorTranscriber(config)
     official_model = transcriber.load_model()
     assert transcriber._runtime_details["processing_chain"] == "official"
-    assert transcriber._runtime_details["quality_mode"] == "official_v0.3.0"
-    assert transcriber._runtime_details["boundary_recovery"] == "official_v0.3.0"
+    assert transcriber._runtime_details["quality_mode"] == "official_v0.4.0"
+    assert transcriber._runtime_details["boundary_recovery"] == "official_v0.4.0"
 
     config.muscriptor_processing_chain = MuscriptorProcessingChain.TELKNET.value
     telknet_model = transcriber.load_model()

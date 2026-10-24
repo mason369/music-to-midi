@@ -182,8 +182,8 @@ try {
     }
     $PublicOrigin = "https://$PublicAddress"
     $Lines = @(
-        "BACKEND_IMAGE=ghcr.io/mason369/music-to-midi-backend:v1.9.0",
-        "GATEWAY_IMAGE=ghcr.io/mason369/music-to-midi-gateway:v1.9.0",
+        "BACKEND_IMAGE=ghcr.io/mason369/music-to-midi-backend:v1.10.0",
+        "GATEWAY_IMAGE=ghcr.io/mason369/music-to-midi-gateway:v1.10.0",
         "VCS_REF=$VcsRef",
         "BUILD_VERSION=$BuildVersion",
         "PUBLIC_ADDRESS=$PublicAddress",

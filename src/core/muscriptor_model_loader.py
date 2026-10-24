@@ -33,7 +33,7 @@ def _safetensors_open_kwargs(target_device) -> dict[str, str]:
 def _build_telknet_boundary_recovery_model_class(upstream, torch):
     """Create the project-owned Issue #74 recovery subclass.
 
-    The pinned ``muscriptor`` package remains byte-for-byte upstream v0.3.0.
+    The pinned ``muscriptor`` package remains byte-for-byte upstream v0.4.0.
     Only the instantiated model class changes, so source identity checks keep
     proving the official dependency while this downstream product fix remains
     explicit and independently testable.

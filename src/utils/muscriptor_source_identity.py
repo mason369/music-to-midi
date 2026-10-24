@@ -1,4 +1,4 @@
-"""Strict source identity for the released MuScriptor v0.3.0 runtime."""
+"""Strict source identity for the released MuScriptor v0.4.0 runtime."""
 
 from __future__ import annotations
 
@@ -7,23 +7,23 @@ import importlib.metadata
 import importlib.util
 from pathlib import Path
 
-MUSCRIPTOR_PACKAGE_VERSION = "0.3.0"
-MUSCRIPTOR_SOURCE_COMMIT = "d73147e75e5b9b0c0a79ebe154587db4fd603e0c"
+MUSCRIPTOR_PACKAGE_VERSION = "0.4.0"
+MUSCRIPTOR_SOURCE_COMMIT = "8a1ef88672cc23c26619adaff37ec48d82c0b906"
 MUSCRIPTOR_SOURCE_REQUIREMENT = (
     "muscriptor @ https://github.com/muscriptor/muscriptor/archive/"
     f"{MUSCRIPTOR_SOURCE_COMMIT}.zip"
 )
 
-# These hashes pin the released v0.3.0 inference, hard instrument mask,
-# BeatGrid onset correction, and MuseScore-compatible MIDI writer together.
+# These hashes pin the released v0.4.0 inference, hard instrument mask,
+# BeatGrid onset correction, and tempo-aware MIDI writer together.
 _SOURCE_IDENTITY_FILES = {
-    "transcription_model.py": "d301cee911ad0e2fdf90bf4ad659a7e2a55e30d9028fa3604df3bb31b12fc88d",
+    "transcription_model.py": "1f12a7da7b12b876eb6104823a63629f12b60ef0570b52f5da93239c414e7f30",
     "tokenizer/mt3.py": "c37c7d9b101f6498bf8cf5964ab90df8b4df59f2e9960a192ed43b7fa9ae4a62",
     "models/lm.py": "8600f40d7b5242b37d0db5dbf16eddde6b493d2243ac4177bc86750bcea554a2",
     "accelerator.py": "1bc8001093c7fbc888191fc649c874c238d3966b3363d6458833157761ae40e5",
-    "tokenizer/notes.py": "686ee5a6d336bf74a67390c72af376c00e42061e0d72354346e2e52b95363f33",
-    "utils/beats.py": "58da8484da7c0372aa54690d5d6a801c9ae14c6897ac52aaf81acdee85af6bd9",
-    "utils/midi.py": "21d16e15b073ec0522b31c6468a166dac4ae7c76f5ea318077945330ca572348",
+    "tokenizer/notes.py": "c8ddbaab0d6db7f7eb9886d2adf17052c6d643c95ac1db6421dfa9f0effa2a84",
+    "utils/beats.py": "463cdfabc65a7fe2b2a0d2437f3bcfee9c0f6412a126375ffac3b3fb7de98c4f",
+    "utils/midi.py": "42b9565d1f965a6102d9f3befdc778afca4554e958c9e047382552842e3aded2",
 }
 
 

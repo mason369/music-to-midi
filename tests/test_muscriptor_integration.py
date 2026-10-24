@@ -420,12 +420,16 @@ def _install_fake_event_module(monkeypatch):
             first_downbeat: float,
             beats=None,
             onset_delay=None,
+            steady=True,
+            beat_subdivision=None,
         ):
             self.bpm = bpm
             self.beats_per_bar = beats_per_bar
             self.first_downbeat = first_downbeat
             self.beats = beats
             self.onset_delay = onset_delay
+            self.steady = steady
+            self.beat_subdivision = beat_subdivision
 
         def bar_offset(self, min_shift: float = 0.0) -> float:
             step = (self.beats_per_bar or 1) * 60.0 / self.bpm
@@ -546,12 +550,12 @@ def test_muscriptor_load_model_keeps_fp32_parameters_and_verified_fp16_autocast(
         "batch_size": 1,
         "prelude_forcing": True,
         "processing_chain": MuscriptorProcessingChain.TELKNET.value,
-        "quality_mode": "official_v0.3.0+telknet_issue74_boundary_recovery_v1",
+        "quality_mode": "official_v0.4.0+telknet_issue74_boundary_recovery_v1",
         "boundary_recovery": "telknet_issue74_single_program_v1",
         "window_seconds": 5.0,
         "no_eos_is_ok": True,
-        "package_version": "0.3.0",
-        "source_commit": "d73147e75e5b9b0c0a79ebe154587db4fd603e0c",
+        "package_version": "0.4.0",
+        "source_commit": "8a1ef88672cc23c26619adaff37ec48d82c0b906",
     }
 
 

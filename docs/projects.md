@@ -42,9 +42,14 @@ python -m src.cli project import D:\RestoredProject D:\MusicProject.mtmproject
 - 同一项目内按原音 SHA-256 去重。更换模型或影响 MIDI 的配置只使相应转写步骤重新待处理，保留历史产物。单纯更换后续 MIDI 模型不使分离失效。
 - 原音和成功产物都有大小与 SHA-256 校验。缺失或被外部修改会明确失败，不把损坏结果当成功，也不静默重新计算覆盖它。
 - JSON 原子提交，操作系统锁隔离读写与推理；进程退出后锁释放。多个窗口不能同时修改正在执行的项目。
+- 清单存在性检查也进入同一状态互斥；构造 `ProjectStore` 时只解析稳定父目录，避免 Windows 元数据句柄阻止另一线程原子替换清单。没有重试或备用清单。独立 Web 切换语言会更新默认名称、项目状态与可访问标签，同时保留自定义名称和当前选择。
 - 项目包只接收清单内的文件，拒绝路径穿越、符号链接、清单不一致及校验失败。移动整个项目目录或使用项目包，勿只移动 JSON。
 - Docker 应持久化已有 API 数据卷；便携包使用相同项目格式。更新程序前保留项目及输出目录。
 
 ## 验收范围
 
 代码与契约检查覆盖桌面、CLI、独立 Web/API、Space/Colab 共享组件、Docker 源码复制及便携入口。实际云端 ZeroGPU/Colab、Linux GPU、Intel XPU 和新构建便携包的验收必须分别执行，不能从本机 NVIDIA 或契约测试推断已经通过。
+
+2026-10-24 的 Windows/WSL CUDA、实际包及浏览器验收见 [候选记录](releases/v1.10.0.md)。
+
+Manifest existence probes use the same state mutex as reads/writes. `ProjectStore` resolves only the stable parent directory so Windows metadata handles cannot conflict with another thread's atomic replacement; no retry or alternate manifest is used. Standalone Web language changes translate defaults, status/options and accessible labels while preserving custom names and project selection. See the [candidate record](releases/v1.10.0.md#english) for separate Windows/WSL CUDA, packaged-runtime and browser evidence.

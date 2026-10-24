@@ -2,11 +2,13 @@
 
 ## 中文
 
-本次在所有后端共用的项目层实现节拍和导出增强，保留已验收的官方 MuScriptor 0.3.0 推理、固定权重及 Torch 2.7 / NumPy 1.26 运行时。这不是 0.4.0 整包升级，不改变模型、精度、解码和官方推理源码，也不引入新版 NumPy 2 依赖。
+MuScriptor 推理包现已固定到未修改的官方 0.4.0（`8a1ef88672cc23c26619adaff37ec48d82c0b906`），仍使用原有三档权重、精度和五秒分片。官方 writer 接收项目唯一一次 Beat This 分析；速度图、编辑、量化和导出通过共享层贯通所有后端，不新增转换路线。桌面和 Docker 保持 Torch 2.7 / NumPy 1.26，Space/Colab 使用各自既有运行时；上游 NumPy 2 元数据下限源于 uv 的平台分支解析，实际兼容性由固定源码、真实推理和跨平台测试核验。
 
 秒、四分音符拍与 MIDI tick 使用同一张可逆 tempo map，贯通结果试听、钢琴卷帘、编辑、量化、MIDI/WAV、逐乐器导出与乐谱副本。自适应速度图不再在结果页压平成单一 BPM。工程 BPM/工程倍速按比例缩放整张图，并同步改变原音和 MIDI 的真实播放速度。
 
 “节拍纠错与导出整理”是独立的显式操作。BPM、拍号、首拍和倍频纠错只重新解释节拍网格，不改变原音演奏速度，不重新识别。BPM 留空保留原图；填写 BPM 表示纠正后的恒速网格。首拍按原音秒数填写，必要的小节前置留白通过同一偏移标记同步到原音。倍频 ×2 同时把 4/4 解释为 8/4，显式填写的拍号优先。
+
+Type 0/1 MIDI 的原音偏移属于整首曲目，即使 `muscriptor:bar_offset=` 只在 conductor 轨中出现，所有轨道也须共用。纠错前解析一次；首拍纠错、BPM／倍频组合及后续裁切沿用该起点。Type 2 的独立序列分别保留自己的起点。不能逐轨把缺少标记解释成零，否则重复纠错会错移乐器轨。
 
 量化保留 `1/4`、`1/8`、`1/16`、`1/32`、`1/64` 五档及默认 `1/32`。三连音为所选步长的 2/3；强度为 0–100%，默认 100%；自动网格按音符起点和时值从五档中选择。切换设置不改音符，只有点击量化或 `quantize_notes=true` 才执行。结果编辑器默认全部轨道，也可选择所选音符；Web/API、CLI、Docker 与便携 Web 处理全部轨道。变速处先映射到音乐拍，再量化并映回秒；普通量化保留所有非音符事件的绝对 tick。
 
@@ -47,7 +49,12 @@ CLI 参数为 `--grid-bpm`、`--beats-per-bar`、`--beat-unit`、`--first-downbe
 
 ```mermaid
 flowchart LR
+    B[一次 Beat This 分析] --> U[官方 MuScriptor 0.4.0 writer]
+    I[固定权重 / 精度 / 五秒分片] --> U
+    U --> A
+    B --> T
     A[官方模型 MIDI] --> T[统一秒 / 拍 / tick 时间轴]
+    OI[整曲原音偏移 / Type 2 独立偏移] --> C
     T --> C[可选不变速纠错]
     C --> E[显式编辑与量化]
     E --> X[可选休止填补 / 空小节裁切]
@@ -61,6 +68,8 @@ flowchart LR
 `tests/test_midi_timing_workflow.py` 使用真实 SMF、控制器、SysEx 和 PCM 验证。运行 `venv/Scripts/python scripts/verify_midi_timing_ui.py` 后，可在 `/timing/zh_CN`、`/timing/en_US` 操作生产共用浏览器结果组件；根路径是独立 Web。测试资源由真实 FluidSynth 合成，不加载转写模型、不使用用户音频或生产数据。
 
 ## 验收记录（2026-10-21）
+
+后续整曲、Windows／Linux、真实设备、浏览器下载及候选包验证见 [2026-10-24 发版复核](releases/v1.10.0.md#2026-10-24-验收结果)；以下保留上一阶段的原始记录。
 
 全工作区测试为 1,851 项通过、5 项设备验收跳过；最后一次浏览器 BPM 输入提交修正后，受影响路径的 126 项再次通过，其中包含一项新增回归。没有将两个测试批次的重叠用例相加。中英文分别验证 660 个桌面／共享键和 283 个独立 Web 键的解析、完整性、占位符及新增文案无回退。
 
@@ -79,11 +88,15 @@ flowchart LR
 
 ## English
 
-The shared project layer implements these improvements for every backend while retaining verified official MuScriptor 0.3.0 inference, pinned weights and the Torch 2.7 / NumPy 1.26 runtime. This is not a 0.4.0 package upgrade and does not change model precision, decoding or official inference code.
+The [2026-10-24 candidate audit](releases/v1.10.0.md) adds whole-song, physical-device, Windows/Linux, browser-download and packaged-runtime evidence. The earlier validation record below is retained as originally observed.
+
+The inference package now pins unmodified official MuScriptor 0.4.0 (`8a1ef88672cc23c26619adaff37ec48d82c0b906`), with the same three checkpoints, precision and five-second windows. Its writer receives the single project Beat This analysis. Shared timing, editing, quantization and export integrate these capabilities across all backends without adding a conversion route. Desktop and Docker keep Torch 2.7 / NumPy 1.26; Space/Colab keep their platform runtimes. Upstream's NumPy 2 metadata floor separates uv platform resolution branches; fixed-source checks, real inference and cross-platform tests verify actual compatibility.
 
 One reversible tempo map connects seconds, quarter-note beats and MIDI ticks throughout playback, piano-roll editing, quantization and MIDI/WAV/stem/sheet exports. Adaptive maps survive the workbench. Project BPM/speed scales the whole map and changes linked original/MIDI playback speed together.
 
 Grid correction is separate and explicit: BPM, meter, first downbeat and beat scale reinterpret the grid without changing source-relative performance timing or transcribing again. Leave BPM blank to retain the map. A supplied BPM requests a corrected fixed grid. Downbeats are measured in original-audio seconds; bar padding is shared with the source. A ×2 beat scale changes 4/4 to 8/4 unless a meter is explicitly supplied.
+
+Type 0/1 MIDI tracks share one source-audio offset even when `muscriptor:bar_offset=` appears only in the conductor track. It is resolved once before correction and retained through downbeat/BPM/beat-scale combinations and trimming. Type 2 sequences retain independent origins. Treating an unmarked instrument track as zero would misalign repeated corrections.
 
 The five grids and default 1/32 are retained. Triplets multiply the step by 2/3; strength is 0–100%, default 100%. Automatic selection evaluates note starts and durations. Settings alone never edit notes. Editors default to all tracks and also support selected notes; API/CLI/Docker/portable Web process all tracks. Quantization follows musical beats across tempo changes and preserves non-note event ticks.
 

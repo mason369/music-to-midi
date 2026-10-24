@@ -134,6 +134,18 @@ def test_frontend_server_publishes_static_ui_and_exact_runtime_config(tmp_path):
             "backend_url": "http://127.0.0.1:18765",
             "expected_api_version": "2.0",
         }
+        from src.gui.web.soundfont_runtime import SOUNDFONT_CSS, SOUNDFONT_JS
+
+        for suffix, expected, media_type in (
+            ("js", SOUNDFONT_JS, "text/javascript"),
+            ("css", SOUNDFONT_CSS, "text/css"),
+        ):
+            with urlopen(f"http://127.0.0.1:{port}/api/v1/soundfont-ui.{suffix}", timeout=3) as response:
+                assert response.read().decode("utf-8") == expected
+                assert response.headers["Content-Type"].startswith(media_type)
+                policy = response.headers["Content-Security-Policy"]
+                assert "script-src 'self';" in policy
+                assert "'unsafe-eval'" not in policy
     finally:
         server.close()
 

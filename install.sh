@@ -403,7 +403,7 @@ if ! (cd "$REPO_DIR" && "$PYTHON" -c 'from src.utils.muscriptor_downloader impor
 fi
 success "MuScriptor Small/Medium/Large gated 访问权限预检通过"
 
-info "安装并严格校验官方 MuScriptor v0.3.0（不改写固定 PyTorch 运行时）..."
+info "安装并严格校验官方 MuScriptor（不改写固定 PyTorch 运行时）..."
 MUSCRIPTOR_REQUIREMENT="$(cd "$REPO_DIR" && "$PYTHON" -c 'from src.utils.muscriptor_source_identity import MUSCRIPTOR_SOURCE_REQUIREMENT; print(MUSCRIPTOR_SOURCE_REQUIREMENT)')"
 if [ -z "$MUSCRIPTOR_REQUIREMENT" ]; then
     error "无法从项目源码读取 MuScriptor 固定安装身份"
@@ -411,7 +411,7 @@ fi
 "$PIP" install "$MUSCRIPTOR_REQUIREMENT" --no-deps --force-reinstall
 (cd "$REPO_DIR" && "$PYTHON" -m src.utils.source_runtime)
 (cd "$REPO_DIR" && "$PYTHON" -c 'from src.core.muscriptor_transcriber import MuscriptorTranscriber; reason = MuscriptorTranscriber._runtime_unavailable_reason(); print(reason or "MuScriptor public runtime identity/API verified"); raise SystemExit(0 if reason == "" else 1)')
-success "MuScriptor v0.3.0 官方源码与硬乐器约束 API 校验通过"
+success "MuScriptor 官方源码与硬乐器约束 API 校验通过"
 
 validate_default_transkun_runtime() {
     "$PYTHON" - <<'PY'

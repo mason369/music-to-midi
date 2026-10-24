@@ -70,9 +70,9 @@ def test_runtime_identity_rejects_old_package_version(tmp_path, monkeypatch):
     monkeypatch.setattr(
         muscriptor_source_identity.importlib.metadata,
         "version",
-        lambda _package: "0.3.0a1",
+        lambda _package: "0.3.0",
     )
 
     error = muscriptor_source_identity.validate_muscriptor_runtime_identity(package_root)
 
-    assert "expected 0.3.0, got 0.3.0a1" in error
+    assert "expected 0.4.0, got 0.3.0" in error
