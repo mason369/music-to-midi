@@ -18,7 +18,9 @@ RUNNING = {
 CONFIG = {"version": "6.17.3", "components": [{"id": 1}], "dependencies": [{"id": 0}]}
 
 
-@pytest.mark.parametrize("stage", ["BUILDING", "RUNNING_BUILDING", "APP_STARTING"])
+@pytest.mark.parametrize(
+    "stage", ["BUILDING", "RUNNING_BUILDING", "APP_STARTING", "RUNNING_APP_STARTING"]
+)
 def test_waits_for_build_then_checks_live_application_without_forwarding_token(stage):
     building = deepcopy(RUNNING)
     building["runtime"]["stage"] = stage
@@ -37,7 +39,20 @@ def test_waits_for_build_then_checks_live_application_without_forwarding_token(s
     assert all(token == "test-token" for _url, token in calls[:-1])
 
 
-@pytest.mark.parametrize("stage", ["BUILD_ERROR", "RUNTIME_ERROR", "CONFIG_ERROR", "PAUSED", None])
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "BUILD_ERROR",
+        "RUNTIME_ERROR",
+        "CONFIG_ERROR",
+        "NO_APP_FILE",
+        "STOPPED",
+        "PAUSED",
+        "DELETING",
+        "FUTURE_STAGE",
+        None,
+    ],
+)
 def test_terminal_failures_stop_without_retry(stage):
     info = deepcopy(RUNNING)
     info["runtime"] = {"stage": stage, "errorMessage": "original dependency failure"}
@@ -50,6 +65,25 @@ def test_terminal_failures_stop_without_retry(stage):
     with pytest.raises(RuntimeError, match="original dependency failure"):
         wait_for_space("mason369/music-to-midi", REVISION, "test", fetch=fetch)
     assert len(calls) == 1
+
+
+def test_starting_replacement_that_fails_does_not_accept_the_previous_live_app():
+    starting = deepcopy(RUNNING)
+    starting["runtime"]["stage"] = "RUNNING_APP_STARTING"
+    failed = deepcopy(RUNNING)
+    failed["runtime"] = {"stage": "RUNTIME_ERROR", "errorMessage": "new app failed"}
+    responses = iter([starting, failed])
+    calls, sleeps = [], []
+
+    def fetch(url, token=""):
+        calls.append(url)
+        return next(responses)
+
+    with pytest.raises(RuntimeError, match="new app failed"):
+        wait_for_space("mason369/music-to-midi", REVISION, "test", fetch=fetch, sleep=sleeps.append)
+    assert sleeps == [15]
+    assert len(calls) == 2
+    assert all(url.startswith("https://huggingface.co/api/spaces/") for url in calls)
 
 
 def test_wrong_revision_cannot_pass_using_an_old_healthy_app():
@@ -78,9 +112,12 @@ def test_network_failure_is_not_retried():
     assert len(calls) == 1
 
 
-def test_build_timeout_is_bounded():
+@pytest.mark.parametrize(
+    "stage", ["BUILDING", "RUNNING_BUILDING", "APP_STARTING", "RUNNING_APP_STARTING"]
+)
+def test_build_timeout_is_bounded(stage):
     info = deepcopy(RUNNING)
-    info["runtime"]["stage"] = "BUILDING"
+    info["runtime"]["stage"] = stage
     timestamps = iter([0, 0, 10])
     sleeps = []
     with pytest.raises(TimeoutError):

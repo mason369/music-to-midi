@@ -70,9 +70,9 @@ XPU 构建默认对同卷的暂存资源使用 NTFS 硬链接，跨卷资源逐�
 
 `release.yml` is the sole versioned-release entry. Push a matching `vX.Y.Z` tag or run it manually at that exact tagged commit. Portable and Docker packages share one source SHA; publication requires consecutive volumes and verified local/remote SHA-256 for every asset. Failed checks/uploads leave the draft unpublished and never overwrite an existing public version.
 
-Space 同步还必须确认 Hub 中的精确提交、运行状态 `RUNNING`、声明的 Gradio 版本及真实界面的组件和事件图。构建错误、运行错误、HTTP 错误或启动超时都会阻断发布；等待正在进行的构建不会重启服务或重装依赖。
+Space 同步还必须确认 Hub 中的精确提交、运行状态 `RUNNING`、声明的 Gradio 版本及真实界面的组件和事件图。只等待官方定义的 `BUILDING`、`RUNNING_BUILDING`、`APP_STARTING`、`RUNNING_APP_STARTING` 四种中间状态；旧实例仍可访问时，也必须等待替换实例启动完成。构建错误、运行错误、未知状态、HTTP 错误或启动超时都会阻断发布；等待正在进行的构建不会重启服务或重装依赖。状态定义与 [HF 官方实现](https://github.com/huggingface/huggingface_hub/blob/main/src/huggingface_hub/_space_api.py) 和 [等待接口文档](https://huggingface.co/docs/huggingface_hub/v1.32.0/en/package_reference/hf_api#huggingface_hub.HfApi.wait_for_space) 对齐。
 
-Space synchronization also verifies the exact Hub commit, `RUNNING` status, declared Gradio version and the live UI's component/event graph. Build/runtime/HTTP errors or a startup timeout block publication. Waiting for an in-flight build never restarts the service or reinstalls dependencies.
+Space synchronization also verifies the exact Hub commit, `RUNNING` status, declared Gradio version and the live UI's component/event graph. Only the four official intermediate states (`BUILDING`, `RUNNING_BUILDING`, `APP_STARTING`, `RUNNING_APP_STARTING`) are awaited; an older live instance cannot satisfy replacement-app readiness. Build/runtime/HTTP errors, unknown states or a startup timeout block publication. Waiting for an in-flight build never restarts the service or reinstalls dependencies. State definitions match the official HF implementation and wait API linked above.
 
 ```mermaid
 flowchart TD
@@ -80,7 +80,7 @@ flowchart TD
     V --> W[Windows GPU build and smoke checks]
     V --> L[Linux GPU build and smoke checks]
     S --> D[Docker build, public pull and distribution]
-    S --> H[Space sync and live application gate]
+    S --> H[Space sync: await build/start, verify RUNNING and live UI]
     W --> H
     L --> H
     D --> H

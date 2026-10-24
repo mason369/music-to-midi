@@ -9,7 +9,9 @@ import re
 import time
 import urllib.request
 
-PENDING_STAGES = {"BUILDING", "RUNNING_BUILDING", "STARTING", "APP_STARTING", "BUILD_QUEUED"}
+# Match huggingface_hub._space_api.INTERMEDIATE_SPACE_STAGES, including
+# replacement-app startup while the previous instance is still serving.
+PENDING_STAGES = {"BUILDING", "RUNNING_BUILDING", "APP_STARTING", "RUNNING_APP_STARTING"}
 
 
 def read_json(url: str, token: str = "") -> dict:
